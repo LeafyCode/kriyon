@@ -457,8 +457,9 @@ pub fn parse_partial(line: &str, conversation: Option<&str>) -> Option<PartialRe
 }
 
 /// Build the turns from the [Bridge spool]'s lines and the transcript's lines
-/// (all of them, or only its newest part). `conversation` is the Claude session id the view is for; live rows from any
-/// other conversation (a nested `claude -p`) are left out.
+/// (all of them, or only its newest part). `conversation` is the Claude
+/// session id the view is for; live rows from any other conversation (a
+/// nested `claude -p`) are left out.
 #[must_use]
 pub fn build_turns(
     bridge_lines: &[&str],
@@ -1051,6 +1052,59 @@ mod tests {
         let turns = build_turns(&b_refs, &t_refs, None);
         let prompts: Vec<_> = turns.iter().map(|t| t.prompt.as_deref()).collect();
         assert_eq!(prompts, [Some("second"), Some("third")]);
+    }
+
+    #[test]
+    fn a_live_row_cut_off_just_before_the_transcript_read_stays_cut_off() {
+        // a1 is the last row before the cut, received a moment after the
+        // first row read was written: only its place, before u2, says it
+        // isn't still to come.
+        let transcript = [
+            t_at(
+                "u2",
+                Some("a1"),
+                "user",
+                "second",
+                "2026-10-18T09:00:00.000Z",
+            ),
+            t_at(
+                "a2",
+                Some("u2"),
+                "assistant",
+                "Second reply.",
+                "2026-10-18T09:00:05.000Z",
+            ),
+        ];
+        let at = |iso| crate::activity_log::parse_iso_ms(iso).expect("time");
+        let bridge = [
+            live_at(
+                1,
+                "a1",
+                "assistant",
+                "First reply.",
+                at("2026-10-18T09:00:00.020Z"),
+            ),
+            live_at(2, "u2", "user", "second", at("2026-10-18T09:00:00.030Z")),
+            live_at(
+                3,
+                "a2",
+                "assistant",
+                "Second reply.",
+                at("2026-10-18T09:00:05.010Z"),
+            ),
+        ];
+        let t_refs: Vec<&str> = transcript.iter().map(String::as_str).collect();
+        let b_refs: Vec<&str> = bridge.iter().map(String::as_str).collect();
+        let turns = build_turns(&b_refs, &t_refs, None);
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].reply.as_deref(), Some("Second reply."));
+        assert!(
+            !turns[0]
+                .did
+                .iter()
+                .any(|item| matches!(item, TurnItem::Text { text } if text == "First reply.")),
+            "the cut-off row came back"
+        );
     }
 
     #[test]
