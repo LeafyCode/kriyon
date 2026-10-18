@@ -80,10 +80,10 @@ if [[ "$verdict" == *": accepted"* && "$verdict" == *"source=Notarized Developer
 else
   fail "Gatekeeper does not accept the DMG as notarized: $verdict"
 fi
-if xcrun stapler validate "$dmg" >/dev/null 2>&1; then
+if stapled="$(xcrun stapler validate "$dmg" 2>&1)"; then
   ok "The DMG has its notarization ticket stapled"
 else
-  fail "The DMG has no stapled notarization ticket"
+  fail "The DMG has no stapled notarization ticket: $stapled"
 fi
 
 exit "$failed"
