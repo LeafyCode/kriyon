@@ -1,16 +1,12 @@
 import { Sparkles } from "lucide-react";
 import type { CSSProperties } from "react";
 import { showsPill, useUpdates } from "../state/updates.ts";
-import { chip, fillVars } from "../theme/recipes.ts";
+import { chip } from "../theme/recipes.ts";
 import { accentAlpha, tokens } from "../theme/tokens.ts";
 
-// The tint rides `--kr-fill`: chip()'s inline `background` would outrank
-// the hover fill (see `fillVars`).
 const pillStyle: CSSProperties = {
-  ...chip(),
-  ...fillVars(accentAlpha(0.12), accentAlpha(0.22)),
+  ...chip({ fill: accentAlpha(0.12), hover: accentAlpha(0.22) }),
   animation: "kr-pop-in 0.3s ease-out",
-  background: undefined,
   border: `1px solid ${accentAlpha(0.35)}`,
   borderRadius: tokens.radius.pill,
   color: tokens.color.accentBright,
