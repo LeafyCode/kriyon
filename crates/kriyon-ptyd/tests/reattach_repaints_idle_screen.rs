@@ -93,6 +93,8 @@ fn reattach_repaints_current_screen_of_idle_child() {
             "/bin/sh",
         ])
         .env("PS1", "$ ")
+        // Run from inside a Kriyon session, never serve (or end) its bridge.
+        .env_remove("KRIYON_BRIDGE_SOCKET")
         .spawn()
         .expect("spawn daemon");
 

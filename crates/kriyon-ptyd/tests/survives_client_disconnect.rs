@@ -70,6 +70,8 @@ fn child_survives_client_disconnect_and_reattach() {
             "/bin/sh",
         ])
         .env("PS1", "")
+        // Run from inside a Kriyon session, never serve (or end) its bridge.
+        .env_remove("KRIYON_BRIDGE_SOCKET")
         .spawn()
         .expect("spawn daemon");
 

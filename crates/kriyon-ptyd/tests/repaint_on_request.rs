@@ -92,6 +92,8 @@ fn repaint_request_resends_the_screen_on_the_same_connection() {
             "/bin/sh",
         ])
         .env("PS1", "$ ")
+        // Run from inside a Kriyon session, never serve (or end) its bridge.
+        .env_remove("KRIYON_BRIDGE_SOCKET")
         .spawn()
         .expect("spawn daemon");
 
