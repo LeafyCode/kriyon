@@ -10,8 +10,10 @@
 //! `kriyon_core::bridge`.
 
 use std::io::{Read as _, Write as _};
+use std::os::unix::fs::MetadataExt as _;
 use std::os::unix::net::{UnixListener, UnixStream};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use kriyon_core::bridge::{
@@ -41,10 +43,20 @@ pub fn spawn(id: &str) {
     });
 }
 
-/// Remove the bridge socket [`spawn`] bound, if the app asked for one. Part of
-/// the daemon's way out: nothing serves the path once the daemon is gone.
+/// The socket file this daemon bound: its path, device and inode.
+static BOUND: OnceLock<(PathBuf, u64, u64)> = OnceLock::new();
+
+/// Remove the bridge socket [`spawn`] bound. Part of the daemon's way out:
+/// nothing serves the path once the daemon is gone. Only the file this daemon
+/// bound goes. A daemon that inherited a live session's path (a test run from
+/// inside a Kriyon session) couldn't bind it, and removing it would cut that
+/// session's companion off for good.
 pub fn remove_socket() {
-    if let Ok(socket) = std::env::var("KRIYON_BRIDGE_SOCKET") {
+    let Some((socket, dev, ino)) = BOUND.get() else {
+        return;
+    };
+    let ours = std::fs::symlink_metadata(socket).is_ok_and(|m| m.dev() == *dev && m.ino() == *ino);
+    if ours {
         let _ = std::fs::remove_file(socket);
     }
 }
@@ -79,6 +91,8 @@ fn bind(socket: &Path) -> std::io::Result<UnixListener> {
     }
     let _ = std::fs::remove_file(socket);
     let listener = UnixListener::bind(socket)?;
+    let bound = std::fs::symlink_metadata(socket)?;
+    let _ = BOUND.set((socket.to_path_buf(), bound.dev(), bound.ino()));
     std::fs::set_permissions(socket, std::fs::Permissions::from_mode(0o600))?;
     Ok(listener)
 }

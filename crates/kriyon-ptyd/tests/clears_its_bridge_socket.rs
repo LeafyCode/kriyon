@@ -63,3 +63,40 @@ fn the_bridge_socket_goes_when_the_daemon_stops() {
     assert!(!socket.exists(), "session socket left behind");
     assert!(!bridge.exists(), "bridge socket left behind");
 }
+
+/// A test or nested daemon handed a live session's bridge path can't bind it,
+/// and must leave it alone when it ends: the session's companion posts there.
+#[test]
+fn a_daemon_leaves_a_bridge_socket_it_did_not_bind() {
+    let dir = tempfile::tempdir().expect("tmp dir");
+    let socket = dir.path().join("test.sock");
+    let bridge = dir.path().join("test.b");
+    // The session's own daemon, serving the bridge.
+    let _live = std::os::unix::net::UnixListener::bind(&bridge).expect("live bridge");
+
+    let mut daemon = Daemon(
+        Command::new(env!("CARGO_BIN_EXE_kriyon-ptyd"))
+            .args([
+                "--id", "test", "--cwd", "/", "--shell", "/bin/sh", "--socket",
+            ])
+            .arg(&socket)
+            .env("PS1", "")
+            .env("HOME", dir.path())
+            .env("KRIYON_BRIDGE_SOCKET", &bridge)
+            .spawn()
+            .expect("spawn daemon"),
+    );
+    wait_for(&socket);
+
+    UnixStream::connect(&socket)
+        .expect("connect")
+        .write_all(&Frame::Shutdown.encode())
+        .expect("shutdown");
+    let _ = daemon.0.wait();
+
+    assert!(!socket.exists(), "session socket left behind");
+    assert!(
+        UnixStream::connect(&bridge).is_ok(),
+        "the live bridge socket was removed"
+    );
+}
