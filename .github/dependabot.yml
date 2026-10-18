@@ -18,14 +18,20 @@ updates:
     groups:
       npm:
         patterns: ["*"]
-    # `tauri build` refuses an npm Tauri package and its Rust crate on
+    # `tauri build` refuses a Tauri npm package and its Rust crate on
     # different minor versions, and Dependabot can't bump npm and Cargo in one
-    # pull request. So minor and major Tauri bumps are done by hand, both sides
-    # together; patches and security updates still come. Keep in step with the
-    # cargo entry below.
+    # pull request. So minor and major version updates of these pairs are done
+    # by hand, both sides together; patches still come. Security updates ignore
+    # this rule and can bring one side's minor alone: bump its pair in the same
+    # pull request. The same list, by crate name, is in the cargo entry below.
     ignore:
-      - dependency-name: "@tauri-apps/*"
-        update-types: ["version-update:semver-minor", "version-update:semver-major"]
+      - { dependency-name: "@tauri-apps/api", update-types: ["version-update:semver-minor", "version-update:semver-major"] }
+      - { dependency-name: "@tauri-apps/plugin-deep-link", update-types: ["version-update:semver-minor", "version-update:semver-major"] }
+      - { dependency-name: "@tauri-apps/plugin-dialog", update-types: ["version-update:semver-minor", "version-update:semver-major"] }
+      - { dependency-name: "@tauri-apps/plugin-fs", update-types: ["version-update:semver-minor", "version-update:semver-major"] }
+      - { dependency-name: "@tauri-apps/plugin-notification", update-types: ["version-update:semver-minor", "version-update:semver-major"] }
+      - { dependency-name: "@tauri-apps/plugin-opener", update-types: ["version-update:semver-minor", "version-update:semver-major"] }
+      - { dependency-name: "@tauri-apps/plugin-shell", update-types: ["version-update:semver-minor", "version-update:semver-major"] }
 
   - package-ecosystem: npm
     directory: /website
@@ -58,11 +64,17 @@ updates:
     groups:
       cargo:
         patterns: ["*"]
-    # Minor and major Tauri bumps by hand, with their npm side (see the npm
-    # entry above).
+    # The crates paired with an npm package (see the npm entry above). Crates
+    # with no npm side, like tauri-build, tauri-plugin-positioner and
+    # tauri-plugin-updater, keep their minor updates.
     ignore:
-      - dependency-name: "tauri*"
-        update-types: ["version-update:semver-minor", "version-update:semver-major"]
+      - { dependency-name: "tauri", update-types: ["version-update:semver-minor", "version-update:semver-major"] }
+      - { dependency-name: "tauri-plugin-deep-link", update-types: ["version-update:semver-minor", "version-update:semver-major"] }
+      - { dependency-name: "tauri-plugin-dialog", update-types: ["version-update:semver-minor", "version-update:semver-major"] }
+      - { dependency-name: "tauri-plugin-fs", update-types: ["version-update:semver-minor", "version-update:semver-major"] }
+      - { dependency-name: "tauri-plugin-notification", update-types: ["version-update:semver-minor", "version-update:semver-major"] }
+      - { dependency-name: "tauri-plugin-opener", update-types: ["version-update:semver-minor", "version-update:semver-major"] }
+      - { dependency-name: "tauri-plugin-shell", update-types: ["version-update:semver-minor", "version-update:semver-major"] }
 
   - package-ecosystem: github-actions
     directory: /
