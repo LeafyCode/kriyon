@@ -292,8 +292,8 @@ fn transcript_row(line: &str) -> Option<Row> {
 }
 
 /// The live conversation in a transcript: from the newest main row back to the
-/// root through `parentUuid`, oldest first. A rewound branch, left in the file,
-/// is not on the chain.
+/// root through `parentUuid` (across a compaction, `logicalParentUuid`), oldest
+/// first. A rewound branch, left in the file, is not on the chain.
 fn main_chain(rows: Vec<Row>) -> Vec<Row> {
     let Some(leaf) = rows
         .iter()
