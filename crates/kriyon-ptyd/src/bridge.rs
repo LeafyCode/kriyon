@@ -13,7 +13,7 @@ use std::io::{Read as _, Write as _};
 use std::os::unix::fs::MetadataExt as _;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::Mutex;
 use std::time::Duration;
 
 use kriyon_core::bridge::{
@@ -43,8 +43,20 @@ pub fn spawn(id: &str) {
     });
 }
 
-/// The socket file this daemon bound: its path, device and inode.
-static BOUND: OnceLock<(PathBuf, u64, u64)> = OnceLock::new();
+/// The bridge socket's owner record. Binding and recording happen under one
+/// lock, and the daemon's way out takes it too, so a stop never falls between
+/// the file appearing and the daemon knowing it is its own.
+static OWNER: Mutex<Owner> = Mutex::new(Owner {
+    bound: None,
+    stopped: false,
+});
+
+struct Owner {
+    /// The socket file this daemon bound: its path, device and inode.
+    bound: Option<(PathBuf, u64, u64)>,
+    /// The daemon is on its way out: a bind that hasn't happened yet doesn't.
+    stopped: bool,
+}
 
 /// Remove the bridge socket [`spawn`] bound. Part of the daemon's way out:
 /// nothing serves the path once the daemon is gone. Only the file this daemon
@@ -52,10 +64,14 @@ static BOUND: OnceLock<(PathBuf, u64, u64)> = OnceLock::new();
 /// inside a Kriyon session) couldn't bind it, and removing it would cut that
 /// session's companion off for good.
 pub fn remove_socket() {
-    let Some((socket, dev, ino)) = BOUND.get() else {
+    let mut owner = OWNER
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    owner.stopped = true;
+    let Some((socket, dev, ino)) = owner.bound.take() else {
         return;
     };
-    let ours = std::fs::symlink_metadata(socket).is_ok_and(|m| m.dev() == *dev && m.ino() == *ino);
+    let ours = std::fs::symlink_metadata(&socket).is_ok_and(|m| m.dev() == dev && m.ino() == ino);
     if ours {
         let _ = std::fs::remove_file(socket);
     }
@@ -89,10 +105,24 @@ fn bind(socket: &Path) -> std::io::Result<UnixListener> {
             "a live bridge already serves this socket",
         ));
     }
+    let mut owner = OWNER
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if owner.stopped {
+        return Err(std::io::Error::other("the daemon is stopping"));
+    }
     let _ = std::fs::remove_file(socket);
     let listener = UnixListener::bind(socket)?;
-    let bound = std::fs::symlink_metadata(socket)?;
-    let _ = BOUND.set((socket.to_path_buf(), bound.dev(), bound.ino()));
+    let bound = match std::fs::symlink_metadata(socket) {
+        Ok(bound) => bound,
+        Err(e) => {
+            // Just made, so ours: nothing would remove it later.
+            let _ = std::fs::remove_file(socket);
+            return Err(e);
+        }
+    };
+    owner.bound = Some((socket.to_path_buf(), bound.dev(), bound.ino()));
+    drop(owner);
     std::fs::set_permissions(socket, std::fs::Permissions::from_mode(0o600))?;
     Ok(listener)
 }
