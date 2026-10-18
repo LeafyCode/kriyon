@@ -51,6 +51,9 @@ struct Row {
     role: String,
     name: Option<String>,
     is_meta: bool,
+    /// The summary Claude Code writes after a compaction: a user row nobody
+    /// typed, written when the compaction ran.
+    compact_summary: bool,
     /// Who wrote a `user` row (`origin.kind`): `human`, or Claude Code
     /// itself (a [Work report]'s `task-notification`).
     origin: Option<String>,
@@ -230,6 +233,7 @@ fn bridge_row(line: &str, conversation: Option<&str>) -> Option<((String, u64), 
                 .and_then(Value::as_str)
                 .map(str::to_string),
             is_meta: message.get("isMeta").and_then(Value::as_bool) == Some(true),
+            compact_summary: false,
             origin: value
                 .get("origin")
                 .and_then(Value::as_str)
@@ -252,9 +256,12 @@ fn transcript_row(line: &str) -> Option<Row> {
     let message = value.get("message");
     Some(Row {
         uuid: value.get("uuid")?.as_str()?.to_string(),
+        // A compaction starts a new chain: its boundary row has no parent and
+        // names the row before it in `logicalParentUuid`.
         parent: value
             .get("parentUuid")
             .and_then(Value::as_str)
+            .or_else(|| value.get("logicalParentUuid").and_then(Value::as_str))
             .map(str::to_string),
         role: role.to_string(),
         name: value
@@ -262,6 +269,7 @@ fn transcript_row(line: &str) -> Option<Row> {
             .and_then(Value::as_str)
             .map(str::to_string),
         is_meta: value.get("isMeta").and_then(Value::as_bool) == Some(true),
+        compact_summary: value.get("isCompactSummary").and_then(Value::as_bool) == Some(true),
         origin: value
             .get("origin")
             .and_then(|o| o.get("kind"))
@@ -284,8 +292,8 @@ fn transcript_row(line: &str) -> Option<Row> {
 }
 
 /// The live conversation in a transcript: from the newest main row back to the
-/// root through `parentUuid`, oldest first. A rewound branch, left in the file,
-/// is not on the chain.
+/// root through `parentUuid` (across a compaction, `logicalParentUuid`), oldest
+/// first. A rewound branch, left in the file, is not on the chain.
 fn main_chain(rows: Vec<Row>) -> Vec<Row> {
     let Some(leaf) = rows
         .iter()
@@ -528,8 +536,9 @@ fn fold(rows: Vec<(Row, bool)>) -> Vec<StructuredTurn> {
             }
             continue;
         }
-        // Attachments and other engine rows carry the chain, not the view.
-        if row.role != "user" && row.role != "assistant" {
+        // Attachments, other engine rows and a compaction's summary carry the
+        // chain, not the view.
+        if (row.role != "user" && row.role != "assistant") || row.compact_summary {
             continue;
         }
         if let Some(reports) = row.work_reports() {
@@ -763,8 +772,13 @@ fn add_block(turn: &mut StructuredTurn, block: Block, from_claude: bool, thinkin
 
 /// Lift the turn's last text, when nothing came after it, out as the reply.
 fn finish(mut turn: StructuredTurn) -> StructuredTurn {
-    if let Some(TurnItem::Text { .. }) = turn.did.last() {
-        if let Some(TurnItem::Text { text }) = turn.did.pop() {
+    // A compaction after the turn ended doesn't bury its reply.
+    let at = turn
+        .did
+        .iter()
+        .rposition(|item| *item != TurnItem::Compacted);
+    if let Some(at) = at.filter(|&at| matches!(turn.did[at], TurnItem::Text { .. })) {
+        if let TurnItem::Text { text } = turn.did.remove(at) {
             turn.reply = Some(text);
         }
     }
@@ -1575,5 +1589,50 @@ mod tests {
         assert!(turns[0].interrupted);
         assert!(!turns[1].interrupted);
         assert_eq!(turns[1].reply.as_deref(), Some("B is done."));
+    }
+
+    #[test]
+    fn a_compaction_keeps_the_turns_before_it_and_its_summary_is_no_prompt() {
+        // As 2.1.302 writes it: the boundary starts a new chain (no parent;
+        // `logicalParentUuid` names the row before), then Claude Code's
+        // summary as a user row.
+        let transcript = [
+            t("u1", None, "user", &json!("ship it")),
+            json!({"type":"assistant","uuid":"a1","parentUuid":"u1",
+                   "timestamp":"2026-10-18T07:32:02.000Z",
+                   "message":{"role":"assistant","content":[{"type":"text","text":"Shipped. Beta.2 next?"}]}})
+            .to_string(),
+            json!({"type":"system","subtype":"turn_duration","uuid":"d1","parentUuid":"a1",
+                   "timestamp":"2026-10-18T07:32:02.000Z"})
+            .to_string(),
+            json!({"type":"system","subtype":"compact_boundary","uuid":"b1","parentUuid":null,
+                   "logicalParentUuid":"d1","timestamp":"2026-10-18T08:26:43.000Z"})
+            .to_string(),
+            json!({"type":"user","uuid":"s1","parentUuid":"b1","isCompactSummary":true,
+                   "isVisibleInTranscriptOnly":true,"timestamp":"2026-10-18T08:26:43.000Z",
+                   "message":{"role":"user","content":"This session is being continued from a previous conversation."}})
+            .to_string(),
+            json!({"type":"attachment","uuid":"x1","parentUuid":"s1"}).to_string(),
+            t("u2", Some("x1"), "user", &json!("yes, ship beta.2")),
+            t(
+                "a2",
+                Some("u2"),
+                "assistant",
+                &json!([{"type":"text","text":"Started."}]),
+            ),
+        ];
+        let refs: Vec<&str> = transcript.iter().map(String::as_str).collect();
+        let turns = build_turns(&[], &refs, None);
+        assert_eq!(turns.len(), 2);
+        assert_eq!(turns[0].prompt.as_deref(), Some("ship it"));
+        assert_eq!(turns[0].reply.as_deref(), Some("Shipped. Beta.2 next?"));
+        assert!(turns[0].did.contains(&TurnItem::Compacted));
+        // The summary, written an hour later, doesn't stretch the turn.
+        assert_eq!(
+            turns[0].ended_ms,
+            crate::activity_log::parse_iso_ms("2026-10-18T07:32:02.000Z")
+        );
+        assert_eq!(turns[1].prompt.as_deref(), Some("yes, ship beta.2"));
+        assert_eq!(turns[1].reply.as_deref(), Some("Started."));
     }
 }
