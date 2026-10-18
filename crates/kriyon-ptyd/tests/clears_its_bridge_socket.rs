@@ -100,3 +100,41 @@ fn a_daemon_leaves_a_bridge_socket_it_did_not_bind() {
         "the live bridge socket was removed"
     );
 }
+
+/// The path a daemon bound can be taken over while it still runs (the app
+/// unlinks it before starting a new daemon for the session). The file there
+/// when the daemon ends is someone else's, and stays.
+#[test]
+fn a_daemon_leaves_a_bridge_socket_bound_over_its_own() {
+    let dir = tempfile::tempdir().expect("tmp dir");
+    let socket = dir.path().join("test.sock");
+    let bridge = dir.path().join("test.b");
+
+    let mut daemon = Daemon(
+        Command::new(env!("CARGO_BIN_EXE_kriyon-ptyd"))
+            .args([
+                "--id", "test", "--cwd", "/", "--shell", "/bin/sh", "--socket",
+            ])
+            .arg(&socket)
+            .env("PS1", "")
+            .env("HOME", dir.path())
+            .env("KRIYON_BRIDGE_SOCKET", &bridge)
+            .spawn()
+            .expect("spawn daemon"),
+    );
+    wait_for(&socket);
+    wait_for(&bridge);
+    std::fs::remove_file(&bridge).expect("unlink the daemon's bridge");
+    let _other = std::os::unix::net::UnixListener::bind(&bridge).expect("other bridge");
+
+    UnixStream::connect(&socket)
+        .expect("connect")
+        .write_all(&Frame::Shutdown.encode())
+        .expect("shutdown");
+    let _ = daemon.0.wait();
+
+    assert!(
+        UnixStream::connect(&bridge).is_ok(),
+        "the other bridge socket was removed"
+    );
+}
