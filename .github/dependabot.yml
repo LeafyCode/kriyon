@@ -1,0 +1,67 @@
+# Weekly dependency updates, grouped so each ecosystem is one pull request.
+# Actions stay pinned to commit SHAs; Dependabot updates the SHA and the
+# version comment together.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    target-branch: dev
+    schedule:
+      interval: weekly
+    # Wait a week after a release before proposing it, so a compromised or
+    # broken version is usually caught and pulled first.
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: chore
+      include: scope
+    groups:
+      npm:
+        patterns: ["*"]
+
+  - package-ecosystem: npm
+    directory: /website
+    target-branch: dev
+    schedule:
+      interval: weekly
+    # Wait a week after a release before proposing it, so a compromised or
+    # broken version is usually caught and pulled first.
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: chore
+      include: scope
+    groups:
+      website:
+        patterns: ["*"]
+
+  - package-ecosystem: cargo
+    directory: /
+    target-branch: dev
+    schedule:
+      interval: weekly
+    # Wait a week after a release before proposing it, so a compromised or
+    # broken version is usually caught and pulled first.
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: chore
+      include: scope
+    groups:
+      cargo:
+        patterns: ["*"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    target-branch: dev
+    schedule:
+      interval: weekly
+    # Wait a week after a release before proposing it, so a compromised or
+    # broken version is usually caught and pulled first.
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: ci
+    groups:
+      actions:
+        patterns: ["*"]

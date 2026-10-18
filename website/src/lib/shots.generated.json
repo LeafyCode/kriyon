@@ -1,0 +1,58 @@
+{
+  "01-changes-review": {
+    "widths": [
+      640,
+      960,
+      1280,
+      1920,
+      2560,
+      3600
+    ],
+    "intrinsicWidth": 3600,
+    "intrinsicHeight": 2168
+  },
+  "02-live-session": {
+    "widths": [
+      640,
+      960,
+      1280,
+      1920,
+      2560,
+      3600
+    ],
+    "intrinsicWidth": 3600,
+    "intrinsicHeight": 2168
+  },
+  "03-command-palette": {
+    "widths": [
+      640,
+      960,
+      1280,
+      1920,
+      2560,
+      3600
+    ],
+    "intrinsicWidth": 3600,
+    "intrinsicHeight": 2168
+  },
+  "04-prompt-library": {
+    "widths": [
+      640,
+      960,
+      1280,
+      1920,
+      2560,
+      3600
+    ],
+    "intrinsicWidth": 3600,
+    "intrinsicHeight": 2168
+  },
+  "05-menu-bar-triage-portrait": {
+    "widths": [
+      640,
+      800
+    ],
+    "intrinsicWidth": 800,
+    "intrinsicHeight": 1080
+  }
+}

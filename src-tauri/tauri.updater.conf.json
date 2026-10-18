@@ -1,0 +1,9 @@
+{
+  "bundle": { "createUpdaterArtifacts": true },
+  "plugins": {
+    "updater": {
+      "requireSignedVersion": true,
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IENDQ0VDNkY0Q0M0Qzc2NDAKUldSQWRrek05TWJPekd5NkZvV2UwTDlUdllsd3JDZjNLUmxvN0VnU3FURW5nTHpwbXJUdUJCbC8K"
+    }
+  }
+}

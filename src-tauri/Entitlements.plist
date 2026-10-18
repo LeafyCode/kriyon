@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Hardened-runtime entitlements for Kriyon.
+
+  Wired in via tauri.conf.json → bundle.macOS.entitlements, and validated end to
+  end on 0.2.0: a `scripts/release-mac.sh` universal build signed, notarized
+  (Accepted), and stapled with this exact set, and Gatekeeper accepts the result
+  (spctl: "Notarized Developer ID"). A wrong entitlement can hard-fail codesign or
+  notarization, so re-run that build and re-verify if you change anything here.
+
+  What this is for: Kriyon is a terminal host. Every session runs the user's own
+  `claude` CLI plus whatever else they type (shells, node, python, ffmpeg, ssh,
+  REPLs). Those child processes exec arbitrary binaries and load dylibs / native
+  addons that Leafy Code did not sign; under a hardened runtime that would get
+  them hard-killed. The set below is the minimum a general-purpose terminal needs
+  — the same entitlements iTerm2 and Terminal.app ship.
+
+  This is Developer ID (not App Store) distribution: there is NO App Sandbox and
+  deliberately NO app-group / provisioning-profile entry (that would break
+  `codesign`). It does not silence the App Management or Full Disk Access prompts
+  — those are user-only grants in System Settings; no entitlement can dodge them.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Interpreters hosted in the terminal (node/V8, python, etc.) JIT-compile
+	     and write executable memory. -->
+	<key>com.apple.security.cs.allow-jit</key>
+	<true/>
+	<key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+	<true/>
+
+	<!-- Hosted tools set DYLD_* env vars (build tools, custom loaders) that the
+	     hardened runtime would otherwise strip. -->
+	<key>com.apple.security.cs.allow-dyld-environment-variables</key>
+	<true/>
+
+	<!-- Let child processes load dylibs / native addons signed by other teams
+	     (Homebrew tools, node native modules, python extensions). -->
+	<key>com.apple.security.cs.disable-library-validation</key>
+	<true/>
+
+	<!-- Send Apple Events / run osascript so hosted shell integrations and editor
+	     tooling work. macOS still shows a normal per-target consent prompt. -->
+	<key>com.apple.security.automation.apple-events</key>
+	<true/>
+</dict>
+</plist>

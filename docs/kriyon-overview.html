@@ -1,0 +1,508 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Kriyon — Plan Overview</title>
+    <style>
+    :root {
+      --bg: #0b0b0f;
+      --panel: rgba(255, 255, 255, 0.035);
+      --line: rgba(255, 255, 255, 0.08);
+      --ink: #ececf2;
+      --soft: #a6a6b4;
+      --dim: #6a6a7a;
+      --accent: #b084eb;
+      --green: #6fcf97;
+      --amber: #e8c547;
+      --blue: #5b9bd9;
+      --pink: #f0909e;
+    }
+    * {
+      box-sizing: border-box;
+    }
+    html,
+    body {
+      padding: 0;
+      margin: 0;
+    }
+    body {
+      padding: 48px 20px 90px;
+      font-family: "Hanken Grotesk", -apple-system, system-ui, sans-serif;
+      -webkit-font-smoothing: antialiased;
+      line-height: 1.6;
+      color: var(--ink);
+      background: radial-gradient(
+        130% 110% at 30% -10%,
+        #14141a 0%,
+        #0b0b0f 55%,
+        #08080b 100%
+      );
+    }
+    .wrap {
+      max-width: 760px;
+      margin: 0 auto;
+    }
+    header {
+      margin-bottom: 38px;
+    }
+    .logo {
+      display: inline-flex;
+      gap: 10px;
+      align-items: center;
+      margin-bottom: 18px;
+    }
+    .logo .mark {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 40px;
+      height: 40px;
+      font-family: ui-monospace, "JetBrains Mono", monospace;
+      font-size: 20px;
+      color: var(--accent);
+      background: rgba(176, 132, 235, 0.12);
+      border: 1px solid rgba(176, 132, 235, 0.3);
+      border-radius: 10px;
+    }
+    .logo h1 {
+      margin: 0;
+      font-size: 26px;
+      letter-spacing: -0.02em;
+    }
+    .tagline {
+      max-width: 60ch;
+      margin: 0;
+      font-size: 18px;
+      color: var(--soft);
+    }
+    h2 {
+      margin: 40px 0 14px;
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--dim);
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+    }
+    h3 {
+      margin: 0 0 6px;
+      font-size: 17px;
+    }
+    p {
+      margin: 0 0 14px;
+      color: #d2d2dc;
+    }
+    .card {
+      padding: 18px 20px;
+      margin-bottom: 12px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+    }
+    .card p:last-child {
+      margin-bottom: 0;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+    @media (max-width: 560px) {
+      .grid {
+        grid-template-columns: 1fr;
+      }
+    }
+    .feat {
+      display: flex;
+      gap: 12px;
+      align-items: flex-start;
+    }
+    .feat .ico {
+      display: flex;
+      flex: none;
+      align-items: center;
+      justify-content: center;
+      width: 30px;
+      height: 30px;
+      font-size: 15px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+    }
+    .feat h3 {
+      font-size: 15px;
+    }
+    .feat p {
+      margin: 0;
+      font-size: 14px;
+      color: var(--soft);
+    }
+    .lead {
+      font-size: 18px;
+      color: var(--ink);
+    }
+    .steps {
+      padding: 0;
+      margin: 0;
+      list-style: none;
+      counter-reset: s;
+    }
+    .steps li {
+      position: relative;
+      padding: 2px 0 16px 42px;
+    }
+    .steps li:before {
+      position: absolute;
+      top: 0;
+      left: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 28px;
+      height: 28px;
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--accent);
+      content: counter(s);
+      counter-increment: s;
+      background: rgba(176, 132, 235, 0.14);
+      border: 1px solid rgba(176, 132, 235, 0.35);
+      border-radius: 50%;
+    }
+    .steps li:not(:last-child):after {
+      position: absolute;
+      top: 30px;
+      bottom: 2px;
+      left: 13.5px;
+      width: 1px;
+      content: "";
+      background: var(--line);
+    }
+    .pill {
+      display: inline-block;
+      padding: 3px 10px;
+      margin: 0 6px 6px 0;
+      font-size: 12px;
+      color: var(--soft);
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid var(--line);
+      border-radius: 20px;
+    }
+    .rule {
+      display: flex;
+      gap: 10px;
+      align-items: flex-start;
+      margin-bottom: 10px;
+    }
+    .rule .dot {
+      flex: none;
+      width: 7px;
+      height: 7px;
+      margin-top: 8px;
+      border-radius: 50%;
+    }
+    .ok .dot {
+      background: var(--green);
+    }
+    .no .dot {
+      background: var(--pink);
+    }
+    .rule b {
+      font-weight: 600;
+      color: var(--ink);
+    }
+    .two {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+    }
+    @media (max-width: 560px) {
+      .two {
+        grid-template-columns: 1fr;
+      }
+    }
+    .now {
+      padding-left: 16px;
+      border-left: 2px solid var(--green);
+    }
+    .later {
+      padding-left: 16px;
+      border-left: 2px solid var(--dim);
+    }
+    .now h3,
+    .later h3 {
+      font-size: 14px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+    .now h3 {
+      color: var(--green);
+    }
+    .later h3 {
+      color: var(--dim);
+    }
+    ul.clean {
+      padding: 0;
+      margin: 0;
+      list-style: none;
+    }
+    ul.clean li {
+      position: relative;
+      padding: 5px 0 5px 20px;
+      font-size: 14.5px;
+      color: var(--soft);
+    }
+    ul.clean li:before {
+      position: absolute;
+      left: 0;
+      color: var(--dim);
+      content: "›";
+    }
+    .callout {
+      padding: 16px 18px;
+      background: rgba(232, 197, 71, 0.07);
+      border: 1px solid rgba(232, 197, 71, 0.22);
+      border-radius: 12px;
+    }
+    .callout h3 {
+      font-size: 15px;
+      color: var(--amber);
+    }
+    .callout p {
+      margin: 0;
+      font-size: 14.5px;
+      color: #e9ddb6;
+    }
+    footer {
+      padding-top: 18px;
+      margin-top: 46px;
+      font-size: 13px;
+      color: var(--dim);
+      border-top: 1px solid var(--line);
+    }
+    a {
+      color: var(--accent);
+    }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <header>
+        <div class="logo">
+          <span class="mark">›_</span>
+          <h1>Kriyon</h1>
+        </div>
+        <p class="tagline">
+          A friendly desktop app that wraps the Claude Code command‑line tool in
+          a clean interface — so you can run several coding sessions at once and
+          actually keep track of them.
+        </p>
+      </header>
+
+      <h2>The idea in one line</h2>
+      <div class="card">
+        <p class="lead">
+          Keep the real terminal underneath (nothing lost), but add a tidy
+          window on top: organized sessions, readable output, clean copy‑paste,
+          and a heads‑up when a session needs you.
+        </p>
+      </div>
+
+      <h2>What it does for you</h2>
+      <div class="grid">
+        <div class="card feat">
+          <span class="ico">🗂️</span>
+          <div>
+            <h3>Many sessions, organized</h3>
+            <p>
+              Run Claude across several projects and branches at once. They're
+              grouped in a sidebar — no more lost terminal tabs.
+            </p>
+          </div>
+        </div>
+        <div class="card feat">
+          <span class="ico">🔔</span>
+          <div>
+            <h3>Know what's happening</h3>
+            <p>
+              Each session shows its status and a short summary. Get a
+              notification when one finishes or needs your input — without
+              switching to it.
+            </p>
+          </div>
+        </div>
+        <div class="card feat">
+          <span class="ico">📖</span>
+          <div>
+            <h3>Readable output</h3>
+            <p>
+              A clean "Studio" view lays out the conversation, code, and changes
+              nicely. Prefer the raw terminal? One click to switch.
+            </p>
+          </div>
+        </div>
+        <div class="card feat">
+          <span class="ico">📋</span>
+          <div>
+            <h3>Copy that just works</h3>
+            <p>
+              Copy code or output and it comes out clean — no random line breaks
+              chopping up your text.
+            </p>
+          </div>
+        </div>
+        <div class="card feat">
+          <span class="ico">💻</span>
+          <div>
+            <h3>A real terminal</h3>
+            <p>
+              It's a proper terminal too — vim, ssh, and any command work
+              normally. Claude is the star, but the shell is fully there.
+            </p>
+          </div>
+        </div>
+        <div class="card feat">
+          <span class="ico">⌘</span>
+          <div>
+            <h3>Quick jump</h3>
+            <p>
+              A search box (⌘K) to jump straight to any session or run a
+              command.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <h2>How it works (plain version)</h2>
+      <div class="card">
+        <ol class="steps">
+          <li>
+            <b>You log in once</b>
+            with the normal Claude tool, the usual way. Kriyon never touches
+            your login — it just uses the tool you already have.
+          </li>
+          <li>
+            <b>You start a session</b>
+            in a project. Kriyon runs the real Claude command for you behind the
+            scenes.
+          </li>
+          <li>
+            <b>You see two views of the same session:</b>
+            the raw terminal, and a tidy structured version built from Claude's
+            own saved history.
+          </li>
+          <li>
+            <b>The sidebar keeps watch</b>
+            — status, progress, and notifications — so you can leave a session
+            running and check back later.
+          </li>
+        </ol>
+        <p style="margin-top:4px;color:var(--soft);font-size:14.5px;">
+          The clever part: the real terminal always shows everything, so when
+          Claude adds new features, Kriyon never breaks. The tidy view sits on
+          top as a nice‑to‑have.
+        </p>
+      </div>
+
+      <h2>Playing by the rules</h2>
+      <p>
+        Kriyon follows Anthropic's terms. The approach is simple:
+      </p>
+      <div class="card">
+        <div class="rule ok">
+          <span class="dot"></span>
+          <div>
+            <b>You use your own Claude login</b>
+            — we never store or pass around your credentials.
+          </div>
+        </div>
+        <div class="rule ok">
+          <span class="dot"></span>
+          <div>
+            <b>We run the official Claude tool unchanged</b>, just in a nicer
+            window.
+          </div>
+        </div>
+        <div class="rule ok">
+          <span class="dot"></span>
+          <div>
+            <b>Normal, hands‑on use</b>
+            — one person, real work, you stay in the loop.
+          </div>
+        </div>
+        <div class="rule no">
+          <span class="dot"></span>
+          <div>
+            <b>No automation on your subscription.</b>
+            Any future automation will use a separate API key instead.
+          </div>
+        </div>
+        <div class="rule no">
+          <span class="dot"></span>
+          <div>
+            <b>Not named "Claude" and not pretending to be official</b>
+            — it's "Kriyon, works with Claude Code," with a clear "not
+            affiliated with Anthropic" note.
+          </div>
+        </div>
+      </div>
+
+      <h2>What we build first vs. later</h2>
+      <div class="two">
+        <div class="now">
+          <h3>Version 1</h3>
+          <ul class="clean">
+            <li>Multiple sessions across projects and branches</li>
+            <li>Tidy view + raw terminal, switchable</li>
+            <li>Sidebar status, summaries, notifications</li>
+            <li>Clean copy‑paste</li>
+            <li>Quick‑jump search</li>
+            <li>A side panel showing file changes and usage</li>
+          </ul>
+        </div>
+        <div class="later">
+          <h3>Later</h3>
+          <ul class="clean">
+            <li>Review changes → open a pull request → merge, in‑app</li>
+            <li>An automation mode (using your API key)</li>
+            <li>Room for other tools like Codex, side by side</li>
+            <li>Polishing Windows and Linux</li>
+          </ul>
+        </div>
+      </div>
+
+      <h2>What it's built with</h2>
+      <div class="card">
+        <p style="margin-bottom:12px;">
+          Mac first, but able to grow to other systems. Chosen to stay fast and
+          light even with many sessions open.
+        </p>
+        <span class="pill">Tauri (lightweight app shell)</span>
+        <span class="pill">Rust (the fast engine underneath)</span>
+        <span class="pill">React (the interface)</span>
+        <span class="pill">xterm.js (the terminal)</span>
+      </div>
+
+      <h2>Decisions made</h2>
+      <div class="callout">
+        <h3>Settled</h3>
+        <p>
+          • <b>Flat, clean look</b> (not frosted glass) — a touch faster for the
+          terminal.<br>
+          • <b>Branches kept simple</b> — basic create/switch, no extra helpers
+          for now.<br>
+          • <b>zsh fully supported</b>, and the terminal engine (xterm.js) is
+          confirmed the best fit.<br>
+          • <b>We build on one branch</b> and keep things lean — no
+          over‑engineering.
+        </p>
+      </div>
+
+      <footer>
+        Kriyon — working name.<br>
+        Not affiliated with, endorsed by, or sponsored by Anthropic. Works with
+        the Claude Code CLI.
+      </footer>
+    </div>
+  </body>
+</html>

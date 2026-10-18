@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta content="width=device-width, initial-scale=1.0" name="viewport">
+    <title>Kriyon — Sessions</title>
+    <style>
+    html,
+    body,
+    #tray-root {
+      height: 100%;
+      margin: 0;
+    }
+    body {
+      background: transparent;
+    }
+    /* Hide the scrollbar entirely; the popover still scrolls. */
+    * {
+      scrollbar-width: none;
+    }
+    ::-webkit-scrollbar {
+      display: none;
+    }
+    </style>
+  </head>
+  <body>
+    <div id="tray-root"></div>
+    <script src="/src/tray/main.tsx" type="module"></script>
+  </body>
+</html>

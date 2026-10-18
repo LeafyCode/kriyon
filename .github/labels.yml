@@ -1,0 +1,23 @@
+# Issue and PR labels. Kept here so they can be recreated on a new repo.
+# Apply with: gh label create <name> --color <color> --description <description> --force
+- name: bug
+  color: d73a4a
+  description: Something doesn't work as it should
+- name: feature
+  color: a2eeef
+  description: A request for something new
+- name: needs triage
+  color: fbca04
+  description: Not looked at by a maintainer yet
+- name: needs repro
+  color: e4e669
+  description: Needs steps that reproduce the problem; closes after 14 days without them
+- name: good first issue
+  color: 7057ff
+  description: A good place to start for new contributors
+- name: help wanted
+  color: "008672"
+  description: Maintainers would welcome a pull request
+- name: stale
+  color: cfd3d7
+  description: Waiting on a reply; added and removed by the stale workflow

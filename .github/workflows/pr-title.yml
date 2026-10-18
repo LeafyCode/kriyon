@@ -1,0 +1,44 @@
+name: PR title
+
+# Pull requests into dev are squash-merged, so the title becomes the commit
+# message that the changelog and version bump are built from. Same rules as
+# commitlint's config-conventional.
+#
+# `pull_request`, never `pull_request_target`: reading the title needs no
+# secrets, and a fork's run gets a read-only token.
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions: {}
+
+jobs:
+  title:
+    name: Conventional commit title
+    runs-on: ubuntu-24.04
+    permissions:
+      pull-requests: read
+    steps:
+      - uses: amannn/action-semantic-pull-request@48f256284bd46cdaab1048c3721360e808335d50 # v6.1.1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          types: |
+            build
+            chore
+            ci
+            docs
+            feat
+            fix
+            perf
+            refactor
+            revert
+            style
+            test
+          # Lower-case start, as commitlint's subject-case rule requires. The one
+          # exception is Dependabot's "Bump …": it always writes the word with a
+          # capital and offers no setting to change it.
+          subjectPattern: ^(?:Bump |(?![A-Z])).+$
+          subjectPatternError: |
+            The subject "{subject}" in the title "{title}" should start with a
+            lower-case letter, e.g. "fix(changes): keep scroll position on reload".

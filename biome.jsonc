@@ -1,0 +1,75 @@
+{
+  "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
+  "extends": [
+    "ultracite/biome/core",
+    "ultracite/biome/type-aware",
+    "ultracite/biome/react"
+  ],
+  "files": {
+    "includes": [
+      "!docs",
+      "!**/dist",
+      "!**/target",
+      "!src-tauri/gen",
+      // `claude --worktree` checkouts live here; each carries its own
+      // biome.jsonc, which Biome rejects as a nested root.
+      "!.claude/worktrees",
+      // Image assets, some written by scripts/make-*.mjs. Biome 2.5 started
+      // linting SVG; sorting their attributes is churn with no gain.
+      "!**/*.svg"
+    ]
+  },
+  "javascript": {
+    // Injected at build time by vite.config.ts / vitest.config.ts from
+    // package.json; declared for tsc in src/vite-env.d.ts.
+    "globals": ["__APP_VERSION__"]
+  },
+  "assist": {
+    "actions": {
+      "source": {
+        // Key order carries meaning here: palettes run by hue, statuses in
+        // display order, tokens grouped by use. Code that iterates an object
+        // (Object.keys, entries) would change what the UI shows.
+        "useSortedKeys": "off"
+      }
+    }
+  },
+  "linter": {
+    "rules": {
+      // Inline arrow handlers are this codebase's idiom. Wrapping each one in
+      // useCallback adds a dependency list to keep right and buys nothing
+      // unless the child is memoised.
+      "performance": {
+        "noJsxPropsBind": "off"
+      },
+      "suspicious": {
+        // Biome's type inference can't see a ref or class field change in
+        // another function, so it calls `if (cancelledRef.current)` always
+        // false. Every hit was wrong, and "fixing" one deletes a live check.
+        "noUnnecessaryConditions": "off",
+        // Mostly `const Row = memo(function Row(...))`, where the inner name
+        // is what React DevTools shows.
+        "noShadow": "off"
+      },
+      "style": {
+        "useFilenamingConvention": {
+          "level": "error",
+          "options": {
+            "filenameCases": ["camelCase", "PascalCase", "kebab-case"]
+          }
+        }
+      },
+      // tsc (pnpm typecheck) validates module resolution. Biome's type-aware
+      // noUnresolvedImports false-positives on React's CJS runtime + @types.
+      "correctness": {
+        "noUnresolvedImports": "off"
+      }
+    }
+  },
+  "overrides": [
+    {
+      "includes": ["src/**"],
+      "linter": { "rules": { "suspicious": { "noConsole": "error" } } }
+    }
+  ]
+}

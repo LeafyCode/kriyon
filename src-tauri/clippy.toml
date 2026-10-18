@@ -1,0 +1,4 @@
+msrv = "1.88.0"
+allow-expect-in-tests = true
+# Apple framework and class names Kriyon's macOS modules name in prose.
+doc-valid-idents = ["AppKit", "NSException", "WKWebView", ".."]

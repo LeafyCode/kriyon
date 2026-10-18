@@ -1,0 +1,22 @@
+[workspace]
+members = ["src-tauri", "crates/*"]
+resolver = "2"
+
+# One version for every crate, the same as package.json. `pnpm release` sets it;
+# scripts/release.test.mjs fails when they differ.
+[workspace.package]
+version = "0.12.0"
+
+# Release build tuned for a small, quick-to-launch binary (Tauri size guide:
+# https://v2.tauri.app/concept/size). We deliberately keep the default
+# `panic = "unwind"`: it lets Tauri catch a panic inside a command handler and
+# return it as an error instead of aborting the whole app — reliability wins
+# over the small size saving `panic = "abort"` would give.
+[profile.release]
+codegen-units = 1   # Let LLVM optimize across the whole crate graph.
+# Thin LTO, not fat: `window-vibrancy` links Objective-C objects that carry no
+# LLVM bitcode, which fat LTO (`lto = true`) refuses to load. Thin still gives
+# most of the size/speed win and builds cleanly.
+lto = "thin"
+opt-level = "s"     # Prioritize size; the hot paths are IO-bound, not CPU-bound.
+strip = true        # Drop debug symbols (the bulk of the unstripped size).

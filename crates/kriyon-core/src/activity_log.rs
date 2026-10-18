@@ -1,0 +1,707 @@
+//! The [Activity log]'s pure half: what one [Hook spool] line means for the
+//! log — a prompt opening a turn, a turn ending, an [Activity step] starting
+//! or finishing — plus each step's kind, its [Step flags] and what allowed it.
+//! The SQLite half (`src-tauri/src/activity_store.rs`) only stores what this
+//! decides.
+
+use std::sync::LazyLock;
+
+use regex::Regex;
+use serde::Serialize;
+
+use crate::hooks::HookEvent;
+use crate::redact::{redact, redact_json_text};
+
+/// What sort of thing an [Activity step] did, for its label and filter chips.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum StepKind {
+    Read,
+    Search,
+    Edit,
+    Write,
+    Command,
+    Web,
+    Agent,
+    Mcp,
+    Other,
+}
+
+impl StepKind {
+    /// The kind of Claude Code tool `tool`.
+    #[must_use]
+    pub fn of(tool: &str) -> Self {
+        match tool {
+            "Read" | "NotebookRead" => Self::Read,
+            "Grep" | "Glob" | "LS" | "ToolSearch" => Self::Search,
+            "Edit" | "MultiEdit" | "NotebookEdit" => Self::Edit,
+            "Write" => Self::Write,
+            "Bash" | "BashOutput" | "KillShell" | "KillBash" | "PowerShell" => Self::Command,
+            "WebFetch" | "WebSearch" => Self::Web,
+            "Agent" | "Task" => Self::Agent,
+            t if t.starts_with("mcp__") => Self::Mcp,
+            _ => Self::Other,
+        }
+    }
+
+    /// The stored name (matches the serde form).
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Read => "read",
+            Self::Search => "search",
+            Self::Edit => "edit",
+            Self::Write => "write",
+            Self::Command => "command",
+            Self::Web => "web",
+            Self::Agent => "agent",
+            Self::Mcp => "mcp",
+            Self::Other => "other",
+        }
+    }
+
+    /// The stored name back to a kind; anything unknown is `Other`.
+    #[must_use]
+    pub fn parse(name: &str) -> Self {
+        [
+            Self::Read,
+            Self::Search,
+            Self::Edit,
+            Self::Write,
+            Self::Command,
+            Self::Web,
+            Self::Agent,
+            Self::Mcp,
+        ]
+        .into_iter()
+        .find(|k| k.as_str() == name)
+        .unwrap_or(Self::Other)
+    }
+
+    /// Whether the step only looks, never changes anything.
+    #[must_use]
+    pub const fn is_read_only(self) -> bool {
+        matches!(self, Self::Read | Self::Search)
+    }
+}
+
+/// [Step flags]: the things about a step worth a second look. A bit set, so
+/// the store can filter on them with one integer column.
+pub mod flags {
+    /// Installed a package, plugin or MCP server (known by command shape only).
+    pub const INSTALLED: u32 = 1;
+    /// Deleted files, or rewrote history (`rm`, `git reset --hard`, …).
+    pub const DELETED: u32 = 1 << 1;
+    /// Reached the internet.
+    pub const NETWORK: u32 = 1 << 2;
+    /// Read or wrote a file outside the session's folder.
+    pub const OUTSIDE_PROJECT: u32 = 1 << 3;
+    /// Touched a file that usually holds secrets (`.env`, keys, `~/.ssh`, …).
+    pub const SECRET_FILE: u32 = 1 << 4;
+}
+
+/// A shell-command boundary: start of text or a separator before the word.
+const CMD: &str = r"(?:^|[\s;&|(`])";
+
+static INSTALLS: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(&format!(
+        r"{CMD}(?:(?:npm|pnpm|yarn|bun)\s+(?:add|install|i)\b|pip3?\s+install\b|uv\s+(?:add|pip\s+install)\b|brew\s+install\b|cargo\s+(?:add|install)\b|go\s+install\b|gem\s+install\b|apt(?:-get)?\s+install\b|claude\s+(?:plugin\s+install|mcp\s+add)\b|(?:curl|wget)\b[^|]*\|\s*(?:sudo\s+)?(?:ba|z)?sh\b)"
+    ))
+    .expect("a constant pattern")
+});
+
+static DELETES: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(&format!(
+        r"{CMD}(?:rm|rmdir|unlink|shred)\s|{CMD}git\s+(?:reset\s+--hard|clean\b|push\s+(?:.*\s)?(?:--force\b|-f\b)|branch\s+-D\b)|\s-delete\b"
+    ))
+    .expect("a constant pattern")
+});
+
+static NETWORK: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(&format!(
+        r"{CMD}(?:curl|wget|ssh|scp|rsync|nc|ftp|http)\s|{CMD}git\s+(?:push|pull|fetch|clone)\b|https?://"
+    ))
+    .expect("a constant pattern")
+});
+
+static SECRET_PATH: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r#"(?:^|[/\s'"=])(?:\.env(?:\.[A-Za-z0-9_-]+)?|[^/\s'"]+\.(?:pem|key|p12|pfx)|id_(?:rsa|ed25519|ecdsa|dsa)|\.netrc|\.npmrc|\.pypirc)(?:$|[\s'"])|/\.ssh/|/\.aws/|/\.gnupg/|\.credentials"#,
+    )
+    .expect("a constant pattern")
+});
+
+/// Templates that look like secret files but are meant to be shared.
+static SAFE_ENV: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\.env\.(?:example|sample|template|dist)\b").expect("a constant pattern")
+});
+
+/// The [Step flags] for one step. `path` is the file a file tool touched;
+/// `command` the shell command a command tool ran; `cwd` the session folder.
+#[must_use]
+pub fn step_flags(
+    kind: StepKind,
+    command: Option<&str>,
+    path: Option<&str>,
+    cwd: Option<&str>,
+) -> u32 {
+    let mut out = 0;
+    if kind == StepKind::Web {
+        out |= flags::NETWORK;
+    }
+    if let Some(cmd) = command.filter(|_| kind == StepKind::Command) {
+        if INSTALLS.is_match(cmd) {
+            out |= flags::INSTALLED;
+        }
+        if DELETES.is_match(cmd) {
+            out |= flags::DELETED;
+        }
+        if NETWORK.is_match(cmd) {
+            out |= flags::NETWORK;
+        }
+        if is_secret_path(cmd) {
+            out |= flags::SECRET_FILE;
+        }
+    }
+    if let Some(path) = path {
+        if is_secret_path(path) {
+            out |= flags::SECRET_FILE;
+        }
+        if is_outside(path, cwd) {
+            out |= flags::OUTSIDE_PROJECT;
+        }
+    }
+    out
+}
+
+fn is_secret_path(text: &str) -> bool {
+    SECRET_PATH.is_match(text) && !SAFE_ENV.is_match(text)
+}
+
+/// An absolute path not under `cwd`. A relative path is inside by definition;
+/// with no `cwd` known nothing is flagged.
+fn is_outside(path: &str, cwd: Option<&str>) -> bool {
+    let Some(cwd) = cwd.filter(|c| c.starts_with('/')) else {
+        return false;
+    };
+    if !path.starts_with('/') {
+        return false;
+    }
+    let root = cwd.trim_end_matches('/');
+    !(path == root || path.starts_with(&format!("{root}/")))
+}
+
+/// Where an [Activity step] stands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum StepStatus {
+    Running,
+    Ok,
+    Error,
+}
+
+impl StepStatus {
+    /// The stored name back to a status; anything unknown reads as finished.
+    #[must_use]
+    pub fn parse(name: &str) -> Self {
+        match name {
+            "running" => Self::Running,
+            "error" => Self::Error,
+            _ => Self::Ok,
+        }
+    }
+
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Running => "running",
+            Self::Ok => "ok",
+            Self::Error => "error",
+        }
+    }
+}
+
+/// One step's start or end, as the store merges it by `tool_use_id`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StepUpdate {
+    pub tool_use_id: String,
+    pub prompt_id: Option<String>,
+    pub claude_session_id: Option<String>,
+    pub agent_id: Option<String>,
+    pub agent_type: Option<String>,
+    pub tool_name: String,
+    pub kind: StepKind,
+    pub target: Option<String>,
+    pub input: Option<String>,
+    pub result: Option<String>,
+    pub status: StepStatus,
+    pub flags: u32,
+    pub permission_mode: Option<String>,
+    /// When the hook fired (epoch ms).
+    pub at_ms: i64,
+    pub duration_ms: Option<i64>,
+}
+
+/// What one [Hook spool] line means for the [Activity log].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LogEntry {
+    /// A prompt opened a turn.
+    Prompt {
+        prompt_id: Option<String>,
+        claude_session_id: Option<String>,
+        text: String,
+        source: Option<String>,
+        at_ms: i64,
+    },
+    /// The turn ended (`stop`, or `error:<kind>` after an API error).
+    TurnEnd {
+        prompt_id: Option<String>,
+        claude_session_id: Option<String>,
+        reason: String,
+        at_ms: i64,
+    },
+    /// A step started or finished.
+    Step(StepUpdate),
+    /// Claude asked the user's permission for the latest running `tool_name`
+    /// step (the request carries no step id).
+    Asked {
+        tool_name: String,
+        /// The conversation that asked, so the mark lands on its own call.
+        claude_session_id: Option<String>,
+        at_ms: i64,
+    },
+    /// A `claude` in the session ended: its steps still running never will
+    /// finish. Scoped to that conversation — a nested `claude -p` ending must
+    /// not close the main conversation's steps.
+    SessionEnded {
+        claude_session_id: Option<String>,
+        at_ms: i64,
+    },
+}
+
+/// The [Activity log] entry for one hook event, or `None` when it has none
+/// (a notification, a session start, a tool event with no id or timestamp).
+/// Every stored text is redacted again here, so lines from an older hook
+/// script are covered too.
+#[must_use]
+pub fn log_entry(ev: &HookEvent) -> Option<LogEntry> {
+    let at_ms = parse_iso_ms(ev.ts.as_deref()?)?;
+    match ev.event.as_str() {
+        "UserPromptSubmit" => Some(LogEntry::Prompt {
+            prompt_id: ev.prompt_id.clone(),
+            claude_session_id: ev.session_id.clone(),
+            text: redact(ev.prompt.as_deref().unwrap_or_default()),
+            source: ev.prompt_source.clone(),
+            at_ms,
+        }),
+        "Stop" | "StopFailure" => Some(LogEntry::TurnEnd {
+            prompt_id: ev.prompt_id.clone(),
+            claude_session_id: ev.session_id.clone(),
+            reason: match (ev.event.as_str(), ev.error.as_deref()) {
+                ("StopFailure", Some(kind)) => format!("error:{kind}"),
+                ("StopFailure", None) => "error".to_string(),
+                _ => "stop".to_string(),
+            },
+            at_ms,
+        }),
+        "SessionEnd" => Some(LogEntry::SessionEnded {
+            claude_session_id: ev.session_id.clone(),
+            at_ms,
+        }),
+        "PermissionRequest" => Some(LogEntry::Asked {
+            tool_name: ev.tool_name.clone()?,
+            claude_session_id: ev.session_id.clone(),
+            at_ms,
+        }),
+        "PreToolUse" | "PostToolUse" | "PostToolUseFailure" => {
+            step_update(ev, at_ms).map(LogEntry::Step)
+        }
+        _ => None,
+    }
+}
+
+fn step_update(ev: &HookEvent, at_ms: i64) -> Option<StepUpdate> {
+    let tool_use_id = ev.tool_use_id.clone().filter(|id| !id.is_empty())?;
+    let tool_name = ev.tool_name.clone().unwrap_or_default();
+    let kind = StepKind::of(&tool_name);
+    let status = match ev.event.as_str() {
+        "PreToolUse" => StepStatus::Running,
+        "PostToolUse" => StepStatus::Ok,
+        _ => StepStatus::Error,
+    };
+    let input = ev.input.as_deref().map(redact_json_text);
+    let path = input_path(input.as_deref()).or_else(|| {
+        matches!(kind, StepKind::Read | StepKind::Edit | StepKind::Write)
+            .then(|| ev.target.clone())
+            .flatten()
+    });
+    let result = match status {
+        StepStatus::Error => ev.error.as_deref().or(ev.result.as_deref()),
+        _ => ev.result.as_deref(),
+    };
+    Some(StepUpdate {
+        flags: step_flags(
+            kind,
+            ev.command.as_deref(),
+            path.as_deref(),
+            ev.cwd.as_deref(),
+        ),
+        tool_use_id,
+        prompt_id: ev.prompt_id.clone(),
+        claude_session_id: ev.session_id.clone(),
+        agent_id: ev.agent_id.clone().filter(|a| !a.is_empty()),
+        agent_type: ev.agent_type.clone(),
+        tool_name,
+        kind,
+        target: ev.target.as_deref().map(redact),
+        input,
+        result: result.map(redact),
+        status,
+        permission_mode: ev.permission_mode.clone(),
+        at_ms,
+        duration_ms: ev.duration_ms.and_then(|d| i64::try_from(d).ok()),
+    })
+}
+
+/// The file a tool input names (`file_path`, `notebook_path`, `path`), when the
+/// recorded input still parses (a capped one may not).
+fn input_path(input: Option<&str>) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(input?).ok()?;
+    ["file_path", "notebook_path", "path"]
+        .iter()
+        .find_map(|key| value.get(key)?.as_str().map(str::to_string))
+}
+
+/// Plain words for what let a step run. From hooks alone the rule that
+/// matched is unknown, so this names one only when the companion reported it
+/// (`check`). A permission dialog alone doesn't prove the user said yes: only a
+/// step that then finished reads as approved.
+#[must_use]
+pub fn allowed_by(
+    kind: StepKind,
+    permission_mode: Option<&str>,
+    asked: bool,
+    status: StepStatus,
+    check: Option<&crate::bridge::ToolCheck>,
+) -> String {
+    if asked {
+        return match status {
+            StepStatus::Ok => "You approved it in the terminal",
+            StepStatus::Running => "Waiting for your answer in the terminal",
+            StepStatus::Error => "You were asked in the terminal; it didn't complete",
+        }
+        .to_string();
+    }
+    if let Some(rule) = check
+        .filter(|c| c.decision == "allow")
+        .and_then(|c| c.rule.as_deref())
+    {
+        return format!("Allowed by your rule {rule}");
+    }
+    if permission_mode == Some("auto")
+        && status == StepStatus::Ok
+        && check.is_some_and(|c| c.decision == "ask")
+    {
+        return "Auto mode approved it (your settings would have asked)".to_string();
+    }
+    match permission_mode {
+        Some("bypassPermissions") => "Bypass-permissions mode (no prompts)",
+        Some("acceptEdits") if matches!(kind, StepKind::Edit | StepKind::Write) => {
+            "Accept-edits mode"
+        }
+        Some("auto") => "Auto mode",
+        _ if kind.is_read_only() => "Read-only, no prompt needed",
+        _ => "Allowed by your permission settings",
+    }
+    .to_string()
+}
+
+/// Epoch milliseconds for an ISO-8601 UTC-offset timestamp as the hook script
+/// writes it (`2026-10-03T12:00:00.123456+00:00`, or a `Z` suffix). `None`
+/// for anything else — a bad line is skipped, never an error.
+#[must_use]
+pub fn parse_iso_ms(ts: &str) -> Option<i64> {
+    let (date, rest) = ts.split_once('T')?;
+    let mut ymd = date.splitn(3, '-').map(str::parse::<i64>);
+    let (year, month, day) = (ymd.next()?.ok()?, ymd.next()?.ok()?, ymd.next()?.ok()?);
+    let (clock, offset_secs) = if let Some(c) = rest.strip_suffix('Z') {
+        (c, 0)
+    } else {
+        let at = rest.rfind(['+', '-'])?;
+        let (c, off) = rest.split_at(at);
+        let sign = if off.starts_with('-') { -1 } else { 1 };
+        let mut parts = off[1..].splitn(2, ':').map(str::parse::<i64>);
+        let hours = parts.next()?.ok()?;
+        let minutes = parts.next().unwrap_or(Ok(0)).ok()?;
+        (c, sign * (hours * 3600 + minutes * 60))
+    };
+    let (hms, frac) = clock.split_once('.').unwrap_or((clock, ""));
+    let mut parts = hms.splitn(3, ':').map(str::parse::<i64>);
+    let (hour, minute, second) = (
+        parts.next()?.ok()?,
+        parts.next()?.ok()?,
+        parts.next()?.ok()?,
+    );
+    let millis = format!("{frac:0<3}").get(..3)?.parse::<i64>().ok()?;
+    if !(1..=12).contains(&month)
+        || !(1..=31).contains(&day)
+        || hour > 23
+        || minute > 59
+        || second > 60
+    {
+        return None;
+    }
+    let days = days_from_civil(year, month, day);
+    Some(((days * 86_400 + hour * 3600 + minute * 60 + second - offset_secs) * 1000) + millis)
+}
+
+/// Days since 1970-01-01 for a proleptic Gregorian date (H. Hinnant's algorithm).
+const fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
+    let y = if month <= 2 { year - 1 } else { year };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400;
+    let mp = (month + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::hooks::parse_hook_line;
+
+    fn ev(json: &str) -> HookEvent {
+        parse_hook_line(json).expect("a hook line")
+    }
+
+    #[test]
+    fn parses_the_hook_scripts_timestamps() {
+        assert_eq!(parse_iso_ms("1970-01-01T00:00:00+00:00"), Some(0));
+        assert_eq!(parse_iso_ms("1970-01-01T00:00:01.5Z"), Some(1500));
+        assert_eq!(
+            parse_iso_ms("2026-10-03T12:00:00.123456+00:00"),
+            Some(1_791_028_800_123)
+        );
+        assert_eq!(
+            parse_iso_ms("2026-10-03T14:00:00+02:00"),
+            parse_iso_ms("2026-10-03T12:00:00Z")
+        );
+        assert_eq!(parse_iso_ms("not a time"), None);
+        assert_eq!(parse_iso_ms("2026-13-03T12:00:00Z"), None);
+    }
+
+    #[test]
+    fn kinds_cover_the_built_in_tools() {
+        assert_eq!(StepKind::of("Read"), StepKind::Read);
+        assert_eq!(StepKind::of("Grep"), StepKind::Search);
+        assert_eq!(StepKind::of("MultiEdit"), StepKind::Edit);
+        assert_eq!(StepKind::of("Write"), StepKind::Write);
+        assert_eq!(StepKind::of("Bash"), StepKind::Command);
+        assert_eq!(StepKind::of("WebFetch"), StepKind::Web);
+        assert_eq!(StepKind::of("Agent"), StepKind::Agent);
+        assert_eq!(StepKind::of("mcp__github__create_issue"), StepKind::Mcp);
+        assert_eq!(StepKind::of("TodoWrite"), StepKind::Other);
+        for kind in [StepKind::Read, StepKind::Mcp, StepKind::Other] {
+            assert_eq!(StepKind::parse(kind.as_str()), kind);
+        }
+    }
+
+    fn cmd_flags(cmd: &str) -> u32 {
+        step_flags(StepKind::Command, Some(cmd), None, Some("/w"))
+    }
+
+    #[test]
+    fn flags_installs_by_command_shape() {
+        for cmd in [
+            "pnpm add zod",
+            "cd web && npm install",
+            "pip install requests",
+            "brew install jq",
+            "cargo add serde",
+            "claude mcp add github",
+            "curl -fsSL https://x.sh | sh",
+        ] {
+            assert_ne!(cmd_flags(cmd) & flags::INSTALLED, 0, "{cmd}");
+        }
+        for cmd in ["pnpm test", "npm run build", "echo install", "cargo build"] {
+            assert_eq!(cmd_flags(cmd) & flags::INSTALLED, 0, "{cmd}");
+        }
+    }
+
+    #[test]
+    fn flags_deletes_and_history_rewrites() {
+        for cmd in [
+            "rm -rf dist",
+            "git reset --hard HEAD~1",
+            "git push origin main --force",
+            "git clean -fdx",
+            "find . -name '*.log' -delete",
+        ] {
+            assert_ne!(cmd_flags(cmd) & flags::DELETED, 0, "{cmd}");
+        }
+        for cmd in ["git status", "npm run format", "git push origin main"] {
+            assert_eq!(cmd_flags(cmd) & flags::DELETED, 0, "{cmd}");
+        }
+    }
+
+    #[test]
+    fn flags_network_use() {
+        assert_ne!(cmd_flags("curl -s api.example.com") & flags::NETWORK, 0);
+        assert_ne!(cmd_flags("git push origin main") & flags::NETWORK, 0);
+        assert_eq!(cmd_flags("git commit -m x") & flags::NETWORK, 0);
+        assert_ne!(
+            step_flags(StepKind::Web, None, None, None) & flags::NETWORK,
+            0
+        );
+    }
+
+    #[test]
+    fn flags_files_outside_the_project_and_secret_files() {
+        let read = |path: &str| step_flags(StepKind::Read, None, Some(path), Some("/w/app"));
+        assert_ne!(read("/etc/hosts") & flags::OUTSIDE_PROJECT, 0);
+        assert_ne!(
+            read("/w/app-other/x") & flags::OUTSIDE_PROJECT,
+            0,
+            "a sibling is outside"
+        );
+        assert_eq!(read("/w/app/src/main.rs") & flags::OUTSIDE_PROJECT, 0);
+        assert_eq!(read("src/main.rs") & flags::OUTSIDE_PROJECT, 0);
+
+        assert_ne!(read("/w/app/.env") & flags::SECRET_FILE, 0);
+        assert_ne!(read("/w/app/.env.local") & flags::SECRET_FILE, 0);
+        assert_ne!(read("/Users/me/.ssh/id_ed25519") & flags::SECRET_FILE, 0);
+        assert_ne!(read("/w/app/certs/server.pem") & flags::SECRET_FILE, 0);
+        assert_eq!(read("/w/app/.env.example") & flags::SECRET_FILE, 0);
+        assert_eq!(read("/w/app/src/environment.ts") & flags::SECRET_FILE, 0);
+        assert_ne!(cmd_flags("cat .env") & flags::SECRET_FILE, 0);
+    }
+
+    #[test]
+    fn a_prompt_opens_a_turn_and_a_stop_ends_it() {
+        let prompt = log_entry(&ev(
+            r#"{"event":"UserPromptSubmit","session_id":"c1","prompt_id":"p1","prompt":"fix it token=abc","prompt_source":"user","ts":"1970-01-01T00:00:01Z"}"#,
+        ));
+        assert_eq!(
+            prompt,
+            Some(LogEntry::Prompt {
+                prompt_id: Some("p1".into()),
+                claude_session_id: Some("c1".into()),
+                text: "fix it token=[REDACTED]".into(),
+                source: Some("user".into()),
+                at_ms: 1000,
+            })
+        );
+        let failed = log_entry(&ev(
+            r#"{"event":"StopFailure","error":"rate_limit","ts":"1970-01-01T00:00:02Z"}"#,
+        ));
+        assert!(
+            matches!(failed, Some(LogEntry::TurnEnd { ref reason, .. }) if reason == "error:rate_limit")
+        );
+    }
+
+    #[test]
+    fn a_tool_event_becomes_a_step_update() {
+        let pre = log_entry(&ev(
+            r#"{"event":"PreToolUse","tool_name":"Bash","tool_use_id":"t1","prompt_id":"p1","command":"rm -rf build","target":"rm -rf build","input":"{\"command\":\"rm -rf build\"}","cwd":"/w","permission_mode":"default","ts":"1970-01-01T00:00:01Z"}"#,
+        ));
+        let Some(LogEntry::Step(step)) = pre else {
+            panic!("a step: {pre:?}");
+        };
+        assert_eq!(step.status, StepStatus::Running);
+        assert_eq!(step.kind, StepKind::Command);
+        assert_ne!(step.flags & flags::DELETED, 0);
+        assert_eq!(step.prompt_id.as_deref(), Some("p1"));
+
+        let post = log_entry(&ev(
+            r#"{"event":"PostToolUseFailure","tool_name":"Read","tool_use_id":"t2","error":"no such file","input":"{\"file_path\":\"/etc/passwd\"}","cwd":"/w","duration_ms":4,"ts":"1970-01-01T00:00:02Z"}"#,
+        ));
+        let Some(LogEntry::Step(step)) = post else {
+            panic!("a step: {post:?}");
+        };
+        assert_eq!(step.status, StepStatus::Error);
+        assert_eq!(step.result.as_deref(), Some("no such file"));
+        assert_ne!(
+            step.flags & flags::OUTSIDE_PROJECT,
+            0,
+            "path read from the input"
+        );
+        assert_eq!(step.duration_ms, Some(4));
+    }
+
+    #[test]
+    fn events_the_log_does_not_keep_are_skipped() {
+        assert_eq!(
+            log_entry(&ev(
+                r#"{"event":"Notification","ts":"1970-01-01T00:00:01Z"}"#
+            )),
+            None
+        );
+        assert_eq!(
+            log_entry(&ev(
+                r#"{"event":"PreToolUse","tool_name":"Bash","ts":"1970-01-01T00:00:01Z"}"#
+            )),
+            None,
+            "no tool_use_id: nothing to merge the end into"
+        );
+        assert_eq!(log_entry(&ev(r#"{"event":"Stop"}"#)), None, "no timestamp");
+    }
+
+    #[test]
+    fn allowed_by_says_what_hooks_and_the_companion_can_know() {
+        use crate::bridge::ToolCheck;
+        let ok = StepStatus::Ok;
+        assert_eq!(
+            allowed_by(StepKind::Command, Some("default"), true, ok, None),
+            "You approved it in the terminal"
+        );
+        assert_eq!(
+            allowed_by(StepKind::Command, None, true, StepStatus::Running, None),
+            "Waiting for your answer in the terminal",
+            "a dialog alone is not an approval"
+        );
+        assert_eq!(
+            allowed_by(StepKind::Command, None, true, StepStatus::Error, None),
+            "You were asked in the terminal; it didn't complete"
+        );
+        let rule = ToolCheck {
+            decision: "allow".into(),
+            rule: Some("Bash(npm *)".into()),
+        };
+        assert_eq!(
+            allowed_by(StepKind::Command, None, false, ok, Some(&rule)),
+            "Allowed by your rule Bash(npm *)"
+        );
+        let asks = ToolCheck {
+            decision: "ask".into(),
+            rule: None,
+        };
+        assert_eq!(
+            allowed_by(StepKind::Command, Some("auto"), false, ok, Some(&asks)),
+            "Auto mode approved it (your settings would have asked)"
+        );
+        assert_eq!(
+            allowed_by(
+                StepKind::Command,
+                Some("auto"),
+                false,
+                StepStatus::Error,
+                Some(&asks)
+            ),
+            "Auto mode",
+            "an ask that never ran proves no approval"
+        );
+        assert_eq!(
+            allowed_by(StepKind::Edit, Some("acceptEdits"), false, ok, None),
+            "Accept-edits mode"
+        );
+        assert_eq!(
+            allowed_by(StepKind::Read, Some("default"), false, ok, None),
+            "Read-only, no prompt needed"
+        );
+        assert_eq!(
+            allowed_by(StepKind::Command, None, false, ok, None),
+            "Allowed by your permission settings"
+        );
+    }
+}

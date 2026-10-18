@@ -1,0 +1,6 @@
+# Marks website/ as its own pnpm root (own lockfile) so it never joins the
+# desktop app's workspace above. See docs/adr/0018-website-in-repo.md.
+# The empty list must stay: tools that parse this file (e.g. Vercel's
+# workspace detection) crash on a comment-only file, which YAML parses as
+# null.
+packages: []

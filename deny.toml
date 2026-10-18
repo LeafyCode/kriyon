@@ -1,0 +1,48 @@
+# cargo-deny: checks Rust dependencies for known security holes, licences we
+# can't ship, and crates from unknown sources. Run with `cargo deny check`.
+# Docs: https://embarkstudios.github.io/cargo-deny/
+
+[graph]
+# Kriyon ships for macOS only. Linux builds in CI just to run the tests, and
+# Windows is never built, so their platform-only crates are out of scope.
+targets = ["aarch64-apple-darwin", "x86_64-apple-darwin"]
+all-features = true
+
+[advisories]
+# Every vulnerability and unmaintained-crate advisory fails the check. To
+# accept one, add it here with the reason and a date to look again.
+ignore = []
+
+[licenses]
+# Permissive licences, plus MPL-2.0 (file-level copyleft; we don't modify
+# those files). Anything else fails until someone decides.
+allow = [
+  "0BSD",
+  "Apache-2.0",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "CC0-1.0",
+  "ISC",
+  "MIT",
+  "MIT-0",
+  "MPL-2.0",
+  "Unicode-3.0",
+  "Unlicense",
+  "Zlib",
+]
+confidence-threshold = 0.9
+
+[licenses.private]
+# Kriyon's own crates are not published to crates.io.
+ignore = true
+
+[bans]
+# Duplicate versions are common in the Tauri tree and not a risk on their own.
+multiple-versions = "allow"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
