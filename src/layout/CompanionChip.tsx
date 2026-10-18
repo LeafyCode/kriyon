@@ -16,7 +16,7 @@ export function CompanionChip({ status }: { status: CompanionStatus | null }) {
     return null;
   }
   const style: CSSProperties = {
-    ...chip(),
+    ...chip({}),
     color: view.on ? tokens.color.status.running : tokens.color.ink.muted,
     cursor: "pointer",
     fontSize: "11.5px",
