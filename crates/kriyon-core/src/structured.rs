@@ -456,8 +456,8 @@ pub fn parse_partial(line: &str, conversation: Option<&str>) -> Option<PartialRe
     })
 }
 
-/// Build the turns from the [Bridge spool]'s lines and the transcript's lines.
-/// `conversation` is the Claude session id the view is for; live rows from any
+/// Build the turns from the [Bridge spool]'s lines and the transcript's lines
+/// (all of them, or only its newest part). `conversation` is the Claude session id the view is for; live rows from any
 /// other conversation (a nested `claude -p`) are left out.
 #[must_use]
 pub fn build_turns(
@@ -486,10 +486,17 @@ pub fn build_turns(
     // Every row the transcript holds, on any branch: a live row it has on a
     // branch the user rewound away from is discarded, not "not written yet".
     let in_transcript: HashSet<String> = rows.iter().map(|r| r.uuid.clone()).collect();
+    let oldest_read = rows.iter().filter_map(|r| r.at_ms).min();
     let chain = main_chain(rows);
 
     // The transcript's order where it has the row; live rows it hasn't written
-    // yet (it lags) follow in the mod's order.
+    // yet (it lags) follow in the mod's order. It lags only at its end, so a
+    // row is still to be written only after the last live row it holds. A
+    // live row older than all of what was read was cut off with the
+    // transcript's start, not still to come.
+    let last_written = live
+        .iter()
+        .rposition(|(_, r)| in_transcript.contains(&r.uuid));
     let mut merged: Vec<(Row, bool)> = chain
         .into_iter()
         .map(|r| {
@@ -499,7 +506,12 @@ pub fn build_turns(
         .collect();
     merged.extend(
         live.into_iter()
-            .filter(|(_, r)| !in_transcript.contains(&r.uuid))
+            .skip(last_written.map_or(0, |at| at + 1))
+            .filter(|(_, r)| {
+                r.at_ms
+                    .zip(oldest_read)
+                    .is_none_or(|(at, oldest)| at >= oldest)
+            })
             .map(|(_, r)| (r, true)),
     );
     fold(merged)
@@ -980,6 +992,94 @@ mod tests {
         let turns = build_turns(&b_refs, &t_refs, None);
         assert_eq!(turns[0].source, TurnSource::Transcript);
         assert_eq!(turns[1].source, TurnSource::Live);
+    }
+
+    fn live_at(seq: u64, uuid: &str, kind: &str, text: &str, received_ms: i64) -> String {
+        json!({"kind": "row", "run": "r", "seq": seq, "uuid": uuid, "receivedMs": received_ms,
+               "message": {"type": kind, "role": kind, "content": [{"type":"text","text":text}]}})
+        .to_string()
+    }
+
+    fn t_at(uuid: &str, parent: Option<&str>, kind: &str, text: &str, at: &str) -> String {
+        json!({"type": kind, "uuid": uuid, "parentUuid": parent, "timestamp": at,
+               "message": {"role": kind, "content": [{"type":"text","text":text}]}})
+        .to_string()
+    }
+
+    #[test]
+    fn live_rows_older_than_the_transcript_read_are_not_shown_as_newest() {
+        // Only the transcript's newest part is read: u1 and a1 were cut off,
+        // so the transcript doesn't hold them, but they aren't still to come.
+        let transcript = [
+            t_at(
+                "u2",
+                Some("a1"),
+                "user",
+                "second",
+                "2026-10-18T09:00:00.000Z",
+            ),
+            t_at(
+                "a2",
+                Some("u2"),
+                "assistant",
+                "Second reply.",
+                "2026-10-18T09:00:05.000Z",
+            ),
+        ];
+        let at = |iso| crate::activity_log::parse_iso_ms(iso).expect("time");
+        let bridge = [
+            live_at(1, "u1", "user", "first", at("2026-10-18T08:00:00.000Z")),
+            live_at(
+                2,
+                "a1",
+                "assistant",
+                "First reply.",
+                at("2026-10-18T08:00:05.000Z"),
+            ),
+            live_at(3, "u2", "user", "second", at("2026-10-18T09:00:00.000Z")),
+            live_at(
+                4,
+                "a2",
+                "assistant",
+                "Second reply.",
+                at("2026-10-18T09:00:05.000Z"),
+            ),
+            live_at(5, "u3", "user", "third", at("2026-10-18T09:01:00.000Z")),
+        ];
+        let t_refs: Vec<&str> = transcript.iter().map(String::as_str).collect();
+        let b_refs: Vec<&str> = bridge.iter().map(String::as_str).collect();
+        let turns = build_turns(&b_refs, &t_refs, None);
+        let prompts: Vec<_> = turns.iter().map(|t| t.prompt.as_deref()).collect();
+        assert_eq!(prompts, [Some("second"), Some("third")]);
+    }
+
+    #[test]
+    fn live_rows_from_before_the_transcript_read_are_left_out_when_none_overlap() {
+        // The companion's rows all come from an earlier run, before the part
+        // of the transcript that was read.
+        let transcript = [t_at(
+            "u5",
+            Some("a4"),
+            "user",
+            "later",
+            "2026-10-18T12:00:00.000Z",
+        )];
+        let at = |iso| crate::activity_log::parse_iso_ms(iso).expect("time");
+        let bridge = [
+            live_at(1, "u1", "user", "early", at("2026-10-18T08:00:00.000Z")),
+            live_at(
+                2,
+                "a1",
+                "assistant",
+                "Early reply.",
+                at("2026-10-18T08:00:05.000Z"),
+            ),
+        ];
+        let t_refs: Vec<&str> = transcript.iter().map(String::as_str).collect();
+        let b_refs: Vec<&str> = bridge.iter().map(String::as_str).collect();
+        let turns = build_turns(&b_refs, &t_refs, None);
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].prompt.as_deref(), Some("later"));
     }
 
     fn local(uuid: &str, parent: Option<&str>, content: &str) -> String {
