@@ -43,7 +43,7 @@ import { tokens } from "./tokens.ts";
  * to its own wash; an active row passes its own fill to sit still under the
  * pointer rather than darken.
  */
-function fillVars(fill: string, hover?: string): CSSProperties {
+export function fillVars(fill: string, hover?: string): CSSProperties {
   return {
     "--kr-fill": fill,
     ...(hover === undefined ? {} : { "--kr-fill-hover": hover }),
