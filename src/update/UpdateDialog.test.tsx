@@ -46,6 +46,23 @@ describe("UpdateDialog", () => {
     );
   });
 
+  it("draws the notes' Markdown instead of showing its marks", () => {
+    show({
+      ...snapshot,
+      available: {
+        ...snapshot.available,
+        notes:
+          "### Fixed\n\n- Keep **every** turn (#8)\n- Show `stapler` output",
+      },
+    } as UpdateSnapshot);
+    const notes = screen.getByTestId("update-notes");
+    expect(notes.textContent).not.toContain("###");
+    expect(notes.textContent).not.toContain("**");
+    expect(notes.querySelectorAll("li")).toHaveLength(2);
+    expect(notes.querySelector("strong")?.textContent).toBe("every");
+    expect(notes.querySelector("code")?.textContent).toBe("stapler");
+  });
+
   it("offers no install when the step-down has to wait", () => {
     show({
       ...snapshot,
