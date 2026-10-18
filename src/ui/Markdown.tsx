@@ -1,6 +1,8 @@
 /**
  * Markdown as React elements, for Claude's replies and for release notes:
- * the slice `parseReply` reads, with links that open as the terminal's do.
+ * the slice `parseReply` reads. URLs open in the browser; file paths open as
+ * the terminal's do only under a {@link LinkCwd} folder, and stay text
+ * without one.
  */
 
 import { Check, Copy } from "lucide-react";
@@ -93,7 +95,11 @@ const codeCopyStyle: CSSProperties = {
   top: "6px",
 };
 
-/** The folder a reply's relative file links resolve against. */
+/**
+ * The folder a reply's file links resolve against: the session's. Without
+ * one (`""`, as in the update dialog) nothing can open a file, so file paths
+ * stay plain text and only URLs are links.
+ */
 export const LinkCwd = createContext("");
 
 /**
@@ -104,7 +110,7 @@ export const LinkCwd = createContext("");
 function Link({ children, target }: { children: ReactNode; target: string }) {
   const cwd = useContext(LinkCwd);
   const link = linkTarget(target);
-  if (link === null) {
+  if (link === null || (link.kind === "path" && cwd === "")) {
     return <>{children}</>;
   }
   const href = link.kind === "url" ? link.url : link.path;

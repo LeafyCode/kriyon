@@ -63,6 +63,21 @@ describe("UpdateDialog", () => {
     expect(notes.querySelector("code")?.textContent).toBe("stapler");
   });
 
+  it("links URLs in the notes but leaves file paths as text", () => {
+    show({
+      ...snapshot,
+      available: {
+        ...snapshot.available,
+        notes:
+          "- Fixed `src/ui/Markdown.tsx`, see https://github.com/LeafyCode/kriyon/pull/12",
+      },
+    } as UpdateSnapshot);
+    const links = screen.getByTestId("update-notes").querySelectorAll("a");
+    expect([...links].map((a) => a.getAttribute("href"))).toEqual([
+      "https://github.com/LeafyCode/kriyon/pull/12",
+    ]);
+  });
+
   it("offers no install when the step-down has to wait", () => {
     show({
       ...snapshot,
