@@ -36,11 +36,14 @@ to `dev`, the default branch (the action refuses any other), and weekly, and
 publishes the score.
 
 Dependabot proposes weekly grouped updates for npm (app and website), Cargo
-and Actions into `dev`, each held for 7 days after release. Tauri's npm
-packages and Rust crates get only patch updates from it: `tauri build` refuses
-the two sides on different minor versions, and Dependabot bumps each ecosystem
-in its own pull request, so a minor or major Tauri bump is done by hand, both
-sides in one pull request.
+and Actions into `dev`, each held for 7 days after release. Tauri packages
+that come in npm/Rust pairs (`@tauri-apps/api` with `tauri`, each
+`@tauri-apps/plugin-*` with its `tauri-plugin-*`) get only patch version
+updates from it: `tauri build` refuses the two sides on different minor
+versions, and Dependabot bumps each ecosystem in its own pull request, so a
+minor or major bump of a pair is done by hand, both sides in one pull request.
+A security update ignores that rule and can bring one side's minor alone; its
+pull request then bumps the other side too.
 
 Rules every workflow follows: `permissions: {}` at the top and only what each
 job needs; actions pinned to a full commit SHA with a version comment;
