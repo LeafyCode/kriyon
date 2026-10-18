@@ -67,7 +67,9 @@ fn daemon_command(socket: &str) -> Command {
         .args([
             "--socket", socket, "--id", "test", "--cwd", "/", "--shell", "/bin/sh",
         ])
-        .env("PS1", "");
+        .env("PS1", "")
+        // Run from inside a Kriyon session, never serve (or end) its bridge.
+        .env_remove("KRIYON_BRIDGE_SOCKET");
     command
 }
 

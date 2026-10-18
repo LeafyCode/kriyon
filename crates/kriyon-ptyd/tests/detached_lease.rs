@@ -56,6 +56,8 @@ fn spawn_daemon(socket: &str) -> Daemon {
             &LEASE_SECS.to_string(),
         ])
         .env("PS1", "")
+        // Run from inside a Kriyon session, never serve (or end) its bridge.
+        .env_remove("KRIYON_BRIDGE_SOCKET")
         .spawn()
         .expect("spawn daemon");
     Daemon(child)
