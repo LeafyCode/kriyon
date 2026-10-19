@@ -1,7 +1,7 @@
 import "./companionStarting.css";
 import type { CSSProperties } from "react";
 import { useLayout } from "../state/layout.ts";
-import { button } from "../theme/recipes.ts";
+import { button, shimmerText } from "../theme/recipes.ts";
 import { accentAlpha, tokens } from "../theme/tokens.ts";
 import { Mascot } from "./Mascot.tsx";
 
@@ -73,7 +73,7 @@ const orbStyle: CSSProperties = {
 };
 
 const titleStyle: CSSProperties = {
-  backgroundImage: `linear-gradient(90deg, ${tokens.color.ink.muted} 0%, ${tokens.color.ink.bright} 50%, ${tokens.color.ink.muted} 100%)`,
+  ...shimmerText(),
   fontSize: "14px",
   fontWeight: 500,
   margin: 0,
@@ -126,7 +126,7 @@ export function CompanionStarting() {
           </span>
         </span>
       </div>
-      <p className="kr-starting-title" role="status" style={titleStyle}>
+      <p role="status" style={titleStyle}>
         Starting Kriyon Companion…
       </p>
       <p style={hintStyle}>

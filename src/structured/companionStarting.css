@@ -35,14 +35,6 @@
   animation: kr-starting-star 6s linear infinite;
 }
 
-.kr-starting-title {
-  color: transparent;
-  -webkit-background-clip: text;
-  background-clip: text;
-  background-size: 200% auto;
-  animation: kr-shimmer 2.4s linear infinite;
-}
-
 @keyframes kr-starting-travel {
   0% {
     left: 100%;

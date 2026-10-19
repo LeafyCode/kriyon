@@ -18,6 +18,7 @@ import {
   searchInput,
   searchRow,
   sectionLabel,
+  shimmerText,
   statTile,
 } from "./recipes.ts";
 import { tokens } from "./tokens.ts";
@@ -80,6 +81,7 @@ const EVERY_RECIPE = {
   resultLabel: resultLabel(),
   resultSub: resultSub(),
   overlayEmpty: overlayEmpty(),
+  shimmerText: shimmerText(),
 };
 
 describe("style recipes", () => {
