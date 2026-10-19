@@ -112,12 +112,12 @@ test("only the newest snapshot of the block being written is kept, in order", as
   );
 });
 
-test("a resume or /clear says hello again, for the conversation that took over", async () => {
-  // Claude Code fires no `session.start` after either, and the new
+test("a resume, /clear or /branch says hello again, for the conversation that took over", async () => {
+  // Claude Code fires no `session.start` after any of them, and the new
   // conversation may stay quiet until its first prompt: without a hello,
   // Kriyon would take the companion for gone.
   const sessionStart = handlers.get("classic.SessionStart");
-  for (const source of ["resume", "clear"]) {
+  for (const source of ["resume", "clear", "fork"]) {
     const s = session();
     const e = { source, session_id: "next" };
     // biome-ignore lint/performance/noAwaitInLoops: one session at a time.

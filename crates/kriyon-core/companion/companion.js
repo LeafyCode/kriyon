@@ -153,7 +153,7 @@ function greet($) {
 
 /** Conversations that take over a running process: no `session.start`
  *  fires for them, only the classic hook. */
-const TAKEOVERS = new Set(["resume", "clear"]);
+const TAKEOVERS = new Set(["resume", "clear", "fork"]);
 
 /** The fewest milliseconds between two posts of a reply as it streams. */
 const PARTIAL_MS = 250;
@@ -226,8 +226,8 @@ export function register(on) {
     return next(e);
   });
 
-  // A resume or /clear ends the conversation, not the companion: say hello
-  // for the new one, which may stay quiet until its first prompt.
+  // A resume, /clear or /branch ends the conversation, not the companion:
+  // say hello for the new one, which may stay quiet until its first prompt.
   on("classic.SessionStart", ($, e, next) => {
     if (TAKEOVERS.has(e.source)) {
       hello($, e.session_id);
