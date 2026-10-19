@@ -83,7 +83,9 @@ attestations until then, and macOS runners cost ten times the Linux rate.
   last stable release; a beta's or nightly's git-cliff draft, without its heading or guidance
   comment (`release.mjs notes`). A beta's draft lists only what is new since the previous beta
   (a nightly's, since the previous nightly), or since the last stable release when it is the
-  first, so a tester sees what changed since the build they run. They also become
+  first, and a release tagged in between is listed with it. So a tester who takes every beta
+  sees what changed since the one they run; one who skipped a beta sees only the newest
+  beta's changes, and the skipped one's are on its own GitHub release. They also become
   `latest.json`'s notes, which the update dialog shows.
 - **Secrets are plain repo secrets while private.** The jobs already name two environments:
   `prerelease` for betas and nightlies, and `release` for stable builds, publishing and the
