@@ -10,20 +10,17 @@ import {
 import { button } from "../theme/recipes.ts";
 import { tokens } from "../theme/tokens.ts";
 import { DialogPanel, dialogBodyStyle } from "../ui/ConfirmDialog.tsx";
+import { Markdown } from "../ui/Markdown.tsx";
 
 const notesStyle: CSSProperties = {
   background: tokens.color.blockWell,
   border: `1px solid ${tokens.color.line.base}`,
   borderRadius: tokens.radius.md,
-  color: tokens.color.ink.muted,
   fontFamily: tokens.font.sans,
-  fontSize: "12px",
-  lineHeight: 1.5,
   margin: `0 0 ${tokens.space.md}`,
-  maxHeight: "220px",
+  maxHeight: "260px",
   overflowY: "auto",
-  padding: `${tokens.space.sm} ${tokens.space.md}`,
-  whiteSpace: "pre-wrap",
+  padding: `${tokens.space.md} ${tokens.space.lg}`,
 };
 
 const noteStyle: CSSProperties = {
@@ -137,7 +134,7 @@ export function UpdateDialog() {
       <p style={dialogBodyStyle}>{copy.body}</p>
       {available.notes ? (
         <div data-testid="update-notes" style={notesStyle}>
-          {available.notes}
+          <Markdown size="small" text={available.notes} />
         </div>
       ) : null}
       {note ? <p style={noteStyle}>{note}</p> : null}

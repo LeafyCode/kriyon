@@ -46,6 +46,38 @@ describe("UpdateDialog", () => {
     );
   });
 
+  it("draws the notes' Markdown instead of showing its marks", () => {
+    show({
+      ...snapshot,
+      available: {
+        ...snapshot.available,
+        notes:
+          "### Fixed\n\n- Keep **every** turn (#8)\n- Show `stapler` output",
+      },
+    } as UpdateSnapshot);
+    const notes = screen.getByTestId("update-notes");
+    expect(notes.textContent).not.toContain("###");
+    expect(notes.textContent).not.toContain("**");
+    expect(notes.querySelectorAll("li")).toHaveLength(2);
+    expect(notes.querySelector("strong")?.textContent).toBe("every");
+    expect(notes.querySelector("code")?.textContent).toBe("stapler");
+  });
+
+  it("links URLs in the notes but leaves file paths as text", () => {
+    show({
+      ...snapshot,
+      available: {
+        ...snapshot.available,
+        notes:
+          "- Fixed `src/ui/Markdown.tsx`, see https://github.com/LeafyCode/kriyon/pull/12",
+      },
+    } as UpdateSnapshot);
+    const links = screen.getByTestId("update-notes").querySelectorAll("a");
+    expect([...links].map((a) => a.getAttribute("href"))).toEqual([
+      "https://github.com/LeafyCode/kriyon/pull/12",
+    ]);
+  });
+
   it("offers no install when the step-down has to wait", () => {
     show({
       ...snapshot,

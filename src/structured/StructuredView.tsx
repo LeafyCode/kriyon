@@ -1,11 +1,9 @@
 import {
   ArrowDown,
   Bell,
-  Check,
   CircleCheck,
   CircleSlash,
   CircleX,
-  Copy,
   Lightbulb,
   LoaderCircle,
   type LucideIcon,
@@ -13,7 +11,6 @@ import {
 } from "lucide-react";
 import {
   type CSSProperties,
-  createContext,
   Fragment,
   type ReactNode,
   useCallback,
@@ -42,11 +39,7 @@ import { useLayout } from "../state/layout.ts";
 import { useSentPrompts } from "../state/sentPrompts.ts";
 import { sessionWorkingDir, useSessions } from "../state/sessions.ts";
 import { type ShownUsageCard, useUsageCards } from "../state/usageCards.ts";
-import {
-  linkTarget,
-  openFileToken,
-  openLinkTarget,
-} from "../terminal/links.ts";
+import { openFileToken } from "../terminal/links.ts";
 import { screenText } from "../terminal/screenText.ts";
 import {
   type SpinnerTip,
@@ -55,9 +48,15 @@ import {
 } from "../terminal/spinnerTip.ts";
 import { button, chip } from "../theme/recipes.ts";
 import { tokens } from "../theme/tokens.ts";
-import { copyText } from "../ui/copyText.ts";
 import { ImageLightbox } from "../ui/ImageLightbox.tsx";
 import { useImagePreview } from "../ui/imagePreview.ts";
+import {
+  CopyButton,
+  InlineText,
+  LinkCwd,
+  Markdown,
+  replyStyle,
+} from "../ui/Markdown.tsx";
 import { companionHint } from "../welcome/integrationCopy.ts";
 import { useCliDialog } from "./cliDialog.ts";
 import { interruptSession } from "./interrupt.ts";
@@ -72,7 +71,7 @@ import {
   thoughtLabel,
   turnSections,
 } from "./plainWords.ts";
-import { type Inline, linkText, parseReply } from "./replyMarkdown.ts";
+import { linkText } from "./replyMarkdown.ts";
 import { matchingTurn, recordedEnd, shownPrompt } from "./sentPrompt.ts";
 import { UsageCard } from "./UsageCard.tsx";
 import { usageCardSlot } from "./usageRules.ts";
@@ -157,7 +156,7 @@ const caretStyle: CSSProperties = {
 function LiveReply({ text }: { text: string }) {
   return (
     <div aria-live="polite" data-testid="live-reply">
-      <Reply text={text} />
+      <Markdown text={text} />
       <span aria-hidden style={caretStyle} />
     </div>
   );
@@ -278,62 +277,6 @@ const promptStyle: CSSProperties = {
   whiteSpace: "pre-wrap",
 };
 
-const replyStyle: CSSProperties = {
-  color: tokens.color.ink.primary,
-  fontSize: "14px",
-  lineHeight: 1.65,
-  margin: 0,
-  whiteSpace: "pre-wrap",
-};
-
-const replyBlocksStyle: CSSProperties = {
-  display: "flex",
-  flexDirection: "column",
-  gap: tokens.space.md,
-};
-
-const listStyle: CSSProperties = {
-  ...replyStyle,
-  display: "flex",
-  flexDirection: "column",
-  gap: tokens.space.xs,
-  paddingLeft: tokens.space.xl,
-};
-
-const headingStyle: CSSProperties = {
-  ...replyStyle,
-  color: tokens.color.ink.bright,
-  fontWeight: 600,
-};
-
-const codeBlockStyle: CSSProperties = {
-  background: tokens.color.blockWell,
-  borderRadius: tokens.radius.md,
-  color: tokens.color.ink.primary,
-  fontFamily: tokens.font.mono,
-  fontSize: "12px",
-  lineHeight: 1.55,
-  margin: 0,
-  overflowX: "auto",
-  padding: `${tokens.space.sm} ${tokens.space.md}`,
-  whiteSpace: "pre",
-};
-
-const inlineCodeStyle: CSSProperties = {
-  background: tokens.color.blockWell,
-  borderRadius: tokens.radius.sm,
-  fontFamily: tokens.font.mono,
-  fontSize: "0.88em",
-  padding: "1px 4px",
-};
-
-const linkStyle: CSSProperties = {
-  color: tokens.color.accentBright,
-  cursor: "pointer",
-  textDecoration: "underline",
-  textUnderlineOffset: "2px",
-};
-
 const workingStyle: CSSProperties = {
   alignItems: "center",
   color: tokens.color.ink.muted,
@@ -423,24 +366,6 @@ const thumbsStyle: CSSProperties = {
 
 const THUMB_HEIGHT = 96;
 
-const iconButtonStyle: CSSProperties = {
-  ...button("ghost", "sm"),
-  color: tokens.color.ink.muted,
-  height: "22px",
-  padding: "0 6px",
-};
-
-const codeWrapStyle: CSSProperties = {
-  position: "relative",
-};
-
-const codeCopyStyle: CSSProperties = {
-  ...iconButtonStyle,
-  position: "absolute",
-  right: "6px",
-  top: "6px",
-};
-
 const jumpStyle: CSSProperties = {
   ...button("secondary", "sm"),
   borderRadius: tokens.radius.pill,
@@ -492,170 +417,6 @@ function Item({ item }: { item: TurnItem }) {
         </div>
       );
   }
-}
-
-/** The folder a reply's relative file links resolve against. */
-const LinkCwd = createContext("");
-
-/**
- * A link in a reply: a URL opens in the browser, a file in its default app,
- * and Cmd/Ctrl+click reveals the file in Finder — the terminal's gestures. A
- * target that is neither (`mailto:`, `#anchor`) stays plain text.
- */
-function Link({ children, target }: { children: ReactNode; target: string }) {
-  const cwd = useContext(LinkCwd);
-  const link = linkTarget(target);
-  if (link === null) {
-    return <>{children}</>;
-  }
-  const href = link.kind === "url" ? link.url : link.path;
-  return (
-    <a
-      className="kr-focusable"
-      href={href}
-      // The webview must never follow the href itself — not on a middle
-      // click either.
-      onAuxClick={(event) => event.preventDefault()}
-      onClick={(event) => {
-        event.preventDefault();
-        openLinkTarget(cwd, link, event.metaKey || event.ctrlKey);
-      }}
-      style={linkStyle}
-      title={href}
-    >
-      {children}
-    </a>
-  );
-}
-
-function InlineText({ pieces }: { pieces: Inline[] }) {
-  return (
-    <>
-      {pieces.map((piece, index) => {
-        // Pieces never reorder; index is their identity.
-        switch (piece.kind) {
-          case "code":
-            return (
-              // biome-ignore lint/suspicious/noArrayIndexKey: fixed list
-              <code key={index} style={inlineCodeStyle}>
-                {piece.text}
-              </code>
-            );
-          case "bold":
-            return (
-              // biome-ignore lint/suspicious/noArrayIndexKey: fixed list
-              <strong key={index}>
-                <InlineText pieces={piece.children} />
-              </strong>
-            );
-          case "italic":
-            return (
-              // biome-ignore lint/suspicious/noArrayIndexKey: fixed list
-              <em key={index}>
-                <InlineText pieces={piece.children} />
-              </em>
-            );
-          case "link":
-            return (
-              // biome-ignore lint/suspicious/noArrayIndexKey: fixed list
-              <Link key={index} target={piece.target}>
-                <InlineText pieces={piece.children} />
-              </Link>
-            );
-          default:
-            // biome-ignore lint/suspicious/noArrayIndexKey: fixed list
-            return <Fragment key={index}>{piece.text}</Fragment>;
-        }
-      })}
-    </>
-  );
-}
-
-/** Claude's reply, its Markdown drawn as elements (never as HTML). */
-function Reply({ text }: { text: string }) {
-  const blocks = parseReply(text);
-  const drawn: ReactNode[] = blocks.map((block, index) => {
-    switch (block.kind) {
-      case "code":
-        return (
-          // biome-ignore lint/suspicious/noArrayIndexKey: fixed list
-          <div className="kr-copy-host" key={index} style={codeWrapStyle}>
-            <pre style={codeBlockStyle}>
-              <code>{block.text}</code>
-            </pre>
-            <CopyButton
-              label="Copy code"
-              style={codeCopyStyle}
-              text={block.text}
-            />
-          </div>
-        );
-      case "heading":
-        return (
-          // biome-ignore lint/suspicious/noArrayIndexKey: fixed list
-          <p key={index} style={headingStyle}>
-            <InlineText pieces={block.inline} />
-          </p>
-        );
-      case "list": {
-        const List = block.ordered ? "ol" : "ul";
-        return (
-          // biome-ignore lint/suspicious/noArrayIndexKey: fixed list
-          <List key={index} style={{ ...listStyle, margin: 0 }}>
-            {block.items.map((item, at) => (
-              // biome-ignore lint/suspicious/noArrayIndexKey: fixed list
-              <li key={at}>
-                <InlineText pieces={item} />
-              </li>
-            ))}
-          </List>
-        );
-      }
-      default:
-        return (
-          // biome-ignore lint/suspicious/noArrayIndexKey: fixed list
-          <p key={index} style={replyStyle}>
-            <InlineText pieces={block.inline} />
-          </p>
-        );
-    }
-  });
-  return <div style={replyBlocksStyle}>{drawn}</div>;
-}
-
-/** A small copy button; shows a tick for a moment after a copy. */
-function CopyButton({
-  label,
-  style,
-  text,
-}: {
-  label: string;
-  style: CSSProperties;
-  text: string;
-}) {
-  const [done, setDone] = useState(false);
-  useEffect(() => {
-    if (!done) {
-      return;
-    }
-    const timer = window.setTimeout(() => setDone(false), 1200);
-    return () => window.clearTimeout(timer);
-  }, [done]);
-  return (
-    <button
-      aria-label={label}
-      className="kr-focusable kr-hover-surface kr-copy"
-      onClick={() => {
-        copyText(text);
-        setDone(true);
-      }}
-      style={style}
-      title={label}
-      type="button"
-    >
-      {done ? <Check size={12} /> : <Copy size={12} />}
-    </button>
-  );
 }
 
 /** One prompt image: a thumbnail that opens full size. */
@@ -861,11 +622,7 @@ function TurnMeta({ turn }: { turn: StructuredTurn }) {
   return (
     <div className="kr-copy-host" style={metaLineStyle}>
       {turn.reply === null ? null : (
-        <CopyButton
-          label="Copy reply"
-          style={iconButtonStyle}
-          text={turn.reply}
-        />
+        <CopyButton label="Copy reply" text={turn.reply} />
       )}
       {pieces}
     </div>
@@ -1053,7 +810,7 @@ function Turn({
         // Sections have no id of their own and only append.
         section.kind === "text" ? (
           // biome-ignore lint/suspicious/noArrayIndexKey: append-only list
-          <Reply key={index} text={section.text} />
+          <Markdown key={index} text={section.text} />
         ) : (
           // biome-ignore lint/suspicious/noArrayIndexKey: append-only list
           <Steps items={section.items} key={index} />
@@ -1062,7 +819,7 @@ function Turn({
       {/* One slot for the reply: the stream fills it, then the kept reply
           takes it over in the same element — no blank, no jump. */}
       {(turn.reply ?? live) === null ? null : (
-        <Reply text={turn.reply ?? live ?? ""} />
+        <Markdown text={turn.reply ?? live ?? ""} />
       )}
       {live !== null && turn.reply === null ? (
         <span aria-hidden style={caretStyle} />

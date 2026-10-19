@@ -5,6 +5,12 @@ import { chip } from "../theme/recipes.ts";
 import { tokens } from "../theme/tokens.ts";
 import { companionChip } from "./companionChip.ts";
 
+const chipStyle: CSSProperties = {
+  ...chip({}),
+  cursor: "pointer",
+  fontSize: "11.5px",
+};
+
 /**
  * The session header's companion chip: hidden when the companion is off. The
  * header owns the status (it gates a tab on it too), so it is passed in rather
@@ -16,10 +22,8 @@ export function CompanionChip({ status }: { status: CompanionStatus | null }) {
     return null;
   }
   const style: CSSProperties = {
-    ...chip(),
+    ...chipStyle,
     color: view.on ? tokens.color.status.running : tokens.color.ink.muted,
-    cursor: "pointer",
-    fontSize: "11.5px",
   };
   return (
     <button

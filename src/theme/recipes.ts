@@ -192,11 +192,20 @@ export function button(
   };
 }
 
-/** A 24px labelled chip — the composer's `Session ▾`, a worktree branch. */
-export function chip(): CSSProperties {
+/**
+ * A 24px labelled chip — the composer's `Session ▾`, a worktree branch.
+ * Pass `pressable` for a chip that is a button with `.kr-hover-surface`: its
+ * fill (`tokens.color.chip` unless given) and hover fill then ride
+ * `--kr-fill`, as {@link fillVars} explains.
+ */
+export function chip(pressable?: {
+  fill?: string;
+  hover?: string;
+}): CSSProperties {
+  const fill = pressable?.fill ?? tokens.color.chip;
   return {
     alignItems: "center",
-    background: tokens.color.chip,
+    ...(pressable ? fillVars(fill, pressable.hover) : { background: fill }),
     border: `1px solid ${tokens.color.border}`,
     borderRadius: tokens.radius.sm,
     color: tokens.color.ink.secondary,
