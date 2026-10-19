@@ -56,6 +56,10 @@ describe("the BisBig non-color tokens", () => {
     expect(tokens.shadow.raised).toBe("none");
   });
 
+  it("lights a glow with the accent, so it follows the theme", () => {
+    expect(tokens.shadow.glow).toContain("var(--kr-accent-rgb)");
+  });
+
   it("keeps a real shadow only for surfaces that genuinely float", () => {
     for (const key of ["window", "pop", "toast"] as const) {
       expect(tokens.shadow[key]).not.toBe("none");

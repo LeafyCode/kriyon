@@ -196,6 +196,9 @@ export const tokens = {
     pop: "0 8px 28px rgba(0,0,0,0.3)",
     raised: "none",
     toast: "0 6px 22px rgba(0,0,0,0.4)",
+    /** Not depth: the accent's own light, on a small dot that stands for a
+     *  signal on the move (the companion's starting screen). */
+    glow: `0 0 8px ${accentAlpha(0.8)}`,
   },
   // No glass. The chrome is opaque and flat; only the modal/palette scrim keeps
   // a light blur so the dimmed app behind it reads as out of focus.

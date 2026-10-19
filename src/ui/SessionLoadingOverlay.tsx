@@ -1,4 +1,5 @@
 import type { CSSProperties } from "react";
+import { shimmerText } from "../theme/recipes.ts";
 import { tokens } from "../theme/tokens.ts";
 
 const overlayStyle: CSSProperties = {
@@ -23,16 +24,8 @@ const glyphStyle: CSSProperties = {
   lineHeight: 1,
 };
 
-// Travelling light-band over the label — the same "thinking" shimmer used in the
-// session panes, so the loading state reads as part of the same family.
 const labelStyle: CSSProperties = {
-  WebkitBackgroundClip: "text",
-  animation: "kr-shimmer 2.2s linear infinite",
-  backgroundClip: "text",
-  backgroundImage: `linear-gradient(90deg, ${tokens.color.ink.dim} 0%, ${tokens.color.ink.bright} 50%, ${tokens.color.ink.dim} 100%)`,
-  backgroundPosition: "200% center",
-  backgroundSize: "200% auto",
-  color: "transparent",
+  ...shimmerText(),
   fontFamily: tokens.font.sans,
   fontSize: "14px",
 };

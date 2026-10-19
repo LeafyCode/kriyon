@@ -411,6 +411,23 @@ export function overlayEmpty(): CSSProperties {
   };
 }
 
+/**
+ * Text with a band of light travelling across it — the "thinking" shimmer
+ * every loading label shares, so a wait reads as one family wherever it is.
+ * Set the size and weight at the call site.
+ */
+export function shimmerText(): CSSProperties {
+  return {
+    WebkitBackgroundClip: "text",
+    animation: "kr-shimmer 2.2s linear infinite",
+    backgroundClip: "text",
+    backgroundImage: `linear-gradient(90deg, ${tokens.color.ink.dim} 0%, ${tokens.color.ink.bright} 50%, ${tokens.color.ink.dim} 100%)`,
+    backgroundPosition: "200% center",
+    backgroundSize: "200% auto",
+    color: "transparent",
+  };
+}
+
 /** A number tile — the Details rail's tokens / this-session pair. */
 export function statTile(): CSSProperties {
   return {
