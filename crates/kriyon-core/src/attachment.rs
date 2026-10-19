@@ -68,6 +68,15 @@ const IMAGE_READ_MS_MAX: u64 = 2500;
 /// the TUI reads the Enter as part of a paste and inserts a newline.
 pub const SUBMIT_DELAY_MS: u64 = 80;
 
+/// The most text written to the terminal at once. Claude Code reads an
+/// input chunk over 800 characters as a paste: a message sent whole is
+/// wrapped as pasted text, and past the terminal's ~1 KB read only its last
+/// chunk arrives. Pieces this small stay typing even when a few run together.
+pub const TYPE_PIECE_BYTES: usize = 256;
+
+/// The beat between two pieces of a long message, so each is read on its own.
+pub const TYPE_PIECE_GAP_MS: u64 = 20;
+
 /// What an attachment is, which decides how it is sent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -319,10 +328,16 @@ pub fn keystrokes(text: &str, attachments: &[Outgoing<'_>]) -> Vec<Keystroke> {
     }
     let mut out = Vec::new();
     if !first.trim().is_empty() {
-        out.push(Keystroke {
-            text: first,
-            wait_ms: SUBMIT_DELAY_MS,
-        });
+        let pieces = pieces(&first);
+        let last = pieces.len() - 1;
+        out.extend(pieces.into_iter().enumerate().map(|(at, text)| Keystroke {
+            text: text.to_string(),
+            wait_ms: if at == last {
+                SUBMIT_DELAY_MS
+            } else {
+                TYPE_PIECE_GAP_MS
+            },
+        }));
     }
     for image in images {
         out.push(Keystroke {
@@ -335,6 +350,23 @@ pub fn keystrokes(text: &str, attachments: &[Outgoing<'_>]) -> Vec<Keystroke> {
             text: "\r".to_string(),
             wait_ms: 0,
         });
+    }
+    out
+}
+
+/// `text` cut into pieces of at most [`TYPE_PIECE_BYTES`], never inside a
+/// character.
+fn pieces(text: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut rest = text;
+    while !rest.is_empty() {
+        let mut end = rest.len().min(TYPE_PIECE_BYTES);
+        while !rest.is_char_boundary(end) {
+            end -= 1;
+        }
+        let (piece, after) = rest.split_at(end);
+        out.push(piece);
+        rest = after;
     }
     out
 }
@@ -513,6 +545,23 @@ mod tests {
             ]
         );
         assert_eq!(keystrokes("   ", &[]), Vec::<Keystroke>::new());
+    }
+
+    #[test]
+    fn long_text_is_typed_in_pieces_claude_code_reads_as_typing() {
+        let text = "ab\u{3042}\n".repeat(300);
+        let keys = keystrokes(&text, &[]);
+        let (enter, pieces) = keys.split_last().expect("keys");
+        assert_eq!(enter.text, "\r");
+        assert!(pieces.len() > 1);
+        assert!(pieces.iter().all(|k| k.text.len() <= TYPE_PIECE_BYTES));
+        assert_eq!(
+            pieces.iter().map(|k| k.text.as_str()).collect::<String>(),
+            text.trim()
+        );
+        let (last, rest) = pieces.split_last().expect("pieces");
+        assert_eq!(last.wait_ms, SUBMIT_DELAY_MS);
+        assert!(rest.iter().all(|k| k.wait_ms == TYPE_PIECE_GAP_MS));
     }
 
     #[test]
