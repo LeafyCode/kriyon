@@ -11,6 +11,7 @@ use serde::Serialize;
 
 use crate::hooks::HookEvent;
 use crate::redact::{redact, redact_json_text};
+use crate::work_report;
 
 /// What sort of thing an [Activity step] did, for its label and filter chips.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -232,6 +233,8 @@ pub struct StepUpdate {
     pub tool_name: String,
     pub kind: StepKind,
     pub target: Option<String>,
+    /// What the step was for, in one line — see [`step_summary`].
+    pub summary: Option<String>,
     pub input: Option<String>,
     pub result: Option<String>,
     pub status: StepStatus,
@@ -339,6 +342,8 @@ fn step_update(ev: &HookEvent, at_ms: i64) -> Option<StepUpdate> {
         StepStatus::Error => ev.error.as_deref().or(ev.result.as_deref()),
         _ => ev.result.as_deref(),
     };
+    let description = ev.description.as_deref().map(redact);
+    let summary = step_summary(&tool_name, input.as_deref(), description.as_deref());
     Some(StepUpdate {
         flags: step_flags(
             kind,
@@ -354,12 +359,69 @@ fn step_update(ev: &HookEvent, at_ms: i64) -> Option<StepUpdate> {
         tool_name,
         kind,
         target: ev.target.as_deref().map(redact),
+        summary,
         input,
         result: result.map(redact),
         status,
         permission_mode: ev.permission_mode.clone(),
         at_ms,
         duration_ms: ev.duration_ms.and_then(|d| i64::try_from(d).ok()),
+    })
+}
+
+/// The line that heads a turn no person started, or `None` for a person's
+/// prompt: Claude Code's own [Work report]s (`<task-notification>`), and a
+/// message another agent sent the main agent (`<agent-message from="…">`) —
+/// a [Subagent] handing back its report, named `agent` when that is known.
+/// Their tags are for the model; the person reads the summary.
+#[must_use]
+pub fn report_heading(prompt: &str, agent: Option<&str>) -> Option<String> {
+    if let Some(reports) = work_report::parse(prompt) {
+        let summaries: Vec<String> = reports.into_iter().map(|r| r.summary).collect();
+        return Some(summaries.join(" · "));
+    }
+    let peer = prompt.trim_start();
+    (peer.starts_with("<agent-message") || peer.starts_with(PEER_PREFACE))
+        .then(|| work_report::from_peer(prompt, agent).summary)
+}
+
+/// How Claude Code introduces another session's message before its tag.
+const PEER_PREFACE: &str = "Another Claude session sent a message:";
+
+/// The input field that says what a tool call was about, for the tools whose
+/// call has no `description`: what a search looked for, the page it opened.
+fn summary_key(tool: &str) -> Option<&'static str> {
+    match tool {
+        "Grep" | "Glob" => Some("pattern"),
+        "WebSearch" | "ToolSearch" => Some("query"),
+        "WebFetch" => Some("url"),
+        "Skill" => Some("skill"),
+        "ScheduleWakeup" => Some("reason"),
+        _ => None,
+    }
+}
+
+/// The longest summary kept: a row shows one line of it.
+const SUMMARY_MAX: usize = 200;
+
+/// What a step was for, in one line: the `description` Claude writes for a
+/// command or a subagent ("Run the tests"), or the input that names what a
+/// search or fetch was about. Costs no tokens — Claude already sends it.
+///
+/// `description` is the hook's own copy, kept for when the recorded `input`
+/// was capped mid-JSON and no longer parses (a long command comes first).
+#[must_use]
+pub fn step_summary(tool: &str, input: Option<&str>, description: Option<&str>) -> Option<String> {
+    let value: Option<serde_json::Value> = input.and_then(|i| serde_json::from_str(i).ok());
+    let field = |key: &str| value.as_ref()?.get(key)?.as_str().map(str::to_string);
+    let text = summary_key(tool)
+        .and_then(field)
+        .or_else(|| field("description"))
+        .or_else(|| description.map(str::to_string))?;
+    let line = text.lines().map(str::trim).find(|l| !l.is_empty())?;
+    Some(match line.char_indices().nth(SUMMARY_MAX) {
+        Some((cut, _)) => format!("{}\u{2026}", line[..cut].trim_end()),
+        None => line.to_string(),
     })
 }
 
@@ -627,6 +689,68 @@ mod tests {
             "path read from the input"
         );
         assert_eq!(step.duration_ms, Some(4));
+    }
+
+    #[test]
+    fn a_step_says_what_it_was_for() {
+        let bash = r#"{"command":"pnpm check","description":"Run every check"}"#;
+        assert_eq!(
+            step_summary("Bash", Some(bash), None).as_deref(),
+            Some("Run every check")
+        );
+        let grep = r#"{"pattern":"fn map_blocks","path":"crates"}"#;
+        assert_eq!(
+            step_summary("Grep", Some(grep), None).as_deref(),
+            Some("fn map_blocks")
+        );
+        assert_eq!(
+            step_summary(
+                "WebFetch",
+                Some(r#"{"url":"https://docs.rs/x","prompt":"how?"}"#),
+                None
+            )
+            .as_deref(),
+            Some("https://docs.rs/x")
+        );
+        // A long command caps the input mid-JSON: the hook's own copy of the
+        // description still says what it was for.
+        let capped = r#"{"command":"python3 - <<'EOF'\nimport sys…"#;
+        assert_eq!(
+            step_summary("Bash", Some(capped), Some("Print the bytes")).as_deref(),
+            Some("Print the bytes")
+        );
+        assert_eq!(
+            step_summary("Read", Some(r#"{"file_path":"/a"}"#), None),
+            None
+        );
+        assert_eq!(
+            step_summary("Agent", None, Some("\n  Score the findings\nmore")).as_deref(),
+            Some("Score the findings"),
+            "one line"
+        );
+        let long = "x".repeat(SUMMARY_MAX + 10);
+        let capped = step_summary("Bash", None, Some(&long)).expect("a summary");
+        assert_eq!(capped.chars().count(), SUMMARY_MAX + 1);
+    }
+
+    #[test]
+    fn a_turn_no_person_started_is_headed_by_its_summary() {
+        let handback = "<agent-message from=\"a35\">\n[Subagent hand-back] The text below is the final report\n…\n</agent-message>";
+        assert_eq!(
+            report_heading(handback, Some("pr-scorer")).as_deref(),
+            Some("Agent \"pr-scorer\" reported back")
+        );
+        assert_eq!(
+            report_heading(handback, None).as_deref(),
+            Some("A subagent reported back")
+        );
+        let report = "<task-notification>\n<task-id>b1</task-id>\n<status>completed</status>\n<summary>Background command \"Build\" completed</summary>\n</task-notification>";
+        assert_eq!(
+            report_heading(report, None).as_deref(),
+            Some("Background command \"Build\" completed")
+        );
+        assert_eq!(report_heading("fix the <agent-message> parser", None), None);
+        assert_eq!(report_heading("run the tests", None), None);
     }
 
     #[test]

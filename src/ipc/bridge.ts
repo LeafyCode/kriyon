@@ -1387,6 +1387,9 @@ export interface ActivityStep {
   kind: StepKind;
   startedMs: number;
   status: StepStatus;
+  /** What the step was for, in one line: a command's or subagent's
+   * description, a search's pattern, a fetched page. */
+  summary: string | null;
   target: string | null;
   toolName: string;
 }
@@ -1396,7 +1399,11 @@ export interface ActivityTurn {
   endedMs: number | null;
   endReason: string | null;
   id: number;
+  /** The person's words, without Claude Code's paste markers. */
   prompt: string | null;
+  /** What heads a turn no person started (a subagent handing back, a
+   * [Work report]), in plain words; `null` for a person's prompt. */
+  report: string | null;
   /** Who sent the prompt (`user`, `system`, `loop_wakeup`, …), when known. */
   source: string | null;
   startedMs: number;

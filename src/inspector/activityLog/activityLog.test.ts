@@ -27,6 +27,7 @@ function step(over: Partial<ActivityStep> = {}): ActivityStep {
     kind: "read",
     startedMs: 0,
     status: "ok",
+    summary: null,
     target: "/w/a.ts",
     toolName: "Read",
     ...over,
@@ -39,6 +40,7 @@ function turn(over: Partial<ActivityTurn> = {}): ActivityTurn {
     endReason: null,
     id: 1,
     prompt: "fix it",
+    report: null,
     source: "user",
     startedMs: 0,
     steps: [],
@@ -61,7 +63,10 @@ describe("stepLabel", () => {
     expect(stepLabel(step({ kind: "agent" }))).toBe("Ran a subagent");
     expect(stepLabel(step({ kind: "mcp" }))).toBe("MCP call");
     expect(stepLabel(step({ kind: "other", toolName: "TodoWrite" }))).toBe(
-      "Used TodoWrite"
+      "Updated the to-do list"
+    );
+    expect(stepLabel(step({ kind: "other", toolName: "Frobnicate" }))).toBe(
+      "Used Frobnicate"
     );
   });
 
@@ -158,7 +163,101 @@ describe("stepLabel", () => {
   });
 });
 
+describe("what a step was for", () => {
+  test("a command reads as Claude's own description of it", () => {
+    const check = step({
+      flags: STEP_FLAGS.network,
+      kind: "command",
+      summary: "Run every check",
+      target: "pnpm fix && pnpm check",
+      toolName: "Bash",
+    });
+    expect(stepLabel(check)).toBe("Run every check");
+    expect(stepChips(check)).toEqual([{ text: "internet", tone: "flag" }]);
+    expect(stepLines(check, null)).toEqual(["pnpm fix", "pnpm check"]);
+  });
+
+  test("a heredoc is one command, shown by its first line", () => {
+    const script = step({
+      kind: "command",
+      target:
+        "f=/Users/dev/.local/x\npython3 -I - \"$f\" <<'EOF'\nimport sys\nb = open(sys.argv[1]); c = 1\nEOF\ncargo test",
+    });
+    expect(stepLabel(script)).toBe("Ran 3 commands");
+    expect(stepLines(script, null)).toEqual([
+      "f=~/.local/x",
+      "python3 -I - \"$f\" <<'EOF' …",
+      "cargo test",
+    ]);
+  });
+
+  test("a long chain shows its first commands and how many more", () => {
+    const chain = step({ kind: "command", target: "a; b; c; d; e" });
+    expect(stepLines(chain, null)).toEqual(["a", "b", "c", "+2 more"]);
+  });
+
+  test("searches, the web and subagents say what they were about", () => {
+    expect(
+      stepLabel(step({ kind: "search", summary: "fn map", toolName: "Grep" }))
+    ).toBe("Searched for “fn map”");
+    expect(
+      stepLabel(
+        step({ kind: "search", summary: "select:Read", toolName: "ToolSearch" })
+      )
+    ).toBe("Loaded more tools");
+    expect(
+      stepLabel(
+        step({ kind: "web", summary: "tauri v2", toolName: "WebSearch" })
+      )
+    ).toBe("Searched the web for “tauri v2”");
+    expect(
+      stepLabel(
+        step({
+          kind: "web",
+          summary: "https://docs.rs/x/latest",
+          toolName: "WebFetch",
+        })
+      )
+    ).toBe("Opened docs.rs");
+    expect(
+      stepLabel(
+        step({
+          kind: "agent",
+          summary: "Score the findings",
+          toolName: "Agent",
+        })
+      )
+    ).toBe("Subagent: Score the findings");
+  });
+
+  test("other tools get plain words, with their detail under them", () => {
+    const wake = step({
+      kind: "other",
+      summary: "Check the CI run",
+      target: null,
+      toolName: "ScheduleWakeup",
+    });
+    expect(stepLabel(wake)).toBe("Scheduled a check-in");
+    expect(stepLines(wake, null)).toEqual(["Check the CI run"]);
+    expect(
+      stepLabel(
+        step({ kind: "other", summary: "pr-review", toolName: "Skill" })
+      )
+    ).toBe("Used the pr-review skill");
+  });
+});
+
 describe("stepChips", () => {
+  test("a main-agent step of a finished turn isn't running any more", () => {
+    expect(stepChips(step({ status: "running" }), true)).toEqual([]);
+    expect(
+      stepChips(step({ agentType: "Explore", status: "running" }), true)
+    ).toEqual([
+      { text: "running…", tone: "live" },
+      { text: "Explore", tone: "muted" },
+    ]);
+  });
+
   test("a plain main-agent step has none", () => {
     expect(stepChips(step())).toEqual([]);
   });
@@ -234,6 +333,17 @@ describe("turnHeading", () => {
       quoted: false,
       text: "Background message",
     });
+  });
+
+  test("heads a subagent's hand-back by what it was, not its tags", () => {
+    expect(
+      turnHeading(
+        turn({
+          prompt: '<agent-message from="a1">',
+          report: 'Agent "pr-scorer" reported back',
+        })
+      )
+    ).toEqual({ quoted: false, text: 'Agent "pr-scorer" reported back' });
   });
 
   test("says so when no prompt was recorded", () => {

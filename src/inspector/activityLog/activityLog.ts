@@ -66,10 +66,78 @@ function leadFlag(step: ActivityStep): FlagName | null {
   );
 }
 
+/** Plain words for Claude Code's own tools that name no file or command. */
+const TOOL_LABEL: Record<string, string> = {
+  AskUserQuestion: "Asked you a question",
+  CronCreate: "Scheduled a task",
+  CronDelete: "Cancelled a scheduled task",
+  CronList: "Checked the scheduled tasks",
+  EnterPlanMode: "Started planning",
+  EnterWorktree: "Moved to a worktree",
+  ExitPlanMode: "Proposed a plan",
+  ExitWorktree: "Left the worktree",
+  LSP: "Looked up code",
+  Monitor: "Watched a command",
+  PushNotification: "Sent you a notification",
+  ScheduleWakeup: "Scheduled a check-in",
+  SendMessage: "Sent a message to an agent",
+  TaskCreate: "Added a task",
+  TaskGet: "Checked a task",
+  TaskList: "Checked the tasks",
+  TaskOutput: "Read a background task's output",
+  TaskStop: "Stopped a background task",
+  TaskUpdate: "Updated a task",
+  TodoWrite: "Updated the to-do list",
+  ToolSearch: "Loaded more tools",
+};
+
+/** Tools whose summary is for the model, not the person (`select:Read`). */
+const QUIET_SUMMARY = new Set(["ToolSearch"]);
+
 function kindLabel(step: ActivityStep): string {
+  const named = TOOL_LABEL[step.toolName];
+  if (named) {
+    return named;
+  }
   return step.kind === "other"
     ? `Used ${step.toolName}`
     : KIND_LABEL[step.kind];
+}
+
+/** A web address's host, or the address as it is when it doesn't parse. */
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host || url;
+  } catch {
+    // A capped or relative address: show what Claude asked for.
+    return url;
+  }
+}
+
+/** The title a step's summary gives it, or `null` when it has none to give. */
+function summaryLabel(step: ActivityStep): string | null {
+  const { summary, toolName } = step;
+  if (!summary || QUIET_SUMMARY.has(toolName)) {
+    return null;
+  }
+  if (step.kind === "command" || step.kind === "agent") {
+    // Claude's own description of the call: "Run the tests".
+    return step.kind === "agent" ? `Subagent: ${summary}` : summary;
+  }
+  switch (toolName) {
+    case "Grep":
+      return `Searched for “${summary}”`;
+    case "Glob":
+      return `Found files matching “${summary}”`;
+    case "WebSearch":
+      return `Searched the web for “${summary}”`;
+    case "WebFetch":
+      return `Opened ${hostOf(summary)}`;
+    case "Skill":
+      return `Used the ${summary} skill`;
+    default:
+      return null;
+  }
 }
 
 /** The length of the command separator at `line[i]` (`;`, a newline, `&&`,
@@ -81,6 +149,30 @@ function separatorAt(line: string, i: number): number {
   }
   return (ch === "&" || ch === "|") && line[i + 1] === ch ? 2 : 0;
 }
+
+/**
+ * Where the command holding the heredoc opened at `line[start]` (`<<EOF`,
+ * `<<-'EOF'`, `<<"EOF"`) goes on: the newline after its closing word, or the
+ * end. -1 when `<<` there opens no heredoc (`<<<` is a here-string).
+ */
+function heredocEnd(line: string, start: number): number {
+  const word = HEREDOC.exec(line.slice(start))?.[1];
+  if (!word) {
+    return -1;
+  }
+  let at = line.indexOf("\n", start);
+  while (at !== -1) {
+    const next = line.indexOf("\n", at + 1);
+    const body = line.slice(at + 1, next === -1 ? undefined : next);
+    if (body.trim() === word) {
+      return next === -1 ? line.length : next;
+    }
+    at = next;
+  }
+  return line.length;
+}
+
+const HEREDOC = /^<<-?\s*['"]?([A-Za-z_][A-Za-z0-9_]*)['"]?/;
 
 /** Where the quote opened at `line[start]` closes (its index), or the end. */
 function quoteEnd(line: string, start: number): number {
@@ -94,7 +186,8 @@ function quoteEnd(line: string, start: number): number {
 
 /**
  * The commands a shell line chains with `&&`, `||`, `;` or a newline, outside
- * quotes, each trimmed. A pipe stays one command (`curl … | sh` is one install).
+ * quotes and heredocs, each trimmed. A pipe stays one command (`curl … | sh`
+ * is one install).
  */
 export function splitCommands(line: string): string[] {
   const parts: string[] = [];
@@ -106,6 +199,9 @@ export function splitCommands(line: string): string[] {
       i = quoteEnd(line, i) + 1;
     } else if (ch === "\\") {
       i += 2;
+    } else if (ch === "<" && heredocEnd(line, i) !== -1) {
+      // A heredoc's body is the command's input, not more commands.
+      i = heredocEnd(line, i);
     } else {
       const sep = separatorAt(line, i);
       if (sep > 0) {
@@ -140,20 +236,55 @@ function folderOf(path: string): string {
   return cut > 0 ? path.slice(0, cut) : "";
 }
 
+/** The most lines a chain shows before it says how many more ran. */
+const MAX_COMMAND_LINES = 4;
+
+/** A home folder anywhere in a line: `/Users/<name>/`. Mac-first. */
+const HOME_PATH = /\/Users\/[^/\s'"]+\//g;
+
+/** Each command of a chain by its first line, the rest counted. */
+function commandLines(target: string): string[] {
+  const lines = splitCommands(target).map((command) => {
+    const cut = command.indexOf("\n");
+    return cut === -1 ? command : `${command.slice(0, cut).trimEnd()} …`;
+  });
+  if (lines.length <= MAX_COMMAND_LINES) {
+    return lines;
+  }
+  const shown = MAX_COMMAND_LINES - 1;
+  return [...lines.slice(0, shown), `+${lines.length - shown} more`];
+}
+
 /**
- * The lines under a step's title: each command of a chain, or a file's folder
- * (relative to the repository when it's inside it), or the target as it is.
+ * The lines under a step's title, home folders shortened to `~`: each command
+ * of a chain, or a file's folder (relative to the repository when it's inside
+ * it), or what a tool with a fixed title was about, or the target as it is.
  */
 export function stepLines(
   step: ActivityStep,
   toplevel: string | null | undefined
 ): string[] {
-  const { target } = step;
+  return rawLines(step, toplevel).map((line) => line.replace(HOME_PATH, "~/"));
+}
+
+function rawLines(
+  step: ActivityStep,
+  toplevel: string | null | undefined
+): string[] {
+  const { summary, target, toolName } = step;
+  if (
+    !target &&
+    summary &&
+    TOOL_LABEL[toolName] &&
+    !QUIET_SUMMARY.has(toolName)
+  ) {
+    return [summary];
+  }
   if (!target) {
     return [];
   }
   if (step.kind === "command") {
-    return splitCommands(target);
+    return commandLines(target);
   }
   if (FILE_VERB[step.kind] === undefined) {
     return [target];
@@ -169,11 +300,16 @@ export function stepLines(
 }
 
 /**
- * "Ran a command" — or, for a flagged step, what the flag means. A chain of
- * commands says how many ran instead: its flag stays a chip, so the title
+ * What Claude said the step was for ("Run the tests", "Searched for …") — or
+ * else "Ran a command", or, for a flagged step, what the flag means. A chain
+ * of commands says how many ran instead: its flag stays a chip, so the title
  * never pins one command's meaning on the whole line shown under it.
  */
 export function stepLabel(step: ActivityStep): string {
+  const described = summaryLabel(step);
+  if (described) {
+    return described;
+  }
   if (step.kind === "command" && step.target) {
     const count = splitCommands(step.target).length;
     if (count > 1) {
@@ -207,12 +343,17 @@ export interface StepChip {
   tone: ChipTone;
 }
 
-/** The small trailing chips: status, the lead flag, a subagent's type. */
-export function stepChips(step: ActivityStep): StepChip[] {
+/**
+ * The small trailing chips: status, the lead flag, a subagent's type. Once
+ * `turnEnded`, a main-agent step whose end was never recorded isn't running:
+ * Claude ends a turn only after its own calls return.
+ */
+export function stepChips(step: ActivityStep, turnEnded = false): StepChip[] {
   const chips: StepChip[] = [];
+  const stale = turnEnded && step.agentType === null;
   if (step.status === "error") {
     chips.push({ text: "failed", tone: "error" });
-  } else if (step.status === "running") {
+  } else if (step.status === "running" && !stale) {
     chips.push({ text: "running…", tone: "live" });
   }
   const flag = leadFlag(step);
@@ -301,6 +442,9 @@ export interface TurnHeading {
 }
 
 export function turnHeading(turn: ActivityTurn): TurnHeading {
+  if (turn.report) {
+    return { quoted: false, text: turn.report };
+  }
   if (turn.source && turn.source !== "user") {
     return {
       quoted: false,

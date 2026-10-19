@@ -27,6 +27,7 @@ const EDIT: ActivityStep = {
   kind: "edit",
   startedMs: 0,
   status: "ok",
+  summary: null,
   target: "/w/src/a.ts",
   toolName: "Edit",
 };
@@ -45,6 +46,7 @@ const TURN: ActivityTurn = {
   endReason: null,
   id: 1,
   prompt: "add validation",
+  report: null,
   source: "user",
   startedMs: 0,
   steps: [EDIT, INSTALL],

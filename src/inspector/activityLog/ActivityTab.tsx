@@ -294,13 +294,15 @@ function StepRow({
   onOpen,
   step,
   toplevel,
+  turnEnded,
 }: {
   onOpen: (step: ActivityStep) => void;
   step: ActivityStep;
   toplevel: string | null | undefined;
+  turnEnded: boolean;
 }) {
   const Icon = KIND_ICON[step.kind];
-  const chips = stepChips(step);
+  const chips = stepChips(step, turnEnded);
   return (
     <button
       className="kr-hover-surface"
@@ -373,6 +375,7 @@ function TurnBlock({
               onOpen={onOpen}
               step={step}
               toplevel={toplevel}
+              turnEnded={turn.endedMs !== null}
             />
           ))}
         </div>

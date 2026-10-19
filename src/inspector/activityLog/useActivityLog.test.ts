@@ -27,6 +27,7 @@ function turn(id: number): ActivityTurn {
     endReason: null,
     id,
     prompt: `p${id}`,
+    report: null,
     source: "user",
     startedMs: 0,
     steps: [],

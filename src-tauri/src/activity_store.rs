@@ -10,7 +10,9 @@
 
 use std::path::Path;
 
-use kriyon_core::activity_log::{self, LogEntry, StepKind, StepStatus, StepUpdate};
+use kriyon_core::activity_log::{self, report_heading, LogEntry, StepKind, StepStatus, StepUpdate};
+use kriyon_core::transcript::unwrap_pastes;
+use kriyon_core::work_report;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 
@@ -91,7 +93,11 @@ pub struct CompanionFacts {
 #[serde(rename_all = "camelCase")]
 pub struct ActivityTurn {
     pub id: i64,
+    /// The person's words, with Claude Code's paste markers taken out.
     pub prompt: Option<String>,
+    /// What heads a turn no person started (a subagent handing back, a
+    /// [Work report]), in plain words; `None` for a person's prompt.
+    pub report: Option<String>,
     /// Who sent the prompt (`user`, `system`, `loop_wakeup`, …), when known.
     pub source: Option<String>,
     pub started_ms: i64,
@@ -108,6 +114,8 @@ pub struct ActivityStep {
     pub tool_name: String,
     pub kind: StepKind,
     pub target: Option<String>,
+    /// What the step was for, in one line (`activity_log::step_summary`).
+    pub summary: Option<String>,
     pub status: StepStatus,
     pub flags: u32,
     pub agent_type: Option<String>,
@@ -213,7 +221,7 @@ impl ActivityStore {
         Self::init(Connection::open_in_memory()?)
     }
 
-    fn init(conn: Connection) -> Result<Self, ActivityError> {
+    fn init(mut conn: Connection) -> Result<Self, ActivityError> {
         // auto_vacuum only takes on a file with no tables yet; harmless after.
         conn.execute_batch(
             "PRAGMA auto_vacuum = INCREMENTAL;
@@ -312,6 +320,16 @@ impl ActivityStore {
                  ) STRICT;
                  PRAGMA user_version = 5; COMMIT;",
             )?;
+        }
+        if version < 6 {
+            // What each step was for (a command's description, a search's
+            // pattern), so a row reads as Claude meant it — filled in for the
+            // steps already kept from the input they recorded.
+            let tx = conn.transaction()?;
+            tx.execute_batch("ALTER TABLE steps ADD COLUMN summary TEXT;")?;
+            backfill_summaries(&tx)?;
+            tx.execute_batch("PRAGMA user_version = 6;")?;
+            tx.commit()?;
         }
         Ok(Self { conn })
     }
@@ -441,11 +459,16 @@ impl ActivityStore {
         let mut steps_stmt = self.conn.prepare(&format!(
             "SELECT {STEP_COLUMNS} FROM steps WHERE turn_id = ?1 ORDER BY started_ms, id"
         ))?;
+        let mut agent_stmt = self.conn.prepare(
+            "SELECT agent_type FROM steps
+             WHERE session_id = ?1 AND agent_id = ?2 AND agent_type IS NOT NULL LIMIT 1",
+        )?;
         let mut turns = turns_stmt
             .query_map(params![session_id, limit], |r| {
                 Ok(ActivityTurn {
                     id: r.get(0)?,
                     prompt: r.get(1)?,
+                    report: None,
                     source: r.get(2)?,
                     started_ms: r.get(3)?,
                     ended_ms: r.get(4)?,
@@ -455,6 +478,17 @@ impl ActivityStore {
             })?
             .collect::<Result<Vec<_>, _>>()?;
         for turn in &mut turns {
+            if let Some(prompt) = turn.prompt.take() {
+                // A hand-back names its sender by id; its steps carry its type.
+                let agent: Option<String> = match work_report::peer_sender(&prompt) {
+                    Some(id) => agent_stmt
+                        .query_row(params![session_id, id], |r| r.get(0))
+                        .optional()?,
+                    None => None,
+                };
+                turn.report = report_heading(&prompt, agent.as_deref());
+                turn.prompt = Some(unwrap_pastes(&prompt));
+            }
             turn.steps = steps_stmt
                 .query_map([turn.id], step_row)?
                 .collect::<Result<Vec<_>, _>>()?;
@@ -488,12 +522,12 @@ impl ActivityStore {
                 params![session_id, step_id],
                 |r| {
                     let step = step_row(r)?;
-                    let mode: Option<String> = r.get(12)?;
-                    let asked: i64 = r.get(13)?;
-                    let decision: Option<String> = r.get(15)?;
+                    let mode: Option<String> = r.get(AFTER_STEP + 3)?;
+                    let asked: i64 = r.get(AFTER_STEP + 4)?;
+                    let decision: Option<String> = r.get(AFTER_STEP + 6)?;
                     let check = decision.map(|decision| kriyon_core::bridge::ToolCheck {
                         decision,
-                        rule: r.get(16).ok().flatten(),
+                        rule: r.get(AFTER_STEP + 7).ok().flatten(),
                     });
                     Ok(ActivityStepDetail {
                         allowed_by: activity_log::allowed_by(
@@ -504,10 +538,10 @@ impl ActivityStore {
                             check.as_ref(),
                         ),
                         step,
-                        input: r.get(9)?,
-                        result: r.get(10)?,
-                        agent_id: r.get(11)?,
-                        ended_ms: r.get(14)?,
+                        input: r.get(AFTER_STEP)?,
+                        result: r.get(AFTER_STEP + 1)?,
+                        agent_id: r.get(AFTER_STEP + 2)?,
+                        ended_ms: r.get(AFTER_STEP + 5)?,
                     })
                 },
             )
@@ -828,8 +862,32 @@ impl ActivityStore {
     }
 }
 
+/// Each kept step's summary, from the input it recorded.
+fn backfill_summaries(tx: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+    let mut read = tx.prepare("SELECT id, tool_name, input FROM steps WHERE input IS NOT NULL")?;
+    let mut write = tx.prepare("UPDATE steps SET summary = ?2 WHERE id = ?1")?;
+    let rows = read
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    for (id, tool, input) in rows {
+        if let Some(summary) = activity_log::step_summary(&tool, Some(&input), None) {
+            write.execute(params![id, summary])?;
+        }
+    }
+    Ok(())
+}
+
 const STEP_COLUMNS: &str =
-    "id, tool_name, kind, target, status, flags, agent_type, started_ms, duration_ms";
+    "id, tool_name, kind, target, status, flags, agent_type, started_ms, duration_ms, summary";
+
+/// The index of the first column a query selects after [`STEP_COLUMNS`].
+const AFTER_STEP: usize = 10;
 
 fn step_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<ActivityStep> {
     let kind: String = r.get(2)?;
@@ -844,6 +902,7 @@ fn step_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<ActivityStep> {
         agent_type: r.get(6)?,
         started_ms: r.get(7)?,
         duration_ms: r.get(8)?,
+        summary: r.get(9)?,
     })
 }
 
@@ -1111,14 +1170,15 @@ fn upsert_step(
     tx.execute(
         "INSERT INTO steps (session_id, turn_id, tool_use_id, agent_id, agent_type, tool_name, kind,
                             target, input, result, status, flags, permission_mode, started_ms,
-                            ended_ms, duration_ms, claude_session_id)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
+                            ended_ms, duration_ms, claude_session_id, summary)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
          ON CONFLICT(session_id, tool_use_id) DO UPDATE SET
            claude_session_id = COALESCE(claude_session_id, excluded.claude_session_id),
            turn_id = COALESCE(turn_id, excluded.turn_id),
            agent_id = COALESCE(agent_id, excluded.agent_id),
            agent_type = COALESCE(agent_type, excluded.agent_type),
            target = COALESCE(target, excluded.target),
+           summary = COALESCE(summary, excluded.summary),
            input = COALESCE(input, excluded.input),
            result = CASE WHEN excluded.status <> 'running' AND result = 'Did not finish: the session ended'
                          THEN excluded.result
@@ -1147,6 +1207,7 @@ fn upsert_step(
             ended,
             step.duration_ms,
             step.claude_session_id,
+            step.summary,
         ],
     )?;
     Ok(())
@@ -1354,6 +1415,35 @@ mod tests {
         assert_eq!(step.kind, StepKind::Command);
         assert_ne!(step.flags & flags::INSTALLED, 0);
         assert_eq!((step.started_ms, step.duration_ms), (2000, Some(1000)));
+    }
+
+    #[test]
+    fn turns_and_steps_read_in_plain_words() {
+        let mut store = ActivityStore::open_in_memory().expect("opens");
+        ingest(
+            &mut store,
+            &[
+                prompt("p1", "send this\n\n<pasted_content id=\"9\">\nhi\n</pasted_content id=\"9\">\n", 1),
+                line(&serde_json::json!({
+                    "event": "PostToolUse", "tool_name": "Bash", "tool_use_id": "t1",
+                    "prompt_id": "p1", "agent_id": "a35", "agent_type": "pr-scorer",
+                    "command": "pnpm check", "description": "Run every check",
+                    "input": "{\"command\":\"pnpm check\",\"description\":\"Run every check\"}",
+                    "ts": at(2),
+                })),
+                prompt("p2", "<agent-message from=\"a35\">\n[Subagent hand-back] The report\n</agent-message>", 3),
+            ],
+        );
+        let turns = store.turns("s1", 10).expect("reads");
+        let (handback, pasted) = (&turns[0], &turns[1]);
+        assert_eq!(
+            handback.report.as_deref(),
+            Some("Agent \"pr-scorer\" reported back"),
+            "named by the type its own steps carry"
+        );
+        assert_eq!(pasted.report, None);
+        assert_eq!(pasted.prompt.as_deref(), Some("send this\n\nhi\n"));
+        assert_eq!(pasted.steps[0].summary.as_deref(), Some("Run every check"));
     }
 
     #[test]
@@ -1844,6 +1934,31 @@ mod tests {
         assert_eq!(step.status, StepStatus::Ok);
         let detail = store.step("s1", step.id).expect("reads").expect("a step");
         assert_eq!(detail.result, None, "no leftover \"did not finish\"");
+    }
+
+    #[test]
+    fn steps_kept_before_summaries_get_one_from_their_input() {
+        let conn = Connection::open_in_memory().expect("opens");
+        conn.execute_batch(&format!(
+            "{SCHEMA_V1} ALTER TABLE steps ADD COLUMN claude_session_id TEXT;
+             PRAGMA user_version = 5;
+             INSERT INTO sessions VALUES ('s1', 0);
+             INSERT INTO steps (session_id, tool_use_id, tool_name, kind, input, status, started_ms)
+             VALUES ('s1', 't1', 'Bash', 'command',
+                     '{{\"command\":\"pnpm check\",\"description\":\"Run every check\"}}', 'ok', 0),
+                    ('s1', 't2', 'Read', 'read', '{{\"file_path\":\"/a\"}}', 'ok', 0);"
+        ))
+        .expect("a v5 log");
+        let store = ActivityStore::init(conn).expect("migrates");
+        let summaries: Vec<Option<String>> = store
+            .conn
+            .prepare("SELECT summary FROM steps ORDER BY tool_use_id")
+            .expect("prepares")
+            .query_map([], |r| r.get(0))
+            .expect("reads")
+            .collect::<Result<_, _>>()
+            .expect("rows");
+        assert_eq!(summaries, [Some("Run every check".to_string()), None]);
     }
 
     #[test]
