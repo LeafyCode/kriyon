@@ -327,6 +327,10 @@ pub struct HookEvent {
     /// On a file tool's `PostToolUse`, whether it made a new file.
     #[serde(default)]
     pub created: Option<bool>,
+    /// On a [Subagent]'s own event, the `tool_use_id` of the call that launched
+    /// it, from the sidecar Claude Code writes beside its transcript.
+    #[serde(default)]
+    pub launched_by: Option<String>,
     /// On a Bash `PostToolUse`, the files the command changed (capped).
     #[serde(default)]
     pub changed_files: Option<Vec<String>>,
@@ -1210,6 +1214,38 @@ mod tests {
             Some("1 failed")
         );
         assert_eq!(bash("hello").as_deref(), None);
+        // A run where every test failed has no "passed" anywhere.
+        assert_eq!(
+            bash(" Test Files  1 failed (1)\n      Tests  2 failed (2)\n").as_deref(),
+            Some("2 failed")
+        );
+        assert_eq!(
+            bash("===== 2 failed in 0.10s =====").as_deref(),
+            Some("2 failed")
+        );
+        assert_eq!(
+            bash("Tests:       2 failed, 2 total").as_deref(),
+            Some("2 failed")
+        );
+        assert_eq!(
+            bash("Tests:       41 passed, 41 total").as_deref(),
+            Some("41 passed")
+        );
+        // Output that only mentions passing is not a test run.
+        assert_eq!(
+            bash("hooks.rs:1188: Some(\"43 passed\")\nfix: 3 passed tests").as_deref(),
+            None
+        );
+        // One command running several runners adds them all up.
+        assert_eq!(
+            bash("      Tests  10 passed (10)\nℹ pass 5\nℹ fail 0\ntest result: ok. 7 passed; 0 failed;").as_deref(),
+            Some("22 passed")
+        );
+        assert_eq!(
+            bash("      Tests  1 failed | 9 passed (10)\ntest result: ok. 7 passed; 0 failed;")
+                .as_deref(),
+            Some("1 failed")
+        );
         assert_eq!(
             outcome(
                 "Grep",
@@ -1246,6 +1282,36 @@ mod tests {
         let tasks = ev.background_tasks.expect("the list");
         assert_eq!(tasks[0].id, "ac049aa2d97e68b55");
         assert_eq!(tasks[1].kind, "shell");
+    }
+
+    #[test]
+    fn the_hook_script_reads_which_launch_started_a_subagent() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let sub = home.path().join("proj/s1/subagents");
+        std::fs::create_dir_all(&sub).expect("subagents dir");
+        std::fs::write(
+            sub.join("agent-a7.meta.json"),
+            r#"{"agentType":"Explore","description":"Map it","toolUseId":"toolu_9"}"#,
+        )
+        .expect("sidecar");
+        let transcript = home.path().join("proj/s1.jsonl");
+        let payload = |agent: &str| {
+            serde_json::json!({
+                "hook_event_name": "PreToolUse", "tool_name": "Read", "tool_use_id": "t",
+                "agent_id": agent, "agent_type": "Explore",
+                "transcript_path": transcript, "tool_input": {"file_path": "/w/a"},
+            })
+            .to_string()
+        };
+        let ev = run_hook_script_in(home.path(), &payload("a7")).expect("an event line");
+        assert_eq!(ev.launched_by.as_deref(), Some("toolu_9"));
+        let unknown = run_hook_script_in(home.path(), &payload("zz")).expect("an event line");
+        assert_eq!(
+            unknown.launched_by, None,
+            "no sidecar: nothing, and no failure"
+        );
+        let sneaky = run_hook_script_in(home.path(), &payload("../../x")).expect("an event line");
+        assert_eq!(sneaky.launched_by, None, "an id is a name, never a path");
     }
 
     #[test]
@@ -1395,11 +1461,29 @@ mod tests {
             r#"{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_use_id":"toolu_5","tool_response":{"stdout":"","bashEditDiff":{"files":[{"filePath":"/w/a","hunks":[]}]}}}"#,
         )
         .expect("an event line");
+        // A subagent's own event, with the sidecar naming its launch.
+        let home = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(home.path().join("p/s/subagents")).expect("dir");
+        std::fs::write(
+            home.path().join("p/s/subagents/agent-a1.meta.json"),
+            r#"{"toolUseId":"toolu_1"}"#,
+        )
+        .expect("sidecar");
+        let sub = run_hook_script_in(
+            home.path(),
+            &serde_json::json!({
+                "hook_event_name": "PreToolUse", "tool_name": "Read", "tool_use_id": "toolu_6",
+                "agent_id": "a1", "transcript_path": home.path().join("p/s.jsonl"),
+            })
+            .to_string(),
+        )
+        .expect("an event line");
         let others = [
             fields(&launched),
             fields(&written),
             fields(&found),
             fields(&edited),
+            fields(&sub),
         ];
         for (key, value) in &fields(&answered) {
             assert!(

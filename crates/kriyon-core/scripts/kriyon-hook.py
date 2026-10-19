@@ -169,6 +169,29 @@ def readable(tr):
     return None
 
 
+AGENT_ID = re.compile(r"[A-Za-z0-9_-]+")
+
+
+def launched_by(data):
+    """The launch call that started this subagent: Claude Code writes a
+    sidecar beside the subagent's transcript, `<transcript>/subagents/
+    agent-<id>.meta.json`, naming it as `toolUseId`. None for the main agent
+    or when the sidecar can't be read."""
+    agent, transcript = data.get("agent_id"), data.get("transcript_path")
+    if not (isinstance(agent, str) and AGENT_ID.fullmatch(agent)
+            and isinstance(transcript, str) and transcript.endswith(".jsonl")):
+        return None
+    sidecar = os.path.join(transcript[:-len(".jsonl")], "subagents",
+                           "agent-" + agent + ".meta.json")
+    try:
+        with open(sidecar, encoding="utf-8") as f:
+            meta = json.load(f)
+    except Exception:
+        return None
+    tool_use = meta.get("toolUseId") if isinstance(meta, dict) else None
+    return tool_use if isinstance(tool_use, str) else None
+
+
 def changed_files(tr):
     """The files a Bash command changed, as Claude Code reports them."""
     files = project_files(tr.get("bashEditDiff")) if isinstance(tr, dict) else None
@@ -176,16 +199,30 @@ def changed_files(tr):
     return paths[:20] or None
 
 
-CARGO_RESULT = re.compile(r"test result: \w+\. (\d+) passed; (\d+) failed")
+# The summary line each test runner ends with: (failed, passed) groups.
+# Only these count, so output that merely mentions "passed" is not a run.
+TEST_SUMMARIES = [
+    # cargo test, once per test binary
+    re.compile(r"^test result: \w+\. (?P<passed>\d+) passed; (?P<failed>\d+) failed", re.M),
+    # vitest: "Tests  2 failed | 41 passed (43)", "Tests  43 passed (43)"
+    re.compile(r"^\s*Tests\s+(?:(?P<failed>\d+) failed)?(?:\s*\|\s*)?"
+               r"(?:(?P<passed>\d+) passed)?.*\(\d+\)\s*$", re.M),
+    # jest: "Tests:  2 failed, 41 passed, 43 total"
+    re.compile(r"^Tests:\s+(?:(?P<failed>\d+) failed,\s*)?(?:(?P<passed>\d+) passed,\s*)?"
+               r"(?:\d+ \w+,\s*)*\d+ total", re.M),
+    # pytest: "=== 3 failed, 10 passed in 0.2s ==="
+    re.compile(r"^=+ (?:(?P<failed>\d+) failed)?(?:, )?(?:(?P<passed>\d+) passed)?"
+               r"[^=]* in [\d.]+s", re.M),
+]
+# Node's test runner: "ℹ pass 3" / "ℹ fail 0" (or "# pass 3" in TAP).
 NODE_RESULT = re.compile(r"^(?:ℹ|#) (pass|fail) (\d+)\s*$", re.M)
-PASSED = re.compile(r"(\d+) passed")
-FAILED = re.compile(r"(\d+) failed")
 
 
 def outcome_of(tool, tr):
     """What came of a call in a few words: a test run's "43 passed" or
-    "2 failed" (read from the whole output, so a capped result can't lose the
-    summary at its end), a search's "6 files"."""
+    "2 failed", from every runner's summary in the whole output (so a capped
+    result can't lose it, and `pnpm check` counts vitest, node and cargo
+    together); a search's "6 files"."""
     if not isinstance(tr, dict):
         return None
     if tool in ("Grep", "Glob") and isinstance(tr.get("numFiles"), int):
@@ -194,18 +231,22 @@ def outcome_of(tool, tr):
     if tool != "Bash":
         return None
     out = "\n".join(t for t in (tr.get("stdout"), tr.get("stderr")) if isinstance(t, str))
-    cargo = CARGO_RESULT.findall(out)
-    node = dict(NODE_RESULT.findall(out))
-    if cargo:
-        passed, failed = sum(int(p) for p, _ in cargo), sum(int(f) for _, f in cargo)
-    elif "pass" in node:
-        passed, failed = int(node["pass"]), int(node.get("fail", 0))
-    else:
-        line = next((l for l in reversed(out.splitlines()) if PASSED.search(l)), None)
-        if line is None:
-            return None
-        failed_m = FAILED.search(line)
-        passed, failed = int(PASSED.search(line).group(1)), int(failed_m.group(1)) if failed_m else 0
+    passed = failed = 0
+    found = False
+    for summary in TEST_SUMMARIES:
+        for m in summary.finditer(out):
+            if m.group("passed") or m.group("failed"):
+                found = True
+                passed += int(m.group("passed") or 0)
+                failed += int(m.group("failed") or 0)
+    for kind, n in NODE_RESULT.findall(out):
+        found = True
+        if kind == "pass":
+            passed += int(n)
+        else:
+            failed += int(n)
+    if not found:
+        return None
     return f"{failed} failed" if failed else f"{passed} passed"
 
 ti = data.get("tool_input")
@@ -220,8 +261,9 @@ try:
     lines_added, lines_removed, created = file_change(tr)
     outcome = outcome_of(data.get("tool_name"), tr)
     edited = changed_files(tr)
+    launcher = launched_by(data)
 except Exception:
-    lines_added = lines_removed = created = outcome = edited = None
+    lines_added = lines_removed = created = outcome = edited = launcher = None
 # A background Agent returns at once with a launch receipt, not its answer:
 # keep the launched agent's id (what its own tool events carry), drop the rest.
 launched = None
@@ -316,6 +358,7 @@ rec = {
     "created": created,
     "outcome": outcome,
     "changed_files": edited,
+    "launched_by": launcher,
     # On Stop: this turn is ending again because a Stop hook resumed it, so it
     # has already been announced once.
     "stop_hook_active": data.get("stop_hook_active"),
