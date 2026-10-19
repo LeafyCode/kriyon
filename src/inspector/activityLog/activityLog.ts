@@ -178,6 +178,7 @@ const PAST: Record<string, string> = {
   stash: "stashed",
   stop: "stopped",
   summarize: "summarized",
+  uninstall: "uninstalled",
   switch: "switched",
   sync: "synced",
   test: "tested",
@@ -192,20 +193,54 @@ const PAST: Record<string, string> = {
   write: "wrote",
 };
 
-const WHITESPACE = /\s/;
+/** Verbs that read as nouns after "and" ("…and test files"): only the
+ * first word of a description takes their past tense. */
+const NOUN_TOO = new Set([
+  "build",
+  "count",
+  "diff",
+  "dump",
+  "export",
+  "format",
+  "import",
+  "list",
+  "push",
+  "query",
+  "reset",
+  "save",
+  "scan",
+  "search",
+  "stage",
+  "start",
+  "stop",
+  "sync",
+  "test",
+  "update",
+  "view",
+  "watch",
+]);
 
-/** `text` with its first word in the past tense, when {@link PAST} knows it. */
+/** The first word of a description, and each word that opens a clause after
+ * it (after a comma, "and" or "then"). */
+const CLAUSE_VERB = /(^|, |; | and | then )([A-Za-z]+)/g;
+
+/** `text` with the verb of each clause in the past tense, when {@link PAST}
+ * knows it: "Install dayjs and check it" → "Installed dayjs and checked it". */
 function pastTense(text: string): string {
-  const space = text.search(WHITESPACE);
-  const word = space === -1 ? text : text.slice(0, space);
-  const past = PAST[word.toLowerCase()];
-  if (!past) {
-    return text;
-  }
-  const capital = word[0] !== word[0].toLowerCase();
-  const head = capital ? past[0].toUpperCase() + past.slice(1) : past;
-  return head + (space === -1 ? "" : text.slice(space));
+  return text.replace(CLAUSE_VERB, (whole, before: string, word: string) => {
+    const lower = word.toLowerCase();
+    const past = PAST[lower];
+    if (!past || (before !== "" && NOUN_TOO.has(lower))) {
+      return whole;
+    }
+    const capital = word[0] !== word[0].toLowerCase();
+    return before + (capital ? past[0].toUpperCase() + past.slice(1) : past);
+  });
 }
+
+/** A command that takes a package off the machine (`npm uninstall`, …). */
+const UNINSTALL =
+  /\b(?:(?:npm|pnpm|yarn|bun)\s+(?:uninstall|remove|rm|un)|pip3?\s+uninstall|uv\s+remove|brew\s+(?:uninstall|remove)|cargo\s+(?:remove|uninstall)|gem\s+uninstall|apt(?:-get)?\s+(?:remove|purge))\b/;
 
 /** Tools whose summary is for the model, not the person (`select:Read`). */
 const QUIET_SUMMARY = new Set(["ToolSearch"]);
@@ -496,7 +531,9 @@ export function stepLabel(step: ActivityStep): string {
     case "secretFile":
       return "Touched a secret file";
     case "deleted":
-      return "Deleted files";
+      return UNINSTALL.test(step.target ?? "")
+        ? "Removed a package"
+        : "Deleted files";
     case "installed":
       return "Installed a package";
     case "outsideProject":

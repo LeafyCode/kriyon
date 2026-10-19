@@ -745,8 +745,53 @@ describe("the second smoke run", () => {
     const said = (summary: string) =>
       stepLabel(step({ kind: "command", summary, target: "x" }));
     expect(said("Append test and run suite")).toBe(
-      "Appended test and run suite"
+      "Appended test and ran suite"
     );
     expect(said("Review the diff")).toBe("Reviewed the diff");
+  });
+});
+
+describe("the third smoke run", () => {
+  const said = (summary: string) =>
+    stepLabel(step({ kind: "command", summary, target: "x; y" }));
+
+  test("every verb Claude chains reads in the past tense", () => {
+    expect(said("Install dayjs and check its output")).toBe(
+      "Installed dayjs and checked its output"
+    );
+    expect(said("Uninstall date-fns and rerun tests")).toBe(
+      "Uninstalled date-fns and reran tests"
+    );
+    expect(said("Count lines, show model setting, print format.js")).toBe(
+      "Counted lines, showed model setting, printed format.js"
+    );
+  });
+
+  test("a word that may be a noun after 'and' stays as written", () => {
+    expect(said("Fix the parser and test files")).toBe(
+      "Fixed the parser and test files"
+    );
+  });
+
+  test("removing a package says so", () => {
+    expect(
+      stepLabel(
+        step({
+          flags: STEP_FLAGS.deleted,
+          kind: "command",
+          summary: "Remove date-fns",
+          target: "npm uninstall date-fns",
+        })
+      )
+    ).toBe("Removed a package");
+    expect(
+      stepLabel(
+        step({
+          flags: STEP_FLAGS.deleted,
+          kind: "command",
+          target: "rm -rf dist",
+        })
+      )
+    ).toBe("Deleted files");
   });
 });

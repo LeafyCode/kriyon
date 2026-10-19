@@ -91,7 +91,8 @@ impl StepKind {
 pub mod flags {
     /// Installed a package, plugin or MCP server (known by command shape only).
     pub const INSTALLED: u32 = 1;
-    /// Deleted files, or rewrote history (`rm`, `git reset --hard`, …).
+    /// Deleted files, removed a package, or rewrote history (`rm`, `npm
+    /// uninstall`, `git reset --hard`, …).
     pub const DELETED: u32 = 1 << 1;
     /// Reached the internet.
     pub const NETWORK: u32 = 1 << 2;
@@ -113,7 +114,7 @@ static INSTALLS: LazyLock<Regex> = LazyLock::new(|| {
 
 static DELETES: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(&format!(
-        r"{CMD}(?:rm|rmdir|unlink|shred)\s|{CMD}git\s+(?:reset\s+--hard|clean\b|push\s+(?:.*\s)?(?:--force\b|-f\b)|branch\s+-D\b)|\s-delete\b"
+        r"{CMD}(?:rm|rmdir|unlink|shred)\s|{CMD}(?:(?:npm|pnpm|yarn|bun)\s+(?:uninstall|remove|rm|un)\b|pip3?\s+uninstall\b|uv\s+(?:remove|pip\s+uninstall)\b|brew\s+(?:uninstall|remove)\b|cargo\s+(?:remove|uninstall)\b|gem\s+uninstall\b|apt(?:-get)?\s+(?:remove|purge)\b)|{CMD}git\s+(?:reset\s+--hard|clean\b|push\s+(?:.*\s)?(?:--force\b|-f\b)|branch\s+-D\b)|\s-delete\b"
     ))
     .expect("a constant pattern")
 });
@@ -663,10 +664,21 @@ mod tests {
             "git push origin main --force",
             "git clean -fdx",
             "find . -name '*.log' -delete",
+            "npm uninstall date-fns",
+            "pnpm remove zod",
+            "yarn remove zod",
+            "pip uninstall -y requests",
+            "brew uninstall jq",
+            "cargo remove serde",
         ] {
             assert_ne!(cmd_flags(cmd) & flags::DELETED, 0, "{cmd}");
         }
-        for cmd in ["git status", "npm run format", "git push origin main"] {
+        for cmd in [
+            "git status",
+            "npm run format",
+            "git push origin main",
+            "npm install zod",
+        ] {
             assert_eq!(cmd_flags(cmd) & flags::DELETED, 0, "{cmd}");
         }
     }
