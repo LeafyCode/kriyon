@@ -169,3 +169,74 @@ test("a link's label is not linked again inside it", () => {
     },
   ]);
 });
+
+test("a pipe table is a table: header, rows and column alignment", () => {
+  const text = [
+    "Four plates:",
+    "| Plate | Parts | Time / plastic |",
+    "|:---|---|--:|",
+    "| 1 | Test ring: a **10mm** slice | 22 min, 13g |",
+    "| 2 | Cuff `supports` | 5.5 h, 203g |",
+    "",
+    "Print plate 1 first.",
+  ].join("\n");
+  expect(parseReply(text)).toEqual([
+    { inline: [{ kind: "text", text: "Four plates:" }], kind: "para" },
+    {
+      align: ["left", null, "right"],
+      head: [
+        [{ kind: "text", text: "Plate" }],
+        [{ kind: "text", text: "Parts" }],
+        [{ kind: "text", text: "Time / plastic" }],
+      ],
+      kind: "table",
+      rows: [
+        [
+          [{ kind: "text", text: "1" }],
+          [
+            { kind: "text", text: "Test ring: a " },
+            { children: [{ kind: "text", text: "10mm" }], kind: "bold" },
+            { kind: "text", text: " slice" },
+          ],
+          [{ kind: "text", text: "22 min, 13g" }],
+        ],
+        [
+          [{ kind: "text", text: "2" }],
+          [
+            { kind: "text", text: "Cuff " },
+            { kind: "code", text: "supports" },
+          ],
+          [{ kind: "text", text: "5.5 h, 203g" }],
+        ],
+      ],
+    },
+    { inline: [{ kind: "text", text: "Print plate 1 first." }], kind: "para" },
+  ]);
+});
+
+test("table rows are padded or cut to the header's width, and a pipe in code stays", () => {
+  const [table] = parseReply("a | b\n--- | ---\n`x | y`\n1 | 2 | 3");
+  expect(table).toEqual({
+    align: [null, null],
+    head: [[{ kind: "text", text: "a" }], [{ kind: "text", text: "b" }]],
+    kind: "table",
+    rows: [
+      [[{ kind: "code", text: "x | y" }], []],
+      [[{ kind: "text", text: "1" }], [{ kind: "text", text: "2" }]],
+    ],
+  });
+});
+
+test("a pipe line without a delimiter row under it stays prose", () => {
+  expect(parseReply("a | b\nc | d")).toEqual([
+    { inline: [{ kind: "text", text: "a | b\nc | d" }], kind: "para" },
+  ]);
+});
+
+test("a line of three dashes is a rule, not text", () => {
+  expect(parseReply("Done.\n\n---\n\nNext:")).toEqual([
+    { inline: [{ kind: "text", text: "Done." }], kind: "para" },
+    { kind: "rule" },
+    { inline: [{ kind: "text", text: "Next:" }], kind: "para" },
+  ]);
+});
