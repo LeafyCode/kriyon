@@ -1,4 +1,10 @@
-import { ChevronDown, ChevronUp, Paperclip, Square } from "lucide-react";
+import {
+  BookMarked,
+  ChevronDown,
+  ChevronUp,
+  Paperclip,
+  Square,
+} from "lucide-react";
 import type {
   ClipboardEvent,
   CSSProperties,
@@ -35,6 +41,7 @@ import { tokens } from "../theme/tokens.ts";
 import { Kbd } from "../ui/Kbd.tsx";
 import { showToast } from "../ui/Toast.tsx";
 import { AttachmentTray } from "./AttachmentTray.tsx";
+import { type FooterFit, FULL_FIT, footerFit } from "./composerFooterFit.ts";
 import {
   type HistoryCursor,
   onFirstLine,
@@ -154,8 +161,29 @@ const editableContainerStyle: CSSProperties = {
 const footerStyle: CSSProperties = {
   alignItems: "center",
   display: "flex",
+  gap: "16px",
   justifyContent: "space-between",
   marginTop: "9px",
+};
+
+// Nothing in the footer wraps. The left group may shrink (and, past the last
+// step `footerFit` takes, clip); the right one, with Stop and Send, never
+// does, so they stay in the box at any width.
+const footerLeftStyle: CSSProperties = {
+  alignItems: "center",
+  display: "flex",
+  gap: "9px",
+  minWidth: 0,
+  overflow: "hidden",
+  whiteSpace: "nowrap",
+};
+
+const footerRightStyle: CSSProperties = {
+  alignItems: "center",
+  display: "flex",
+  flex: "none",
+  gap: "7px",
+  whiteSpace: "nowrap",
 };
 
 const modelChipStyle: CSSProperties = chip();
@@ -173,12 +201,14 @@ const modeChipStyle: CSSProperties = {
 
 const metaStyle: CSSProperties = {
   color: tokens.color.ink.muted,
+  flex: "none",
   fontFamily: tokens.font.mono,
   fontSize: "11px",
 };
 
 const footerActionStyle: CSSProperties = {
   ...button("ghost", "sm"),
+  flex: "none",
   padding: "0 7px",
 };
 
@@ -199,6 +229,99 @@ const sendDisabledStyle: CSSProperties = {
 };
 
 const NO_ATTACHMENTS: Attachment[] = [];
+
+/** The footer's left side: attach, the Session chip, the usage readout,
+ *  Save prompt and Prompts, each as much of it as `fit` has room for. */
+function FooterTools({
+  fit,
+  onAttach,
+  usageLabel,
+  value,
+}: {
+  fit: FooterFit;
+  onAttach: () => void;
+  usageLabel: string | null;
+  value: string;
+}) {
+  const empty = value.trim().length === 0;
+  return (
+    <span style={footerLeftStyle}>
+      <button
+        aria-label="Attach files"
+        className="kr-hover-surface"
+        onClick={onAttach}
+        style={footerActionStyle}
+        title="Attach files or images (or paste, or drop them here)"
+        type="button"
+      >
+        <Paperclip size={13} />
+      </button>
+      {fit.session ? (
+        <span style={modelChipStyle}>
+          Session
+          <ChevronDown size={10} style={{ color: tokens.color.ink.faint }} />
+        </span>
+      ) : null}
+      {usageLabel && fit.usage ? (
+        <span style={metaStyle}>{usageLabel}</span>
+      ) : null}
+      <button
+        aria-label="Save as prompt"
+        className="kr-hover-surface"
+        disabled={empty}
+        onClick={() =>
+          useUi.getState().openPromptEditor({
+            body: value,
+            tags: [],
+            title: value.split("\n")[0].slice(0, 60),
+          })
+        }
+        style={empty ? footerActionDisabledStyle : footerActionStyle}
+        title={
+          empty
+            ? "Type a message to save it as a prompt"
+            : "Save this message as a prompt"
+        }
+        type="button"
+      >
+        {fit.saveLabel ? "✦ Save prompt" : "✦"}
+      </button>
+      <button
+        aria-label="Open prompt library"
+        className="kr-hover-surface"
+        onClick={() => useUi.getState().openPromptPicker()}
+        style={footerActionStyle}
+        title="Open prompt library (⌘⇧P)"
+        type="button"
+      >
+        {fit.promptsLabel ? "Prompts" : <BookMarked size={13} />}
+        {fit.promptsKey ? <Kbd>⌘⇧P</Kbd> : null}
+      </button>
+    </span>
+  );
+}
+
+/** The element's width as it resizes; `null` until it has been laid out. */
+function useWidth(ref: { current: HTMLElement | null }): number | null {
+  const [width, setWidth] = useState<number | null>(null);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) {
+      return;
+    }
+    const observer = new ResizeObserver((entries) => {
+      let next = 0;
+      for (const entry of entries) {
+        next = entry.contentRect.width;
+      }
+      // A box not laid out yet (or a test's DOM) measures 0: not a width.
+      setWidth(next > 0 ? next : null);
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [ref]);
+  return width;
+}
 
 /** How long after a send the history is read again: the CLI records the
  *  prompt as it takes it. */
@@ -430,6 +553,7 @@ export function PromptBar({ suppressed = false }: PromptBarProps) {
   const editableBoxRef = useRef<HTMLDivElement>(null);
   const revealRef = useRef<HTMLButtonElement>(null);
   const boxRef = useRef<HTMLDivElement>(null);
+  const footerRef = useRef<HTMLDivElement>(null);
   // True while an IME composition is in flight. Guards two things: onKeyDown
   // must not treat the composition-confirming Enter as send/accept, and
   // onInput must not mutate the DOM (convertLeadingModeChar) out from under the
@@ -569,6 +693,11 @@ export function PromptBar({ suppressed = false }: PromptBarProps) {
   // Same [Session usage view] the inspector reads, so the composer's ctx% can
   // never diverge from the inspector's for one session.
   const usageLabel = sessionUsageView(live).label;
+  const footerWidth = useWidth(footerRef);
+  const fit =
+    footerWidth === null
+      ? FULL_FIT
+      : footerFit(footerWidth, { stop: canStop, usage: usageLabel });
 
   // Re-serialize the (uncontrolled) editable into the draft on every
   // keystroke, then resync the completion popover's caret from the fresh DOM
@@ -1023,69 +1152,14 @@ export function PromptBar({ suppressed = false }: PromptBarProps) {
                   {view.mode === "bash" ? "! bash command" : "# add to memory"}
                 </span>
               ) : null}
-              <div style={footerStyle}>
-                <span
-                  style={{ alignItems: "center", display: "flex", gap: "9px" }}
-                >
-                  <button
-                    aria-label="Attach files"
-                    className="kr-hover-surface"
-                    onClick={intake.pick}
-                    style={footerActionStyle}
-                    title="Attach files or images (or paste, or drop them here)"
-                    type="button"
-                  >
-                    <Paperclip size={13} />
-                  </button>
-                  <span style={modelChipStyle}>
-                    Session
-                    <ChevronDown
-                      size={10}
-                      style={{ color: tokens.color.ink.faint }}
-                    />
-                  </span>
-                  {usageLabel ? (
-                    <span style={metaStyle}>{usageLabel}</span>
-                  ) : null}
-                  <button
-                    aria-label="Save as prompt"
-                    className="kr-hover-surface"
-                    disabled={trimmed.length === 0}
-                    onClick={() =>
-                      useUi.getState().openPromptEditor({
-                        body: value,
-                        tags: [],
-                        title: value.split("\n")[0].slice(0, 60),
-                      })
-                    }
-                    style={
-                      trimmed.length === 0
-                        ? footerActionDisabledStyle
-                        : footerActionStyle
-                    }
-                    title={
-                      trimmed.length === 0
-                        ? "Type a message to save it as a prompt"
-                        : "Save this message as a prompt"
-                    }
-                    type="button"
-                  >
-                    ✦ Save prompt
-                  </button>
-                  <button
-                    aria-label="Open prompt library"
-                    className="kr-hover-surface"
-                    onClick={() => useUi.getState().openPromptPicker()}
-                    style={footerActionStyle}
-                    type="button"
-                  >
-                    Prompts
-                    <Kbd>⌘⇧P</Kbd>
-                  </button>
-                </span>
-                <span
-                  style={{ alignItems: "center", display: "flex", gap: "7px" }}
-                >
+              <div ref={footerRef} style={footerStyle}>
+                <FooterTools
+                  fit={fit}
+                  onAttach={intake.pick}
+                  usageLabel={usageLabel}
+                  value={value}
+                />
+                <span style={footerRightStyle}>
                   <button
                     aria-label="Hide composer"
                     className="kr-hover-surface"
