@@ -195,10 +195,19 @@ fn blocks(content: Option<&Value>) -> Vec<Block> {
     }
 }
 
+/// The door Claude Code posts its own copy of a message through when it
+/// queues one for the model (a hand-back, a [Work report]). The transcript
+/// never writes that copy, so the view leaves it out too: a hand-back arrives
+/// as its `peer` row, and a report that wakes Claude as a prompt row.
+const QUEUE_DOOR: &str = "queue";
+
 /// One live row from a [Bridge spool] line, with its (run, seq) for ordering.
 fn bridge_row(line: &str, conversation: Option<&str>) -> Option<((String, u64), Row)> {
     let value: Value = serde_json::from_str(line).ok()?;
     if value.get("kind")?.as_str()? != "row" {
+        return None;
+    }
+    if value.get("door").and_then(Value::as_str) == Some(QUEUE_DOOR) {
         return None;
     }
     // A nested `claude -p` in the same terminal posts its own conversation's
@@ -1807,6 +1816,42 @@ mod tests {
             turns[0].reports[0].outcome,
             crate::work_report::ReportOutcome::Failed
         );
+    }
+
+    #[test]
+    fn a_message_claude_code_queued_for_the_model_is_not_a_prompt() {
+        // While Claude works, Claude Code posts its own copy of each message
+        // it queues (door `queue`); the transcript never writes these, and the
+        // hand-back reaches the view as its peer row.
+        let queued = |seq: u64, uuid: &str, text: &str| {
+            json!({"kind":"row","run":"r","seq":seq,"uuid":uuid,"door":"queue","origin":"engine",
+                   "message":{"type":"user","role":"user","content":[{"type":"text","text":text}]}})
+            .to_string()
+        };
+        let bridge = [
+            live(
+                "r",
+                1,
+                "a1",
+                "assistant",
+                &json!([{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"pnpm check"}}]),
+            ),
+            queued(
+                2,
+                "q1",
+                "<agent-message from=\"a9\">\n[Subagent hand-back] …\n</agent-message>",
+            ),
+            queued(
+                3,
+                "q2",
+                "<task-notification>\n<task-id>a9</task-id>\n<status>completed</status>\n<summary>Agent \"Scan\" finished</summary>\n</task-notification>",
+            ),
+        ];
+        let refs: Vec<&str> = bridge.iter().map(String::as_str).collect();
+        let turns = build_turns(&refs, &[], None);
+        assert_eq!(turns.len(), 1, "no turn opens for a queued copy");
+        assert_eq!(turns[0].reports, Vec::new());
+        assert_eq!(turns[0].did.len(), 1);
     }
 
     #[test]
