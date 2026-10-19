@@ -603,7 +603,7 @@ fn fold(rows: Vec<(Row, bool)>) -> Vec<StructuredTurn> {
                 Awaiting::Nothing
             };
             current = Some(StructuredTurn::open(
-                Some(command.unwrap_or(text)),
+                Some(command.unwrap_or_else(|| crate::transcript::unwrap_pastes(&text))),
                 if is_live {
                     TurnSource::Live
                 } else {
@@ -859,6 +859,18 @@ mod tests {
         json!({"kind": "row", "run": run, "seq": seq, "uuid": uuid,
                "message": {"type": kind, "role": kind, "content": content}})
         .to_string()
+    }
+
+    #[test]
+    fn a_pasted_prompt_shows_without_the_paste_markers() {
+        let text = "fix this\n\n<pasted_content id=\"8239\">\npanic at main.rs:4\n</pasted_content id=\"8239\">\n";
+        let transcript = [t("u1", None, "user", &json!(text))];
+        let refs: Vec<&str> = transcript.iter().map(String::as_str).collect();
+        let turns = build_turns(&[], &refs, None);
+        assert_eq!(
+            turns[0].prompt.as_deref(),
+            Some("fix this\n\npanic at main.rs:4\n")
+        );
     }
 
     #[test]

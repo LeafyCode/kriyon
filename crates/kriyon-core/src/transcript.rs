@@ -246,7 +246,8 @@ pub fn prompt_label(text: &str) -> Option<String> {
     if let Some(label) = command_label(text) {
         return Some(clamp(&label));
     }
-    text.lines()
+    unwrap_pastes(text)
+        .lines()
         .map(str::trim)
         .find(|line| !line.is_empty() && !WRAPPER_TAGS.iter().any(|tag| line.starts_with(tag)))
         .map(clamp)
@@ -277,6 +278,37 @@ fn clamp(label: &str) -> String {
     }
     let head: String = label.chars().take(MAX_LABEL_CHARS - 1).collect();
     format!("{}\u{2026}", head.trim_end())
+}
+
+/// `text` with Claude Code's paste markers taken out and the pasted text kept.
+///
+/// Claude Code records a paste as `<pasted_content id="x">\n…\n</pasted_content id="x">`
+/// inside the prompt, so the model knows which part the user pasted. They are
+/// for the model, not the person. Only a pair with matching ids is a marker; an
+/// opening one without its close is prose that mentions the tag.
+#[must_use]
+pub fn unwrap_pastes(text: &str) -> String {
+    const OPEN: &str = "<pasted_content id=\"";
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find(OPEN) {
+        let after_open = &rest[at + OPEN.len()..];
+        let pair = after_open.split_once("\">").and_then(|(id, inner)| {
+            let close = format!("</pasted_content id=\"{id}\">");
+            let (pasted, after) = inner.split_once(close.as_str())?;
+            Some((pasted, after))
+        });
+        let Some((pasted, after)) = pair else {
+            out.push_str(&rest[..at + OPEN.len()]);
+            rest = after_open;
+            continue;
+        };
+        out.push_str(&rest[..at]);
+        out.push_str(pasted.strip_prefix('\n').unwrap_or(pasted));
+        rest = after.strip_prefix('\n').unwrap_or(after);
+    }
+    out.push_str(rest);
+    out
 }
 
 /// The trimmed text between the first `open`/`close` pair, if both are present.
@@ -897,6 +929,31 @@ mod tests {
             prompt_label("<system-reminder>noise</system-reminder>"),
             None
         );
+    }
+
+    #[test]
+    fn unwrap_pastes_keeps_the_pasted_text_without_its_markers() {
+        let mixed = "Send this to \n\n<pasted_content id=\"2d96\">\nColonel A,\nCamp B\n</pasted_content id=\"2d96\">\n";
+        assert_eq!(
+            unwrap_pastes(mixed),
+            "Send this to \n\nColonel A,\nCamp B\n"
+        );
+        let whole =
+            "\n\n<pasted_content id=\"e951\">\nrun the tests\n</pasted_content id=\"e951\">\n";
+        assert_eq!(unwrap_pastes(whole), "\n\nrun the tests\n");
+    }
+
+    #[test]
+    fn unwrap_pastes_leaves_prose_that_only_mentions_the_tag() {
+        let prose = "Why does <pasted_content id=\"8239\"> show up?";
+        assert_eq!(unwrap_pastes(prose), prose);
+    }
+
+    #[test]
+    fn prompt_label_reads_a_pasted_prompt_as_its_text() {
+        let text =
+            "\n\n<pasted_content id=\"aae1\">\nRead the handoff\n</pasted_content id=\"aae1\">\n";
+        assert_eq!(prompt_label(text), Some("Read the handoff".to_string()));
     }
 
     #[test]
