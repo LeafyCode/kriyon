@@ -60,8 +60,9 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
   allowed it. Merged by `tool_use_id`, so a start and its end make one step whatever order they
   land in. _Avoid_: event, row.
 - **Step flags** (`activity_log::flags`) — the things about an [Activity step] worth a second
-  look: installed something, deleted or rewrote history, used the internet, touched a file outside
-  the project, touched a secret file. Known by command and path shape only. _Avoid_: warnings.
+  look: installed something, removed a package, deleted or rewrote history, used the internet,
+  touched a file outside the project, touched a secret file. Known by command and path shape only.
+  _Avoid_: warnings.
 - **Activity store** (`ActivityStore`, `activity.db`) — the SQLite file the [Hook spool] is
   ingested into, one transaction per read together with the spool position. Keeps 30 days and at
   most 500 MB (oldest sessions go first, a live one never), plus the recent spool lines each

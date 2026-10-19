@@ -15,6 +15,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::activity_log::{exact_launch, guessed_launch, AgentKey, LaunchKey};
 use crate::ask::PendingAsk;
 use crate::hook_signal::{classify, Actor, HookSignal, InFlight, ToolCall, ToolPhase};
 use crate::main_session::MainSessionLock;
@@ -86,7 +87,13 @@ impl Subagent {
     fn spawned(tool_use_id: &str, ev: &crate::hooks::HookEvent) -> Self {
         Self {
             tool_use_id: tool_use_id.to_string(),
-            kind: ev.subagent_type.clone().unwrap_or_default(),
+            // A launch that names no type runs the default one; its own
+            // events say so, which is what binds them here.
+            kind: ev
+                .subagent_type
+                .clone()
+                .filter(|t| !t.is_empty())
+                .unwrap_or_else(|| crate::activity_log::DEFAULT_SUBAGENT.to_string()),
             description: ev.description.clone(),
             state: SubagentState::Running,
             started_at: ev.ts.clone(),
@@ -389,7 +396,11 @@ impl HookActivity {
         let pre = call.phase == ToolPhase::Started;
         match call.actor {
             Actor::Subagent(agent_id) => {
-                let Some(idx) = self.bind_agent(agent_id, ev.agent_type.as_deref()) else {
+                let Some(idx) = self.bind_agent(
+                    agent_id,
+                    ev.agent_type.as_deref(),
+                    ev.launched_by.as_deref(),
+                ) else {
                     return false; // no subagent to attribute to (enrichment tier)
                 };
                 if pre {
@@ -422,13 +433,17 @@ impl HookActivity {
     }
 
     /// Resolve the subagent an `agent_id` belongs to, binding lazily on first
-    /// sight: if already bound, return it; otherwise bind this id to the oldest
-    /// still-running, un-bound subagent whose `kind` matches `agent_type`.
-    /// Returns `None` when nothing matches (the tool then goes unattributed —
-    /// enrichment only; the core spawn/state view is unaffected). Parallel
-    /// same-type subagents are an accepted v1 limit: a tool may bind to the wrong
-    /// identical-kind sibling, but counts/states/results stay correct.
-    fn bind_agent(&mut self, agent_id: &str, agent_type: Option<&str>) -> Option<usize> {
+    /// sight by the same rule the [Activity log] links by: already bound; else
+    /// `activity_log::exact_launch` (the launch its sidecar names); else
+    /// `activity_log::guessed_launch` among the still-running, un-bound
+    /// subagents. Returns `None` when nothing matches (the tool then goes
+    /// unattributed — enrichment only; the core spawn/state view is unaffected).
+    fn bind_agent(
+        &mut self,
+        agent_id: &str,
+        agent_type: Option<&str>,
+        launched_by: Option<&str>,
+    ) -> Option<usize> {
         if let Some(i) = self
             .subagents
             .iter()
@@ -436,10 +451,25 @@ impl HookActivity {
         {
             return Some(i);
         }
-        let kind = agent_type.unwrap_or_default();
-        let i = self.subagents.iter().position(|s| {
-            s.agent_id.is_none() && s.state == SubagentState::Running && s.kind == kind
-        })?;
+        let launches: Vec<LaunchKey<'_>> = self
+            .subagents
+            .iter()
+            .map(|s| LaunchKey {
+                tool_use_id: &s.tool_use_id,
+                launched_type: &s.kind,
+                // A background launch's id binds on its receipt, above.
+                launched_agent: None,
+                started_ms: None,
+                free: s.agent_id.is_none() && s.state == SubagentState::Running,
+            })
+            .collect();
+        let agent = AgentKey {
+            agent_id,
+            agent_type,
+            launched_by,
+            first_ms: None,
+        };
+        let i = exact_launch(&agent, &launches).or_else(|| guessed_launch(&agent, &launches))?;
         self.subagents[i].agent_id = Some(agent_id.to_string());
         Some(i)
     }
@@ -713,6 +743,67 @@ mod tests {
         let subs = a.subagents();
         assert_eq!(subs[0].state, SubagentState::Running);
         assert_eq!(subs[1].state, SubagentState::Done);
+    }
+
+    #[test]
+    fn a_subagent_binds_to_the_launch_its_sidecar_names() {
+        // Two of one type, started together; B's first tool comes first.
+        let mut a = HookActivity::new();
+        for id in ["t1", "t2"] {
+            let mut launch = hook("PreToolUse", Some("Agent"), Some(id));
+            launch.subagent_type = Some("Explore".to_string());
+            a.ingest(&launch);
+        }
+        let tool = |agent: &str, launched_by: &str| {
+            let mut ev = hook("PreToolUse", Some("Read"), Some(&format!("r-{agent}")));
+            ev.agent_id = Some(agent.to_string());
+            ev.agent_type = Some("Explore".to_string());
+            ev.launched_by = Some(launched_by.to_string());
+            ev
+        };
+        a.ingest(&tool("b", "t2"));
+        a.ingest(&tool("a", "t1"));
+        let subs = a.subagents();
+        assert_eq!(subs[0].agent_id.as_deref(), Some("a"));
+        assert_eq!(subs[1].agent_id.as_deref(), Some("b"));
+    }
+
+    #[test]
+    fn a_named_launch_already_taken_by_a_guess_is_not_stolen() {
+        // B's sidecar was unread, so it was guessed onto t1; A's names t1.
+        let mut a = HookActivity::new();
+        for id in ["t1", "t2"] {
+            let mut launch = hook("PreToolUse", Some("Agent"), Some(id));
+            launch.subagent_type = Some("Explore".to_string());
+            a.ingest(&launch);
+        }
+        let tool = |agent: &str, launched_by: Option<&str>| {
+            let mut ev = hook("PreToolUse", Some("Read"), Some(&format!("r-{agent}")));
+            ev.agent_id = Some(agent.to_string());
+            ev.agent_type = Some("Explore".to_string());
+            ev.launched_by = launched_by.map(str::to_string);
+            ev
+        };
+        a.ingest(&tool("b", None));
+        a.ingest(&tool("a", Some("t1")));
+        let bound: Vec<_> = a.subagents().iter().map(|s| s.agent_id.clone()).collect();
+        assert_eq!(
+            bound,
+            [Some("b".to_string()), Some("a".to_string())],
+            "b keeps its binding"
+        );
+    }
+
+    #[test]
+    fn an_untyped_launch_runs_and_binds_as_the_default_type() {
+        let mut a = HookActivity::new();
+        a.ingest(&hook("PreToolUse", Some("Agent"), Some("t1")));
+        assert_eq!(a.subagents()[0].kind, crate::activity_log::DEFAULT_SUBAGENT);
+        let mut ev = hook("PreToolUse", Some("Read"), Some("r1"));
+        ev.agent_id = Some("a".to_string());
+        ev.agent_type = Some(crate::activity_log::DEFAULT_SUBAGENT.to_string());
+        a.ingest(&ev);
+        assert_eq!(a.subagents()[0].agent_id.as_deref(), Some("a"));
     }
 
     #[test]
