@@ -339,6 +339,13 @@ impl ActivityStore {
         if version < 6 {
             migrate_to_v6(&mut conn)?;
         }
+        if version < 7 {
+            // The files each command changed, so a row can name them.
+            conn.execute_batch(
+                "BEGIN; ALTER TABLE steps ADD COLUMN changed_files TEXT;
+                 PRAGMA user_version = 7; COMMIT;",
+            )?;
+        }
         Ok(Self { conn })
     }
 
@@ -882,8 +889,7 @@ fn migrate_to_v6(conn: &mut Connection) -> rusqlite::Result<()> {
              ALTER TABLE steps ADD COLUMN lines_added INTEGER;
              ALTER TABLE steps ADD COLUMN lines_removed INTEGER;
              ALTER TABLE steps ADD COLUMN created INTEGER NOT NULL DEFAULT 0;
-             ALTER TABLE steps ADD COLUMN outcome TEXT;
-             ALTER TABLE steps ADD COLUMN changed_files TEXT;",
+             ALTER TABLE steps ADD COLUMN outcome TEXT;",
     )?;
     backfill_summaries(&tx)?;
     tx.execute_batch("PRAGMA user_version = 6;")?;
@@ -2012,6 +2018,22 @@ mod tests {
         assert_eq!(step.status, StepStatus::Ok);
         let detail = store.step("s1", step.id).expect("reads").expect("a step");
         assert_eq!(detail.result, None, "no leftover \"did not finish\"");
+    }
+
+    #[test]
+    fn a_database_already_at_v6_gets_the_changed_files_column() {
+        let mut conn = Connection::open_in_memory().expect("opens");
+        conn.execute_batch(&format!(
+            "{SCHEMA_V1} ALTER TABLE steps ADD COLUMN claude_session_id TEXT;
+             PRAGMA user_version = 5;"
+        ))
+        .expect("a v5 log");
+        migrate_to_v6(&mut conn).expect("to v6");
+        let store = ActivityStore::init(conn).expect("migrates");
+        assert!(
+            store.turns("s1", 10).is_ok(),
+            "every column the list reads exists"
+        );
     }
 
     #[test]
