@@ -311,7 +311,7 @@ describe("filters", () => {
   });
 
   test("All keeps every turn; a narrower chip hides turns with no match", () => {
-    expect(visibleTurns(turns, "all")).toBe(turns);
+    expect(visibleTurns(turns, "all")).toEqual(turns);
     const commands = visibleTurns(turns, "commands");
     expect(commands.map((t) => t.id)).toEqual([2]);
     expect(commands[0]?.steps.map((s) => s.id)).toEqual([2]);
@@ -716,5 +716,37 @@ describe("subagents", () => {
     );
     expect(rows.map((r) => r.label)).toEqual(["Subagent · Explore"]);
     expect(rows[0].children).toHaveLength(2);
+  });
+});
+
+describe("the second smoke run", () => {
+  test("a subagent handing back reads as such", () => {
+    expect(
+      stepLabel(
+        step({ kind: "other", target: null, toolName: "SubagentHandback" })
+      )
+    ).toBe("Reported back");
+  });
+
+  test("Claude loading its own tools isn't shown or counted", () => {
+    const turns = [
+      turn({
+        steps: [
+          step({ id: 1, kind: "search", toolName: "ToolSearch" }),
+          step({ id: 2, kind: "read" }),
+        ],
+      }),
+    ];
+    expect(filterCounts(turns).all).toBe(1);
+    expect(visibleTurns(turns, "all")[0].steps.map((s) => s.id)).toEqual([2]);
+  });
+
+  test("more of Claude's verbs read in the past tense", () => {
+    const said = (summary: string) =>
+      stepLabel(step({ kind: "command", summary, target: "x" }));
+    expect(said("Append test and run suite")).toBe(
+      "Appended test and run suite"
+    );
+    expect(said("Review the diff")).toBe("Reviewed the diff");
   });
 });

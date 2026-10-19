@@ -1146,6 +1146,20 @@ mod tests {
         )
         .expect("an event line");
         assert_eq!(ev.changed_files, Some(vec!["/w/src/a.js".to_string()]));
+
+        // An install rewrites node_modules: that's the package, not the project.
+        let install = run_hook_script(
+            r#"{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_use_id":"t","tool_input":{"command":"npm i lodash"},"tool_response":{"stdout":"","bashEditDiff":{"files":[{"filePath":"/w/node_modules/.package-lock.json","hunks":[{"lines":["+a","+b"]}]},{"filePath":"/w/.git/index","hunks":[{"lines":["+c"]}]},{"filePath":"/w/package.json","hunks":[{"lines":["+d"]}]}]}}}"#,
+        )
+        .expect("an event line");
+        assert_eq!(
+            install.changed_files,
+            Some(vec!["/w/package.json".to_string()])
+        );
+        assert_eq!(
+            (install.lines_added, install.lines_removed),
+            (Some(1), Some(0))
+        );
     }
 
     #[test]

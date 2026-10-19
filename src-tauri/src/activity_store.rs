@@ -474,9 +474,21 @@ impl ActivityStore {
         let mut steps_stmt = self.conn.prepare(&format!(
             "SELECT {STEP_COLUMNS} FROM steps WHERE turn_id = ?1 ORDER BY started_ms, id"
         ))?;
+        // A subagent by the task Claude gave it: the latest launch of its type
+        // before its first step; else by its type.
         let mut agent_stmt = self.conn.prepare(
-            "SELECT agent_type FROM steps
-             WHERE session_id = ?1 AND agent_id = ?2 AND agent_type IS NOT NULL LIMIT 1",
+            "SELECT COALESCE(
+               (SELECT l.summary FROM steps l
+                WHERE l.session_id = ?1 AND l.kind = 'agent' AND l.agent_id IS NULL
+                  AND l.started_ms <= s.started_ms AND l.summary IS NOT NULL
+                  AND COALESCE(CASE WHEN json_valid(l.input)
+                                    THEN json_extract(l.input, '$.subagent_type') END,
+                               'general-purpose') = s.agent_type
+                ORDER BY l.started_ms DESC LIMIT 1),
+               s.agent_type)
+             FROM steps s
+             WHERE s.session_id = ?1 AND s.agent_id = ?2 AND s.agent_type IS NOT NULL
+             ORDER BY s.started_ms LIMIT 1",
         )?;
         let mut turns = turns_stmt
             .query_map(params![session_id, limit], |r| {
@@ -494,7 +506,7 @@ impl ActivityStore {
             .collect::<Result<Vec<_>, _>>()?;
         for turn in &mut turns {
             if let Some(prompt) = turn.prompt.take() {
-                // A hand-back names its sender by id; its steps carry its type.
+                // A hand-back names its sender by id; its steps lead to its task.
                 let agent: Option<String> = match work_report::peer_sender(&prompt) {
                     Some(id) => agent_stmt
                         .query_row(params![session_id, id], |r| r.get(0))
@@ -1510,8 +1522,8 @@ mod tests {
         let (handback, pasted) = (&turns[0], &turns[1]);
         assert_eq!(
             handback.report.as_deref(),
-            Some("Agent \"pr-scorer\" reported back"),
-            "named by the type its own steps carry"
+            Some("Agent \"Score the findings\" reported back"),
+            "named by the task it was launched with"
         );
         assert_eq!(pasted.report, None);
         assert_eq!(pasted.prompt.as_deref(), Some("run the tests"));

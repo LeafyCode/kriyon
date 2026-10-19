@@ -102,6 +102,20 @@ except Exception:
     sys.exit(0)
 
 
+# Folders a command rewrites for its tools, not the user's project: an
+# install's node_modules, git's own files.
+TOOL_DIRS = re.compile(r"/(?:node_modules|\.git)/")
+
+
+def project_files(diff):
+    """The files in a Bash `bashEditDiff` that belong to the project."""
+    files = diff.get("files") if isinstance(diff, dict) else None
+    if not isinstance(files, list):
+        return None
+    return [f for f in files if isinstance(f, dict) and isinstance(f.get("filePath"), str)
+            and not TOOL_DIRS.search(f["filePath"])]
+
+
 def file_change(tr):
     """(lines added, lines removed, made a new file) from Claude Code's own
     patch: an Edit or Write's `structuredPatch`, or the files a Bash command
@@ -111,11 +125,10 @@ def file_change(tr):
     hunks = tr.get("structuredPatch")
     created = tr.get("type") == "create" if "type" in tr and "content" in tr else None
     if not isinstance(hunks, list):
-        diff = tr.get("bashEditDiff")
-        files = diff.get("files") if isinstance(diff, dict) else None
-        if not isinstance(files, list):
+        files = project_files(tr.get("bashEditDiff"))
+        if files is None:
             return None, None, created
-        hunks = [h for f in files if isinstance(f, dict)
+        hunks = [h for f in files
                  for h in (f.get("hunks") if isinstance(f.get("hunks"), list) else [])]
     added = removed = 0
     for hunk in hunks:
@@ -158,12 +171,8 @@ def readable(tr):
 
 def changed_files(tr):
     """The files a Bash command changed, as Claude Code reports them."""
-    diff = tr.get("bashEditDiff") if isinstance(tr, dict) else None
-    files = diff.get("files") if isinstance(diff, dict) else None
-    if not isinstance(files, list):
-        return None
-    paths = [redact(f["filePath"]) for f in files
-             if isinstance(f, dict) and isinstance(f.get("filePath"), str)]
+    files = project_files(tr.get("bashEditDiff")) if isinstance(tr, dict) else None
+    paths = [redact(f["filePath"]) for f in files or []]
     return paths[:20] or None
 
 

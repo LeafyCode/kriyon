@@ -82,6 +82,7 @@ const TOOL_LABEL: Record<string, string> = {
   PushNotification: "Sent you a notification",
   ScheduleWakeup: "Scheduled a check-in",
   SendMessage: "Sent a message to an agent",
+  SubagentHandback: "Reported back",
   TaskCreate: "Added a task",
   TaskGet: "Checked a task",
   TaskList: "Checked the tasks",
@@ -98,6 +99,8 @@ const TOOL_LABEL: Record<string, string> = {
  * with any other word stays as Claude wrote it. */
 const PAST: Record<string, string> = {
   add: "added",
+  analyze: "analyzed",
+  append: "appended",
   apply: "applied",
   build: "built",
   bump: "bumped",
@@ -113,9 +116,13 @@ const PAST: Record<string, string> = {
   count: "counted",
   create: "created",
   delete: "deleted",
+  describe: "described",
   diff: "diffed",
   download: "downloaded",
   dump: "dumped",
+  ensure: "ensured",
+  examine: "examined",
+  explore: "explored",
   export: "exported",
   extract: "extracted",
   fetch: "fetched",
@@ -129,6 +136,7 @@ const PAST: Record<string, string> = {
   init: "initialized",
   inspect: "inspected",
   install: "installed",
+  investigate: "investigated",
   kill: "killed",
   launch: "launched",
   lint: "linted",
@@ -159,6 +167,7 @@ const PAST: Record<string, string> = {
   restart: "restarted",
   restore: "restored",
   revert: "reverted",
+  review: "reviewed",
   run: "ran",
   save: "saved",
   scan: "scanned",
@@ -168,6 +177,7 @@ const PAST: Record<string, string> = {
   start: "started",
   stash: "stashed",
   stop: "stopped",
+  summarize: "summarized",
   switch: "switched",
   sync: "synced",
   test: "tested",
@@ -752,7 +762,14 @@ export const ACTIVITY_FILTERS: readonly {
   { label: "Needs a look", value: "flagged" },
 ];
 
+/** Claude Code's own housekeeping, which does nothing on the machine:
+ * loading more of its tools. Left out of the timeline and its counts. */
+const HOUSEKEEPING = new Set(["ToolSearch"]);
+
 function matches(step: ActivityStep, filter: ActivityFilter): boolean {
+  if (HOUSEKEEPING.has(step.toolName)) {
+    return false;
+  }
   switch (filter) {
     case "changes":
       // A command that edited files changed them too (`sed -i`, a codemod).
@@ -793,20 +810,19 @@ export function filterCounts(
 }
 
 /**
- * The turns a filter shows. "All" is every turn as-is (a turn with no steps
- * still happened); a narrower chip keeps only matching steps and drops the
+ * The turns a filter shows, each with only its matching steps. "All" keeps
+ * every turn (a turn with no steps still happened); a narrower chip drops the
  * turns left empty.
  */
 export function visibleTurns(
   turns: ActivityTurn[],
   filter: ActivityFilter
 ): ActivityTurn[] {
-  if (filter === "all") {
-    return turns;
-  }
-  return turns
-    .map((t) => ({ ...t, steps: t.steps.filter((s) => matches(s, filter)) }))
-    .filter((t) => t.steps.length > 0);
+  const kept = turns.map((t) => ({
+    ...t,
+    steps: t.steps.filter((s) => matches(s, filter)),
+  }));
+  return filter === "all" ? kept : kept.filter((t) => t.steps.length > 0);
 }
 
 /** What started a turn: Claude Code's own prompt sources, by name. */
