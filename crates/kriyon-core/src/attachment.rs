@@ -68,14 +68,13 @@ const IMAGE_READ_MS_MAX: u64 = 2500;
 /// the TUI reads the Enter as part of a paste and inserts a newline.
 pub const SUBMIT_DELAY_MS: u64 = 80;
 
-/// The most text written to the terminal at once. Claude Code reads an
-/// input chunk over 800 characters as a paste: a message sent whole is
-/// wrapped as pasted text, and past the terminal's ~1 KB read only its last
-/// chunk arrives. Pieces this small stay typing even when a few run together.
-pub const TYPE_PIECE_BYTES: usize = 256;
-
-/// The beat between two pieces of a long message, so each is read on its own.
-pub const TYPE_PIECE_GAP_MS: u64 = 20;
+/// The most text typed in one write. Claude Code takes a single input chunk
+/// over 800 characters (JavaScript string length, never more than the UTF-8
+/// byte count) as a paste: a longer message typed in one write is wrapped as
+/// pasted, and past the terminal's ~1 KB read all but its last chunk is lost.
+/// Within this limit the text is typing however the terminal splits or joins
+/// it; a longer message goes as one bracketed paste, which arrives whole.
+pub const TYPED_MAX_BYTES: usize = 800;
 
 /// What an attachment is, which decides how it is sent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -303,8 +302,9 @@ fn image_read_ms(bytes: u64) -> u64 {
 }
 
 /// The keystrokes that send `text` with `attachments`, ending with Enter:
-/// the text with each file's `@` mention after it, then each image as a
-/// pasted path, each given time to be read before anything follows.
+/// the text with each file's `@` mention after it (typed, or one paste past
+/// [`TYPED_MAX_BYTES`]), then each image as a pasted path, each given time to
+/// be read before anything follows.
 #[must_use]
 pub fn keystrokes(text: &str, attachments: &[Outgoing<'_>]) -> Vec<Keystroke> {
     let mut first = text.trim().to_string();
@@ -328,16 +328,17 @@ pub fn keystrokes(text: &str, attachments: &[Outgoing<'_>]) -> Vec<Keystroke> {
     }
     let mut out = Vec::new();
     if !first.trim().is_empty() {
-        let pieces = pieces(&first);
-        let last = pieces.len() - 1;
-        out.extend(pieces.into_iter().enumerate().map(|(at, text)| Keystroke {
-            text: text.to_string(),
-            wait_ms: if at == last {
-                SUBMIT_DELAY_MS
-            } else {
-                TYPE_PIECE_GAP_MS
-            },
-        }));
+        let text = if first.len() <= TYPED_MAX_BYTES {
+            first
+        } else {
+            // Text inside the paste must not end it early.
+            let body = first.replace(PASTE_END, &PASTE_END[1..]);
+            format!("{PASTE_START}{body}{PASTE_END}")
+        };
+        out.push(Keystroke {
+            text,
+            wait_ms: SUBMIT_DELAY_MS,
+        });
     }
     for image in images {
         out.push(Keystroke {
@@ -350,23 +351,6 @@ pub fn keystrokes(text: &str, attachments: &[Outgoing<'_>]) -> Vec<Keystroke> {
             text: "\r".to_string(),
             wait_ms: 0,
         });
-    }
-    out
-}
-
-/// `text` cut into pieces of at most [`TYPE_PIECE_BYTES`], never inside a
-/// character.
-fn pieces(text: &str) -> Vec<&str> {
-    let mut out = Vec::new();
-    let mut rest = text;
-    while !rest.is_empty() {
-        let mut end = rest.len().min(TYPE_PIECE_BYTES);
-        while !rest.is_char_boundary(end) {
-            end -= 1;
-        }
-        let (piece, after) = rest.split_at(end);
-        out.push(piece);
-        rest = after;
     }
     out
 }
@@ -548,20 +532,52 @@ mod tests {
     }
 
     #[test]
-    fn long_text_is_typed_in_pieces_claude_code_reads_as_typing() {
-        let text = "ab\u{3042}\n".repeat(300);
+    fn text_up_to_the_paste_limit_is_typed_in_one_write() {
+        let text = "\u{3042}".repeat(TYPED_MAX_BYTES / 3) + "ab";
+        assert_eq!(text.len(), TYPED_MAX_BYTES);
         let keys = keystrokes(&text, &[]);
-        let (enter, pieces) = keys.split_last().expect("keys");
-        assert_eq!(enter.text, "\r");
-        assert!(pieces.len() > 1);
-        assert!(pieces.iter().all(|k| k.text.len() <= TYPE_PIECE_BYTES));
-        assert_eq!(
-            pieces.iter().map(|k| k.text.as_str()).collect::<String>(),
-            text.trim()
+        assert_eq!(keys.len(), 2);
+        assert_eq!(keys[0].text, text);
+        assert_eq!(keys[0].wait_ms, SUBMIT_DELAY_MS);
+    }
+
+    #[test]
+    fn longer_text_and_its_mentions_go_as_one_paste() {
+        let text = "a".repeat(TYPED_MAX_BYTES);
+        let keys = keystrokes(
+            &text,
+            &[Outgoing {
+                path: "/notes/todo.md",
+                kind: AttachmentKind::File,
+                bytes: 10,
+            }],
         );
-        let (last, rest) = pieces.split_last().expect("pieces");
-        assert_eq!(last.wait_ms, SUBMIT_DELAY_MS);
-        assert!(rest.iter().all(|k| k.wait_ms == TYPE_PIECE_GAP_MS));
+        assert_eq!(
+            keys,
+            vec![
+                Keystroke {
+                    text: format!("{PASTE_START}{text} @/notes/todo.md {PASTE_END}"),
+                    wait_ms: SUBMIT_DELAY_MS
+                },
+                Keystroke {
+                    text: "\r".into(),
+                    wait_ms: 0
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_paste_end_in_the_text_cannot_close_the_paste_early() {
+        let text = format!("{}{PASTE_END}rest", "a".repeat(TYPED_MAX_BYTES));
+        let keys = keystrokes(&text, &[]);
+        assert_eq!(
+            keys[0].text,
+            format!(
+                "{PASTE_START}{}[201~rest{PASTE_END}",
+                "a".repeat(TYPED_MAX_BYTES)
+            )
+        );
     }
 
     #[test]
