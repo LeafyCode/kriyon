@@ -79,9 +79,14 @@ attestations until then, and macOS runners cost ten times the Linux rate.
   forward (semver, as the updater compares). A stable release becomes GitHub's latest release,
   which is the stable feed, only when it is the newest stable version, and the tap follows the
   latest release. So publishing an older release never points anyone back at it.
-- **Release notes**: a stable release's `CHANGELOG.md` entry; a beta's or nightly's
-  git-cliff draft, without its heading or guidance comment (`release.mjs notes`). They also
-  become `latest.json`'s notes, which the update dialog shows.
+- **Release notes**: a stable release's `CHANGELOG.md` entry, which lists everything since the
+  last stable release; a beta's or nightly's git-cliff draft, without its heading or guidance
+  comment (`release.mjs notes`). A beta's draft lists only what is new since the previous beta
+  (a nightly's, since the previous nightly), or since the last stable release when it is the
+  first, and a release tagged in between is listed with it. So a tester who takes every beta
+  sees what changed since the one they run; one who skipped a beta sees only the newest
+  beta's changes, and the skipped one's are on its own GitHub release. They also become
+  `latest.json`'s notes, which the update dialog shows.
 - **Secrets are plain repo secrets while private.** The jobs already name two environments:
   `prerelease` for betas and nightlies, and `release` for stable builds, publishing and the
   Homebrew tap. A private repo on the free plan gets environments without rules, and repo

@@ -24,7 +24,8 @@
 //       --no-fetch uses the branches and tags already fetched.
 //   node scripts/release.mjs notes <version>
 //       Print the release notes: a release's CHANGELOG.md entry, or for a
-//       beta or nightly git-cliff's draft, both without heading or comments.
+//       beta or nightly git-cliff's draft of what is new since the previous
+//       one on its channel, both without heading or comments.
 
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -43,6 +44,7 @@ import {
   listsChanges,
   nextRelease,
   nightlyVersion,
+  notesSince,
   preReleaseBase,
   readTagPattern,
   readVersions,
@@ -250,12 +252,23 @@ const nightlyDate = (value) => {
   return date;
 };
 
+// git-cliff only counts from release tags (cliff.toml), so a range starts it
+// from the last pre-release of the channel instead. --unreleased would drop
+// the range. A release can still be tagged inside it, a patch shipped between
+// two betas; ignoring every tag keeps the range in one section.
+const preReleaseDraft = (version) => {
+  const since = notesSince(version, tags(), tagPattern());
+  const range =
+    since === undefined
+      ? ["--unreleased"]
+      : ["--ignore-tags", ".*", `${since}..HEAD`];
+  return cliff("--tag", `v${version}`, "--strip", "all", ...range);
+};
+
 const notes = (version) =>
   channelOf(version) === "stable"
     ? changelogEntry(read(CHANGELOG), version)
-    : draftNotes(
-        cliff("--unreleased", "--tag", `v${version}`, "--strip", "all")
-      );
+    : draftNotes(preReleaseDraft(version));
 
 const main = () => {
   const { values, positionals } = parseArgs({
