@@ -727,6 +727,28 @@ test("a work report opens its turn as a status line, not a prompt", async () => 
   expect(screen.getByText("It passed.")).toBeInTheDocument();
 });
 
+test("tells the user's prompt apart from Claude's side of the turn", async () => {
+  on();
+  render(<StructuredView sessionId="s1" />);
+  const prompt = await screen.findByRole("region", { name: "Your prompt" });
+  expect(prompt).toHaveTextContent("fix it");
+  // The corner nearest the user's edge stays tucked in, like a bubble's tail.
+  const card = screen.getByText("fix it").closest("p");
+  expect(card?.style.borderRadius).toBe("12px 12px 4px 12px");
+  const claude = screen.getByRole("region", { name: "Claude" });
+  expect(claude).toHaveTextContent("Fixed.");
+  expect(claude).not.toHaveTextContent("fix it");
+});
+
+test("a prompt sent from Kriyon shows as the user's before its turn arrives", async () => {
+  on();
+  vi.mocked(structuredTurns).mockResolvedValue([]);
+  useSentPrompts.setState({ sent: { s1: sentNow("hello") } });
+  render(<StructuredView sessionId="s1" />);
+  const prompt = await screen.findByRole("region", { name: "Your prompt" });
+  expect(prompt).toHaveTextContent("hello");
+});
+
 test("while the companion starts, it shows it connecting, not that it's missing", async () => {
   vi.mocked(companionStatus).mockResolvedValue({
     claudeVersion: null,
