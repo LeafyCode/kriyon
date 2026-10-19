@@ -4,6 +4,7 @@
 //! The SQLite half (`src-tauri/src/activity_store.rs`) only stores what this
 //! decides.
 
+use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
 
 use regex::Regex;
@@ -11,6 +12,7 @@ use serde::Serialize;
 
 use crate::hooks::HookEvent;
 use crate::redact::{redact, redact_json_text};
+use crate::work_report;
 
 /// What sort of thing an [Activity step] did, for its label and filter chips.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -98,6 +100,8 @@ pub mod flags {
     pub const OUTSIDE_PROJECT: u32 = 1 << 3;
     /// Touched a file that usually holds secrets (`.env`, keys, `~/.ssh`, …).
     pub const SECRET_FILE: u32 = 1 << 4;
+    /// Removed a package (`npm uninstall`, `brew uninstall`, …).
+    pub const REMOVED_PACKAGE: u32 = 1 << 5;
 }
 
 /// A shell-command boundary: start of text or a separator before the word.
@@ -113,6 +117,13 @@ static INSTALLS: LazyLock<Regex> = LazyLock::new(|| {
 static DELETES: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(&format!(
         r"{CMD}(?:rm|rmdir|unlink|shred)\s|{CMD}git\s+(?:reset\s+--hard|clean\b|push\s+(?:.*\s)?(?:--force\b|-f\b)|branch\s+-D\b)|\s-delete\b"
+    ))
+    .expect("a constant pattern")
+});
+
+static REMOVES_PACKAGE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(&format!(
+        r"{CMD}(?:(?:npm|pnpm|yarn|bun)\s+(?:uninstall|remove|rm|un)\b|pip3?\s+uninstall\b|uv\s+(?:remove|pip\s+uninstall)\b|brew\s+(?:uninstall|remove)\b|cargo\s+(?:remove|uninstall)\b|gem\s+uninstall\b|apt(?:-get)?\s+(?:remove|purge)\b)"
     ))
     .expect("a constant pattern")
 });
@@ -156,11 +167,17 @@ pub fn step_flags(
         if DELETES.is_match(cmd) {
             out |= flags::DELETED;
         }
+        if REMOVES_PACKAGE.is_match(cmd) {
+            out |= flags::REMOVED_PACKAGE;
+        }
         if NETWORK.is_match(cmd) {
             out |= flags::NETWORK;
         }
         if is_secret_path(cmd) {
             out |= flags::SECRET_FILE;
+        }
+        if reaches_outside(cmd, cwd) {
+            out |= flags::OUTSIDE_PROJECT;
         }
     }
     if let Some(path) = path {
@@ -189,6 +206,40 @@ fn is_outside(path: &str, cwd: Option<&str>) -> bool {
     }
     let root = cwd.trim_end_matches('/');
     !(path == root || path.starts_with(&format!("{root}/")))
+}
+
+/// A path a command names in the home folder or the system's own: `~/…`,
+/// `$HOME/…`, `/Users/…`, `/etc/…`, `/Volumes/…`. Scratch places (`/tmp`,
+/// `/dev/null`) and tools (`/usr/bin`) are left out: using them is routine.
+static COMMAND_PATH: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r#"(?:^|[\s'"=(<>|;&])((?:~|\$HOME|\$\{HOME\})/[^\s'"<>|;&)]*|/(?:Users|etc|private/etc|Volumes)/[^\s'"<>|;&)]*)"#,
+    )
+    .expect("a constant pattern")
+});
+
+/// Whether a command names a file outside the session folder `cwd` — best
+/// effort, from the paths it spells out. `~` is the home folder `cwd` sits
+/// in; with `cwd` outside any home folder, a `~` path can't be inside it.
+fn reaches_outside(command: &str, cwd: Option<&str>) -> bool {
+    let Some(cwd) = cwd else {
+        return false;
+    };
+    let home = cwd
+        .strip_prefix("/Users/")
+        .and_then(|rest| rest.split('/').next())
+        .map(|user| format!("/Users/{user}"));
+    COMMAND_PATH.captures_iter(command).any(|c| {
+        let path = &c[1];
+        let rest = ["~", "$HOME", "${HOME}"]
+            .iter()
+            .find_map(|h| path.strip_prefix(h).filter(|r| r.starts_with('/')));
+        match (rest, &home) {
+            (Some(rest), Some(home)) => is_outside(&format!("{home}{rest}"), Some(cwd)),
+            (Some(_), None) => true,
+            (None, _) => is_outside(path, Some(cwd)),
+        }
+    })
 }
 
 /// Where an [Activity step] stands.
@@ -232,6 +283,25 @@ pub struct StepUpdate {
     pub tool_name: String,
     pub kind: StepKind,
     pub target: Option<String>,
+    /// What the step was for, in one line — see [`step_summary`].
+    pub summary: Option<String>,
+    /// The lines a file change added and removed (an edit, a write, or the
+    /// files a command edited).
+    pub lines_added: Option<i64>,
+    pub lines_removed: Option<i64>,
+    /// Whether a write made a new file.
+    pub created: Option<bool>,
+    /// What came of the call in a few words ("43 passed", "6 files").
+    pub outcome: Option<String>,
+    /// The files a command changed.
+    pub changed_files: Vec<String>,
+    /// For a step that launched a [Subagent], the type it launched
+    /// ([`DEFAULT_SUBAGENT`] when it named none).
+    pub launched_type: Option<String>,
+    /// The agent a background launch started, when Claude Code said.
+    pub launched_agent: Option<String>,
+    /// For a [Subagent]'s step, the launch call that started it.
+    pub launched_by: Option<String>,
     pub input: Option<String>,
     pub result: Option<String>,
     pub status: StepStatus,
@@ -261,7 +331,8 @@ pub enum LogEntry {
         at_ms: i64,
     },
     /// A step started or finished.
-    Step(StepUpdate),
+    /// Boxed: a step carries far more than the other entries.
+    Step(Box<StepUpdate>),
     /// Claude asked the user's permission for the latest running `tool_name`
     /// step (the request carries no step id).
     Asked {
@@ -314,7 +385,7 @@ pub fn log_entry(ev: &HookEvent) -> Option<LogEntry> {
             at_ms,
         }),
         "PreToolUse" | "PostToolUse" | "PostToolUseFailure" => {
-            step_update(ev, at_ms).map(LogEntry::Step)
+            step_update(ev, at_ms).map(|step| LogEntry::Step(Box::new(step)))
         }
         _ => None,
     }
@@ -339,13 +410,26 @@ fn step_update(ev: &HookEvent, at_ms: i64) -> Option<StepUpdate> {
         StepStatus::Error => ev.error.as_deref().or(ev.result.as_deref()),
         _ => ev.result.as_deref(),
     };
+    let description = ev.description.as_deref().map(redact);
+    let summary = step_summary(&tool_name, input.as_deref(), description.as_deref());
+    let changed_files: Vec<String> = ev
+        .changed_files
+        .iter()
+        .flatten()
+        .map(|f| redact(f))
+        .collect();
+    // A file a command changed counts like one a file tool touched.
+    let changed_flags = changed_files.iter().fold(0, |out, file| {
+        out | step_flags(StepKind::Edit, None, Some(file), ev.cwd.as_deref())
+    });
     Some(StepUpdate {
-        flags: step_flags(
-            kind,
-            ev.command.as_deref(),
-            path.as_deref(),
-            ev.cwd.as_deref(),
-        ),
+        flags: changed_flags
+            | step_flags(
+                kind,
+                ev.command.as_deref(),
+                path.as_deref(),
+                ev.cwd.as_deref(),
+            ),
         tool_use_id,
         prompt_id: ev.prompt_id.clone(),
         claude_session_id: ev.session_id.clone(),
@@ -354,12 +438,215 @@ fn step_update(ev: &HookEvent, at_ms: i64) -> Option<StepUpdate> {
         tool_name,
         kind,
         target: ev.target.as_deref().map(redact),
+        summary,
+        lines_added: ev.lines_added.and_then(|n| i64::try_from(n).ok()),
+        lines_removed: ev.lines_removed.and_then(|n| i64::try_from(n).ok()),
+        created: ev.created,
+        outcome: ev.outcome.as_deref().map(redact),
+        changed_files,
+        launched_type: (kind == StepKind::Agent).then(|| {
+            ev.subagent_type
+                .clone()
+                .filter(|t| !t.is_empty())
+                .unwrap_or_else(|| DEFAULT_SUBAGENT.to_string())
+        }),
+        launched_agent: ev.launched_agent_id.clone().filter(|a| !a.is_empty()),
+        launched_by: ev.launched_by.clone(),
         input,
         result: result.map(redact),
         status,
         permission_mode: ev.permission_mode.clone(),
         at_ms,
         duration_ms: ev.duration_ms.and_then(|d| i64::try_from(d).ok()),
+    })
+}
+
+/// The subagent type Claude Code runs when a launch names none.
+pub const DEFAULT_SUBAGENT: &str = "general-purpose";
+
+/// A step that launched a [Subagent], as [`link_subagents`] needs it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubagentLaunch {
+    /// The step's own id in the store.
+    pub step_id: i64,
+    /// Claude Code's id for the launch call.
+    pub tool_use_id: String,
+    /// The type it launched, [`DEFAULT_SUBAGENT`] when it named none.
+    pub launched_type: String,
+    /// The launched agent's id, when Claude Code said it (a background launch).
+    pub launched_agent: Option<String>,
+    pub started_ms: i64,
+}
+
+/// What [`link_subagents`] knows of one [Subagent] from its own steps.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubagentSeen {
+    pub agent_id: String,
+    pub agent_type: Option<String>,
+    /// The launch call its sidecar names, when the hook could read it.
+    pub launched_by: Option<String>,
+    /// When its first step started.
+    pub first_ms: i64,
+}
+
+/// One launch as the subagent-linking rule sees it — the one rule both the
+/// live Agents panel (`HookActivity`) and the [Activity log] link by.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LaunchKey<'a> {
+    pub tool_use_id: &'a str,
+    pub launched_type: &'a str,
+    pub launched_agent: Option<&'a str>,
+    /// When it started, when the caller knows it as a number.
+    pub started_ms: Option<i64>,
+    /// Not yet linked to another subagent (and, live, still running).
+    pub free: bool,
+}
+
+/// One [Subagent] as the linking rule sees it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AgentKey<'a> {
+    pub agent_id: &'a str,
+    pub agent_type: Option<&'a str>,
+    pub launched_by: Option<&'a str>,
+    /// When its first step started, when the caller knows it as a number.
+    pub first_ms: Option<i64>,
+}
+
+/// The launch that certainly started `agent`: the one its sidecar names, or
+/// the background launch that returned its id — while it is still free. A
+/// launch already given to another subagent (by an earlier guess) is never
+/// taken from it, so no binding is silently dropped.
+#[must_use]
+pub fn exact_launch(agent: &AgentKey<'_>, launches: &[LaunchKey<'_>]) -> Option<usize> {
+    launches.iter().position(|l| {
+        l.free
+            && (agent.launched_by == Some(l.tool_use_id)
+                || l.launched_agent == Some(agent.agent_id))
+    })
+}
+
+/// The launch that probably started `agent` when nothing names it: the
+/// earliest free launch of its type made before its first step. It can mix up
+/// two of one type started together. A subagent with no type is Claude Code's
+/// own helper, which nobody launched.
+#[must_use]
+pub fn guessed_launch(agent: &AgentKey<'_>, launches: &[LaunchKey<'_>]) -> Option<usize> {
+    let kind = agent.agent_type?;
+    launches.iter().position(|l| {
+        let before = match (l.started_ms, agent.first_ms) {
+            (Some(launch), Some(first)) => launch <= first,
+            _ => true,
+        };
+        l.free && l.launched_type == kind && before
+    })
+}
+
+impl SubagentSeen {
+    fn key(&self) -> AgentKey<'_> {
+        AgentKey {
+            agent_id: &self.agent_id,
+            agent_type: self.agent_type.as_deref(),
+            launched_by: self.launched_by.as_deref(),
+            first_ms: Some(self.first_ms),
+        }
+    }
+}
+
+/// Which launch started each [Subagent]: agent id → the launch's step id.
+/// Every exact link ([`exact_launch`]) is made before any guess
+/// ([`guessed_launch`]), so a guess never takes a launch another subagent's
+/// sidecar names. `agents` in first-step order.
+#[must_use]
+pub fn link_subagents(
+    launches: &[SubagentLaunch],
+    agents: &[SubagentSeen],
+) -> HashMap<String, i64> {
+    let mut claimed = HashSet::new();
+    let keys = |claimed: &HashSet<i64>| -> Vec<LaunchKey<'_>> {
+        launches
+            .iter()
+            .map(|l| LaunchKey {
+                tool_use_id: &l.tool_use_id,
+                launched_type: &l.launched_type,
+                launched_agent: l.launched_agent.as_deref(),
+                started_ms: Some(l.started_ms),
+                free: !claimed.contains(&l.step_id),
+            })
+            .collect()
+    };
+    let mut links = HashMap::new();
+    let mut guess = Vec::new();
+    for agent in agents {
+        match exact_launch(&agent.key(), &keys(&claimed)) {
+            Some(i) => {
+                claimed.insert(launches[i].step_id);
+                links.insert(agent.agent_id.clone(), launches[i].step_id);
+            }
+            None => guess.push(agent),
+        }
+    }
+    for agent in guess {
+        if let Some(i) = guessed_launch(&agent.key(), &keys(&claimed)) {
+            claimed.insert(launches[i].step_id);
+            links.insert(agent.agent_id.clone(), launches[i].step_id);
+        }
+    }
+    links
+}
+
+/// The line that heads a turn no person started, or `None` for a person's
+/// prompt: Claude Code's own [Work report]s (`<task-notification>`), and a
+/// message another agent sent the main agent (`<agent-message from="…">`) —
+/// a [Subagent] handing back its report, named `agent` when that is known.
+/// Their tags are for the model; the person reads the summary.
+#[must_use]
+pub fn report_heading(prompt: &str, agent: Option<&str>) -> Option<String> {
+    if let Some(reports) = work_report::parse(prompt) {
+        let summaries: Vec<String> = reports.into_iter().map(|r| r.summary).collect();
+        return Some(summaries.join(" · "));
+    }
+    let peer = prompt.trim_start();
+    (peer.starts_with("<agent-message") || peer.starts_with(PEER_PREFACE))
+        .then(|| work_report::from_peer(prompt, agent).summary)
+}
+
+/// How Claude Code introduces another session's message before its tag.
+const PEER_PREFACE: &str = "Another Claude session sent a message:";
+
+/// The input field that says what a tool call was about, for the tools whose
+/// call has no `description`: what a search looked for, the page it opened.
+fn summary_key(tool: &str) -> Option<&'static str> {
+    match tool {
+        "Grep" | "Glob" => Some("pattern"),
+        "WebSearch" | "ToolSearch" => Some("query"),
+        "WebFetch" => Some("url"),
+        "Skill" => Some("skill"),
+        "ScheduleWakeup" => Some("reason"),
+        _ => None,
+    }
+}
+
+/// The longest summary kept: a row shows one line of it.
+const SUMMARY_MAX: usize = 200;
+
+/// What a step was for, in one line: the `description` Claude writes for a
+/// command or a subagent ("Run the tests"), or the input that names what a
+/// search or fetch was about. Costs no tokens — Claude already sends it.
+///
+/// `description` is the hook's own copy, kept for when the recorded `input`
+/// was capped mid-JSON and no longer parses (a long command comes first).
+#[must_use]
+pub fn step_summary(tool: &str, input: Option<&str>, description: Option<&str>) -> Option<String> {
+    let value: Option<serde_json::Value> = input.and_then(|i| serde_json::from_str(i).ok());
+    let field = |key: &str| value.as_ref()?.get(key)?.as_str().map(str::to_string);
+    let text = summary_key(tool)
+        .and_then(field)
+        .or_else(|| field("description"))
+        .or_else(|| description.map(str::to_string))?;
+    let line = text.lines().map(str::trim).find(|l| !l.is_empty())?;
+    Some(match line.char_indices().nth(SUMMARY_MAX) {
+        Some((cut, _)) => format!("{}\u{2026}", line[..cut].trim_end()),
+        None => line.to_string(),
     })
 }
 
@@ -540,7 +827,25 @@ mod tests {
         ] {
             assert_ne!(cmd_flags(cmd) & flags::DELETED, 0, "{cmd}");
         }
-        for cmd in ["git status", "npm run format", "git push origin main"] {
+        for cmd in [
+            "npm uninstall date-fns",
+            "pnpm remove zod",
+            "yarn remove zod",
+            "pip uninstall -y requests",
+            "uv pip uninstall requests",
+            "brew uninstall jq",
+            "cargo remove serde",
+        ] {
+            let flags = cmd_flags(cmd);
+            assert_ne!(flags & flags::REMOVED_PACKAGE, 0, "{cmd}");
+            assert_eq!(flags & flags::DELETED, 0, "{cmd}: a package, not files");
+        }
+        for cmd in [
+            "git status",
+            "npm run format",
+            "git push origin main",
+            "npm install zod",
+        ] {
             assert_eq!(cmd_flags(cmd) & flags::DELETED, 0, "{cmd}");
         }
     }
@@ -575,6 +880,73 @@ mod tests {
         assert_eq!(read("/w/app/.env.example") & flags::SECRET_FILE, 0);
         assert_eq!(read("/w/app/src/environment.ts") & flags::SECRET_FILE, 0);
         assert_ne!(cmd_flags("cat .env") & flags::SECRET_FILE, 0);
+    }
+
+    #[test]
+    fn flags_a_command_that_reaches_outside_the_project() {
+        let run = |cmd: &str| {
+            step_flags(StepKind::Command, Some(cmd), None, Some("/Users/me/app"))
+                & flags::OUTSIDE_PROJECT
+        };
+        assert_ne!(run("cat ~/.claude/settings.json"), 0);
+        assert_ne!(
+            run("for f in src/*; do cat \"$f\"; done; cat $HOME/.zshrc"),
+            0
+        );
+        assert_ne!(run("ls /Users/me/other"), 0);
+        assert_ne!(run("cat /etc/hosts"), 0);
+        assert_eq!(run("cat ~/app/src/a.js"), 0, "inside, spelled from home");
+        assert_eq!(run("cat /Users/me/app/src/a.js"), 0);
+        assert_eq!(
+            run("npm test 2>/dev/null > /tmp/out.txt"),
+            0,
+            "scratch places"
+        );
+        assert_eq!(run("/usr/bin/env node a.js"), 0);
+        assert_ne!(
+            cmd_flags("cat ~/.npmrc") & flags::OUTSIDE_PROJECT,
+            0,
+            "no home known"
+        );
+    }
+
+    #[test]
+    fn a_launch_step_says_what_it_launched() {
+        let entry = |json: &str| {
+            let Some(LogEntry::Step(step)) = log_entry(&ev(json)) else {
+                panic!("a step");
+            };
+            step
+        };
+        let typed = entry(
+            r#"{"event":"PostToolUse","tool_name":"Agent","tool_use_id":"t1","subagent_type":"Explore","launched_agent_id":"a9","ts":"1970-01-01T00:00:01Z"}"#,
+        );
+        assert_eq!(typed.launched_type.as_deref(), Some("Explore"));
+        assert_eq!(typed.launched_agent.as_deref(), Some("a9"));
+        let untyped = entry(
+            r#"{"event":"PreToolUse","tool_name":"Agent","tool_use_id":"t2","launched_agent_id":"","ts":"1970-01-01T00:00:01Z"}"#,
+        );
+        assert_eq!(untyped.launched_type.as_deref(), Some(DEFAULT_SUBAGENT));
+        assert_eq!(untyped.launched_agent, None);
+        let sub = entry(
+            r#"{"event":"PreToolUse","tool_name":"Read","tool_use_id":"t3","agent_id":"a9","launched_by":"t1","ts":"1970-01-01T00:00:01Z"}"#,
+        );
+        assert_eq!(
+            (sub.launched_type, sub.launched_by.as_deref()),
+            (None, Some("t1"))
+        );
+    }
+
+    #[test]
+    fn a_command_that_changed_files_outside_is_flagged() {
+        let step = log_entry(&ev(
+            r#"{"event":"PostToolUse","tool_name":"Bash","tool_use_id":"t1","command":"./fix.sh","changed_files":["/w/a.js","/u/.zshrc"],"cwd":"/w","ts":"1970-01-01T00:00:01Z"}"#,
+        ));
+        let Some(LogEntry::Step(step)) = step else {
+            panic!("a step: {step:?}");
+        };
+        assert_ne!(step.flags & flags::OUTSIDE_PROJECT, 0);
+        assert_eq!(step.changed_files, ["/w/a.js", "/u/.zshrc"]);
     }
 
     #[test]
@@ -627,6 +999,146 @@ mod tests {
             "path read from the input"
         );
         assert_eq!(step.duration_ms, Some(4));
+    }
+
+    #[test]
+    fn a_step_says_what_it_was_for() {
+        let bash = r#"{"command":"pnpm check","description":"Run every check"}"#;
+        assert_eq!(
+            step_summary("Bash", Some(bash), None).as_deref(),
+            Some("Run every check")
+        );
+        let grep = r#"{"pattern":"fn map_blocks","path":"crates"}"#;
+        assert_eq!(
+            step_summary("Grep", Some(grep), None).as_deref(),
+            Some("fn map_blocks")
+        );
+        assert_eq!(
+            step_summary(
+                "WebFetch",
+                Some(r#"{"url":"https://docs.rs/x","prompt":"how?"}"#),
+                None
+            )
+            .as_deref(),
+            Some("https://docs.rs/x")
+        );
+        // A long command caps the input mid-JSON: the hook's own copy of the
+        // description still says what it was for.
+        let capped = r#"{"command":"python3 - <<'EOF'\nimport sys…"#;
+        assert_eq!(
+            step_summary("Bash", Some(capped), Some("Print the bytes")).as_deref(),
+            Some("Print the bytes")
+        );
+        assert_eq!(
+            step_summary("Read", Some(r#"{"file_path":"/a"}"#), None),
+            None
+        );
+        assert_eq!(
+            step_summary("Agent", None, Some("\n  Score the findings\nmore")).as_deref(),
+            Some("Score the findings"),
+            "one line"
+        );
+        let long = "x".repeat(SUMMARY_MAX + 10);
+        let capped = step_summary("Bash", None, Some(&long)).expect("a summary");
+        assert_eq!(capped.chars().count(), SUMMARY_MAX + 1);
+    }
+
+    fn launch(step_id: i64, kind: &str, started_ms: i64) -> SubagentLaunch {
+        SubagentLaunch {
+            step_id,
+            tool_use_id: format!("toolu_{step_id}"),
+            launched_type: kind.to_string(),
+            launched_agent: None,
+            started_ms,
+        }
+    }
+
+    fn seen(agent_id: &str, kind: Option<&str>, first_ms: i64) -> SubagentSeen {
+        SubagentSeen {
+            agent_id: agent_id.to_string(),
+            agent_type: kind.map(str::to_string),
+            launched_by: None,
+            first_ms,
+        }
+    }
+
+    #[test]
+    fn a_subagent_links_to_the_launch_that_named_it() {
+        // Two of one type, started together; B's first step comes first.
+        let launches = [launch(1, "Explore", 100), launch(2, "Explore", 101)];
+        let a = SubagentSeen {
+            launched_by: Some("toolu_1".into()),
+            ..seen("a", Some("Explore"), 160)
+        };
+        let b = SubagentSeen {
+            launched_by: Some("toolu_2".into()),
+            ..seen("b", Some("Explore"), 150)
+        };
+        let links = link_subagents(&launches, &[b, a]);
+        assert_eq!(
+            (links["a"], links["b"]),
+            (1, 2),
+            "by the sidecar, not by order"
+        );
+
+        // A background launch says which agent it started.
+        let bg = SubagentLaunch {
+            launched_agent: Some("c".into()),
+            ..launch(3, "Plan", 100)
+        };
+        let links = link_subagents(
+            &[launch(4, "Plan", 90), bg],
+            &[seen("c", Some("Plan"), 200)],
+        );
+        assert_eq!(links["c"], 3);
+    }
+
+    #[test]
+    fn with_no_exact_link_a_subagent_takes_the_earliest_free_launch_of_its_type() {
+        let launches = [
+            launch(1, "Explore", 100),
+            launch(2, "Plan", 101),
+            launch(3, "Explore", 102),
+        ];
+        let exact = SubagentSeen {
+            launched_by: Some("toolu_1".into()),
+            ..seen("x", Some("Explore"), 300)
+        };
+        let links = link_subagents(
+            &launches,
+            &[
+                seen("y", Some("Explore"), 150),
+                exact,
+                seen("p", Some("Plan"), 99),
+            ],
+        );
+        assert_eq!(links["x"], 1);
+        assert_eq!(links["y"], 3, "launch 1 is taken exactly");
+        assert!(!links.contains_key("p"), "no launch before its first step");
+        assert!(
+            link_subagents(&launches, &[seen("h", None, 500)]).is_empty(),
+            "a helper"
+        );
+    }
+
+    #[test]
+    fn a_turn_no_person_started_is_headed_by_its_summary() {
+        let handback = "<agent-message from=\"a35\">\n[Subagent hand-back] The text below is the final report\n…\n</agent-message>";
+        assert_eq!(
+            report_heading(handback, Some("pr-scorer")).as_deref(),
+            Some("Agent \"pr-scorer\" reported back")
+        );
+        assert_eq!(
+            report_heading(handback, None).as_deref(),
+            Some("A subagent reported back")
+        );
+        let report = "<task-notification>\n<task-id>b1</task-id>\n<status>completed</status>\n<summary>Background command \"Build\" completed</summary>\n</task-notification>";
+        assert_eq!(
+            report_heading(report, None).as_deref(),
+            Some("Background command \"Build\" completed")
+        );
+        assert_eq!(report_heading("fix the <agent-message> parser", None), None);
+        assert_eq!(report_heading("run the tests", None), None);
     }
 
     #[test]

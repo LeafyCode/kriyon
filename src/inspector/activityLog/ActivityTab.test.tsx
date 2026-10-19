@@ -20,13 +20,23 @@ vi.mock("../../ipc/bridge.ts", () => ({
 }));
 
 const EDIT: ActivityStep = {
+  agentId: null,
+  agentName: null,
   agentType: null,
+  approved: false,
+  changedFiles: [],
+  created: false,
   durationMs: 40,
   flags: 0,
   id: 1,
   kind: "edit",
+  parentStepId: null,
+  linesAdded: null,
+  linesRemoved: null,
+  outcome: null,
   startedMs: 0,
   status: "ok",
+  summary: null,
   target: "/w/src/a.ts",
   toolName: "Edit",
 };
@@ -45,6 +55,7 @@ const TURN: ActivityTurn = {
   endReason: null,
   id: 1,
   prompt: "add validation",
+  report: null,
   source: "user",
   startedMs: 0,
   steps: [EDIT, INSTALL],
@@ -105,7 +116,64 @@ test("a chained command shows each command on its own line", async () => {
   expect(await screen.findByText("Ran 2 commands")).toBeTruthy();
   expect(screen.getByText('echo "hi" > hello.txt')).toBeTruthy();
   expect(screen.getByText("curl -sI https://example.com")).toBeTruthy();
-  expect(screen.getByText("internet")).toBeTruthy();
+  expect(screen.getByText("web")).toBeTruthy();
+});
+
+const LAUNCH_ROW = /Subagent: Map the parser/;
+
+test("a subagent's steps sit under its launch; a lone block opens nothing", async () => {
+  const launch: ActivityStep = {
+    ...EDIT,
+    id: 10,
+    kind: "agent",
+    summary: "Map the parser",
+    target: null,
+    toolName: "Agent",
+  };
+  const sub = (id: number, parentStepId: number | null): ActivityStep => ({
+    ...EDIT,
+    agentId: parentStepId === null ? "b" : "a",
+    agentName: "Explore",
+    agentType: "Explore",
+    id,
+    kind: "command",
+    linesAdded: 5,
+    outcome: "4 passed",
+    parentStepId,
+    target: "npm test",
+    toolName: "Bash",
+  });
+  vi.mocked(activityTurns).mockResolvedValue([
+    { ...TURN, steps: [launch, sub(11, 10), sub(12, null)] },
+  ]);
+  render(<ActivityTab onOpenInChanges={vi.fn()} sessionId="s1" />);
+  expect(await screen.findByRole("button", { name: LAUNCH_ROW })).toBeTruthy();
+  expect(screen.getAllByTestId("subagent-steps")).toHaveLength(2);
+  expect(screen.getAllByText("4 passed").length).toBeGreaterThan(0);
+  const block = screen.getByTestId("subagent-block");
+  expect(block.textContent).toContain("Subagent: Explore");
+  expect(block.textContent).not.toContain("Explore Explore");
+});
+
+const READ_TWO = /Read 2 files/;
+
+test("reads in a row fold into one line that opens to show each", async () => {
+  const read = (id: number, name: string): ActivityStep => ({
+    ...EDIT,
+    id,
+    kind: "read",
+    target: `/w/src/${name}`,
+    toolName: "Read",
+  });
+  vi.mocked(activityTurns).mockResolvedValue([
+    { ...TURN, steps: [read(1, "a.ts"), read(2, "b.ts")] },
+  ]);
+  render(<ActivityTab onOpenInChanges={vi.fn()} sessionId="s1" />);
+  const fold = await screen.findByRole("button", { name: READ_TWO });
+  expect(screen.getByText("a.ts, b.ts")).toBeTruthy();
+  fireEvent.click(fold);
+  expect(screen.getByText("Read a.ts")).toBeTruthy();
+  expect(screen.getByText("Read b.ts")).toBeTruthy();
 });
 
 test("a step opens its detail, and an edit opens in the Changes view", async () => {

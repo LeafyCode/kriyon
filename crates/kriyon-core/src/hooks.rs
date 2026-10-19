@@ -317,6 +317,27 @@ pub struct HookEvent {
     /// For an `ExitPlanMode` `PreToolUse`, the plan's first non-empty line (capped).
     #[serde(default)]
     pub plan: Option<String>,
+    /// On a `PostToolUse` that changed files, the lines it added, from Claude
+    /// Code's own patch (an edit's, or the files a command edited).
+    #[serde(default)]
+    pub lines_added: Option<u64>,
+    /// The lines that change removed; see [`Self::lines_added`].
+    #[serde(default)]
+    pub lines_removed: Option<u64>,
+    /// On a file tool's `PostToolUse`, whether it made a new file.
+    #[serde(default)]
+    pub created: Option<bool>,
+    /// On a [Subagent]'s own event, the `tool_use_id` of the call that launched
+    /// it, from the sidecar Claude Code writes beside its transcript.
+    #[serde(default)]
+    pub launched_by: Option<String>,
+    /// On a Bash `PostToolUse`, the files the command changed (capped).
+    #[serde(default)]
+    pub changed_files: Option<Vec<String>>,
+    /// On a `PostToolUse`, what came of it in a few words: a test run's
+    /// "43 passed" or "2 failed", a search's "6 files".
+    #[serde(default)]
+    pub outcome: Option<String>,
     /// On a `Stop` hook, whether Claude Code is already continuing because a
     /// previous `Stop` hook blocked — i.e. this is a *re-entry*, ending a turn
     /// the user has already been told about. Absent on every other event.
@@ -1043,6 +1064,209 @@ mod tests {
     }
 
     #[test]
+    fn the_hook_script_counts_the_lines_a_file_change_made() {
+        // Claude Code's own patch, as an Edit returns it.
+        let edit = run_hook_script(
+            r#"{"hook_event_name":"PostToolUse","tool_name":"Edit","tool_use_id":"t1","tool_input":{"file_path":"/w/a.ts"},"tool_response":{"filePath":"/w/a.ts","structuredPatch":[{"lines":[" a","-b","+c","+d"]},{"lines":["-e"]}]}}"#,
+        )
+        .expect("an event line");
+        assert_eq!((edit.lines_added, edit.lines_removed), (Some(2), Some(2)));
+        assert_eq!(
+            edit.created, None,
+            "only a Write says whether the file is new"
+        );
+
+        // A new file has no patch: every line of it is new.
+        let write = run_hook_script(
+            r#"{"hook_event_name":"PostToolUse","tool_name":"Write","tool_use_id":"t2","tool_input":{"file_path":"/w/b.ts"},"tool_response":{"type":"create","content":"x\ny\nz\n","structuredPatch":[]}}"#,
+        )
+        .expect("an event line");
+        assert_eq!((write.lines_added, write.lines_removed), (Some(3), Some(0)));
+        assert_eq!(write.created, Some(true));
+
+        // A command that edited files reports them too.
+        let bash = run_hook_script(
+            r#"{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_use_id":"t3","tool_input":{"command":"sed -i '' s/a/b/ x y"},"tool_response":{"stdout":"","bashEditDiff":{"files":[{"filePath":"/w/x","hunks":[{"lines":["-a","+b"]}]},{"filePath":"/w/y","hunks":[{"lines":["+b"]}]}]}}}"#,
+        )
+        .expect("an event line");
+        assert_eq!((bash.lines_added, bash.lines_removed), (Some(2), Some(1)));
+
+        let read = run_hook_script(
+            r#"{"hook_event_name":"PostToolUse","tool_name":"Read","tool_use_id":"t4","tool_input":{"file_path":"/w/a.ts"},"tool_response":{"type":"text"}}"#,
+        )
+        .expect("an event line");
+        assert_eq!((read.lines_added, read.created), (None, None));
+    }
+
+    #[test]
+    fn the_hook_script_records_results_as_a_person_reads_them() {
+        let result = |tool: &str, response: &str| {
+            run_hook_script(&format!(
+                r#"{{"hook_event_name":"PostToolUse","tool_name":"{tool}","tool_use_id":"t","tool_input":{{}},"tool_response":{response}}}"#
+            ))
+            .expect("an event line")
+            .result
+        };
+        assert_eq!(
+            result(
+                "Bash",
+                r#"{"stdout":"found 0 vulnerabilities\nv24","stderr":"warn","interrupted":false}"#
+            )
+            .as_deref(),
+            Some("found 0 vulnerabilities\nv24\nwarn"),
+            "the output, not the JSON around it"
+        );
+        assert_eq!(
+            result(
+                "Edit",
+                r#"{"originalFile":"huge","structuredPatch":[{"lines":[" a","-b","+c"]}]}"#
+            )
+            .as_deref(),
+            Some(" a\n-b\n+c")
+        );
+        assert_eq!(
+            result(
+                "WebFetch",
+                r#"{"url":"https://x","code":200,"result":"page text"}"#
+            )
+            .as_deref(),
+            Some("page text")
+        );
+        // A long output keeps its start and its end, where the summary is.
+        let long = format!("start{}end", "x".repeat(10_000));
+        let kept =
+            result("Bash", &serde_json::json!({ "stdout": long }).to_string()).expect("a result");
+        assert!(
+            kept.starts_with("start") && kept.ends_with("end"),
+            "{kept:.40}"
+        );
+        assert!(kept.chars().count() < 4100);
+    }
+
+    #[test]
+    fn the_hook_script_names_the_files_a_command_changed() {
+        let ev = run_hook_script(
+            r#"{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_use_id":"t","tool_input":{"command":"cat > src/a.js"},"tool_response":{"stdout":"","bashEditDiff":{"files":[{"filePath":"/w/src/a.js","hunks":[{"lines":["+x"]}]}]}}}"#,
+        )
+        .expect("an event line");
+        assert_eq!(ev.changed_files, Some(vec!["/w/src/a.js".to_string()]));
+
+        // An install rewrites node_modules: that's the package, not the project.
+        let install = run_hook_script(
+            r#"{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_use_id":"t","tool_input":{"command":"npm i lodash"},"tool_response":{"stdout":"","bashEditDiff":{"files":[{"filePath":"/w/node_modules/.package-lock.json","hunks":[{"lines":["+a","+b"]}]},{"filePath":"/w/.git/index","hunks":[{"lines":["+c"]}]},{"filePath":"/w/package.json","hunks":[{"lines":["+d"]}]}]}}}"#,
+        )
+        .expect("an event line");
+        assert_eq!(
+            install.changed_files,
+            Some(vec!["/w/package.json".to_string()])
+        );
+        assert_eq!(
+            (install.lines_added, install.lines_removed),
+            (Some(1), Some(0))
+        );
+    }
+
+    #[test]
+    fn the_hook_script_sums_up_what_a_command_or_search_found() {
+        let outcome = |tool: &str, input: &str, response: &str| {
+            run_hook_script(&format!(
+                r#"{{"hook_event_name":"PostToolUse","tool_name":"{tool}","tool_use_id":"t","tool_input":{input},"tool_response":{response}}}"#
+            ))
+            .expect("an event line")
+            .outcome
+        };
+        let bash = |stdout: &str| {
+            outcome(
+                "Bash",
+                r#"{"command":"pnpm test"}"#,
+                &serde_json::json!({ "stdout": stdout }).to_string(),
+            )
+        };
+        // The summary sits at the end of a long run, past any cap.
+        let noise = "ok\n".repeat(5000);
+        assert_eq!(
+            bash(&format!(
+                "{noise} Test Files  9 passed (9)\n      Tests  43 passed (43)\n"
+            ))
+            .as_deref(),
+            Some("43 passed")
+        );
+        assert_eq!(
+            bash("Tests  2 failed | 41 passed (43)").as_deref(),
+            Some("2 failed")
+        );
+        // Cargo prints one line per test binary: they add up.
+        assert_eq!(
+            bash("test result: ok. 200 passed; 0 failed; 0 ignored\ntest result: ok. 12 passed; 0 failed;").as_deref(),
+            Some("212 passed")
+        );
+        assert_eq!(
+            bash("== 3 failed, 10 passed in 0.2s ==").as_deref(),
+            Some("3 failed")
+        );
+        // Node's own test runner.
+        assert_eq!(
+            bash("ℹ tests 3\nℹ suites 0\nℹ pass 3\nℹ fail 0\n").as_deref(),
+            Some("3 passed")
+        );
+        assert_eq!(
+            bash("# tests 3\n# pass 2\n# fail 1\n").as_deref(),
+            Some("1 failed")
+        );
+        assert_eq!(bash("hello").as_deref(), None);
+        // A run where every test failed has no "passed" anywhere.
+        assert_eq!(
+            bash(" Test Files  1 failed (1)\n      Tests  2 failed (2)\n").as_deref(),
+            Some("2 failed")
+        );
+        assert_eq!(
+            bash("===== 2 failed in 0.10s =====").as_deref(),
+            Some("2 failed")
+        );
+        assert_eq!(
+            bash("Tests:       2 failed, 2 total").as_deref(),
+            Some("2 failed")
+        );
+        assert_eq!(
+            bash("Tests:       41 passed, 41 total").as_deref(),
+            Some("41 passed")
+        );
+        // Output that only mentions passing is not a test run.
+        assert_eq!(
+            bash("hooks.rs:1188: Some(\"43 passed\")\nfix: 3 passed tests").as_deref(),
+            None
+        );
+        // One command running several runners adds them all up.
+        assert_eq!(
+            bash("      Tests  10 passed (10)\nℹ pass 5\nℹ fail 0\ntest result: ok. 7 passed; 0 failed;").as_deref(),
+            Some("22 passed")
+        );
+        assert_eq!(
+            bash("      Tests  1 failed | 9 passed (10)\ntest result: ok. 7 passed; 0 failed;")
+                .as_deref(),
+            Some("1 failed")
+        );
+        assert_eq!(
+            outcome(
+                "Grep",
+                r#"{"pattern":"x"}"#,
+                r#"{"mode":"files_with_matches","numFiles":6,"filenames":[]}"#
+            )
+            .as_deref(),
+            Some("6 files")
+        );
+        assert_eq!(
+            outcome(
+                "Glob",
+                r#"{"pattern":"*.rs"}"#,
+                r#"{"numFiles":1,"filenames":["a.rs"]}"#
+            )
+            .as_deref(),
+            Some("1 file")
+        );
+    }
+
+    #[test]
     fn the_hook_script_records_the_background_work_a_stop_leaves_running() {
         // Claude Code 2.1.283's own `Stop` payload. Only id + type are kept, so
         // a long agent description can never bloat or truncate the line.
@@ -1058,6 +1282,36 @@ mod tests {
         let tasks = ev.background_tasks.expect("the list");
         assert_eq!(tasks[0].id, "ac049aa2d97e68b55");
         assert_eq!(tasks[1].kind, "shell");
+    }
+
+    #[test]
+    fn the_hook_script_reads_which_launch_started_a_subagent() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let sub = home.path().join("proj/s1/subagents");
+        std::fs::create_dir_all(&sub).expect("subagents dir");
+        std::fs::write(
+            sub.join("agent-a7.meta.json"),
+            r#"{"agentType":"Explore","description":"Map it","toolUseId":"toolu_9"}"#,
+        )
+        .expect("sidecar");
+        let transcript = home.path().join("proj/s1.jsonl");
+        let payload = |agent: &str| {
+            serde_json::json!({
+                "hook_event_name": "PreToolUse", "tool_name": "Read", "tool_use_id": "t",
+                "agent_id": agent, "agent_type": "Explore",
+                "transcript_path": transcript, "tool_input": {"file_path": "/w/a"},
+            })
+            .to_string()
+        };
+        let ev = run_hook_script_in(home.path(), &payload("a7")).expect("an event line");
+        assert_eq!(ev.launched_by.as_deref(), Some("toolu_9"));
+        let unknown = run_hook_script_in(home.path(), &payload("zz")).expect("an event line");
+        assert_eq!(
+            unknown.launched_by, None,
+            "no sidecar: nothing, and no failure"
+        );
+        let sneaky = run_hook_script_in(home.path(), &payload("../../x")).expect("an event line");
+        assert_eq!(sneaky.launched_by, None, "an id is a name, never a path");
     }
 
     #[test]
@@ -1194,10 +1448,46 @@ mod tests {
             r#"{"hook_event_name":"PostToolUse","tool_name":"Agent","tool_use_id":"toolu_2","tool_response":{"isAsync":true,"status":"async_launched","agentId":"a2"}}"#,
         )
         .expect("an event line");
-        let (answered, launched) = (fields(&answered), fields(&launched));
-        for (key, value) in &answered {
+        // A file change and a search fill what a step shows beside it.
+        let written = run_hook_script(
+            r#"{"hook_event_name":"PostToolUse","tool_name":"Write","tool_use_id":"toolu_3","tool_response":{"type":"create","content":"x","structuredPatch":[]}}"#,
+        )
+        .expect("an event line");
+        let found = run_hook_script(
+            r#"{"hook_event_name":"PostToolUse","tool_name":"Grep","tool_use_id":"toolu_4","tool_response":{"numFiles":2}}"#,
+        )
+        .expect("an event line");
+        let edited = run_hook_script(
+            r#"{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_use_id":"toolu_5","tool_response":{"stdout":"","bashEditDiff":{"files":[{"filePath":"/w/a","hunks":[]}]}}}"#,
+        )
+        .expect("an event line");
+        // A subagent's own event, with the sidecar naming its launch.
+        let home = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(home.path().join("p/s/subagents")).expect("dir");
+        std::fs::write(
+            home.path().join("p/s/subagents/agent-a1.meta.json"),
+            r#"{"toolUseId":"toolu_1"}"#,
+        )
+        .expect("sidecar");
+        let sub = run_hook_script_in(
+            home.path(),
+            &serde_json::json!({
+                "hook_event_name": "PreToolUse", "tool_name": "Read", "tool_use_id": "toolu_6",
+                "agent_id": "a1", "transcript_path": home.path().join("p/s.jsonl"),
+            })
+            .to_string(),
+        )
+        .expect("an event line");
+        let others = [
+            fields(&launched),
+            fields(&written),
+            fields(&found),
+            fields(&edited),
+            fields(&sub),
+        ];
+        for (key, value) in &fields(&answered) {
             assert!(
-                !value.is_null() || !launched[key].is_null(),
+                !value.is_null() || others.iter().any(|o| !o[key].is_null()),
                 "no payload fills HookEvent::{key} — the script and the struct disagree"
             );
         }

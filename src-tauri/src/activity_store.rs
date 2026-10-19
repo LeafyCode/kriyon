@@ -8,9 +8,15 @@
 //! Kept apart from `kriyon.db` so heavy churn stays away from small config
 //! data, `auto_vacuum` can be chosen up front, and "delete all" is cheap.
 
+use std::collections::HashMap;
 use std::path::Path;
 
-use kriyon_core::activity_log::{self, LogEntry, StepKind, StepStatus, StepUpdate};
+use kriyon_core::activity_log::{
+    self, link_subagents, report_heading, LogEntry, StepKind, StepStatus, StepUpdate,
+    SubagentLaunch, SubagentSeen, DEFAULT_SUBAGENT,
+};
+use kriyon_core::transcript::unwrap_pastes;
+use kriyon_core::work_report;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 
@@ -91,7 +97,11 @@ pub struct CompanionFacts {
 #[serde(rename_all = "camelCase")]
 pub struct ActivityTurn {
     pub id: i64,
+    /// The person's words, with Claude Code's paste markers taken out.
     pub prompt: Option<String>,
+    /// What heads a turn no person started (a subagent handing back, a
+    /// [Work report]), in plain words; `None` for a person's prompt.
+    pub report: Option<String>,
     /// Who sent the prompt (`user`, `system`, `loop_wakeup`, …), when known.
     pub source: Option<String>,
     pub started_ms: i64,
@@ -108,6 +118,27 @@ pub struct ActivityStep {
     pub tool_name: String,
     pub kind: StepKind,
     pub target: Option<String>,
+    /// What the step was for, in one line (`activity_log::step_summary`).
+    pub summary: Option<String>,
+    /// The lines a file change added and removed.
+    pub lines_added: Option<i64>,
+    pub lines_removed: Option<i64>,
+    /// Whether a write made a new file.
+    pub created: bool,
+    /// What came of the call in a few words ("43 passed", "6 files").
+    pub outcome: Option<String>,
+    /// The user said yes to it in a permission dialog.
+    pub approved: bool,
+    /// The files a command changed.
+    pub changed_files: Vec<String>,
+    /// Which agent ran it: `None` for the main agent, else the subagent's id.
+    pub agent_id: Option<String>,
+    /// For a [Subagent]'s step, the step that launched it, when known
+    /// (`activity_log::link_subagents`).
+    pub parent_step_id: Option<i64>,
+    /// For a [Subagent]'s step, what to call it: the task Claude launched it
+    /// with, else its type.
+    pub agent_name: Option<String>,
     pub status: StepStatus,
     pub flags: u32,
     pub agent_type: Option<String>,
@@ -123,7 +154,6 @@ pub struct ActivityStepDetail {
     pub step: ActivityStep,
     pub input: Option<String>,
     pub result: Option<String>,
-    pub agent_id: Option<String>,
     pub allowed_by: String,
     pub ended_ms: Option<i64>,
 }
@@ -213,7 +243,7 @@ impl ActivityStore {
         Self::init(Connection::open_in_memory()?)
     }
 
-    fn init(conn: Connection) -> Result<Self, ActivityError> {
+    fn init(mut conn: Connection) -> Result<Self, ActivityError> {
         // auto_vacuum only takes on a file with no tables yet; harmless after.
         conn.execute_batch(
             "PRAGMA auto_vacuum = INCREMENTAL;
@@ -312,6 +342,15 @@ impl ActivityStore {
                  ) STRICT;
                  PRAGMA user_version = 5; COMMIT;",
             )?;
+        }
+        if version < 6 {
+            migrate_to_v6(&mut conn)?;
+        }
+        if version < 7 {
+            migrate_to_v7(&conn)?;
+        }
+        if version < 8 {
+            migrate_to_v8(&conn)?;
         }
         Ok(Self { conn })
     }
@@ -441,11 +480,13 @@ impl ActivityStore {
         let mut steps_stmt = self.conn.prepare(&format!(
             "SELECT {STEP_COLUMNS} FROM steps WHERE turn_id = ?1 ORDER BY started_ms, id"
         ))?;
+        let subagents = self.subagents(session_id)?;
         let mut turns = turns_stmt
             .query_map(params![session_id, limit], |r| {
                 Ok(ActivityTurn {
                     id: r.get(0)?,
                     prompt: r.get(1)?,
+                    report: None,
                     source: r.get(2)?,
                     started_ms: r.get(3)?,
                     ended_ms: r.get(4)?,
@@ -455,11 +496,78 @@ impl ActivityStore {
             })?
             .collect::<Result<Vec<_>, _>>()?;
         for turn in &mut turns {
+            if let Some(prompt) = turn.prompt.take() {
+                // A hand-back names its sender by id: its task, else its type.
+                let agent = work_report::peer_sender(&prompt).and_then(|id| subagents.name(id));
+                turn.report = report_heading(&prompt, agent);
+                turn.prompt = Some(unwrap_pastes(&prompt));
+            }
             turn.steps = steps_stmt
                 .query_map([turn.id], step_row)?
                 .collect::<Result<Vec<_>, _>>()?;
+            for step in &mut turn.steps {
+                if let Some(id) = step.agent_id.as_deref() {
+                    step.parent_step_id = subagents.launch_of(id);
+                    step.agent_name = subagents.name(id).map(str::to_string);
+                }
+            }
         }
         Ok(turns)
+    }
+
+    /// Every [Subagent] of `session_id` and the launch that started it, as
+    /// `activity_log::link_subagents` decides.
+    fn subagents(&self, session_id: &str) -> Result<Subagents, ActivityError> {
+        let mut launches_stmt = self.conn.prepare(
+            "SELECT id, tool_use_id, launched_type, launched_agent, started_ms, summary FROM steps
+             WHERE session_id = ?1 AND kind = 'agent' AND agent_id IS NULL
+               AND launched_type IS NOT NULL
+             ORDER BY started_ms, id",
+        )?;
+        let mut summaries = HashMap::new();
+        let launches = launches_stmt
+            .query_map([session_id], |r| {
+                let launch = SubagentLaunch {
+                    step_id: r.get(0)?,
+                    tool_use_id: r.get(1)?,
+                    launched_type: r.get(2)?,
+                    launched_agent: r.get(3)?,
+                    started_ms: r.get(4)?,
+                };
+                Ok((launch, r.get::<_, Option<String>>(5)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .map(|(launch, summary)| {
+                if let Some(summary) = summary {
+                    summaries.insert(launch.step_id, summary);
+                }
+                launch
+            })
+            .collect::<Vec<_>>();
+        let mut agents_stmt = self.conn.prepare(
+            "SELECT agent_id, MAX(agent_type), MAX(launched_by), MIN(started_ms) FROM steps
+             WHERE session_id = ?1 AND agent_id IS NOT NULL
+             GROUP BY agent_id ORDER BY MIN(started_ms), agent_id",
+        )?;
+        let agents = agents_stmt
+            .query_map([session_id], |r| {
+                Ok(SubagentSeen {
+                    agent_id: r.get(0)?,
+                    agent_type: r.get(1)?,
+                    launched_by: r.get(2)?,
+                    first_ms: r.get(3)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Subagents {
+            links: link_subagents(&launches, &agents),
+            summaries,
+            types: agents
+                .into_iter()
+                .filter_map(|a| Some((a.agent_id, a.agent_type?)))
+                .collect(),
+        })
     }
 
     /// One step in full, or `None` when it isn't `session_id`'s — with the
@@ -488,12 +596,12 @@ impl ActivityStore {
                 params![session_id, step_id],
                 |r| {
                     let step = step_row(r)?;
-                    let mode: Option<String> = r.get(12)?;
-                    let asked: i64 = r.get(13)?;
-                    let decision: Option<String> = r.get(15)?;
+                    let mode: Option<String> = r.get(AFTER_STEP + 3)?;
+                    let asked: i64 = r.get(AFTER_STEP + 4)?;
+                    let decision: Option<String> = r.get(AFTER_STEP + 6)?;
                     let check = decision.map(|decision| kriyon_core::bridge::ToolCheck {
                         decision,
-                        rule: r.get(16).ok().flatten(),
+                        rule: r.get(AFTER_STEP + 7).ok().flatten(),
                     });
                     Ok(ActivityStepDetail {
                         allowed_by: activity_log::allowed_by(
@@ -504,10 +612,9 @@ impl ActivityStore {
                             check.as_ref(),
                         ),
                         step,
-                        input: r.get(9)?,
-                        result: r.get(10)?,
-                        agent_id: r.get(11)?,
-                        ended_ms: r.get(14)?,
+                        input: r.get(AFTER_STEP)?,
+                        result: r.get(AFTER_STEP + 1)?,
+                        ended_ms: r.get(AFTER_STEP + 5)?,
                     })
                 },
             )
@@ -828,8 +935,102 @@ impl ActivityStore {
     }
 }
 
+/// v6: what each step was for and what came of it.
+fn migrate_to_v6(conn: &mut Connection) -> rusqlite::Result<()> {
+    // What each step was for (a command's description, a search's
+    // pattern), so a row reads as Claude meant it — filled in for the
+    // steps already kept from the input they recorded — and what came
+    // of it: lines changed, a new file, "43 passed".
+    let tx = conn.transaction()?;
+    tx.execute_batch(
+        "ALTER TABLE steps ADD COLUMN summary TEXT;
+             ALTER TABLE steps ADD COLUMN lines_added INTEGER;
+             ALTER TABLE steps ADD COLUMN lines_removed INTEGER;
+             ALTER TABLE steps ADD COLUMN created INTEGER NOT NULL DEFAULT 0;
+             ALTER TABLE steps ADD COLUMN outcome TEXT;",
+    )?;
+    backfill_summaries(&tx)?;
+    tx.execute_batch("PRAGMA user_version = 6;")?;
+    tx.commit()
+}
+
+/// v7: the files each command changed, so a row can name them.
+fn migrate_to_v7(conn: &Connection) -> rusqlite::Result<()> {
+    conn.execute_batch(
+        "BEGIN; ALTER TABLE steps ADD COLUMN changed_files TEXT;
+         PRAGMA user_version = 7; COMMIT;",
+    )
+}
+
+/// v8: what tied a subagent to its launch — the type launched, the agent a
+/// background launch named, the launch a subagent's sidecar names. Kept
+/// launches get their type from the input they kept.
+fn migrate_to_v8(conn: &Connection) -> rusqlite::Result<()> {
+    conn.execute_batch(&format!(
+        "BEGIN;
+         ALTER TABLE steps ADD COLUMN launched_type TEXT;
+         ALTER TABLE steps ADD COLUMN launched_agent TEXT;
+         ALTER TABLE steps ADD COLUMN launched_by TEXT;
+         UPDATE steps SET launched_type = COALESCE(
+           CASE WHEN json_valid(input) THEN json_extract(input, '$.subagent_type') END,
+           '{DEFAULT_SUBAGENT}')
+         WHERE kind = 'agent';
+         PRAGMA user_version = 8; COMMIT;"
+    ))
+}
+
+/// Each kept step's summary, from the input it recorded.
+fn backfill_summaries(tx: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+    let mut read = tx.prepare("SELECT id, tool_name, input FROM steps WHERE input IS NOT NULL")?;
+    let mut write = tx.prepare("UPDATE steps SET summary = ?2 WHERE id = ?1")?;
+    let rows = read
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    for (id, tool, input) in rows {
+        if let Some(summary) = activity_log::step_summary(&tool, Some(&input), None) {
+            write.execute(params![id, summary])?;
+        }
+    }
+    Ok(())
+}
+
+/// A session's [Subagent]s and their launches, for one read of its turns.
+struct Subagents {
+    /// Agent id → the step that launched it.
+    links: HashMap<String, i64>,
+    /// Launch step id → the task Claude gave it.
+    summaries: HashMap<i64, String>,
+    /// Agent id → its type.
+    types: HashMap<String, String>,
+}
+
+impl Subagents {
+    fn launch_of(&self, agent_id: &str) -> Option<i64> {
+        self.links.get(agent_id).copied()
+    }
+
+    /// What to call a subagent: the task it was launched with, else its type.
+    /// The one naming rule: hand-back headings and the timeline both use it.
+    fn name(&self, agent_id: &str) -> Option<&str> {
+        self.launch_of(agent_id)
+            .and_then(|launch| self.summaries.get(&launch))
+            .or_else(|| self.types.get(agent_id))
+            .map(String::as_str)
+    }
+}
+
 const STEP_COLUMNS: &str =
-    "id, tool_name, kind, target, status, flags, agent_type, started_ms, duration_ms";
+    "id, tool_name, kind, target, status, flags, agent_type, started_ms, duration_ms, summary,
+     lines_added, lines_removed, created, outcome, asked, changed_files, agent_id";
+
+/// The index of the first column a query selects after [`STEP_COLUMNS`].
+const AFTER_STEP: usize = 17;
 
 fn step_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<ActivityStep> {
     let kind: String = r.get(2)?;
@@ -844,6 +1045,20 @@ fn step_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<ActivityStep> {
         agent_type: r.get(6)?,
         started_ms: r.get(7)?,
         duration_ms: r.get(8)?,
+        summary: r.get(9)?,
+        lines_added: r.get(10)?,
+        lines_removed: r.get(11)?,
+        created: r.get::<_, i64>(12)? != 0,
+        outcome: r.get(13)?,
+        // A dialog alone isn't a yes: only a step that then finished was approved.
+        approved: r.get::<_, i64>(14)? != 0 && status == "ok",
+        changed_files: r
+            .get::<_, Option<String>>(15)?
+            .map(|files| files.lines().map(str::to_string).collect())
+            .unwrap_or_default(),
+        agent_id: r.get(16)?,
+        parent_step_id: None,
+        agent_name: None,
     })
 }
 
@@ -1111,14 +1326,26 @@ fn upsert_step(
     tx.execute(
         "INSERT INTO steps (session_id, turn_id, tool_use_id, agent_id, agent_type, tool_name, kind,
                             target, input, result, status, flags, permission_mode, started_ms,
-                            ended_ms, duration_ms, claude_session_id)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
+                            ended_ms, duration_ms, claude_session_id, summary, lines_added,
+                            lines_removed, created, outcome, changed_files, launched_type,
+                            launched_agent, launched_by)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18,
+                 ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26)
          ON CONFLICT(session_id, tool_use_id) DO UPDATE SET
            claude_session_id = COALESCE(claude_session_id, excluded.claude_session_id),
            turn_id = COALESCE(turn_id, excluded.turn_id),
            agent_id = COALESCE(agent_id, excluded.agent_id),
            agent_type = COALESCE(agent_type, excluded.agent_type),
            target = COALESCE(target, excluded.target),
+           summary = COALESCE(summary, excluded.summary),
+           lines_added = COALESCE(excluded.lines_added, lines_added),
+           lines_removed = COALESCE(excluded.lines_removed, lines_removed),
+           created = MAX(created, excluded.created),
+           outcome = COALESCE(excluded.outcome, outcome),
+           changed_files = COALESCE(excluded.changed_files, changed_files),
+           launched_type = COALESCE(launched_type, excluded.launched_type),
+           launched_agent = COALESCE(launched_agent, excluded.launched_agent),
+           launched_by = COALESCE(launched_by, excluded.launched_by),
            input = COALESCE(input, excluded.input),
            result = CASE WHEN excluded.status <> 'running' AND result = 'Did not finish: the session ended'
                          THEN excluded.result
@@ -1147,6 +1374,15 @@ fn upsert_step(
             ended,
             step.duration_ms,
             step.claude_session_id,
+            step.summary,
+            step.lines_added,
+            step.lines_removed,
+            i64::from(step.created == Some(true)),
+            step.outcome,
+            (!step.changed_files.is_empty()).then(|| step.changed_files.join("\n")),
+            step.launched_type,
+            step.launched_agent,
+            step.launched_by,
         ],
     )?;
     Ok(())
@@ -1357,6 +1593,156 @@ mod tests {
     }
 
     #[test]
+    fn turns_and_steps_read_in_plain_words() {
+        let mut store = ActivityStore::open_in_memory().expect("opens");
+        ingest(
+            &mut store,
+            &[
+                prompt("p1", "\n\n<pasted_content id=\"8239\">\nrun the tests\n</pasted_content id=\"8239\">\n", 1),
+                line(&serde_json::json!({
+                    "event": "PostToolUse", "tool_name": "Bash", "tool_use_id": "t1",
+                    "prompt_id": "p1", "agent_id": "a35", "agent_type": "pr-scorer",
+                    "command": "pnpm check", "description": "Run every check",
+                    "input": "{\"command\":\"pnpm check\",\"description\":\"Run every check\"}",
+                    "outcome": "43 passed", "changed_files": ["/w/a.js"], "ts": at(2),
+                })),
+                line(&serde_json::json!({
+                    "event": "PreToolUse", "tool_name": "Agent", "tool_use_id": "t0",
+                    "prompt_id": "p1", "description": "Score the findings",
+                    "subagent_type": "pr-scorer",
+                    // A long brief cuts the kept input mid-JSON; the type is
+                    // the hook's own field.
+                    "input": "{\"description\":\"Score the findings\",\"prompt\":\"a long brief…",
+                    "ts": at(1),
+                })),
+                line(&serde_json::json!({
+                    "event": "PostToolUse", "tool_name": "Write", "tool_use_id": "t2",
+                    "prompt_id": "p1", "target": "/w/new.ts", "lines_added": 38,
+                    "lines_removed": 0, "created": true, "ts": at(2),
+                })),
+                prompt("p2", "<agent-message from=\"a35\">\n[Subagent hand-back] The report\n</agent-message>", 3),
+            ],
+        );
+        let turns = store.turns("s1", 10).expect("reads");
+        let (handback, pasted) = (&turns[0], &turns[1]);
+        assert_eq!(
+            handback.report.as_deref(),
+            Some("Agent \"Score the findings\" reported back"),
+            "named by the task it was launched with"
+        );
+        assert_eq!(pasted.report, None);
+        assert_eq!(pasted.prompt.as_deref(), Some("run the tests"));
+        assert_eq!(pasted.steps[1].summary.as_deref(), Some("Run every check"));
+        assert_eq!(pasted.steps[1].outcome.as_deref(), Some("43 passed"));
+        let (launch, bash, write) = (&pasted.steps[0], &pasted.steps[1], &pasted.steps[2]);
+        assert_eq!(launch.agent_id, None);
+        assert_eq!(bash.agent_id.as_deref(), Some("a35"));
+        assert_eq!(bash.parent_step_id, Some(launch.id), "under its launch");
+        assert_eq!(bash.agent_name.as_deref(), Some("Score the findings"));
+        assert_eq!(bash.changed_files, ["/w/a.js"]);
+        assert_eq!(
+            (write.lines_added, write.lines_removed, write.created),
+            (Some(38), Some(0), true)
+        );
+    }
+
+    #[test]
+    fn two_subagents_of_one_type_each_find_their_own_launch() {
+        let mut store = ActivityStore::open_in_memory().expect("opens");
+        let launch = |id: &str, task: &str, secs: u32| {
+            line(&serde_json::json!({
+                "event": "PreToolUse", "tool_name": "Agent", "tool_use_id": id,
+                "prompt_id": "p1", "description": task, "subagent_type": "Explore", "ts": at(secs),
+            }))
+        };
+        let step = |id: &str, agent: &str, launched_by: &str, secs: u32| {
+            line(&serde_json::json!({
+                "event": "PostToolUse", "tool_name": "Read", "tool_use_id": id, "prompt_id": "p1",
+                "agent_id": agent, "agent_type": "Explore", "launched_by": launched_by,
+                "target": "/w/a", "ts": at(secs),
+            }))
+        };
+        ingest(
+            &mut store,
+            &[
+                prompt("p1", "map it", 1),
+                launch("L1", "Map the parser", 2),
+                launch("L2", "Find callers", 3),
+                // B starts work first, yet its sidecar names L2.
+                step("s1", "b", "L2", 4),
+                step("s2", "a", "L1", 5),
+                prompt(
+                    "p2",
+                    "<agent-message from=\"a\">\n[Subagent hand-back] done\n</agent-message>",
+                    6,
+                ),
+                prompt(
+                    "p3",
+                    "<agent-message from=\"b\">\n[Subagent hand-back] done\n</agent-message>",
+                    7,
+                ),
+            ],
+        );
+        let turns = store.turns("s1", 10).expect("reads");
+        let steps = &turns[2].steps;
+        let id_of = |tool_use: &str| {
+            store
+                .conn
+                .query_row(
+                    "SELECT id FROM steps WHERE tool_use_id = ?1",
+                    [tool_use],
+                    |r| r.get::<_, i64>(0),
+                )
+                .expect("a step")
+        };
+        let parent = |agent: &str| {
+            steps
+                .iter()
+                .find(|s| s.agent_id.as_deref() == Some(agent))
+                .and_then(|s| s.parent_step_id)
+        };
+        assert_eq!(parent("a"), Some(id_of("L1")));
+        assert_eq!(parent("b"), Some(id_of("L2")));
+        assert_eq!(
+            turns[1].report.as_deref(),
+            Some("Agent \"Map the parser\" reported back")
+        );
+        assert_eq!(
+            turns[0].report.as_deref(),
+            Some("Agent \"Find callers\" reported back")
+        );
+    }
+
+    #[test]
+    fn a_v7_store_gets_launch_types_from_the_input_it_kept() {
+        let mut conn = Connection::open_in_memory().expect("opens");
+        conn.execute_batch(&format!(
+            "{SCHEMA_V1} ALTER TABLE steps ADD COLUMN claude_session_id TEXT;
+             PRAGMA user_version = 5;"
+        ))
+        .expect("a v5 log");
+        migrate_to_v6(&mut conn).expect("to v6");
+        conn.execute_batch(
+            "ALTER TABLE steps ADD COLUMN changed_files TEXT; PRAGMA user_version = 7;
+             INSERT INTO sessions VALUES ('s1', 0);
+             INSERT INTO steps (session_id, tool_use_id, tool_name, kind, input, status, started_ms)
+             VALUES ('s1', 't1', 'Agent', 'agent', '{\"subagent_type\":\"Plan\"}', 'ok', 0),
+                    ('s1', 't2', 'Agent', 'agent', '{\"prompt\":\"cut…', 'ok', 0);",
+        )
+        .expect("a v7 log");
+        let store = ActivityStore::init(conn).expect("migrates");
+        let types: Vec<String> = store
+            .conn
+            .prepare("SELECT launched_type FROM steps ORDER BY tool_use_id")
+            .expect("prepares")
+            .query_map([], |r| r.get(0))
+            .expect("reads")
+            .collect::<Result<_, _>>()
+            .expect("rows");
+        assert_eq!(types, ["Plan", DEFAULT_SUBAGENT]);
+    }
+
+    #[test]
     fn an_end_that_lands_before_its_start_still_reads_finished() {
         // The spool is in completion order: parallel hooks race.
         let mut store = ActivityStore::open_in_memory().expect("opens");
@@ -1506,7 +1892,9 @@ mod tests {
                 tool("PostToolUse", "t1", "Bash", 3),
             ],
         );
-        let id = store.turns("s1", 10).expect("reads")[0].steps[0].id;
+        let step = store.turns("s1", 10).expect("reads")[0].steps[0].clone();
+        assert!(step.approved, "the timeline row says so too");
+        let id = step.id;
         let detail = store.step("s1", id).expect("reads").expect("a step");
         assert_eq!(detail.allowed_by, "You approved it in the terminal");
         assert_eq!(detail.result.as_deref(), Some("added 1"));
@@ -1844,6 +2232,47 @@ mod tests {
         assert_eq!(step.status, StepStatus::Ok);
         let detail = store.step("s1", step.id).expect("reads").expect("a step");
         assert_eq!(detail.result, None, "no leftover \"did not finish\"");
+    }
+
+    #[test]
+    fn a_database_already_at_v6_gets_the_changed_files_column() {
+        let mut conn = Connection::open_in_memory().expect("opens");
+        conn.execute_batch(&format!(
+            "{SCHEMA_V1} ALTER TABLE steps ADD COLUMN claude_session_id TEXT;
+             PRAGMA user_version = 5;"
+        ))
+        .expect("a v5 log");
+        migrate_to_v6(&mut conn).expect("to v6");
+        let store = ActivityStore::init(conn).expect("migrates");
+        assert!(
+            store.turns("s1", 10).is_ok(),
+            "every column the list reads exists"
+        );
+    }
+
+    #[test]
+    fn steps_kept_before_summaries_get_one_from_their_input() {
+        let conn = Connection::open_in_memory().expect("opens");
+        conn.execute_batch(&format!(
+            "{SCHEMA_V1} ALTER TABLE steps ADD COLUMN claude_session_id TEXT;
+             PRAGMA user_version = 5;
+             INSERT INTO sessions VALUES ('s1', 0);
+             INSERT INTO steps (session_id, tool_use_id, tool_name, kind, input, status, started_ms)
+             VALUES ('s1', 't1', 'Bash', 'command',
+                     '{{\"command\":\"pnpm check\",\"description\":\"Run every check\"}}', 'ok', 0),
+                    ('s1', 't2', 'Read', 'read', '{{\"file_path\":\"/a\"}}', 'ok', 0);"
+        ))
+        .expect("a v5 log");
+        let store = ActivityStore::init(conn).expect("migrates");
+        let summaries: Vec<Option<String>> = store
+            .conn
+            .prepare("SELECT summary FROM steps ORDER BY tool_use_id")
+            .expect("prepares")
+            .query_map([], |r| r.get(0))
+            .expect("reads")
+            .collect::<Result<_, _>>()
+            .expect("rows");
+        assert_eq!(summaries, [Some("Run every check".to_string()), None]);
     }
 
     #[test]

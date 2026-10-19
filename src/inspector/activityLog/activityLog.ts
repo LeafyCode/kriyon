@@ -9,6 +9,7 @@ import type {
   ActivityTurn,
   StepKind,
 } from "../../ipc/bridge.ts";
+import { homeRelative } from "../../state/homeRelative.ts";
 import { relativizeTouchedPath } from "../../state/sessions.ts";
 import { durationLabel } from "../activity/toolLabel.ts";
 
@@ -18,6 +19,7 @@ export const STEP_FLAGS = {
   installed: 1,
   network: 4,
   outsideProject: 8,
+  removedPackage: 32,
   secretFile: 16,
 } as const;
 
@@ -27,6 +29,7 @@ type FlagName = keyof typeof STEP_FLAGS;
 const FLAG_ORDER: readonly FlagName[] = [
   "secretFile",
   "deleted",
+  "removedPackage",
   "installed",
   "outsideProject",
   "network",
@@ -36,8 +39,9 @@ const FLAG_ORDER: readonly FlagName[] = [
 const FLAG_CHIP: Record<FlagName, string> = {
   deleted: "deleted",
   installed: "installed",
-  network: "internet",
-  outsideProject: "outside project",
+  network: "web",
+  outsideProject: "outside",
+  removedPackage: "removed",
   secretFile: "secret file",
 };
 
@@ -66,10 +70,222 @@ function leadFlag(step: ActivityStep): FlagName | null {
   );
 }
 
+/** Plain words for Claude Code's own tools that name no file or command. */
+const TOOL_LABEL: Record<string, string> = {
+  AskUserQuestion: "Asked you a question",
+  CronCreate: "Scheduled a task",
+  CronDelete: "Cancelled a scheduled task",
+  CronList: "Checked the scheduled tasks",
+  EnterPlanMode: "Started planning",
+  EnterWorktree: "Moved to a worktree",
+  ExitPlanMode: "Proposed a plan",
+  ExitWorktree: "Left the worktree",
+  Glob: "Looked for files",
+  LSP: "Looked up code",
+  Monitor: "Watched a command",
+  PushNotification: "Sent you a notification",
+  ScheduleWakeup: "Scheduled a check-in",
+  SendMessage: "Sent a message to an agent",
+  SubagentHandback: "Reported back",
+  TaskCreate: "Added a task",
+  TaskGet: "Checked a task",
+  TaskList: "Checked the tasks",
+  TaskOutput: "Read a background task's output",
+  TaskStop: "Stopped a background task",
+  TaskUpdate: "Updated a task",
+  TodoWrite: "Updated the to-do list",
+  ToolSearch: "Loaded more tools",
+  WebSearch: "Searched the web",
+};
+
+/** The past tense of the verbs Claude starts a description with, so "Run the
+ * tests" reads as what happened: "Ran the tests". A description starting
+ * with any other word stays as Claude wrote it. */
+const PAST: Record<string, string> = {
+  add: "added",
+  analyze: "analyzed",
+  append: "appended",
+  apply: "applied",
+  build: "built",
+  bump: "bumped",
+  check: "checked",
+  clean: "cleaned",
+  clone: "cloned",
+  commit: "committed",
+  compare: "compared",
+  compile: "compiled",
+  confirm: "confirmed",
+  convert: "converted",
+  copy: "copied",
+  count: "counted",
+  create: "created",
+  delete: "deleted",
+  describe: "described",
+  diff: "diffed",
+  download: "downloaded",
+  dump: "dumped",
+  ensure: "ensured",
+  examine: "examined",
+  explore: "explored",
+  export: "exported",
+  extract: "extracted",
+  fetch: "fetched",
+  find: "found",
+  fix: "fixed",
+  format: "formatted",
+  generate: "generated",
+  get: "got",
+  grep: "grepped",
+  import: "imported",
+  init: "initialized",
+  inspect: "inspected",
+  install: "installed",
+  investigate: "investigated",
+  kill: "killed",
+  launch: "launched",
+  lint: "linted",
+  list: "listed",
+  load: "loaded",
+  locate: "located",
+  look: "looked",
+  make: "made",
+  measure: "measured",
+  merge: "merged",
+  move: "moved",
+  open: "opened",
+  print: "printed",
+  probe: "probed",
+  pull: "pulled",
+  push: "pushed",
+  query: "queried",
+  read: "read",
+  rebase: "rebased",
+  rebuild: "rebuilt",
+  remove: "removed",
+  rename: "renamed",
+  render: "rendered",
+  replace: "replaced",
+  reinstall: "reinstalled",
+  rerun: "reran",
+  retry: "retried",
+  rewrite: "rewrote",
+  reset: "reset",
+  restart: "restarted",
+  restore: "restored",
+  revert: "reverted",
+  review: "reviewed",
+  run: "ran",
+  save: "saved",
+  scan: "scanned",
+  search: "searched",
+  show: "showed",
+  stage: "staged",
+  start: "started",
+  stash: "stashed",
+  stop: "stopped",
+  summarize: "summarized",
+  uninstall: "uninstalled",
+  switch: "switched",
+  sync: "synced",
+  test: "tested",
+  update: "updated",
+  upgrade: "upgraded",
+  upload: "uploaded",
+  validate: "validated",
+  verify: "verified",
+  view: "viewed",
+  wait: "waited",
+  watch: "watched",
+  write: "wrote",
+};
+
+/** Verbs that read as nouns after "and" ("…and test files"): only the
+ * first word of a description takes their past tense. */
+const NOUN_TOO = new Set([
+  "build",
+  "count",
+  "diff",
+  "dump",
+  "export",
+  "format",
+  "import",
+  "list",
+  "push",
+  "query",
+  "reset",
+  "save",
+  "scan",
+  "search",
+  "stage",
+  "start",
+  "stop",
+  "sync",
+  "test",
+  "update",
+  "view",
+  "watch",
+]);
+
+/** The first word of a description, and each word that opens a clause after
+ * it (after a comma, "and" or "then", or ", and" and ", then"). */
+const CLAUSE_VERB = /(^|, (?:and |then )?|; | and | then )([A-Za-z]+)/g;
+
+/** `text` with the verb of each clause in the past tense, when {@link PAST}
+ * knows it: "Install dayjs and check it" → "Installed dayjs and checked it".
+ * After "then" the word is always a verb; after "and" or a comma it may be a
+ * noun ({@link NOUN_TOO}), so those stay as written there. */
+function pastTense(text: string): string {
+  return text.replace(CLAUSE_VERB, (whole, before: string, word: string) => {
+    const lower = word.toLowerCase();
+    const past = PAST[lower];
+    const mayBeNoun = before !== "" && !before.endsWith("then ");
+    if (!past || (mayBeNoun && NOUN_TOO.has(lower))) {
+      return whole;
+    }
+    const capital = word[0] !== word[0].toLowerCase();
+    return before + (capital ? past[0].toUpperCase() + past.slice(1) : past);
+  });
+}
+
+/** Tools whose summary is for the model, not the person (`select:Read`). */
+const QUIET_SUMMARY = new Set(["ToolSearch"]);
+
 function kindLabel(step: ActivityStep): string {
+  const named = TOOL_LABEL[step.toolName];
+  if (named) {
+    return named;
+  }
   return step.kind === "other"
     ? `Used ${step.toolName}`
     : KIND_LABEL[step.kind];
+}
+
+/** "Subagent: Map the parser" — a subagent's row, wherever it shows. */
+function subagentTitle(name: string): string {
+  return `Subagent: ${name}`;
+}
+
+/** A step's summary when it is for the person, not the model. */
+function spokenSummary(step: ActivityStep): string | null {
+  return step.summary && !QUIET_SUMMARY.has(step.toolName)
+    ? step.summary
+    : null;
+}
+
+/** The title Claude's own words give a step, or `null` when they give none:
+ * a command's description ("Ran the tests"), a subagent's task, a skill. */
+function describedLabel(step: ActivityStep): string | null {
+  const summary = spokenSummary(step);
+  if (!summary) {
+    return null;
+  }
+  if (step.kind === "command") {
+    return pastTense(summary);
+  }
+  if (step.kind === "agent") {
+    return subagentTitle(summary);
+  }
+  return step.toolName === "Skill" ? `Used the ${summary} skill` : null;
 }
 
 /** The length of the command separator at `line[i]` (`;`, a newline, `&&`,
@@ -82,6 +298,30 @@ function separatorAt(line: string, i: number): number {
   return (ch === "&" || ch === "|") && line[i + 1] === ch ? 2 : 0;
 }
 
+/**
+ * Where the command holding the heredoc opened at `line[start]` (`<<EOF`,
+ * `<<-'EOF'`, `<<"EOF"`) goes on: the newline after its closing word, or the
+ * end. -1 when `<<` there opens no heredoc.
+ */
+function heredocEnd(line: string, start: number): number {
+  const word = HEREDOC.exec(line.slice(start))?.[1];
+  if (!word) {
+    return -1;
+  }
+  let at = line.indexOf("\n", start);
+  while (at !== -1) {
+    const next = line.indexOf("\n", at + 1);
+    const body = line.slice(at + 1, next === -1 ? undefined : next);
+    if (body.trim() === word) {
+      return next === -1 ? line.length : next;
+    }
+    at = next;
+  }
+  return line.length;
+}
+
+const HEREDOC = /^<<-?\s*['"]?([A-Za-z_][A-Za-z0-9_]*)['"]?/;
+
 /** Where the quote opened at `line[start]` closes (its index), or the end. */
 function quoteEnd(line: string, start: number): number {
   const quote = line[start];
@@ -92,28 +332,91 @@ function quoteEnd(line: string, start: number): number {
   return i;
 }
 
+/** Where a stretch of `line` from `i` that holds no separators ends: a
+ * quote, an escape, a here-string `<<<`, arithmetic `$(( … ))`, or a
+ * heredoc's body. `i` itself when nothing of the kind starts there. */
+function skipQuoted(line: string, i: number): number {
+  const ch = line[i];
+  if (ch === '"' || ch === "'") {
+    return quoteEnd(line, i) + 1;
+  }
+  if (ch === "\\") {
+    return i + 2;
+  }
+  if (line.startsWith("<<<", i)) {
+    return i + 3;
+  }
+  if (line.startsWith("$((", i)) {
+    const close = line.indexOf("))", i + 3);
+    return close === -1 ? line.length : close + 2;
+  }
+  if (ch === "<") {
+    // A heredoc's body is the command's input, not more commands.
+    const end = heredocEnd(line, i);
+    return end === -1 ? i : end;
+  }
+  return i;
+}
+
+/** The word that closes each shell block a command can open. */
+const BLOCK_CLOSE: Record<string, string> = {
+  case: "esac",
+  for: "done",
+  if: "fi",
+  select: "done",
+  until: "done",
+  while: "done",
+};
+
+/** Words a block's body starts with, before its own first command. */
+const BODY_LEADS = new Set(["do", "else", "elif", "then"]);
+
+/** A part's first two words, stopping at the separator that ends it. */
+const LEADING_WORDS = /^\s*([^\s;&|]+)(?:[ \t]+([^\s;&|]+))?/;
+
+/** Track the blocks the part of `line` starting at `at` opens or closes:
+ * `open` holds the closing words still owed, innermost first. A block can
+ * open after `do`/`then`/`else`, as a nested loop does. */
+function enterPart(line: string, at: number, open: string[]): void {
+  const [, first = "", second = ""] =
+    LEADING_WORDS.exec(line.slice(at, at + 200)) ?? [];
+  if (first === open[0]) {
+    open.shift();
+    return;
+  }
+  const opener = BODY_LEADS.has(first) ? second : first;
+  if (BLOCK_CLOSE[opener]) {
+    open.unshift(BLOCK_CLOSE[opener]);
+  }
+}
+
 /**
  * The commands a shell line chains with `&&`, `||`, `;` or a newline, outside
- * quotes, each trimmed. A pipe stays one command (`curl … | sh` is one install).
+ * quotes, heredocs and loops or `if`s, each trimmed and kept as written. A pipe
+ * stays one command (`curl … | sh` is one install), and so does
+ * `for f in *; do …; done`.
  */
 export function splitCommands(line: string): string[] {
   const parts: string[] = [];
+  const open: string[] = [];
+  enterPart(line, 0, open);
   let start = 0;
   let i = 0;
   while (i < line.length) {
-    const ch = line[i];
-    if (ch === '"' || ch === "'") {
-      i = quoteEnd(line, i) + 1;
-    } else if (ch === "\\") {
-      i += 2;
-    } else {
-      const sep = separatorAt(line, i);
-      if (sep > 0) {
+    const skipped = skipQuoted(line, i);
+    if (skipped > i) {
+      i = skipped;
+      continue;
+    }
+    const sep = separatorAt(line, i);
+    if (sep > 0) {
+      if (open.length === 0) {
         parts.push(line.slice(start, i));
         start = i + sep;
       }
-      i += Math.max(sep, 1);
+      enterPart(line, i + sep, open);
     }
+    i += Math.max(sep, 1);
   }
   parts.push(line.slice(start));
   // A trailing separator (`cmd;`) ends the line, it doesn't start a command.
@@ -128,8 +431,13 @@ export function chainedCommands(line: string): number {
 const FILE_VERB: Partial<Record<StepKind, string>> = {
   edit: "Changed",
   read: "Read",
-  write: "Wrote",
+  write: "Changed",
 };
+
+/** "Added" for a write that made a new file, else the kind's verb. */
+function fileVerb(step: ActivityStep): string | undefined {
+  return step.kind === "write" && step.created ? "Added" : FILE_VERB[step.kind];
+}
 
 function fileName(path: string): string {
   return path.slice(path.lastIndexOf("/") + 1) || path;
@@ -140,20 +448,76 @@ function folderOf(path: string): string {
   return cut > 0 ? path.slice(0, cut) : "";
 }
 
+/** The scheme a fetched address starts with, left off where it's shown. */
+const WEB_SCHEME = /^https?:\/\//;
+
+/** The most lines a chain shows before it says how many more ran. */
+const MAX_COMMAND_LINES = 4;
+
+/** The most file names a row lists before it counts the rest. */
+const MAX_FOLDED_NAMES = 3;
+
+/** "a.js, b.js, c.js +2": the first few names of `paths`, the rest counted. */
+function namesLine(paths: readonly string[]): string {
+  const names = paths.slice(0, MAX_FOLDED_NAMES).map(fileName).join(", ");
+  const more = paths.length - MAX_FOLDED_NAMES;
+  return more > 0 ? `${names} +${more}` : names;
+}
+
+/** "Changed a.js, b.js" for the files a command changed, if any. */
+function changedLine(paths: readonly string[]): string[] {
+  return paths.length > 0 ? [`Changed ${namesLine(paths)}`] : [];
+}
+
+/** Each command of a chain by its first line, the rest counted. */
+function commandLines(target: string): string[] {
+  const lines = splitCommands(target).map((command) => {
+    const cut = command.indexOf("\n");
+    return cut === -1 ? command : `${command.slice(0, cut).trimEnd()} …`;
+  });
+  if (lines.length <= MAX_COMMAND_LINES) {
+    return lines;
+  }
+  const shown = MAX_COMMAND_LINES - 1;
+  return [...lines.slice(0, shown), `+${lines.length - shown} more`];
+}
+
 /**
- * The lines under a step's title: each command of a chain, or a file's folder
- * (relative to the repository when it's inside it), or the target as it is.
+ * The lines under a step's title, home folders shortened to `~`: each command
+ * of a chain, or a file's folder (relative to the repository when it's inside
+ * it), or what a tool with a fixed title was about, or the target as it is.
  */
 export function stepLines(
   step: ActivityStep,
   toplevel: string | null | undefined
 ): string[] {
-  const { target } = step;
+  return rawLines(step, toplevel).map(homeRelative);
+}
+
+function rawLines(
+  step: ActivityStep,
+  toplevel: string | null | undefined
+): string[] {
+  const { target, toolName } = step;
+  const summary = spokenSummary(step);
+  if (summary && step.kind === "search") {
+    // What it looked for, and what it found: "“UsageSnapshot” · 6 files".
+    return [[`“${summary}”`, step.outcome].filter(Boolean).join(" · ")];
+  }
+  if (summary && toolName === "WebSearch") {
+    return [`“${summary}”`];
+  }
+  if (summary && toolName === "WebFetch") {
+    return [summary.replace(WEB_SCHEME, "")];
+  }
+  if (!target && summary && TOOL_LABEL[toolName]) {
+    return [summary];
+  }
   if (!target) {
     return [];
   }
   if (step.kind === "command") {
-    return splitCommands(target);
+    return [...commandLines(target), ...changedLine(step.changedFiles)];
   }
   if (FILE_VERB[step.kind] === undefined) {
     return [target];
@@ -169,30 +533,41 @@ export function stepLines(
 }
 
 /**
- * "Ran a command" — or, for a flagged step, what the flag means. A chain of
- * commands says how many ran instead: its flag stays a chip, so the title
- * never pins one command's meaning on the whole line shown under it.
+ * What the step did, plainly. What it did to the machine leads: an install,
+ * a delete, a secret file, a file outside the project. Otherwise Claude's own
+ * description in the past tense ("Ran the tests"), the file it changed, or
+ * the kind of step. A chain of commands never takes one command's flag as its
+ * title (the flag stays a chip): it says what Claude meant by it, or how many
+ * commands ran.
  */
 export function stepLabel(step: ActivityStep): string {
-  if (step.kind === "command" && step.target) {
-    const count = splitCommands(step.target).length;
-    if (count > 1) {
-      return `Ran ${count} commands`;
-    }
+  const flag = leadFlag(step);
+  const chain =
+    step.kind === "command" && step.target
+      ? splitCommands(step.target).length
+      : 1;
+  if (chain > 1) {
+    return describedLabel(step) ?? `Ran ${chain} commands`;
   }
-  switch (leadFlag(step)) {
+  const described = describedLabel(step);
+  if (described && (flag === null || flag === "network")) {
+    return described;
+  }
+  switch (flag) {
     case "secretFile":
       return "Touched a secret file";
     case "deleted":
       return "Deleted files";
+    case "removedPackage":
+      return "Removed a package";
     case "installed":
       return "Installed a package";
     case "outsideProject":
       return `${kindLabel(step)} outside the project`;
     case "network":
-      return "Used the internet";
+      return step.kind === "web" ? kindLabel(step) : "Used the internet";
     default: {
-      const verb = FILE_VERB[step.kind];
+      const verb = fileVerb(step);
       return verb && step.target
         ? `${verb} ${fileName(step.target)}`
         : kindLabel(step);
@@ -207,22 +582,242 @@ export interface StepChip {
   tone: ChipTone;
 }
 
-/** The small trailing chips: status, the lead flag, a subagent's type. */
-export function stepChips(step: ActivityStep): StepChip[] {
+/**
+ * The small trailing chips: status, the user's yes, each flag, a
+ * subagent's type (left off when `nested` under its subagent's row). Once
+ * `turnEnded`, a main-agent step whose end was never recorded isn't running:
+ * Claude ends a turn only after its own calls return.
+ */
+export function stepChips(
+  step: ActivityStep,
+  turnEnded = false,
+  nested = false
+): StepChip[] {
   const chips: StepChip[] = [];
+  const stale = turnEnded && step.agentId === null;
   if (step.status === "error") {
     chips.push({ text: "failed", tone: "error" });
-  } else if (step.status === "running") {
+  } else if (step.status === "running" && !stale) {
     chips.push({ text: "running…", tone: "live" });
   }
-  const flag = leadFlag(step);
-  if (flag) {
-    chips.push({ text: FLAG_CHIP[flag], tone: "flag" });
+  if (step.approved) {
+    chips.push({ text: "you approved", tone: "flag" });
   }
-  if (step.agentType) {
+  // Every flag, most serious first: a step that removed one package and
+  // installed another did both.
+  for (const flag of FLAG_ORDER) {
+    if (hasFlag(step.flags, STEP_FLAGS[flag])) {
+      chips.push({ text: FLAG_CHIP[flag], tone: "flag" });
+    }
+  }
+  // Under its subagent's row, the type would only repeat it.
+  if (step.agentType && !nested) {
     chips.push({ text: step.agentType, tone: "muted" });
   }
   return chips;
+}
+
+export type StatTone = "added" | "error" | "ok" | "removed";
+
+export interface StepStat {
+  text: string;
+  tone: StatTone;
+}
+
+/** "+12", "−3": the lines a file change added and removed. */
+function lineStats(added: number, removed: number): StepStat[] {
+  const stats: StepStat[] = [];
+  if (added > 0) {
+    stats.push({ text: `+${added}`, tone: "added" });
+  }
+  if (removed > 0) {
+    stats.push({ text: `−${removed}`, tone: "removed" });
+  }
+  return stats;
+}
+
+/** The facts at a row's end: lines changed, and a test run's "43 passed". */
+export function stepStats(step: ActivityStep): StepStat[] {
+  const stats = lineStats(step.linesAdded ?? 0, step.linesRemoved ?? 0);
+  if (step.kind === "command" && step.outcome) {
+    const failed = step.outcome.includes("failed");
+    stats.push({ text: step.outcome, tone: failed ? "error" : "ok" });
+  }
+  return stats;
+}
+
+/** One timeline row: a step, or a run of reads or changes folded into one. */
+export interface StepRowView {
+  /** A subagent's own rows, under the step that started it. */
+  children?: StepRowView[];
+  label: string;
+  lines: string[];
+  /** The step a click opens: the row's own step. `null` for a fold (a click
+   * opens it) and for a subagent's block with no launch in sight. */
+  opens: ActivityStep | null;
+  stats: StepStat[];
+  /** The step itself, or every step the row folds, in order. */
+  steps: ActivityStep[];
+}
+
+/** A step's own row. */
+export function stepRow(
+  step: ActivityStep,
+  toplevel: string | null | undefined
+): StepRowView {
+  return {
+    label: stepLabel(step),
+    lines: stepLines(step, toplevel),
+    opens: step,
+    stats: stepStats(step),
+    steps: [step],
+  };
+}
+
+type Fold = "change" | "read";
+
+/** What run a step can fold into: a plain read or file change that went
+ * fine. Anything flagged or failed keeps a row of its own, so it's seen. */
+function foldOf(step: ActivityStep): Fold | null {
+  if (step.flags !== 0 || step.status !== "ok" || !step.target) {
+    return null;
+  }
+  if (step.kind === "read") {
+    return "read";
+  }
+  return step.kind === "edit" || step.kind === "write" ? "change" : null;
+}
+
+function foldedRow(
+  run: ActivityStep[],
+  fold: Fold,
+  toplevel: string | null | undefined
+): StepRowView {
+  const targets = [...new Set(run.map((s) => s.target ?? ""))];
+  const stats = lineStats(
+    run.reduce((n, s) => n + (s.linesAdded ?? 0), 0),
+    run.reduce((n, s) => n + (s.linesRemoved ?? 0), 0)
+  );
+  if (targets.length === 1) {
+    return { ...stepRow(run[0], toplevel), stats, steps: run };
+  }
+  let verb = "Read";
+  if (fold === "change") {
+    verb = run.every((s) => s.created) ? "Added" : "Changed";
+  }
+  return {
+    label: `${verb} ${targets.length} files`,
+    lines: [namesLine(targets)],
+    opens: null,
+    stats,
+    steps: run,
+  };
+}
+
+/**
+ * A turn's steps as timeline rows: reads in a row fold into "Read 9 files",
+ * file changes into "Changed 3 files" with their lines added up. Only steps
+ * of the same agent fold together.
+ */
+export function groupSteps(
+  steps: readonly ActivityStep[],
+  toplevel: string | null | undefined = null
+): StepRowView[] {
+  const rows: StepRowView[] = [];
+  let i = 0;
+  while (i < steps.length) {
+    const fold = foldOf(steps[i]);
+    let end = i + 1;
+    while (
+      fold &&
+      end < steps.length &&
+      foldOf(steps[end]) === fold &&
+      steps[end].agentType === steps[i].agentType
+    ) {
+      end += 1;
+    }
+    const run = steps.slice(i, end);
+    rows.push(
+      fold && run.length > 1
+        ? foldedRow(run, fold, toplevel)
+        : stepRow(run[0], toplevel)
+    );
+    i = end;
+  }
+  return rows;
+}
+
+/**
+ * A turn's timeline: the main agent's rows ({@link groupSteps}), with each
+ * subagent's steps under the step that launched it — the store says which
+ * (`parentStepId`). A subagent whose launch isn't in sight (another turn, a
+ * filter, Claude Code's own helper) gets a block of its own, in time order.
+ */
+export function turnRows(
+  steps: readonly ActivityStep[],
+  toplevel: string | null | undefined
+): StepRowView[] {
+  const main = steps.filter((s) => s.agentId === null);
+  const shown = new Set(main.map((s) => s.id));
+  const byLaunch = new Map<number, ActivityStep[]>();
+  const orphans = new Map<string, ActivityStep[]>();
+  for (const s of steps) {
+    if (s.agentId === null) {
+      continue;
+    }
+    if (s.parentStepId !== null && shown.has(s.parentStepId)) {
+      byLaunch.set(s.parentStepId, [
+        ...(byLaunch.get(s.parentStepId) ?? []),
+        s,
+      ]);
+    } else {
+      orphans.set(s.agentId, [...(orphans.get(s.agentId) ?? []), s]);
+    }
+  }
+  const rows = groupSteps(main, toplevel).map((row) => {
+    const group = byLaunch.get(row.steps[0].id);
+    return group ? withChildren(row, group, toplevel) : row;
+  });
+  for (const group of orphans.values()) {
+    const row = withChildren(
+      {
+        label: subagentLabel(group[0]),
+        lines: [],
+        opens: null,
+        stats: [],
+        steps: group,
+      },
+      group,
+      toplevel
+    );
+    const at = rows.findIndex((r) => r.steps[0].startedMs > group[0].startedMs);
+    rows.splice(at === -1 ? rows.length : at, 0, row);
+  }
+  return rows;
+}
+
+/** A subagent's block, by the name the store gives it (the same as its
+ * hand-back heading); a helper nobody launched, by what it is. */
+function subagentLabel(step: ActivityStep): string {
+  return step.agentName
+    ? subagentTitle(step.agentName)
+    : "Claude Code in the background";
+}
+
+/** `row` with a subagent's rows under it, and their lines added up. */
+function withChildren(
+  row: StepRowView,
+  group: ActivityStep[],
+  toplevel: string | null | undefined
+): StepRowView {
+  return {
+    ...row,
+    children: groupSteps(group, toplevel),
+    stats: lineStats(
+      group.reduce((n, s) => n + (s.linesAdded ?? 0), 0),
+      group.reduce((n, s) => n + (s.linesRemoved ?? 0), 0)
+    ),
+  };
 }
 
 export type ActivityFilter = "all" | "changes" | "commands" | "flagged";
@@ -237,10 +832,39 @@ export const ACTIVITY_FILTERS: readonly {
   { label: "Needs a look", value: "flagged" },
 ];
 
+/** Claude Code's own housekeeping, which does nothing on the machine:
+ * loading more of its tools. Left out of the timeline and its counts. */
+const HOUSEKEEPING = new Set(["ToolSearch"]);
+
+/** A step from a helper Claude Code forks for itself: it has an agent but
+ * no subagent type, because nobody launched it. */
+function isHelper(step: ActivityStep): boolean {
+  return step.agentId !== null && step.agentType === null;
+}
+
+/** What only Claude's own bookkeeping does, when a helper does it: a helper
+ * starting or stopping a check-in loop. */
+const HELPER_HOUSEKEEPING = new Set(["ScheduleWakeup"]);
+
+function isHousekeeping(step: ActivityStep): boolean {
+  return (
+    HOUSEKEEPING.has(step.toolName) ||
+    (isHelper(step) && HELPER_HOUSEKEEPING.has(step.toolName))
+  );
+}
+
 function matches(step: ActivityStep, filter: ActivityFilter): boolean {
+  if (isHousekeeping(step)) {
+    return false;
+  }
   switch (filter) {
     case "changes":
-      return step.kind === "edit" || step.kind === "write";
+      // A command that edited files changed them too (`sed -i`, a codemod).
+      return (
+        step.kind === "edit" ||
+        step.kind === "write" ||
+        (step.linesAdded ?? 0) + (step.linesRemoved ?? 0) > 0
+      );
     case "commands":
       return step.kind === "command";
     case "flagged":
@@ -273,20 +897,19 @@ export function filterCounts(
 }
 
 /**
- * The turns a filter shows. "All" is every turn as-is (a turn with no steps
- * still happened); a narrower chip keeps only matching steps and drops the
+ * The turns a filter shows, each with only its matching steps. "All" keeps
+ * every turn (a turn with no steps still happened); a narrower chip drops the
  * turns left empty.
  */
 export function visibleTurns(
   turns: ActivityTurn[],
   filter: ActivityFilter
 ): ActivityTurn[] {
-  if (filter === "all") {
-    return turns;
-  }
-  return turns
-    .map((t) => ({ ...t, steps: t.steps.filter((s) => matches(s, filter)) }))
-    .filter((t) => t.steps.length > 0);
+  const kept = turns.map((t) => ({
+    ...t,
+    steps: t.steps.filter((s) => matches(s, filter)),
+  }));
+  return filter === "all" ? kept : kept.filter((t) => t.steps.length > 0);
 }
 
 /** What started a turn: Claude Code's own prompt sources, by name. */
@@ -301,6 +924,9 @@ export interface TurnHeading {
 }
 
 export function turnHeading(turn: ActivityTurn): TurnHeading {
+  if (turn.report) {
+    return { quoted: false, text: turn.report };
+  }
   if (turn.source && turn.source !== "user") {
     return {
       quoted: false,
@@ -352,10 +978,32 @@ export function turnTimeLabel(turn: ActivityTurn, nowMs: number): string {
   return `${at} · ${took}`;
 }
 
-/** A step's input, pretty-printed when it is JSON. */
-export function prettyInput(input: string | null): string {
+/** `text` parsed as a JSON object, or `null` when it is anything else. */
+function jsonObject(text: string): Record<string, unknown> | null {
+  try {
+    const value: unknown = JSON.parse(text);
+    return value && typeof value === "object" && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : null;
+  } catch {
+    // Not JSON (a raw command line, a truncated blob).
+    return null;
+  }
+}
+
+/** A step's input as a person reads it: a command step's command as its own
+ * text (the core decides which steps are commands), anything else
+ * pretty-printed when it is JSON. */
+export function prettyInput(
+  input: string | null,
+  kind: StepKind | null = null
+): string {
   if (!input) {
     return "";
+  }
+  const command = jsonObject(input)?.command;
+  if (kind === "command" && typeof command === "string") {
+    return command;
   }
   try {
     return JSON.stringify(JSON.parse(input), null, 2);
@@ -365,8 +1013,24 @@ export function prettyInput(input: string | null): string {
   }
 }
 
-export function agentLabel(agentType: string | null): string {
-  return agentType ? `Subagent · ${agentType}` : "Main agent";
+/** A step's result as a person reads it: a command's output, not the JSON
+ * an older hook wrapped it in. */
+export function prettyResult(result: string | null): string {
+  if (!result) {
+    return "";
+  }
+  const value = jsonObject(result);
+  const output = [value?.stdout, value?.stderr].filter(
+    (t): t is string => typeof t === "string" && t !== ""
+  );
+  return value && ("stdout" in value || "stderr" in value)
+    ? output.join("\n")
+    : result;
+}
+
+/** Which agent ran a step, named as the timeline names it. */
+export function agentLabel(step: ActivityStep): string {
+  return step.agentId === null ? "Main agent" : subagentLabel(step);
 }
 
 /** "Kept 30 days" — the [Activity log]'s retention, wherever it is shown. */

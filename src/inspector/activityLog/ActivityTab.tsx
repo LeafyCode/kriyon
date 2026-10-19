@@ -27,10 +27,12 @@ import {
   changesUnavailableReason,
   filterCounts,
   retentionNote,
+  type StatTone,
+  type StepRowView,
   stepChips,
-  stepLabel,
-  stepLines,
+  stepRow,
   turnHeading,
+  turnRows,
   turnTimeLabel,
   visibleTurns,
 } from "./activityLog.ts";
@@ -164,6 +166,35 @@ const stepButtonStyle: CSSProperties = {
   width: "100%",
 };
 
+// A folded row's own steps, set in under it like the turn's steps are.
+const foldStyle: CSSProperties = {
+  ...stepsStyle,
+  marginLeft: tokens.space.lg,
+};
+
+const STAT_INK: Record<StatTone, string> = {
+  added: tokens.color.diffAddInk,
+  error: tokens.color.status.error,
+  ok: tokens.color.diffAddInk,
+  removed: tokens.color.diffDelInk,
+};
+
+const statsStyle: CSSProperties = {
+  display: "flex",
+  flex: "none",
+  fontFamily: tokens.font.mono,
+  fontSize: "12px",
+  gap: tokens.space.xs,
+  lineHeight: 1.45,
+  whiteSpace: "nowrap",
+};
+
+// A subagent's block with no launch in sight: nothing to open, so no hover.
+const blockHeaderStyle: CSSProperties = {
+  ...stepButtonStyle,
+  cursor: "default",
+};
+
 function stepIconColor(step: ActivityStep): string {
   if (step.flags !== 0) {
     return tokens.color.status.waitingInk;
@@ -291,32 +322,35 @@ function FilterChips({
 }
 
 function StepRow({
+  nested = false,
   onOpen,
-  step,
+  row,
   toplevel,
+  turnEnded,
 }: {
+  nested?: boolean;
   onOpen: (step: ActivityStep) => void;
-  step: ActivityStep;
+  row: StepRowView;
   toplevel: string | null | undefined;
+  turnEnded: boolean;
 }) {
-  const Icon = KIND_ICON[step.kind];
-  const chips = stepChips(step);
-  return (
-    <button
-      className="kr-hover-surface"
-      onClick={() => onOpen(step)}
-      style={stepButtonStyle}
-      type="button"
-    >
+  const [open, setOpen] = useState(false);
+  const [lead] = row.steps;
+  // A subagent's block shows its rows open; a fold of reads opens on a click.
+  const folded = row.steps.length > 1 && !row.children;
+  const Icon = row.children ? Bot : KIND_ICON[lead.kind];
+  const chips = row.opens ? stepChips(row.opens, turnEnded, nested) : [];
+  const head = (
+    <>
       <Icon
-        color={stepIconColor(step)}
+        color={stepIconColor(lead)}
         size={14}
         strokeWidth={2}
         style={{ marginTop: "3px" }}
       />
       <span style={stepBodyStyle}>
         <span style={stepHeadStyle}>
-          <span style={stepLabelStyle}>{stepLabel(step)}</span>
+          <span style={stepLabelStyle}>{row.label}</span>
           {chips.length > 0 ? (
             <span style={chipsStyle}>
               {chips.map((chip) => (
@@ -326,8 +360,17 @@ function StepRow({
               ))}
             </span>
           ) : null}
+          {row.stats.length > 0 ? (
+            <span style={statsStyle}>
+              {row.stats.map((stat) => (
+                <span key={stat.text} style={{ color: STAT_INK[stat.tone] }}>
+                  {stat.text}
+                </span>
+              ))}
+            </span>
+          ) : null}
         </span>
-        {stepLines(step, toplevel).map((line, index) => (
+        {row.lines.map((line, index) => (
           // A chain may repeat a command, so the position is part of the key.
           // biome-ignore lint/suspicious/noArrayIndexKey: lines never reorder
           <span key={`${index}:${line}`} style={targetStyle} title={line}>
@@ -335,7 +378,59 @@ function StepRow({
           </span>
         ))}
       </span>
-    </button>
+    </>
+  );
+  const { opens } = row;
+  let header: ReactNode = (
+    <div data-testid="subagent-block" style={blockHeaderStyle}>
+      {head}
+    </div>
+  );
+  if (folded || opens) {
+    header = (
+      <button
+        aria-expanded={folded ? open : undefined}
+        className="kr-hover-surface"
+        onClick={() => (folded ? setOpen(!open) : opens && onOpen(opens))}
+        style={stepButtonStyle}
+        type="button"
+      >
+        {head}
+      </button>
+    );
+  }
+  return (
+    <>
+      {header}
+      {folded && open ? (
+        <div style={foldStyle}>
+          {row.steps.map((step) => (
+            <StepRow
+              key={step.id}
+              nested={nested}
+              onOpen={onOpen}
+              row={stepRow(step, toplevel)}
+              toplevel={toplevel}
+              turnEnded={turnEnded}
+            />
+          ))}
+        </div>
+      ) : null}
+      {row.children ? (
+        <div data-testid="subagent-steps" style={foldStyle}>
+          {row.children.map((child) => (
+            <StepRow
+              key={child.steps[0].id}
+              nested
+              onOpen={onOpen}
+              row={child}
+              toplevel={toplevel}
+              turnEnded={turnEnded}
+            />
+          ))}
+        </div>
+      ) : null}
+    </>
   );
 }
 
@@ -367,12 +462,13 @@ function TurnBlock({
       </p>
       {turn.steps.length > 0 ? (
         <div style={stepsStyle}>
-          {turn.steps.map((step) => (
+          {turnRows(turn.steps, toplevel).map((row) => (
             <StepRow
-              key={step.id}
+              key={row.steps[0].id}
               onOpen={onOpen}
-              step={step}
+              row={row}
               toplevel={toplevel}
+              turnEnded={turn.endedMs !== null}
             />
           ))}
         </div>

@@ -6,6 +6,7 @@ import {
   useChanges,
   visibleFiles,
 } from "../state/changes.ts";
+import { homeRelative } from "../state/homeRelative.ts";
 import { type InspectorTab, useLayout } from "../state/layout.ts";
 import { usePlanLimitsView } from "../state/planLimits.ts";
 import {
@@ -152,8 +153,6 @@ const monoMutedStyle: CSSProperties = {
   fontSize: "11px",
 };
 
-const HOME_PREFIX = /^\/Users\/[^/]+\//;
-
 const kvRowStyle: CSSProperties = kvRow();
 const kvLastRowStyle: CSSProperties = kvRow({ last: true });
 
@@ -204,17 +203,6 @@ function meterFillStyle(percent: number): CSSProperties {
     transition: `width ${tokens.motion.panel}`,
     width: `${percent}%`,
   };
-}
-
-/** `/Users/dev/Projects/kriyon` → `~/Projects/kriyon`.
- *
- * The rail is 280px and the value ellipsizes at its end, so a full path spent
- * its whole width on `/Users/<name>/` and truncated away the one part the row
- * exists to tell you — which folder this session is in. Mac-first, so the
- * home prefix is a known shape rather than something to ask the backend for.
- */
-function homeRelative(path: string): string {
-  return path.replace(HOME_PREFIX, "~/");
 }
 
 /** Coarse "Nm ago" / "Nh ago" relative label. */

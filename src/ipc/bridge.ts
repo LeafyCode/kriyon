@@ -1378,15 +1378,37 @@ export type StepStatus = "running" | "ok" | "error";
 
 /** One [Activity step] as a timeline row shows it. */
 export interface ActivityStep {
+  /** Main agent when `null`; otherwise the subagent's id. */
+  agentId: string | null;
+  /** For a subagent's step, what to call it: the task Claude launched it
+   * with, else its type. */
+  agentName: string | null;
   /** Main agent when `null`; otherwise the subagent's type. */
   agentType: string | null;
+  /** The user said yes to it in a permission dialog. */
+  approved: boolean;
+  /** The files a command changed. */
+  changedFiles: string[];
+  /** A write that made a new file. */
+  created: boolean;
   durationMs: number | null;
   /** A bit set of [Step flags] — see `STEP_FLAGS` in the Activity tab. */
   flags: number;
   id: number;
   kind: StepKind;
+  /** The lines a file change added and removed (an edit, a write, or the
+   * files a command edited). */
+  linesAdded: number | null;
+  linesRemoved: number | null;
+  /** What came of it in a few words: "43 passed", "6 files". */
+  outcome: string | null;
+  /** For a subagent's step, the step that launched it, when known. */
+  parentStepId: number | null;
   startedMs: number;
   status: StepStatus;
+  /** What the step was for, in one line: a command's or subagent's
+   * description, a search's pattern, a fetched page. */
+  summary: string | null;
   target: string | null;
   toolName: string;
 }
@@ -1396,7 +1418,11 @@ export interface ActivityTurn {
   endedMs: number | null;
   endReason: string | null;
   id: number;
+  /** The person's words, without Claude Code's paste markers. */
   prompt: string | null;
+  /** What heads a turn no person started (a subagent handing back, a
+   * [Work report]), in plain words; `null` for a person's prompt. */
+  report: string | null;
   /** Who sent the prompt (`user`, `system`, `loop_wakeup`, …), when known. */
   source: string | null;
   startedMs: number;
@@ -1405,7 +1431,6 @@ export interface ActivityTurn {
 
 /** Everything about one step, for its detail dialog. */
 export interface ActivityStepDetail extends ActivityStep {
-  agentId: string | null;
   allowedBy: string;
   endedMs: number | null;
   /** The redacted tool input — usually JSON. */
