@@ -775,39 +775,67 @@ test("Up and Down walk the folder's prompt history, then give the draft back", a
   expect(useDrafts.getState().drafts.s1).toBe("half typed");
 });
 
-test("a narrow composer gives up its spare parts and keeps Send in the row", () => {
-  const original = globalThis.ResizeObserver;
-  // Report a 300px footer, as a narrow window would.
-  globalThis.ResizeObserver = class {
-    private readonly callback: ResizeObserverCallback;
-    constructor(callback: ResizeObserverCallback) {
-      this.callback = callback;
+/**
+ * Lay the footer's tools out as jsdom can't: each character 8px wide, in a
+ * box `room` px wide.
+ */
+function layOutTools(room: number): () => void {
+  const isTools = (el: HTMLElement) => el.dataset.testid === "footer-tools";
+  const scroll = Object.getOwnPropertyDescriptor(
+    HTMLElement.prototype,
+    "scrollWidth"
+  );
+  const client = Object.getOwnPropertyDescriptor(
+    HTMLElement.prototype,
+    "clientWidth"
+  );
+  Object.defineProperty(HTMLElement.prototype, "scrollWidth", {
+    configurable: true,
+    get(this: HTMLElement) {
+      return isTools(this) ? (this.textContent ?? "").length * 8 : 0;
+    },
+  });
+  Object.defineProperty(HTMLElement.prototype, "clientWidth", {
+    configurable: true,
+    get(this: HTMLElement) {
+      return isTools(this) ? room : 0;
+    },
+  });
+  return () => {
+    if (scroll) {
+      Object.defineProperty(HTMLElement.prototype, "scrollWidth", scroll);
     }
-    observe(target: Element) {
-      this.callback(
-        [{ contentRect: { width: 300 }, target } as ResizeObserverEntry],
-        this as unknown as ResizeObserver
-      );
+    if (client) {
+      Object.defineProperty(HTMLElement.prototype, "clientWidth", client);
     }
-    unobserve() {
-      // Nothing to stop.
-    }
-    disconnect() {
-      // Nothing to stop.
-    }
-  } as unknown as typeof ResizeObserver;
+  };
+}
+
+test("a narrow composer gives up its spare parts until its tools fit", () => {
+  const restore = layOutTools(120);
   try {
     render(<PromptBar />);
     expect(screen.queryByText("⌘⇧P")).toBeNull();
     expect(screen.queryByText("Session")).toBeNull();
-    expect(screen.getByLabelText("Save as prompt").textContent).not.toContain(
-      "Save prompt"
-    );
+    expect(screen.getByLabelText("Save as prompt").textContent).toBe("✦");
+    // "✦" and "Prompts" fit in 120px, so Prompts keeps its label.
     expect(screen.getByLabelText("Open prompt library").textContent).toBe(
       "Prompts"
     );
     expect(screen.getByText("Send ↵")).toBeTruthy();
   } finally {
-    globalThis.ResizeObserver = original;
+    restore();
+  }
+});
+
+test("a very narrow composer turns Prompts into its icon", () => {
+  const restore = layOutTools(20);
+  try {
+    render(<PromptBar />);
+    const prompts = screen.getByLabelText("Open prompt library");
+    expect(prompts.textContent).toBe("");
+    expect(prompts.querySelector("svg")).not.toBeNull();
+  } finally {
+    restore();
   }
 });

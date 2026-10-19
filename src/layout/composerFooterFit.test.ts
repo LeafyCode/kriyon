@@ -1,48 +1,32 @@
 import { describe, expect, it } from "vitest";
-import { FULL_FIT, footerFit } from "./composerFooterFit.ts";
+import { FOOTER_STEPS, FULL_FIT, fitAfter } from "./composerFooterFit.ts";
 
-const usage = "330k · 33% ctx";
+const off = (steps: number) =>
+  Object.entries(fitAfter(steps))
+    .filter(([, on]) => !on)
+    .map(([part]) => part);
 
-describe("footerFit", () => {
-  it("shows everything when the row is wide", () => {
-    expect(footerFit(900, { stop: true, usage })).toEqual(FULL_FIT);
+describe("fitAfter", () => {
+  it("shows everything before any step is taken", () => {
+    expect(fitAfter(0)).toEqual(FULL_FIT);
   });
 
-  it("gives things up least useful first as the row narrows", () => {
-    const shown = (width: number) => {
-      const fit = footerFit(width, { stop: true, usage });
-      return Object.entries(fit)
-        .filter(([, on]) => !on)
-        .map(([step]) => step)
-        .sort();
-    };
-    expect(shown(652)).toEqual([]);
-    expect(shown(620)).toEqual(["promptsKey"]);
-    expect(shown(530)).toEqual(["promptsKey", "session"].sort());
-    // The composer in the bug report (a ~510px footer, Stop showing).
-    expect(shown(510)).toEqual(["promptsKey", "saveLabel", "session"].sort());
-    expect(shown(400)).toEqual(
-      ["promptsKey", "saveLabel", "session", "usage"].sort()
+  it("gives parts up least useful first", () => {
+    expect(off(1)).toEqual(["promptsKey"]);
+    expect(off(2).sort()).toEqual(["promptsKey", "session"]);
+    expect(off(3).sort()).toEqual(["promptsKey", "saveLabel", "session"]);
+    expect(off(4).sort()).toEqual([
+      "promptsKey",
+      "saveLabel",
+      "session",
+      "usage",
+    ]);
+    expect(off(FOOTER_STEPS.length).sort()).toEqual([...FOOTER_STEPS].sort());
+  });
+
+  it("has nothing more to give past the last step", () => {
+    expect(fitAfter(FOOTER_STEPS.length + 3)).toEqual(
+      fitAfter(FOOTER_STEPS.length)
     );
-    expect(shown(300)).toEqual(
-      ["promptsKey", "promptsLabel", "saveLabel", "session", "usage"].sort()
-    );
-  });
-
-  it("needs less room without Stop", () => {
-    const withStop = footerFit(580, { stop: true, usage });
-    const without = footerFit(580, { stop: false, usage });
-    expect(withStop.session).toBe(false);
-    expect(without).toEqual(FULL_FIT);
-  });
-
-  it("counts a longer usage readout", () => {
-    const short = footerFit(600, { stop: true, usage: "9k · 1% ctx" });
-    const long = footerFit(600, {
-      stop: true,
-      usage: "1.2M · 100% ctx · $12.40",
-    });
-    expect(short.session).toBe(true);
-    expect(long.session).toBe(false);
   });
 });

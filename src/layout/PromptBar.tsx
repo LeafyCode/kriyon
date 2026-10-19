@@ -41,7 +41,7 @@ import { tokens } from "../theme/tokens.ts";
 import { Kbd } from "../ui/Kbd.tsx";
 import { showToast } from "../ui/Toast.tsx";
 import { AttachmentTray } from "./AttachmentTray.tsx";
-import { type FooterFit, FULL_FIT, footerFit } from "./composerFooterFit.ts";
+import { FOOTER_STEPS, type FooterFit, fitAfter } from "./composerFooterFit.ts";
 import {
   type HistoryCursor,
   onFirstLine,
@@ -167,8 +167,8 @@ const footerStyle: CSSProperties = {
 };
 
 // Nothing in the footer wraps. The left group may shrink (and, past the last
-// step `footerFit` takes, clip); the right one, with Stop and Send, never
-// does, so they stay in the box at any width.
+// step `fitAfter` has, clip); the right one, with Stop and Send, never does,
+// so they stay in the box at any width.
 const footerLeftStyle: CSSProperties = {
   alignItems: "center",
   display: "flex",
@@ -231,21 +231,30 @@ const sendDisabledStyle: CSSProperties = {
 const NO_ATTACHMENTS: Attachment[] = [];
 
 /** The footer's left side: attach, the Session chip, the usage readout,
- *  Save prompt and Prompts, each as much of it as `fit` has room for. */
+ *  Save prompt and Prompts, each as much of it as fits beside `stopping`'s
+ *  buttons in the footer `footerRef` names. Fitting re-renders only this. */
 function FooterTools({
-  fit,
+  footerRef,
   onAttach,
+  stopping,
   usageLabel,
   value,
 }: {
-  fit: FooterFit;
+  footerRef: { current: HTMLElement | null };
   onAttach: () => void;
+  stopping: boolean;
   usageLabel: string | null;
   value: string;
 }) {
+  const toolsRef = useRef<HTMLSpanElement>(null);
+  const fit = useFooterFit(
+    footerRef,
+    toolsRef,
+    `${stopping}|${usageLabel ?? ""}`
+  );
   const empty = value.trim().length === 0;
   return (
-    <span style={footerLeftStyle}>
+    <span data-testid="footer-tools" ref={toolsRef} style={footerLeftStyle}>
       <button
         aria-label="Attach files"
         className="kr-hover-surface"
@@ -321,6 +330,38 @@ function useWidth(ref: { current: HTMLElement | null }): number | null {
     return () => observer.disconnect();
   }, [ref]);
   return width;
+}
+
+/**
+ * How much of the footer's left side fits, measured: after each layout, while
+ * the tools' content is wider than their box, give up one more step. The
+ * steps run in layout effects, so only the settled footer is painted. Any
+ * change that could make it fit differently (the footer's width, what the
+ * usage readout says, Stop showing) starts again from everything.
+ */
+function useFooterFit(
+  footerRef: { current: HTMLElement | null },
+  toolsRef: { current: HTMLElement | null },
+  shown: string
+): FooterFit {
+  const width = useWidth(footerRef);
+  const key = `${width}|${shown}`;
+  const [fitted, setFitted] = useState({ key, steps: 0 });
+  const current = fitted.key === key ? fitted : { key, steps: 0 };
+  if (current !== fitted) {
+    setFitted(current);
+  }
+  useLayoutEffect(() => {
+    const tools = toolsRef.current;
+    if (
+      tools &&
+      current.steps < FOOTER_STEPS.length &&
+      tools.scrollWidth > tools.clientWidth
+    ) {
+      setFitted({ key: current.key, steps: current.steps + 1 });
+    }
+  });
+  return fitAfter(current.steps);
 }
 
 /** How long after a send the history is read again: the CLI records the
@@ -693,11 +734,6 @@ export function PromptBar({ suppressed = false }: PromptBarProps) {
   // Same [Session usage view] the inspector reads, so the composer's ctx% can
   // never diverge from the inspector's for one session.
   const usageLabel = sessionUsageView(live).label;
-  const footerWidth = useWidth(footerRef);
-  const fit =
-    footerWidth === null
-      ? FULL_FIT
-      : footerFit(footerWidth, { stop: canStop, usage: usageLabel });
 
   // Re-serialize the (uncontrolled) editable into the draft on every
   // keystroke, then resync the completion popover's caret from the fresh DOM
@@ -1154,8 +1190,9 @@ export function PromptBar({ suppressed = false }: PromptBarProps) {
               ) : null}
               <div ref={footerRef} style={footerStyle}>
                 <FooterTools
-                  fit={fit}
+                  footerRef={footerRef}
                   onAttach={intake.pick}
+                  stopping={canStop}
                   usageLabel={usageLabel}
                   value={value}
                 />

@@ -1,9 +1,11 @@
 /**
- * What the composer's footer shows at a given width. The footer is one row:
+ * What the composer's footer shows as it narrows. The footer is one row:
  * attach, the Session chip, the usage readout, Save prompt and Prompts on the
- * left; hide, Stop and Send on the right. Stop and Send always show. As the
- * row narrows, the rest steps down in a fixed order, least useful first, so
- * nothing wraps and nothing is pushed out of the box.
+ * left; hide, Stop and Send on the right. Stop and Send always show. The
+ * left side gives parts up in a fixed order, least useful first, one step at
+ * a time until it fits, so nothing wraps and nothing is pushed out of the
+ * box. Whether it fits is measured from the real layout (`PromptBar`), never
+ * estimated, so a change to a button's size can't throw it off.
  */
 
 export interface FooterFit {
@@ -27,24 +29,8 @@ export const FULL_FIT: FooterFit = {
   usage: true,
 };
 
-// Widths in px, as drawn at the composer's type sizes, each with the gap
-// before it. Generous: a step taken a little early beats a row that clips.
-const GAP_LEFT = 9;
-const GAP_RIGHT = 7;
-const ICON_BUTTON = 26;
-const SESSION_CHIP = 80 + GAP_LEFT;
-const SAVE_LABEL = 66; // "Save prompt" beyond the bare ✦ button
-const PROMPTS_LABEL = 54; // "Prompts" beyond the bare icon button
-const PROMPTS_KEY = 38 + 6; // the ⌘⇧P keycap and its gap
-const STOP = 74 + GAP_RIGHT;
-const SEND = 70 + GAP_RIGHT;
-/** Room kept between the two groups. */
-const BETWEEN = 16;
-/** One character of the 11px mono usage readout. */
-const MONO_CHAR = 6.7;
-
 /** The steps, in the order they are given up. */
-const STEPS: readonly (keyof FooterFit)[] = [
+export const FOOTER_STEPS: readonly (keyof FooterFit)[] = [
   "promptsKey",
   "session",
   "saveLabel",
@@ -52,37 +38,11 @@ const STEPS: readonly (keyof FooterFit)[] = [
   "promptsLabel",
 ];
 
-/**
- * What fits in a footer `width` px wide. `usage` is the readout's text (none
- * when there is no reading yet); `stop` is whether Stop is showing.
- */
-export function footerFit(
-  width: number,
-  { stop, usage }: { stop: boolean; usage: string | null }
-): FooterFit {
-  // Always there: attach, the ✦ and Prompts buttons, hide, Send.
-  const base =
-    ICON_BUTTON +
-    2 * (ICON_BUTTON + GAP_LEFT) +
-    ICON_BUTTON +
-    SEND +
-    (stop ? STOP : 0) +
-    BETWEEN;
-  const cost: Record<keyof FooterFit, number> = {
-    promptsKey: PROMPTS_KEY,
-    promptsLabel: PROMPTS_LABEL,
-    saveLabel: SAVE_LABEL,
-    session: SESSION_CHIP,
-    usage: usage ? Math.ceil(usage.length * MONO_CHAR) + GAP_LEFT : 0,
-  };
+/** What the footer shows once it has given up its first `steps` parts. */
+export function fitAfter(steps: number): FooterFit {
   const fit = { ...FULL_FIT };
-  let needed = base + STEPS.reduce((sum, step) => sum + cost[step], 0);
-  for (const step of STEPS) {
-    if (needed <= width) {
-      break;
-    }
+  for (const step of FOOTER_STEPS.slice(0, steps)) {
     fit[step] = false;
-    needed -= cost[step];
   }
   return fit;
 }
