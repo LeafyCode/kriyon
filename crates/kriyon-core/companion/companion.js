@@ -89,7 +89,7 @@ async function send($, body) {
     }
     // The conversation this came from: a nested `claude -p` run in the same
     // terminal inherits the socket, and Kriyon keeps only the session's own.
-    const sessionId = await $.session.id();
+    const sessionId = body.sessionId ?? (await $.session.id());
     const res = await $.http.fetch("http://kriyon/event", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -133,17 +133,27 @@ function postPartial($, event) {
   })();
 }
 
-/** Say hello once, with the Claude Code version, on the first event seen. */
+/** Say hello, with the Claude Code version; `sessionId` names the
+ *  conversation when it isn't the one `$.session.id()` reads. */
+function hello($, sessionId) {
+  $.session
+    .version()
+    .then((v) => post($, { kind: "hello", version: v?.version, sessionId }))
+    .catch(() => post($, { kind: "hello", sessionId }));
+}
+
+/** Say hello once, on the first event seen. */
 function greet($) {
   if (greeted) {
     return;
   }
   greeted = true;
-  $.session
-    .version()
-    .then((v) => post($, { kind: "hello", version: v?.version }))
-    .catch(() => post($, { kind: "hello" }));
+  hello($);
 }
+
+/** Conversations that take over a running process: no `session.start`
+ *  fires for them, only the classic hook. */
+const TAKEOVERS = new Set(["resume", "clear"]);
 
 /** The fewest milliseconds between two posts of a reply as it streams. */
 const PARTIAL_MS = 250;
@@ -213,6 +223,15 @@ export function register(on) {
 
   on("session.start", ($, e, next) => {
     greet($);
+    return next(e);
+  });
+
+  // A resume or /clear ends the conversation, not the companion: say hello
+  // for the new one, which may stay quiet until its first prompt.
+  on("classic.SessionStart", ($, e, next) => {
+    if (TAKEOVERS.has(e.source)) {
+      hello($, e.session_id);
+    }
     return next(e);
   });
 

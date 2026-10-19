@@ -111,3 +111,34 @@ test("only the newest snapshot of the block being written is kept, in order", as
     "a block is posted only while it is the one being written"
   );
 });
+
+test("a resume or /clear says hello again, for the conversation that took over", async () => {
+  // Claude Code fires no `session.start` after either, and the new
+  // conversation may stay quiet until its first prompt: without a hello,
+  // Kriyon would take the companion for gone.
+  const sessionStart = handlers.get("classic.SessionStart");
+  for (const source of ["resume", "clear"]) {
+    const s = session();
+    const e = { source, session_id: "next" };
+    // biome-ignore lint/performance/noAwaitInLoops: one session at a time.
+    const result = await sessionStart(s.$, e, async (input) => input);
+    assert.equal(result, e, "the event passes on unchanged");
+    await s.answer();
+    await s.answer();
+    assert.deepEqual(
+      s.posted.map((p) => [p.kind, p.sessionId, p.version]),
+      [["hello", "next", "2"]]
+    );
+  }
+});
+
+test("a fresh start or a compaction posts no extra hello", async () => {
+  const sessionStart = handlers.get("classic.SessionStart");
+  for (const source of ["startup", "compact"]) {
+    const s = session();
+    // biome-ignore lint/performance/noAwaitInLoops: one session at a time.
+    await sessionStart(s.$, { source, session_id: "conv" }, async (e) => e);
+    await s.settle();
+    assert.equal(s.held.length, 0);
+  }
+});
