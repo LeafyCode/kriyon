@@ -1674,6 +1674,8 @@ mod tests {
                 summary: "Build finished".into(),
                 outcome: crate::work_report::ReportOutcome::Completed,
                 event: None,
+                task_id: Some("b1".into()),
+                handback: false,
             }]
         );
         assert_eq!(turns[1].reply.as_deref(), Some("It passed."));
@@ -1728,6 +1730,8 @@ mod tests {
                 summary: "Agent \"Re-check the fix\" reported back".into(),
                 outcome: crate::work_report::ReportOutcome::Completed,
                 event: None,
+                task_id: Some("af19c".into()),
+                handback: true,
             }]
         );
         assert!(!turns[1].ended, "Claude is still working on it");

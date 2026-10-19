@@ -23,9 +23,6 @@ pub const PEER_ORIGIN: &str = "peer";
 /// What a subagent's hand-back says of itself, after the sender's tag.
 const HANDBACK: &str = "[Subagent hand-back]";
 
-/// How a hand-back's summary ends.
-const HANDBACK_SUMMARY: &str = " reported back";
-
 /// How the work a report is about came out.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -49,6 +46,13 @@ pub struct WorkReport {
     pub outcome: ReportOutcome,
     /// What a monitor saw, for an [`ReportOutcome::Event`].
     pub event: Option<String>,
+    /// The id of the work it is about: a report's `<task-id>`, or the agent
+    /// a hand-back came from. For matching the two; never shown.
+    #[serde(skip)]
+    pub task_id: Option<String>,
+    /// A [Subagent] handing back, rather than Claude Code's own report.
+    #[serde(skip)]
+    pub handback: bool,
 }
 
 /// The reports a prompt's text carries, or `None` when the text is not
@@ -82,6 +86,8 @@ fn report(inside: &str) -> WorkReport {
         summary: field(inside, "summary").unwrap_or_else(|| "Background work reported".into()),
         outcome,
         event,
+        task_id: field(inside, "task-id"),
+        handback: false,
     }
 }
 
@@ -97,38 +103,38 @@ pub fn peer_sender(text: &str) -> Option<&str> {
 /// or another Claude session's message.
 #[must_use]
 pub fn from_peer(text: &str, agent: Option<&str>) -> WorkReport {
+    let task_id = peer_sender(text).map(str::to_string);
     if !text.contains(HANDBACK) {
         return WorkReport {
             summary: "Another Claude session sent a message".into(),
             outcome: ReportOutcome::Update,
             event: None,
+            task_id,
+            handback: false,
         };
     }
     WorkReport {
         summary: agent.map_or_else(
-            || format!("A subagent{HANDBACK_SUMMARY}"),
-            |name| format!("Agent \"{name}\"{HANDBACK_SUMMARY}"),
+            || "A subagent reported back".into(),
+            |name| format!("Agent \"{name}\" reported back"),
         ),
         outcome: ReportOutcome::Completed,
         event: None,
+        task_id,
+        handback: true,
     }
 }
 
 /// Drop a hand-back that only echoes another report of the same turn: Claude
-/// Code may also send its own `Agent "…" finished` for that agent.
+/// Code may also send its own `Agent "…" finished` for that agent, under the
+/// same id.
 pub fn drop_echoed_handbacks(reports: &mut Vec<WorkReport>) {
-    let named = |report: &WorkReport| {
-        crate::transcript::between(&report.summary, "\"", "\"").map(str::to_string)
-    };
-    let others: Vec<Option<String>> = reports
+    let reported: Vec<String> = reports
         .iter()
-        .map(|r| (!is_handback(r)).then(|| named(r)).flatten())
+        .filter(|r| !r.handback)
+        .filter_map(|r| r.task_id.clone())
         .collect();
-    reports.retain(|r| !is_handback(r) || named(r).is_none() || !others.contains(&named(r)));
-}
-
-fn is_handback(report: &WorkReport) -> bool {
-    report.summary.ends_with(HANDBACK_SUMMARY)
+    reports.retain(|r| !r.handback || r.task_id.as_ref().is_none_or(|id| !reported.contains(id)));
 }
 
 /// The trimmed, non-blank text of the first `<tag>…</tag>`.
@@ -152,6 +158,8 @@ mod tests {
                 summary: "Background command \"Watch the nightly run until it finishes\" completed (exit code 0)".into(),
                 outcome: ReportOutcome::Completed,
                 event: None,
+                task_id: Some("bc1a9h969".into()),
+                handback: false,
             }])
         );
     }
@@ -206,18 +214,47 @@ mod tests {
         assert_eq!(report.outcome, ReportOutcome::Update);
     }
 
-    #[test]
-    fn a_handback_echoing_its_finished_report_is_dropped() {
-        let handback = from_peer(&format!("{HANDBACK} …"), Some("Review"));
-        let finished = parse(&format!(
-            "{OPEN}<status>completed</status><summary>Agent \"Review\" finished</summary>{CLOSE}"
+    fn handback(from: &str, name: Option<&str>) -> WorkReport {
+        from_peer(
+            &format!("<agent-message from=\"{from}\">\n{HANDBACK} …"),
+            name,
+        )
+    }
+
+    fn finished(task: &str, summary: &str) -> WorkReport {
+        parse(&format!(
+            "{OPEN}<task-id>{task}</task-id><status>completed</status><summary>{summary}</summary>{CLOSE}"
         ))
         .expect("a report")
-        .remove(0);
-        let other = from_peer(&format!("{HANDBACK} …"), Some("Scan"));
-        let mut reports = vec![handback, finished.clone(), other.clone()];
+        .remove(0)
+    }
+
+    #[test]
+    fn a_handback_echoing_its_agents_report_is_dropped() {
+        let echoed = finished("a1", "Agent \"Fix \"a\" bug\" finished");
+        let unnamed_echo = finished("a2", "Agent \"Scan\" finished");
+        let mut reports = vec![
+            handback("a1", Some("Fix \"a\" bug")),
+            echoed.clone(),
+            handback("a2", None),
+            unnamed_echo.clone(),
+        ];
         drop_echoed_handbacks(&mut reports);
-        assert_eq!(reports, vec![finished, other]);
+        assert_eq!(reports, vec![echoed, unnamed_echo]);
+    }
+
+    #[test]
+    fn a_handback_is_kept_beside_other_work_of_the_same_name() {
+        let shell = finished("b9", "Background command \"Build\" completed");
+        let other = handback("a3", Some("Fix \"b\" bug"));
+        let mut reports = vec![
+            handback("a1", Some("Build")),
+            shell,
+            finished("a2", "Agent \"Fix \"a\" bug\" finished"),
+            other,
+        ];
+        drop_echoed_handbacks(&mut reports);
+        assert_eq!(reports.len(), 4);
     }
 
     #[test]
