@@ -349,7 +349,7 @@ const CARRIES_FILL_CLASS = /className=[^\n]*kr-(hover|row)/;
 
 /** The recipes that publish `--kr-fill` instead of painting it. */
 const FILL_RECIPES =
-  /\b(row30|iconButton)\(|\bbutton\(\s*"(primary|secondary|ghost)"/;
+  /\b(row30|iconButton)\(|\bbutton\(\s*"(primary|secondary|ghost)"|\bchip\(\s*\{/;
 
 /**
  * The style identifiers in one module that leave a published fill unpainted —

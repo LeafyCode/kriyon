@@ -16,8 +16,8 @@ const pillStyle: CSSProperties = {
   marginRight: "auto",
 };
 
-// A slow glow, so a waiting update is noticed without nagging. Reduced
-// motion stills it (App.css).
+/** A slow glow, so a waiting update is noticed without nagging. Reduced
+ *  motion stills it (App.css). */
 const iconStyle: CSSProperties = {
   animation: "kr-pulse 2.4s ease-in-out infinite",
   flex: "none",
