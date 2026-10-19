@@ -3,9 +3,7 @@ import type { CSSProperties } from "react";
 import { useLayout } from "../state/layout.ts";
 import { button, shimmerText } from "../theme/recipes.ts";
 import { accentAlpha, tokens } from "../theme/tokens.ts";
-import { Mascot } from "./Mascot.tsx";
-
-const NODE_PX = 58;
+import { Mascot, mascotTileStyle, TILE_MASCOT_PX } from "./Mascot.tsx";
 
 const stageStyle: CSSProperties = {
   alignItems: "center",
@@ -24,17 +22,11 @@ const sceneStyle: CSSProperties = {
   marginBottom: tokens.space.sm,
 };
 
+/** Unclipped, unlike the banner's: this mascot plays no tricks, and the
+ *  ripples spread past the tile's edge. */
 const nodeStyle: CSSProperties = {
-  alignItems: "center",
-  background: tokens.color.surface.s3,
-  border: `1px solid ${tokens.color.line.soft}`,
-  borderRadius: tokens.radius.xl,
-  display: "flex",
-  flex: "none",
-  height: NODE_PX,
-  justifyContent: "center",
+  ...mascotTileStyle,
   position: "relative",
-  width: NODE_PX,
 };
 
 const rippleStyle: CSSProperties = {
@@ -105,7 +97,7 @@ export function CompanionStarting() {
           {mascot === "none" ? (
             <span style={orbStyle} />
           ) : (
-            <Mascot busy kind={mascot} size={46} />
+            <Mascot busy kind={mascot} size={TILE_MASCOT_PX} />
           )}
         </span>
         <span style={linkStyle}>

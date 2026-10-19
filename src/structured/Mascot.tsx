@@ -25,6 +25,23 @@ import {
  * Anthropic marks.
  */
 
+/** How big a [Mascot] is drawn on its tile. */
+export const TILE_MASCOT_PX = 46;
+
+/** The flat tile a [Mascot] sits on, so a dark one still reads on the dark
+ *  canvas: the mascot with a small margin all round. */
+export const mascotTileStyle: CSSProperties = {
+  alignItems: "center",
+  background: tokens.color.surface.s3,
+  border: `1px solid ${tokens.color.line.soft}`,
+  borderRadius: tokens.radius.xl,
+  display: "flex",
+  flex: "none",
+  height: TILE_MASCOT_PX + 12,
+  justifyContent: "center",
+  width: TILE_MASCOT_PX + 12,
+};
+
 export interface MascotChoice {
   Art: ComponentType;
   id: Exclude<MascotId, "none">;

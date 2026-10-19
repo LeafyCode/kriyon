@@ -62,7 +62,7 @@ import { CompanionStarting } from "./CompanionStarting.tsx";
 import { useCliDialog } from "./cliDialog.ts";
 import { interruptSession } from "./interrupt.ts";
 import { liveText } from "./liveReply.ts";
-import { Mascot } from "./Mascot.tsx";
+import { Mascot, mascotTileStyle, TILE_MASCOT_PX } from "./Mascot.tsx";
 import {
   clockLabel,
   didSummary,
@@ -328,21 +328,11 @@ const bannerStyle: CSSProperties = {
   gap: tokens.space.md,
 };
 
-/** A flat tile behind the [Mascot], so a dark one still reads on the dark
- *  canvas. */
-const mascotTileStyle: CSSProperties = {
-  alignItems: "center",
+const bannerTileStyle: CSSProperties = {
+  ...mascotTileStyle,
   // A trick that ducks or hops out of the tile is clipped by it, so a peek
   // reads as ducking behind its edge.
   overflow: "hidden",
-  background: tokens.color.surface.s3,
-  border: `1px solid ${tokens.color.line.soft}`,
-  borderRadius: tokens.radius.xl,
-  display: "flex",
-  flex: "none",
-  height: "58px",
-  justifyContent: "center",
-  width: "58px",
 };
 
 const bannerTitleStyle: CSSProperties = {
@@ -1016,8 +1006,8 @@ function Banner({
   return (
     <header style={bannerStyle}>
       {mascot === "none" ? null : (
-        <span style={mascotTileStyle}>
-          <Mascot busy={busy} kind={mascot} lively size={46} />
+        <span style={bannerTileStyle}>
+          <Mascot busy={busy} kind={mascot} lively size={TILE_MASCOT_PX} />
         </span>
       )}
       <div style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
