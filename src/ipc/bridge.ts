@@ -1380,11 +1380,21 @@ export type StepStatus = "running" | "ok" | "error";
 export interface ActivityStep {
   /** Main agent when `null`; otherwise the subagent's type. */
   agentType: string | null;
+  /** The user said yes to it in a permission dialog. */
+  approved: boolean;
+  /** A write that made a new file. */
+  created: boolean;
   durationMs: number | null;
   /** A bit set of [Step flags] — see `STEP_FLAGS` in the Activity tab. */
   flags: number;
   id: number;
   kind: StepKind;
+  /** The lines a file change added and removed (an edit, a write, or the
+   * files a command edited). */
+  linesAdded: number | null;
+  linesRemoved: number | null;
+  /** What came of it in a few words: "43 passed", "6 files". */
+  outcome: string | null;
   startedMs: number;
   status: StepStatus;
   /** What the step was for, in one line: a command's or subagent's

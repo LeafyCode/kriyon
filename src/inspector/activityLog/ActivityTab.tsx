@@ -26,10 +26,12 @@ import {
   changesPathFor,
   changesUnavailableReason,
   filterCounts,
+  groupSteps,
   retentionNote,
+  type StatTone,
+  type StepRowView,
   stepChips,
-  stepLabel,
-  stepLines,
+  stepRow,
   turnHeading,
   turnTimeLabel,
   visibleTurns,
@@ -164,6 +166,29 @@ const stepButtonStyle: CSSProperties = {
   width: "100%",
 };
 
+// A folded row's own steps, set in under it like the turn's steps are.
+const foldStyle: CSSProperties = {
+  ...stepsStyle,
+  marginLeft: "17px",
+};
+
+const STAT_INK: Record<StatTone, string> = {
+  added: tokens.color.diffAddInk,
+  error: tokens.color.status.error,
+  ok: tokens.color.diffAddInk,
+  removed: tokens.color.diffDelInk,
+};
+
+const statsStyle: CSSProperties = {
+  display: "flex",
+  flex: "none",
+  fontFamily: tokens.font.mono,
+  fontSize: "12px",
+  gap: "6px",
+  lineHeight: 1.45,
+  whiteSpace: "nowrap",
+};
+
 function stepIconColor(step: ActivityStep): string {
   if (step.flags !== 0) {
     return tokens.color.status.waitingInk;
@@ -292,52 +317,80 @@ function FilterChips({
 
 function StepRow({
   onOpen,
-  step,
+  row,
   toplevel,
   turnEnded,
 }: {
   onOpen: (step: ActivityStep) => void;
-  step: ActivityStep;
+  row: StepRowView;
   toplevel: string | null | undefined;
   turnEnded: boolean;
 }) {
-  const Icon = KIND_ICON[step.kind];
-  const chips = stepChips(step, turnEnded);
+  const [open, setOpen] = useState(false);
+  const [lead] = row.steps;
+  const folded = row.steps.length > 1;
+  const Icon = KIND_ICON[lead.kind];
+  const chips = folded ? [] : stepChips(lead, turnEnded);
   return (
-    <button
-      className="kr-hover-surface"
-      onClick={() => onOpen(step)}
-      style={stepButtonStyle}
-      type="button"
-    >
-      <Icon
-        color={stepIconColor(step)}
-        size={14}
-        strokeWidth={2}
-        style={{ marginTop: "3px" }}
-      />
-      <span style={stepBodyStyle}>
-        <span style={stepHeadStyle}>
-          <span style={stepLabelStyle}>{stepLabel(step)}</span>
-          {chips.length > 0 ? (
-            <span style={chipsStyle}>
-              {chips.map((chip) => (
-                <span key={chip.text} style={stepChipStyle(chip.tone)}>
-                  {chip.text}
-                </span>
-              ))}
-            </span>
-          ) : null}
-        </span>
-        {stepLines(step, toplevel).map((line, index) => (
-          // A chain may repeat a command, so the position is part of the key.
-          // biome-ignore lint/suspicious/noArrayIndexKey: lines never reorder
-          <span key={`${index}:${line}`} style={targetStyle} title={line}>
-            {line}
+    <>
+      <button
+        aria-expanded={folded ? open : undefined}
+        className="kr-hover-surface"
+        onClick={() => (folded ? setOpen(!open) : onOpen(lead))}
+        style={stepButtonStyle}
+        type="button"
+      >
+        <Icon
+          color={stepIconColor(lead)}
+          size={14}
+          strokeWidth={2}
+          style={{ marginTop: "3px" }}
+        />
+        <span style={stepBodyStyle}>
+          <span style={stepHeadStyle}>
+            <span style={stepLabelStyle}>{row.label}</span>
+            {chips.length > 0 ? (
+              <span style={chipsStyle}>
+                {chips.map((chip) => (
+                  <span key={chip.text} style={stepChipStyle(chip.tone)}>
+                    {chip.text}
+                  </span>
+                ))}
+              </span>
+            ) : null}
+            {row.stats.length > 0 ? (
+              <span style={statsStyle}>
+                {row.stats.map((stat) => (
+                  <span key={stat.text} style={{ color: STAT_INK[stat.tone] }}>
+                    {stat.text}
+                  </span>
+                ))}
+              </span>
+            ) : null}
           </span>
-        ))}
-      </span>
-    </button>
+          {row.lines.map((line, index) => (
+            // A chain may repeat a command, so the position is part of the key.
+            // biome-ignore lint/suspicious/noArrayIndexKey: lines never reorder
+            <span key={`${index}:${line}`} style={targetStyle} title={line}>
+              {line}
+            </span>
+          ))}
+        </span>
+      </button>
+      {folded && open ? (
+        <div style={foldStyle}>
+          {row.steps.map((step) => (
+            <StepRow
+              key={step.id}
+              onOpen={onOpen}
+              row={stepRow(step, toplevel)}
+              toplevel={toplevel}
+              turnEnded={turnEnded}
+            />
+          ))}
+        </div>
+      ) : null}
+    </>
   );
 }
 
@@ -369,11 +422,11 @@ function TurnBlock({
       </p>
       {turn.steps.length > 0 ? (
         <div style={stepsStyle}>
-          {turn.steps.map((step) => (
+          {groupSteps(turn.steps, toplevel).map((row) => (
             <StepRow
-              key={step.id}
+              key={row.steps[0].id}
               onOpen={onOpen}
-              step={step}
+              row={row}
               toplevel={toplevel}
               turnEnded={turn.endedMs !== null}
             />

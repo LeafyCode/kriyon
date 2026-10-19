@@ -6,6 +6,7 @@ import {
   changesUnavailableReason,
   clockLabel,
   filterCounts,
+  groupSteps,
   keptFor,
   prettyInput,
   retentionNote,
@@ -13,6 +14,7 @@ import {
   stepChips,
   stepLabel,
   stepLines,
+  stepStats,
   turnHeading,
   turnTimeLabel,
   visibleTurns,
@@ -21,10 +23,15 @@ import {
 function step(over: Partial<ActivityStep> = {}): ActivityStep {
   return {
     agentType: null,
+    approved: false,
+    created: false,
     durationMs: 120,
     flags: 0,
     id: 1,
     kind: "read",
+    linesAdded: null,
+    linesRemoved: null,
+    outcome: null,
     startedMs: 0,
     status: "ok",
     summary: null,
@@ -98,7 +105,7 @@ describe("stepLabel", () => {
       target: 'echo "hi" > hello.txt && ls -la && curl -sI https://example.com',
     });
     expect(stepLabel(chain)).toBe("Ran 3 commands");
-    expect(stepChips(chain)).toEqual([{ text: "internet", tone: "flag" }]);
+    expect(stepChips(chain)).toEqual([{ text: "web", tone: "flag" }]);
     expect(
       stepLabel(
         step({
@@ -172,8 +179,8 @@ describe("what a step was for", () => {
       target: "pnpm fix && pnpm check",
       toolName: "Bash",
     });
-    expect(stepLabel(check)).toBe("Run every check");
-    expect(stepChips(check)).toEqual([{ text: "internet", tone: "flag" }]);
+    expect(stepLabel(check)).toBe("Ran every check");
+    expect(stepChips(check)).toEqual([{ text: "web", tone: "flag" }]);
     expect(stepLines(check, null)).toEqual(["pnpm fix", "pnpm check"]);
   });
 
@@ -196,29 +203,23 @@ describe("what a step was for", () => {
     expect(stepLines(chain, null)).toEqual(["a", "b", "c", "+2 more"]);
   });
 
-  test("searches, the web and subagents say what they were about", () => {
-    expect(
-      stepLabel(step({ kind: "search", summary: "fn map", toolName: "Grep" }))
-    ).toBe("Searched for “fn map”");
+  test("subagents say their task; tool lookups stay quiet", () => {
     expect(
       stepLabel(
         step({ kind: "search", summary: "select:Read", toolName: "ToolSearch" })
       )
     ).toBe("Loaded more tools");
     expect(
-      stepLabel(
-        step({ kind: "web", summary: "tauri v2", toolName: "WebSearch" })
-      )
-    ).toBe("Searched the web for “tauri v2”");
-    expect(
-      stepLabel(
+      stepLines(
         step({
-          kind: "web",
-          summary: "https://docs.rs/x/latest",
-          toolName: "WebFetch",
-        })
+          kind: "search",
+          summary: "select:Read",
+          target: null,
+          toolName: "ToolSearch",
+        }),
+        null
       )
-    ).toBe("Opened docs.rs");
+    ).toEqual([]);
     expect(
       stepLabel(
         step({
@@ -446,3 +447,165 @@ test("the step flag bits match Rust activity_log::flags", () => {
     secretFile: 16,
   });
 });
+
+describe("the design's timeline", () => {
+  test("a command's title is what Claude did, in the past tense", () => {
+    const tests = step({
+      kind: "command",
+      outcome: "43 passed",
+      summary: "Run the usage tests",
+      target: "pnpm test usage",
+      toolName: "Bash",
+    });
+    expect(stepLabel(tests)).toBe("Ran the usage tests");
+    expect(stepStats(tests)).toEqual([{ text: "43 passed", tone: "ok" }]);
+    expect(stepStats({ ...tests, outcome: "2 failed" })).toEqual([
+      { text: "2 failed", tone: "error" },
+    ]);
+    expect(
+      stepLabel({ ...tests, summary: "git status before committing" })
+    ).toBe("git status before committing");
+  });
+
+  test("an install or a delete leads with what it did to the machine", () => {
+    const install = step({
+      approved: true,
+      flags: STEP_FLAGS.installed,
+      kind: "command",
+      status: "ok",
+      summary: "Add date-fns",
+      target: "pnpm add date-fns",
+      toolName: "Bash",
+    });
+    expect(stepLabel(install)).toBe("Installed a package");
+    expect(stepLines(install, null)).toEqual(["pnpm add date-fns"]);
+    expect(stepChips(install)).toEqual([
+      { text: "you approved", tone: "flag" },
+      { text: "installed", tone: "flag" },
+    ]);
+  });
+
+  test("the web says where it went", () => {
+    const fetch = step({
+      flags: STEP_FLAGS.network,
+      kind: "web",
+      summary: "https://date-fns.org/docs/formatDistance",
+      target: null,
+      toolName: "WebFetch",
+    });
+    expect(stepLabel(fetch)).toBe("Used the internet");
+    expect(stepLines(fetch, null)).toEqual([
+      "date-fns.org/docs/formatDistance",
+    ]);
+    expect(stepChips(fetch)).toEqual([{ text: "web", tone: "flag" }]);
+    const search = step({
+      flags: STEP_FLAGS.network,
+      kind: "web",
+      summary: "tauri v2 tray",
+      target: null,
+      toolName: "WebSearch",
+    });
+    expect(stepLabel(search)).toBe("Searched the web");
+    expect(stepLines(search, null)).toEqual(["“tauri v2 tray”"]);
+  });
+
+  test("a search shows what it looked for and what it found", () => {
+    const grep = step({
+      kind: "search",
+      outcome: "6 files",
+      summary: "UsageSnapshot",
+      target: null,
+      toolName: "Grep",
+    });
+    expect(stepLabel(grep)).toBe("Searched the code");
+    expect(stepLines(grep, null)).toEqual(["“UsageSnapshot” · 6 files"]);
+  });
+
+  test("a file change shows its lines, and a new file reads as added", () => {
+    const added = step({
+      created: true,
+      kind: "write",
+      linesAdded: 38,
+      linesRemoved: 0,
+      target: "/w/src/a.test.tsx",
+      toolName: "Write",
+    });
+    expect(stepLabel(added)).toBe("Added a.test.tsx");
+    expect(stepStats(added)).toEqual([{ text: "+38", tone: "added" }]);
+    const changed = step({
+      kind: "edit",
+      linesAdded: 12,
+      linesRemoved: 3,
+      target: "/w/src/a.tsx",
+      toolName: "Edit",
+    });
+    expect(stepStats(changed)).toEqual([
+      { text: "+12", tone: "added" },
+      { text: "−3", tone: "removed" },
+    ]);
+    expect(stepOutsideLabel()).toBe("Read a file outside the project");
+  });
+
+  test("reads and changes in a row fold into one line", () => {
+    const read = (id: number, target: string) =>
+      step({ id, kind: "read", target });
+    const rows = groupSteps([
+      read(1, "/w/a.rs"),
+      read(2, "/w/b.rs"),
+      read(3, "/w/a.rs"),
+      read(4, "/w/c.rs"),
+      read(5, "/w/d.rs"),
+      step({ flags: STEP_FLAGS.outsideProject, id: 6, target: "/u/x.json" }),
+      step({
+        id: 7,
+        kind: "edit",
+        linesAdded: 5,
+        linesRemoved: 1,
+        target: "/w/a.rs",
+      }),
+      step({
+        id: 8,
+        kind: "edit",
+        linesAdded: 2,
+        linesRemoved: 0,
+        target: "/w/b.rs",
+      }),
+      step({ id: 9, kind: "command", target: "ls" }),
+    ]);
+    expect(rows.map((r) => r.label)).toEqual([
+      "Read 4 files",
+      "Read a file outside the project",
+      "Changed 2 files",
+      "Ran a command",
+    ]);
+    expect(rows[0].lines).toEqual(["a.rs, b.rs, c.rs +1"]);
+    expect(rows[0].steps).toHaveLength(5);
+    expect(rows[2].stats).toEqual([
+      { text: "+7", tone: "added" },
+      { text: "−1", tone: "removed" },
+    ]);
+  });
+
+  test("a command that edited files counts as a change", () => {
+    const sed = step({ kind: "command", linesAdded: 1, linesRemoved: 1 });
+    expect(filterCounts([turn({ steps: [sed] })]).changes).toBe(1);
+  });
+
+  test("the same file read twice in a row stays one file", () => {
+    const rows = groupSteps([
+      step({ id: 1, target: "/w/a.rs" }),
+      step({ id: 2, target: "/w/a.rs" }),
+    ]);
+    expect(rows.map((r) => r.label)).toEqual(["Read a.rs"]);
+    expect(rows[0].steps).toHaveLength(2);
+  });
+});
+
+function stepOutsideLabel(): string {
+  return stepLabel(
+    step({
+      flags: STEP_FLAGS.outsideProject,
+      target: "/u/.claude/settings.json",
+    })
+  );
+}

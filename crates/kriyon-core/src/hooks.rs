@@ -317,6 +317,20 @@ pub struct HookEvent {
     /// For an `ExitPlanMode` `PreToolUse`, the plan's first non-empty line (capped).
     #[serde(default)]
     pub plan: Option<String>,
+    /// On a `PostToolUse` that changed files, the lines it added, from Claude
+    /// Code's own patch (an edit's, or the files a command edited).
+    #[serde(default)]
+    pub lines_added: Option<u64>,
+    /// The lines that change removed; see [`Self::lines_added`].
+    #[serde(default)]
+    pub lines_removed: Option<u64>,
+    /// On a file tool's `PostToolUse`, whether it made a new file.
+    #[serde(default)]
+    pub created: Option<bool>,
+    /// On a `PostToolUse`, what came of it in a few words: a test run's
+    /// "43 passed" or "2 failed", a search's "6 files".
+    #[serde(default)]
+    pub outcome: Option<String>,
     /// On a `Stop` hook, whether Claude Code is already continuing because a
     /// previous `Stop` hook blocked — i.e. this is a *re-entry*, ending a turn
     /// the user has already been told about. Absent on every other event.
@@ -1043,6 +1057,100 @@ mod tests {
     }
 
     #[test]
+    fn the_hook_script_counts_the_lines_a_file_change_made() {
+        // Claude Code's own patch, as an Edit returns it.
+        let edit = run_hook_script(
+            r#"{"hook_event_name":"PostToolUse","tool_name":"Edit","tool_use_id":"t1","tool_input":{"file_path":"/w/a.ts"},"tool_response":{"filePath":"/w/a.ts","structuredPatch":[{"lines":[" a","-b","+c","+d"]},{"lines":["-e"]}]}}"#,
+        )
+        .expect("an event line");
+        assert_eq!((edit.lines_added, edit.lines_removed), (Some(2), Some(2)));
+        assert_eq!(
+            edit.created, None,
+            "only a Write says whether the file is new"
+        );
+
+        // A new file has no patch: every line of it is new.
+        let write = run_hook_script(
+            r#"{"hook_event_name":"PostToolUse","tool_name":"Write","tool_use_id":"t2","tool_input":{"file_path":"/w/b.ts"},"tool_response":{"type":"create","content":"x\ny\nz\n","structuredPatch":[]}}"#,
+        )
+        .expect("an event line");
+        assert_eq!((write.lines_added, write.lines_removed), (Some(3), Some(0)));
+        assert_eq!(write.created, Some(true));
+
+        // A command that edited files reports them too.
+        let bash = run_hook_script(
+            r#"{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_use_id":"t3","tool_input":{"command":"sed -i '' s/a/b/ x y"},"tool_response":{"stdout":"","bashEditDiff":{"files":[{"filePath":"/w/x","hunks":[{"lines":["-a","+b"]}]},{"filePath":"/w/y","hunks":[{"lines":["+b"]}]}]}}}"#,
+        )
+        .expect("an event line");
+        assert_eq!((bash.lines_added, bash.lines_removed), (Some(2), Some(1)));
+
+        let read = run_hook_script(
+            r#"{"hook_event_name":"PostToolUse","tool_name":"Read","tool_use_id":"t4","tool_input":{"file_path":"/w/a.ts"},"tool_response":{"type":"text"}}"#,
+        )
+        .expect("an event line");
+        assert_eq!((read.lines_added, read.created), (None, None));
+    }
+
+    #[test]
+    fn the_hook_script_sums_up_what_a_command_or_search_found() {
+        let outcome = |tool: &str, input: &str, response: &str| {
+            run_hook_script(&format!(
+                r#"{{"hook_event_name":"PostToolUse","tool_name":"{tool}","tool_use_id":"t","tool_input":{input},"tool_response":{response}}}"#
+            ))
+            .expect("an event line")
+            .outcome
+        };
+        let bash = |stdout: &str| {
+            outcome(
+                "Bash",
+                r#"{"command":"pnpm test"}"#,
+                &serde_json::json!({ "stdout": stdout }).to_string(),
+            )
+        };
+        // The summary sits at the end of a long run, past any cap.
+        let noise = "ok\n".repeat(5000);
+        assert_eq!(
+            bash(&format!(
+                "{noise} Test Files  9 passed (9)\n      Tests  43 passed (43)\n"
+            ))
+            .as_deref(),
+            Some("43 passed")
+        );
+        assert_eq!(
+            bash("Tests  2 failed | 41 passed (43)").as_deref(),
+            Some("2 failed")
+        );
+        // Cargo prints one line per test binary: they add up.
+        assert_eq!(
+            bash("test result: ok. 200 passed; 0 failed; 0 ignored\ntest result: ok. 12 passed; 0 failed;").as_deref(),
+            Some("212 passed")
+        );
+        assert_eq!(
+            bash("== 3 failed, 10 passed in 0.2s ==").as_deref(),
+            Some("3 failed")
+        );
+        assert_eq!(bash("hello").as_deref(), None);
+        assert_eq!(
+            outcome(
+                "Grep",
+                r#"{"pattern":"x"}"#,
+                r#"{"mode":"files_with_matches","numFiles":6,"filenames":[]}"#
+            )
+            .as_deref(),
+            Some("6 files")
+        );
+        assert_eq!(
+            outcome(
+                "Glob",
+                r#"{"pattern":"*.rs"}"#,
+                r#"{"numFiles":1,"filenames":["a.rs"]}"#
+            )
+            .as_deref(),
+            Some("1 file")
+        );
+    }
+
+    #[test]
     fn the_hook_script_records_the_background_work_a_stop_leaves_running() {
         // Claude Code 2.1.283's own `Stop` payload. Only id + type are kept, so
         // a long agent description can never bloat or truncate the line.
@@ -1194,10 +1302,19 @@ mod tests {
             r#"{"hook_event_name":"PostToolUse","tool_name":"Agent","tool_use_id":"toolu_2","tool_response":{"isAsync":true,"status":"async_launched","agentId":"a2"}}"#,
         )
         .expect("an event line");
-        let (answered, launched) = (fields(&answered), fields(&launched));
-        for (key, value) in &answered {
+        // A file change and a search fill what a step shows beside it.
+        let written = run_hook_script(
+            r#"{"hook_event_name":"PostToolUse","tool_name":"Write","tool_use_id":"toolu_3","tool_response":{"type":"create","content":"x","structuredPatch":[]}}"#,
+        )
+        .expect("an event line");
+        let found = run_hook_script(
+            r#"{"hook_event_name":"PostToolUse","tool_name":"Grep","tool_use_id":"toolu_4","tool_response":{"numFiles":2}}"#,
+        )
+        .expect("an event line");
+        let others = [fields(&launched), fields(&written), fields(&found)];
+        for (key, value) in &fields(&answered) {
             assert!(
-                !value.is_null() || !launched[key].is_null(),
+                !value.is_null() || others.iter().any(|o| !o[key].is_null()),
                 "no payload fills HookEvent::{key} — the script and the struct disagree"
             );
         }

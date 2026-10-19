@@ -235,6 +235,14 @@ pub struct StepUpdate {
     pub target: Option<String>,
     /// What the step was for, in one line — see [`step_summary`].
     pub summary: Option<String>,
+    /// The lines a file change added and removed (an edit, a write, or the
+    /// files a command edited).
+    pub lines_added: Option<i64>,
+    pub lines_removed: Option<i64>,
+    /// Whether a write made a new file.
+    pub created: Option<bool>,
+    /// What came of the call in a few words ("43 passed", "6 files").
+    pub outcome: Option<String>,
     pub input: Option<String>,
     pub result: Option<String>,
     pub status: StepStatus,
@@ -264,7 +272,8 @@ pub enum LogEntry {
         at_ms: i64,
     },
     /// A step started or finished.
-    Step(StepUpdate),
+    /// Boxed: a step carries far more than the other entries.
+    Step(Box<StepUpdate>),
     /// Claude asked the user's permission for the latest running `tool_name`
     /// step (the request carries no step id).
     Asked {
@@ -317,7 +326,7 @@ pub fn log_entry(ev: &HookEvent) -> Option<LogEntry> {
             at_ms,
         }),
         "PreToolUse" | "PostToolUse" | "PostToolUseFailure" => {
-            step_update(ev, at_ms).map(LogEntry::Step)
+            step_update(ev, at_ms).map(|step| LogEntry::Step(Box::new(step)))
         }
         _ => None,
     }
@@ -360,6 +369,10 @@ fn step_update(ev: &HookEvent, at_ms: i64) -> Option<StepUpdate> {
         kind,
         target: ev.target.as_deref().map(redact),
         summary,
+        lines_added: ev.lines_added.and_then(|n| i64::try_from(n).ok()),
+        lines_removed: ev.lines_removed.and_then(|n| i64::try_from(n).ok()),
+        created: ev.created,
+        outcome: ev.outcome.as_deref().map(redact),
         input,
         result: result.map(redact),
         status,

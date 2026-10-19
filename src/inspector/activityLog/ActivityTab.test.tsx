@@ -21,10 +21,15 @@ vi.mock("../../ipc/bridge.ts", () => ({
 
 const EDIT: ActivityStep = {
   agentType: null,
+  approved: false,
+  created: false,
   durationMs: 40,
   flags: 0,
   id: 1,
   kind: "edit",
+  linesAdded: null,
+  linesRemoved: null,
+  outcome: null,
   startedMs: 0,
   status: "ok",
   summary: null,
@@ -107,7 +112,28 @@ test("a chained command shows each command on its own line", async () => {
   expect(await screen.findByText("Ran 2 commands")).toBeTruthy();
   expect(screen.getByText('echo "hi" > hello.txt')).toBeTruthy();
   expect(screen.getByText("curl -sI https://example.com")).toBeTruthy();
-  expect(screen.getByText("internet")).toBeTruthy();
+  expect(screen.getByText("web")).toBeTruthy();
+});
+
+const READ_TWO = /Read 2 files/;
+
+test("reads in a row fold into one line that opens to show each", async () => {
+  const read = (id: number, name: string): ActivityStep => ({
+    ...EDIT,
+    id,
+    kind: "read",
+    target: `/w/src/${name}`,
+    toolName: "Read",
+  });
+  vi.mocked(activityTurns).mockResolvedValue([
+    { ...TURN, steps: [read(1, "a.ts"), read(2, "b.ts")] },
+  ]);
+  render(<ActivityTab onOpenInChanges={vi.fn()} sessionId="s1" />);
+  const fold = await screen.findByRole("button", { name: READ_TWO });
+  expect(screen.getByText("a.ts, b.ts")).toBeTruthy();
+  fireEvent.click(fold);
+  expect(screen.getByText("Read a.ts")).toBeTruthy();
+  expect(screen.getByText("Read b.ts")).toBeTruthy();
 });
 
 test("a step opens its detail, and an edit opens in the Changes view", async () => {

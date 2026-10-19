@@ -91,6 +91,64 @@ try:
     data = json.load(sys.stdin)
 except Exception:
     sys.exit(0)
+
+
+def file_change(tr):
+    """(lines added, lines removed, made a new file) from Claude Code's own
+    patch: an Edit or Write's `structuredPatch`, or the files a Bash command
+    edited (`bashEditDiff`). (None, None, None) for anything else."""
+    if not isinstance(tr, dict):
+        return None, None, None
+    hunks = tr.get("structuredPatch")
+    created = tr.get("type") == "create" if "type" in tr and "content" in tr else None
+    if not isinstance(hunks, list):
+        diff = tr.get("bashEditDiff")
+        files = diff.get("files") if isinstance(diff, dict) else None
+        if not isinstance(files, list):
+            return None, None, created
+        hunks = [h for f in files if isinstance(f, dict)
+                 for h in (f.get("hunks") if isinstance(f.get("hunks"), list) else [])]
+    added = removed = 0
+    for hunk in hunks:
+        lines = hunk.get("lines") if isinstance(hunk, dict) else None
+        for line in lines if isinstance(lines, list) else []:
+            if isinstance(line, str) and line.startswith("+"):
+                added += 1
+            elif isinstance(line, str) and line.startswith("-"):
+                removed += 1
+    if created and isinstance(tr.get("content"), str):
+        added = len(tr["content"].splitlines())
+    return added, removed, created
+
+
+CARGO_RESULT = re.compile(r"test result: \w+\. (\d+) passed; (\d+) failed")
+PASSED = re.compile(r"(\d+) passed")
+FAILED = re.compile(r"(\d+) failed")
+
+
+def outcome_of(tool, tr):
+    """What came of a call in a few words: a test run's "43 passed" or
+    "2 failed" (read from the whole output, so a capped result can't lose the
+    summary at its end), a search's "6 files"."""
+    if not isinstance(tr, dict):
+        return None
+    if tool in ("Grep", "Glob") and isinstance(tr.get("numFiles"), int):
+        n = tr["numFiles"]
+        return f"{n} file" if n == 1 else f"{n} files"
+    if tool != "Bash":
+        return None
+    out = "\n".join(t for t in (tr.get("stdout"), tr.get("stderr")) if isinstance(t, str))
+    cargo = CARGO_RESULT.findall(out)
+    if cargo:
+        passed, failed = sum(int(p) for p, _ in cargo), sum(int(f) for _, f in cargo)
+    else:
+        line = next((l for l in reversed(out.splitlines()) if PASSED.search(l)), None)
+        if line is None:
+            return None
+        failed_m = FAILED.search(line)
+        passed, failed = int(PASSED.search(line).group(1)), int(failed_m.group(1)) if failed_m else 0
+    return f"{failed} failed" if failed else f"{passed} passed"
+
 ti = data.get("tool_input")
 ti = ti if isinstance(ti, dict) else {}
 # The subagent's final output, for click-to-reveal. An Agent tool_response is a
@@ -98,6 +156,12 @@ ti = ti if isinstance(ti, dict) else {}
 # real answer past the cap; prefer its assistant text blocks. Cap so a large
 # result never bloats the events file.
 tr = data.get("tool_response")
+# Facts the activity log shows beside a step; never fatal to the hook.
+try:
+    lines_added, lines_removed, created = file_change(tr)
+    outcome = outcome_of(data.get("tool_name"), tr)
+except Exception:
+    lines_added = lines_removed = created = outcome = None
 # A background Agent returns at once with a launch receipt, not its answer:
 # keep the launched agent's id (what its own tool events carry), drop the rest.
 launched = None
@@ -180,6 +244,12 @@ rec = {
     "error": data.get("error"),
     "questions": questions,
     "plan": plan,
+    # On PostToolUse: the lines a file change added and removed, whether it
+    # made a new file, and what came of the call ("43 passed", "6 files").
+    "lines_added": lines_added,
+    "lines_removed": lines_removed,
+    "created": created,
+    "outcome": outcome,
     # On Stop: this turn is ending again because a Stop hook resumed it, so it
     # has already been announced once.
     "stop_hook_active": data.get("stop_hook_active"),
