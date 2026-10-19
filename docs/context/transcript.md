@@ -23,7 +23,10 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
   `<task-notification>` blocks, stamped `origin.kind: task-notification`, that no person typed.
   Reduced to Claude Code's one-line summary, an outcome (`completed | failed | stopped | event |
   update`) and a monitor's event text, and shown in the [Structured view] as a quiet card with an
-  outcome icon. Reports that arrive before Claude acts on the last ones share one turn.
+  outcome icon. Reports that arrive before Claude acts on the last ones share one turn. A
+  [Subagent] handing back its final report (a meta `user` row stamped `origin.kind: peer`) is a
+  Work report too, named by the description of the `Agent` step that launched it ("Agent "…"
+  reported back"); one that only echoes Claude Code's own report for that agent is dropped.
   _Avoid_: task notification, background task.
 - **Partial reply** (`PartialReply`, `structured_partial`) — Claude's reply as it streams: the
   newest snapshot of one text block of the main agent's response, posted by the companion's

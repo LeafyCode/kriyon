@@ -16,6 +16,16 @@ const PREFACE: &str = "[SYSTEM NOTIFICATION";
 /// The `origin.kind` Claude Code stamps on a report's row.
 pub const ORIGIN: &str = "task-notification";
 
+/// The `origin.kind` of a message another agent sent the main agent: a
+/// [Subagent] handing back its final report, or another Claude session.
+pub const PEER_ORIGIN: &str = "peer";
+
+/// What a subagent's hand-back says of itself, after the sender's tag.
+const HANDBACK: &str = "[Subagent hand-back]";
+
+/// How a hand-back's summary ends.
+const HANDBACK_SUMMARY: &str = " reported back";
+
 /// How the work a report is about came out.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -73,6 +83,52 @@ fn report(inside: &str) -> WorkReport {
         outcome,
         event,
     }
+}
+
+/// The agent id a peer message names as its sender
+/// (`<agent-message from="…">`).
+#[must_use]
+pub fn peer_sender(text: &str) -> Option<&str> {
+    crate::transcript::between(text, "<agent-message from=\"", "\"").filter(|id| !id.is_empty())
+}
+
+/// The report a peer message reads as: a subagent handing back, named by
+/// what Claude called it when it launched it (`agent`) when that is known,
+/// or another Claude session's message.
+#[must_use]
+pub fn from_peer(text: &str, agent: Option<&str>) -> WorkReport {
+    if !text.contains(HANDBACK) {
+        return WorkReport {
+            summary: "Another Claude session sent a message".into(),
+            outcome: ReportOutcome::Update,
+            event: None,
+        };
+    }
+    WorkReport {
+        summary: agent.map_or_else(
+            || format!("A subagent{HANDBACK_SUMMARY}"),
+            |name| format!("Agent \"{name}\"{HANDBACK_SUMMARY}"),
+        ),
+        outcome: ReportOutcome::Completed,
+        event: None,
+    }
+}
+
+/// Drop a hand-back that only echoes another report of the same turn: Claude
+/// Code may also send its own `Agent "…" finished` for that agent.
+pub fn drop_echoed_handbacks(reports: &mut Vec<WorkReport>) {
+    let named = |report: &WorkReport| {
+        crate::transcript::between(&report.summary, "\"", "\"").map(str::to_string)
+    };
+    let others: Vec<Option<String>> = reports
+        .iter()
+        .map(|r| (!is_handback(r)).then(|| named(r)).flatten())
+        .collect();
+    reports.retain(|r| !is_handback(r) || named(r).is_none() || !others.contains(&named(r)));
+}
+
+fn is_handback(report: &WorkReport) -> bool {
+    report.summary.ends_with(HANDBACK_SUMMARY)
 }
 
 /// The trimmed, non-blank text of the first `<tag>…</tag>`.
@@ -139,6 +195,29 @@ mod tests {
     fn several_reports_in_one_row_are_all_kept() {
         let text = format!("{SHELL}\n{SHELL}");
         assert_eq!(parse(&text).map(|r| r.len()), Some(2));
+    }
+
+    #[test]
+    fn a_message_from_another_session_is_not_a_handback() {
+        let text = "Another Claude session sent a message:\n<agent-message from=\"s1\">\nhi\n</agent-message>";
+        assert_eq!(peer_sender(text), Some("s1"));
+        let report = from_peer(text, None);
+        assert_eq!(report.summary, "Another Claude session sent a message");
+        assert_eq!(report.outcome, ReportOutcome::Update);
+    }
+
+    #[test]
+    fn a_handback_echoing_its_finished_report_is_dropped() {
+        let handback = from_peer(&format!("{HANDBACK} …"), Some("Review"));
+        let finished = parse(&format!(
+            "{OPEN}<status>completed</status><summary>Agent \"Review\" finished</summary>{CLOSE}"
+        ))
+        .expect("a report")
+        .remove(0);
+        let other = from_peer(&format!("{HANDBACK} …"), Some("Scan"));
+        let mut reports = vec![handback, finished.clone(), other.clone()];
+        drop_echoed_handbacks(&mut reports);
+        assert_eq!(reports, vec![finished, other]);
     }
 
     #[test]
