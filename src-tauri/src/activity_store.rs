@@ -1461,7 +1461,7 @@ mod tests {
         ingest(
             &mut store,
             &[
-                prompt("p1", "send this\n\n<pasted_content id=\"9\">\nhi\n</pasted_content id=\"9\">\n", 1),
+                prompt("p1", "\n\n<pasted_content id=\"8239\">\nrun the tests\n</pasted_content id=\"8239\">\n", 1),
                 line(&serde_json::json!({
                     "event": "PostToolUse", "tool_name": "Bash", "tool_use_id": "t1",
                     "prompt_id": "p1", "agent_id": "a35", "agent_type": "pr-scorer",
@@ -1485,7 +1485,7 @@ mod tests {
             "named by the type its own steps carry"
         );
         assert_eq!(pasted.report, None);
-        assert_eq!(pasted.prompt.as_deref(), Some("send this\n\nhi\n"));
+        assert_eq!(pasted.prompt.as_deref(), Some("run the tests"));
         assert_eq!(pasted.steps[0].summary.as_deref(), Some("Run every check"));
         assert_eq!(pasted.steps[0].outcome.as_deref(), Some("43 passed"));
         let write = &pasted.steps[1];
