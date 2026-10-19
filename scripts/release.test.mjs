@@ -34,6 +34,7 @@ import {
   listsChanges,
   nextRelease,
   nightlyVersion,
+  notesSince,
   preReleaseBase,
   readTagPattern,
   readVersions,
@@ -467,6 +468,24 @@ describe("the changelog entry", () => {
     );
   });
 
+  test("a pre-release's notes count from the last release or pre-release on its channel", () => {
+    const tags = [
+      "v0.12.0",
+      "v0.13.0-beta.1",
+      "v0.13.0-beta.2",
+      "v0.13.0-nightly.20261016.5",
+      "feed-beta",
+    ];
+    assert.equal(notesSince("0.13.0-beta.3", tags), "v0.13.0-beta.2");
+    assert.equal(notesSince("0.13.0-beta.1", tags), "v0.12.0");
+    assert.equal(
+      notesSince("0.13.0-nightly.20261017.6", tags),
+      "v0.13.0-nightly.20261016.5"
+    );
+    assert.equal(notesSince("0.14.0-beta.1", [...tags, "v0.13.0"]), "v0.13.0");
+    assert.equal(notesSince("0.13.0-beta.1", []), undefined);
+  });
+
   test("a draft with nothing listed gives empty pre-release notes", () => {
     assert.equal(
       draftNotes(
@@ -841,6 +860,16 @@ describe("pnpm release, end to end", () => {
       const result = release("notes", "0.13.0-beta.1");
       assert.equal(result.status, 0, result.stderr);
       assert.equal(result.stdout, "### Added\n\n- Show the branch name\n");
+    });
+  });
+
+  test("notes for a beta lists only what came after the last beta", () => {
+    withRelease(({ git, release }) => {
+      git("tag", "v0.13.0-beta.1");
+      git("commit", "-q", "--allow-empty", "-m", "fix: keep the branch name");
+      const result = release("notes", "0.13.0-beta.2");
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(result.stdout, "### Fixed\n\n- Keep the branch name\n");
     });
   });
 

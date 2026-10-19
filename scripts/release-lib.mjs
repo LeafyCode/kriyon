@@ -270,6 +270,28 @@ export const compareVersions = (a, b) => {
   return pa.pre.length - pb.pre.length;
 };
 
+/**
+ * The tag a pre-release's notes count from: the newest release or pre-release
+ * of the same channel before `version`, so each beta lists what is new since
+ * the last beta, and each nightly since the last nightly. Undefined when
+ * there is none. A release's notes are its CHANGELOG.md entry instead.
+ */
+export const notesSince = (version, tags) => {
+  const sameLine = channelOf(version) === "beta" ? BETA : NIGHTLY;
+  const counts = (tag) => {
+    const bare = tag.replace(LEADING_V, "");
+    return RELEASE.test(bare) || sameLine.test(bare);
+  };
+  return tags
+    .filter(counts)
+    .filter((tag) => compareVersions(tag, version) < 0)
+    .reduce(
+      (since, tag) =>
+        since === undefined || compareVersions(tag, since) > 0 ? tag : since,
+      undefined
+    );
+};
+
 /** True when no version in `others` comes after `version`. */
 export const isNewest = (version, others) =>
   others.every((other) => compareVersions(version, other) >= 0);
