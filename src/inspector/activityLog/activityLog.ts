@@ -161,7 +161,9 @@ const PAST: Record<string, string> = {
   rename: "renamed",
   render: "rendered",
   replace: "replaced",
+  reinstall: "reinstalled",
   rerun: "reran",
+  retry: "retried",
   rewrite: "rewrote",
   reset: "reset",
   restart: "restarted",
@@ -557,7 +559,7 @@ export interface StepChip {
 }
 
 /**
- * The small trailing chips: status, the user's yes, the lead flag, a
+ * The small trailing chips: status, the user's yes, each flag, a
  * subagent's type (left off when `nested` under its subagent's row). Once
  * `turnEnded`, a main-agent step whose end was never recorded isn't running:
  * Claude ends a turn only after its own calls return.
@@ -577,9 +579,12 @@ export function stepChips(
   if (step.approved) {
     chips.push({ text: "you approved", tone: "flag" });
   }
-  const flag = leadFlag(step);
-  if (flag) {
-    chips.push({ text: FLAG_CHIP[flag], tone: "flag" });
+  // Every flag, most serious first: a step that removed one package and
+  // installed another did both.
+  for (const flag of FLAG_ORDER) {
+    if (hasFlag(step.flags, STEP_FLAGS[flag])) {
+      chips.push({ text: FLAG_CHIP[flag], tone: "flag" });
+    }
   }
   // Under its subagent's row, the type would only repeat it.
   if (step.agentType && !nested) {

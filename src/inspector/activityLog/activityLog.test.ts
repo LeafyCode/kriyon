@@ -826,3 +826,19 @@ describe("Claude Code's own background helpers", () => {
     expect(rows.map((r) => r.label)).toEqual(["Claude Code in the background"]);
   });
 });
+
+describe("a step that did several things", () => {
+  test("shows a chip for each, most serious first", () => {
+    const both = step({
+      flags: STEP_FLAGS.deleted + STEP_FLAGS.installed,
+      kind: "command",
+      summary: "Uninstall then reinstall dayjs",
+      target: "npm uninstall dayjs && npm install dayjs",
+    });
+    expect(stepChips(both)).toEqual([
+      { text: "deleted", tone: "flag" },
+      { text: "installed", tone: "flag" },
+    ]);
+    expect(stepLabel(both)).toBe("Uninstalled then reinstalled dayjs");
+  });
+});
