@@ -290,7 +290,7 @@ const promptStyle: CSSProperties = {
   margin: 0,
   maxWidth: "85%",
   overflowWrap: "anywhere",
-  padding: "10px 14px",
+  padding: `${tokens.space.sm} ${tokens.space.md}`,
   whiteSpace: "pre-wrap",
 };
 
@@ -307,7 +307,7 @@ const speakerStyle: CSSProperties = {
   display: "flex",
   fontSize: "12px",
   fontWeight: 500,
-  gap: "6px",
+  gap: tokens.space.xs,
 };
 
 const workingStyle: CSSProperties = {
