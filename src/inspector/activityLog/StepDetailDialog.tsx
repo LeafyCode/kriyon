@@ -150,11 +150,11 @@ function DetailBody({
               : durationLabel(detail.durationMs)
           }
         />
-        <Fact label="Agent" value={agentLabel(detail.agentType)} />
+        <Fact label="Agent" value={agentLabel(step)} />
         <Fact label="Allowed by" value={detail.allowedBy} />
         <Fact label="Tool" value={detail.toolName} />
       </dl>
-      <Block label="Input" text={prettyInput(detail.input)} />
+      <Block label="Input" text={prettyInput(detail.input, detail.kind)} />
       <Block label="Result" text={prettyResult(detail.result)} />
     </>
   );

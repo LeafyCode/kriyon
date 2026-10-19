@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import type { ActivityStep, ActivityTurn } from "../../ipc/bridge.ts";
+import { setHomeFolder } from "../../state/homeRelative.ts";
 import {
   agentLabel,
   changesPathFor,
@@ -12,6 +13,7 @@ import {
   prettyResult,
   retentionNote,
   STEP_FLAGS,
+  splitCommands,
   stepChips,
   stepLabel,
   stepLines,
@@ -25,6 +27,7 @@ import {
 function step(over: Partial<ActivityStep> = {}): ActivityStep {
   return {
     agentId: null,
+    agentName: null,
     agentType: null,
     approved: false,
     changedFiles: [],
@@ -33,7 +36,7 @@ function step(over: Partial<ActivityStep> = {}): ActivityStep {
     flags: 0,
     id: 1,
     kind: "read",
-    launchedType: null,
+    parentStepId: null,
     linesAdded: null,
     linesRemoved: null,
     outcome: null,
@@ -190,6 +193,7 @@ describe("what a step was for", () => {
   });
 
   test("a heredoc is one command, shown by its first line", () => {
+    setHomeFolder("/Users/dev");
     const script = step({
       kind: "command",
       target:
@@ -201,6 +205,7 @@ describe("what a step was for", () => {
       "python3 -I - \"$f\" <<'EOF' …",
       "cargo test",
     ]);
+    setHomeFolder("");
   });
 
   test("a long chain shows its first commands and how many more", () => {
@@ -257,7 +262,10 @@ describe("stepChips", () => {
   test("a main-agent step of a finished turn isn't running any more", () => {
     expect(stepChips(step({ status: "running" }), true)).toEqual([]);
     expect(
-      stepChips(step({ agentType: "Explore", status: "running" }), true)
+      stepChips(
+        step({ agentId: "a1", agentType: "Explore", status: "running" }),
+        true
+      )
     ).toEqual([
       { text: "running…", tone: "live" },
       { text: "Explore", tone: "muted" },
@@ -383,14 +391,32 @@ describe("detail helpers", () => {
     expect(prettyInput('{"a":1}')).toBe('{\n  "a": 1\n}');
     expect(prettyInput("ls -la")).toBe("ls -la");
     expect(
-      prettyInput('{"command":"npm test\\n| tail","description":"Run tests"}')
+      prettyInput(
+        '{"command":"npm test\\n| tail","description":"Run tests"}',
+        "command"
+      )
     ).toBe("npm test\n| tail");
+    // Another tool with a `command` field keeps all of its input.
+    expect(prettyInput('{"command":"create","path":"/a"}', "mcp")).toBe(
+      '{\n  "command": "create",\n  "path": "/a"\n}'
+    );
     expect(prettyInput(null)).toBe("");
   });
 
-  test("names the agent", () => {
-    expect(agentLabel(null)).toBe("Main agent");
-    expect(agentLabel("Explore")).toBe("Subagent · Explore");
+  test("names the agent the way the timeline does", () => {
+    expect(agentLabel(step())).toBe("Main agent");
+    expect(
+      agentLabel(
+        step({
+          agentId: "a1",
+          agentName: "Map the parser",
+          agentType: "Explore",
+        })
+      )
+    ).toBe("Subagent: Map the parser");
+    expect(agentLabel(step({ agentId: "h", agentType: null }))).toBe(
+      "Claude Code in the background"
+    );
   });
 
   test("the retention note reads its numbers", () => {
@@ -452,6 +478,7 @@ test("the step flag bits match Rust activity_log::flags", () => {
     installed: 1,
     network: 4,
     outsideProject: 8,
+    removedPackage: 32,
     secretFile: 16,
   });
 });
@@ -672,7 +699,6 @@ describe("subagents", () => {
   const launch = step({
     id: 1,
     kind: "agent",
-    launchedType: "Explore",
     startedMs: 100,
     summary: "Map the parser",
     target: null,
@@ -681,8 +707,10 @@ describe("subagents", () => {
   const sub = (id: number, over: Partial<ActivityStep> = {}) =>
     step({
       agentId: "a1",
+      agentName: "Explore",
       agentType: "Explore",
       id,
+      parentStepId: 1,
       startedMs: 100 + id,
       target: `/w/${id}.rs`,
       ...over,
@@ -714,8 +742,32 @@ describe("subagents", () => {
       [sub(2), sub(3, { kind: "command", target: "ls" })],
       null
     );
-    expect(rows.map((r) => r.label)).toEqual(["Subagent · Explore"]);
+    expect(rows.map((r) => r.label)).toEqual(["Subagent: Explore"]);
     expect(rows[0].children).toHaveLength(2);
+    expect(rows[0].opens).toBeNull();
+    // Its launch out of sight (a filter hides it), the store still knows its task.
+    const named = turnRows([sub(2, { agentName: "Map the parser" })], null);
+    expect(named[0].label).toBe("Subagent: Map the parser");
+  });
+
+  test("two subagents of one type sit under their own launches", () => {
+    const second = {
+      ...launch,
+      id: 6,
+      startedMs: 101,
+      summary: "Find callers",
+    };
+    const rows = turnRows(
+      [
+        launch,
+        second,
+        // B works first; the store says it was launched by step 6.
+        sub(7, { agentId: "b", parentStepId: 6 }),
+        sub(8, { agentId: "a", parentStepId: 1 }),
+      ],
+      null
+    );
+    expect(rows.map((r) => r.children?.[0].steps[0].id)).toEqual([8, 7]);
   });
 });
 
@@ -777,7 +829,7 @@ describe("the third smoke run", () => {
     expect(
       stepLabel(
         step({
-          flags: STEP_FLAGS.deleted,
+          flags: STEP_FLAGS.removedPackage,
           kind: "command",
           summary: "Remove date-fns",
           target: "npm uninstall date-fns",
@@ -840,5 +892,45 @@ describe("a step that did several things", () => {
       { text: "installed", tone: "flag" },
     ]);
     expect(stepLabel(both)).toBe("Uninstalled then reinstalled dayjs");
+  });
+});
+
+describe("the review's findings", () => {
+  test("nested loops and ifs stay one command, as written", () => {
+    expect(
+      splitCommands("for a in x; do for b in y; do echo $b; done; done; ls")
+    ).toEqual(["for a in x; do for b in y; do echo $b; done; done", "ls"]);
+    expect(splitCommands("if a; then if b; then c; fi; fi && d")).toEqual([
+      "if a; then if b; then c; fi; fi",
+      "d",
+    ]);
+    expect(splitCommands("for f in *\ndo\n  echo $f\ndone")).toEqual([
+      "for f in *\ndo\n  echo $f\ndone",
+    ]);
+    expect(splitCommands("if a; then b && c; fi")).toEqual([
+      "if a; then b && c; fi",
+    ]);
+  });
+
+  test("a here-string or arithmetic is not a heredoc", () => {
+    expect(splitCommands("cat <<< hello; ls")).toEqual(["cat <<< hello", "ls"]);
+    expect(splitCommands("echo $((1 << n)); ls")).toEqual([
+      "echo $((1 << n))",
+      "ls",
+    ]);
+  });
+
+  test("the verb after ', then' and 'then' reads in the past tense", () => {
+    const said = (summary: string) =>
+      stepLabel(step({ kind: "command", summary, target: "x; y" }));
+    expect(said("Run lint, then commit")).toBe("Ran lint, then committed");
+    expect(said("Build then test")).toBe("Built then tested");
+  });
+
+  test("a background helper's unfinished step still says running", () => {
+    const helper = step({ agentId: "h", agentType: null, status: "running" });
+    expect(stepChips(helper, true)).toEqual([
+      { text: "running…", tone: "live" },
+    ]);
   });
 });

@@ -22,6 +22,7 @@ import {
 import { installSessionListeners } from "./state/backendListeners.ts";
 import { installBridgeMirrors } from "./state/bridgeMirrors.ts";
 import { installCommandCenterListeners } from "./state/commandCenterListeners.ts";
+import { setHomeFolder } from "./state/homeRelative.ts";
 import { useIntegration } from "./state/integration.ts";
 import { useLayout } from "./state/layout.ts";
 import { installMainWindowActions } from "./state/mainWindowActions.ts";
@@ -271,6 +272,7 @@ function App() {
     ignore(
       homeDir().then((home) => {
         setDefaultCwd(home);
+        setHomeFolder(home);
       })
     );
     ignore(useIntegration.getState().load());

@@ -21,6 +21,7 @@ vi.mock("../../ipc/bridge.ts", () => ({
 
 const EDIT: ActivityStep = {
   agentId: null,
+  agentName: null,
   agentType: null,
   approved: false,
   changedFiles: [],
@@ -29,7 +30,7 @@ const EDIT: ActivityStep = {
   flags: 0,
   id: 1,
   kind: "edit",
-  launchedType: null,
+  parentStepId: null,
   linesAdded: null,
   linesRemoved: null,
   outcome: null,
@@ -116,6 +117,42 @@ test("a chained command shows each command on its own line", async () => {
   expect(screen.getByText('echo "hi" > hello.txt')).toBeTruthy();
   expect(screen.getByText("curl -sI https://example.com")).toBeTruthy();
   expect(screen.getByText("web")).toBeTruthy();
+});
+
+const LAUNCH_ROW = /Subagent: Map the parser/;
+
+test("a subagent's steps sit under its launch; a lone block opens nothing", async () => {
+  const launch: ActivityStep = {
+    ...EDIT,
+    id: 10,
+    kind: "agent",
+    summary: "Map the parser",
+    target: null,
+    toolName: "Agent",
+  };
+  const sub = (id: number, parentStepId: number | null): ActivityStep => ({
+    ...EDIT,
+    agentId: parentStepId === null ? "b" : "a",
+    agentName: "Explore",
+    agentType: "Explore",
+    id,
+    kind: "command",
+    linesAdded: 5,
+    outcome: "4 passed",
+    parentStepId,
+    target: "npm test",
+    toolName: "Bash",
+  });
+  vi.mocked(activityTurns).mockResolvedValue([
+    { ...TURN, steps: [launch, sub(11, 10), sub(12, null)] },
+  ]);
+  render(<ActivityTab onOpenInChanges={vi.fn()} sessionId="s1" />);
+  expect(await screen.findByRole("button", { name: LAUNCH_ROW })).toBeTruthy();
+  expect(screen.getAllByTestId("subagent-steps")).toHaveLength(2);
+  expect(screen.getAllByText("4 passed").length).toBeGreaterThan(0);
+  const block = screen.getByTestId("subagent-block");
+  expect(block.textContent).toContain("Subagent: Explore");
+  expect(block.textContent).not.toContain("Explore Explore");
 });
 
 const READ_TWO = /Read 2 files/;

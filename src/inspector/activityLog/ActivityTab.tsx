@@ -169,7 +169,7 @@ const stepButtonStyle: CSSProperties = {
 // A folded row's own steps, set in under it like the turn's steps are.
 const foldStyle: CSSProperties = {
   ...stepsStyle,
-  marginLeft: "17px",
+  marginLeft: tokens.space.lg,
 };
 
 const STAT_INK: Record<StatTone, string> = {
@@ -184,9 +184,15 @@ const statsStyle: CSSProperties = {
   flex: "none",
   fontFamily: tokens.font.mono,
   fontSize: "12px",
-  gap: "6px",
+  gap: tokens.space.xs,
   lineHeight: 1.45,
   whiteSpace: "nowrap",
+};
+
+// A subagent's block with no launch in sight: nothing to open, so no hover.
+const blockHeaderStyle: CSSProperties = {
+  ...stepButtonStyle,
+  cursor: "default",
 };
 
 function stepIconColor(step: ActivityStep): string {
@@ -333,59 +339,69 @@ function StepRow({
   // A subagent's block shows its rows open; a fold of reads opens on a click.
   const folded = row.steps.length > 1 && !row.children;
   const Icon = row.children ? Bot : KIND_ICON[lead.kind];
-  const chips = row.steps.length > 1 ? [] : stepChips(lead, turnEnded, nested);
-  return (
+  const chips = row.opens ? stepChips(row.opens, turnEnded, nested) : [];
+  const head = (
     <>
+      <Icon
+        color={stepIconColor(lead)}
+        size={14}
+        strokeWidth={2}
+        style={{ marginTop: "3px" }}
+      />
+      <span style={stepBodyStyle}>
+        <span style={stepHeadStyle}>
+          <span style={stepLabelStyle}>{row.label}</span>
+          {chips.length > 0 ? (
+            <span style={chipsStyle}>
+              {chips.map((chip) => (
+                <span key={chip.text} style={stepChipStyle(chip.tone)}>
+                  {chip.text}
+                </span>
+              ))}
+            </span>
+          ) : null}
+          {row.stats.length > 0 ? (
+            <span style={statsStyle}>
+              {row.stats.map((stat) => (
+                <span key={stat.text} style={{ color: STAT_INK[stat.tone] }}>
+                  {stat.text}
+                </span>
+              ))}
+            </span>
+          ) : null}
+        </span>
+        {row.lines.map((line, index) => (
+          // A chain may repeat a command, so the position is part of the key.
+          // biome-ignore lint/suspicious/noArrayIndexKey: lines never reorder
+          <span key={`${index}:${line}`} style={targetStyle} title={line}>
+            {line}
+          </span>
+        ))}
+      </span>
+    </>
+  );
+  const { opens } = row;
+  let header: ReactNode = (
+    <div data-testid="subagent-block" style={blockHeaderStyle}>
+      {head}
+    </div>
+  );
+  if (folded || opens) {
+    header = (
       <button
         aria-expanded={folded ? open : undefined}
         className="kr-hover-surface"
-        onClick={() => {
-          if (folded) {
-            setOpen(!open);
-          } else if (row.steps.length === 1) {
-            onOpen(lead);
-          }
-        }}
+        onClick={() => (folded ? setOpen(!open) : opens && onOpen(opens))}
         style={stepButtonStyle}
         type="button"
       >
-        <Icon
-          color={stepIconColor(lead)}
-          size={14}
-          strokeWidth={2}
-          style={{ marginTop: "3px" }}
-        />
-        <span style={stepBodyStyle}>
-          <span style={stepHeadStyle}>
-            <span style={stepLabelStyle}>{row.label}</span>
-            {chips.length > 0 ? (
-              <span style={chipsStyle}>
-                {chips.map((chip) => (
-                  <span key={chip.text} style={stepChipStyle(chip.tone)}>
-                    {chip.text}
-                  </span>
-                ))}
-              </span>
-            ) : null}
-            {row.stats.length > 0 ? (
-              <span style={statsStyle}>
-                {row.stats.map((stat) => (
-                  <span key={stat.text} style={{ color: STAT_INK[stat.tone] }}>
-                    {stat.text}
-                  </span>
-                ))}
-              </span>
-            ) : null}
-          </span>
-          {row.lines.map((line, index) => (
-            // A chain may repeat a command, so the position is part of the key.
-            // biome-ignore lint/suspicious/noArrayIndexKey: lines never reorder
-            <span key={`${index}:${line}`} style={targetStyle} title={line}>
-              {line}
-            </span>
-          ))}
-        </span>
+        {head}
       </button>
+    );
+  }
+  return (
+    <>
+      {header}
       {folded && open ? (
         <div style={foldStyle}>
           {row.steps.map((step) => (

@@ -1380,6 +1380,9 @@ export type StepStatus = "running" | "ok" | "error";
 export interface ActivityStep {
   /** Main agent when `null`; otherwise the subagent's id. */
   agentId: string | null;
+  /** For a subagent's step, what to call it: the task Claude launched it
+   * with, else its type. */
+  agentName: string | null;
   /** Main agent when `null`; otherwise the subagent's type. */
   agentType: string | null;
   /** The user said yes to it in a permission dialog. */
@@ -1393,14 +1396,14 @@ export interface ActivityStep {
   flags: number;
   id: number;
   kind: StepKind;
-  /** For a step that started a subagent, the subagent's type. */
-  launchedType: string | null;
   /** The lines a file change added and removed (an edit, a write, or the
    * files a command edited). */
   linesAdded: number | null;
   linesRemoved: number | null;
   /** What came of it in a few words: "43 passed", "6 files". */
   outcome: string | null;
+  /** For a subagent's step, the step that launched it, when known. */
+  parentStepId: number | null;
   startedMs: number;
   status: StepStatus;
   /** What the step was for, in one line: a command's or subagent's
@@ -1428,7 +1431,6 @@ export interface ActivityTurn {
 
 /** Everything about one step, for its detail dialog. */
 export interface ActivityStepDetail extends ActivityStep {
-  agentId: string | null;
   allowedBy: string;
   endedMs: number | null;
   /** The redacted tool input — usually JSON. */
