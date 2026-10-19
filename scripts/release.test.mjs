@@ -873,6 +873,21 @@ describe("pnpm release, end to end", () => {
     });
   });
 
+  test("a release tagged after the last beta stays in one section of the beta's notes", () => {
+    withRelease(({ git, release }) => {
+      git("tag", "v0.13.0-beta.1");
+      git("commit", "-q", "--allow-empty", "-m", "fix: keep the branch name");
+      git("tag", "v0.12.1");
+      git("commit", "-q", "--allow-empty", "-m", "fix: trim the branch name");
+      const result = release("notes", "0.13.0-beta.2");
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(
+        result.stdout,
+        "### Fixed\n\n- Keep the branch name\n- Trim the branch name\n"
+      );
+    });
+  });
+
   test("notes prints the release's entry for the release notes", () => {
     withRelease(({ release, entry }) => {
       assert.equal(release("--notes", entry).status, 0);

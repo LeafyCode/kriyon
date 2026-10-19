@@ -254,10 +254,14 @@ const nightlyDate = (value) => {
 
 // git-cliff only counts from release tags (cliff.toml), so a range starts it
 // from the last pre-release of the channel instead. --unreleased would drop
-// the range, and isn't needed: no release tag can fall inside it.
+// the range. A release can still be tagged inside it, a patch shipped between
+// two betas; ignoring every tag keeps the range in one section.
 const preReleaseDraft = (version) => {
   const since = notesSince(version, tags());
-  const range = since === undefined ? ["--unreleased"] : [`${since}..HEAD`];
+  const range =
+    since === undefined
+      ? ["--unreleased"]
+      : ["--ignore-tags", ".*", `${since}..HEAD`];
   return cliff("--tag", `v${version}`, "--strip", "all", ...range);
 };
 
