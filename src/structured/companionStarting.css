@@ -1,0 +1,85 @@
+/* The [Structured view]'s wait while Kriyon Companion starts: Claude Code's
+   mark sends a stream of light across a link to Kriyon's mascot, which
+   ripples as each one lands. Colours come in from `tokens` inline; this file
+   holds only the motion. Reduced motion stills it through App.css. */
+
+.kr-starting {
+  /* Held back a moment, so a companion that answers at once never flashes
+     this screen. */
+  animation: kr-fade-up 0.4s ease-out 0.3s both;
+}
+
+.kr-starting-packet {
+  left: 100%;
+  opacity: 0;
+  animation: kr-starting-travel 1.8s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+}
+
+.kr-starting-packet:nth-child(2) {
+  animation-delay: 0.6s;
+}
+
+.kr-starting-packet:nth-child(3) {
+  animation-delay: 1.2s;
+}
+
+.kr-starting-ripple {
+  animation: kr-starting-ripple 1.8s ease-out infinite;
+}
+
+.kr-starting-ripple:nth-child(2) {
+  animation-delay: 0.9s;
+}
+
+.kr-starting-star {
+  animation: kr-starting-star 6s linear infinite;
+}
+
+.kr-starting-title {
+  color: transparent;
+  -webkit-background-clip: text;
+  background-clip: text;
+  background-size: 200% auto;
+  animation: kr-shimmer 2.4s linear infinite;
+}
+
+@keyframes kr-starting-travel {
+  0% {
+    left: 100%;
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.6);
+  }
+  20%,
+  75% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+  100% {
+    left: 0%;
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.6);
+  }
+}
+
+@keyframes kr-starting-ripple {
+  from {
+    opacity: 0.55;
+    transform: scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: scale(1.45);
+  }
+}
+
+@keyframes kr-starting-star {
+  0% {
+    transform: rotate(0deg) scale(1);
+  }
+  50% {
+    transform: rotate(180deg) scale(1.14);
+  }
+  100% {
+    transform: rotate(360deg) scale(1);
+  }
+}

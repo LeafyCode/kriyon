@@ -58,6 +58,7 @@ import {
   replyStyle,
 } from "../ui/Markdown.tsx";
 import { companionHint } from "../welcome/integrationCopy.ts";
+import { CompanionStarting } from "./CompanionStarting.tsx";
 import { useCliDialog } from "./cliDialog.ts";
 import { interruptSession } from "./interrupt.ts";
 import { liveText } from "./liveReply.ts";
@@ -1033,7 +1034,8 @@ function Banner({
 
 /**
  * Why the Structured view can't show this session, and the one thing that
- * fixes it: turn the companion on, or restart the session for it.
+ * fixes it: turn the companion on, or restart the session for it. While the
+ * companion is only starting, there is nothing to fix yet: it shows that wait.
  */
 function CompanionNotice({
   sessionId,
@@ -1057,6 +1059,18 @@ function CompanionNotice({
     (canTurnOn
       ? "Kriyon Companion is off. Turn it on to see each turn as prompt, steps and reply. Sessions you start after that get it."
       : setupWhy);
+  if (state.state === "starting") {
+    return (
+      <div data-testid="structured-view" style={rootStyle}>
+        <CompanionStarting />
+        {card ? (
+          <div style={columnStyle}>
+            <UsageAnswer card={card} sessionId={sessionId} />
+          </div>
+        ) : null}
+      </div>
+    );
+  }
   return (
     <div data-testid="structured-view" style={rootStyle}>
       <div style={noticeStyle}>
