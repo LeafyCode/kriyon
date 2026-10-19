@@ -15,7 +15,12 @@ import {
   useEffect,
   useState,
 } from "react";
-import { type Inline, parseReply } from "../structured/replyMarkdown.ts";
+import {
+  type Align,
+  type Block,
+  type Inline,
+  parseReply,
+} from "../structured/replyMarkdown.ts";
 import { linkTarget, openLinkTarget } from "../terminal/links.ts";
 import { button } from "../theme/recipes.ts";
 import { tokens } from "../theme/tokens.ts";
@@ -60,6 +65,38 @@ const codeBlockStyle: CSSProperties = {
   overflowX: "auto",
   padding: `${tokens.space.sm} ${tokens.space.md}`,
   whiteSpace: "pre",
+};
+
+// Wide tables scroll inside the reply rather than widening it.
+const tableWrapStyle: CSSProperties = {
+  overflowX: "auto",
+};
+
+const tableStyle: CSSProperties = {
+  ...replyStyle,
+  borderCollapse: "collapse",
+  whiteSpace: "normal",
+};
+
+const cellStyle: CSSProperties = {
+  borderBottom: `1px solid ${tokens.color.line.soft}`,
+  padding: `${tokens.space.xs} ${tokens.space.md} ${tokens.space.xs} 0`,
+  textAlign: "left",
+  verticalAlign: "top",
+};
+
+const headCellStyle: CSSProperties = {
+  ...cellStyle,
+  borderBottom: `1px solid ${tokens.color.line.strong}`,
+  color: tokens.color.ink.bright,
+  fontWeight: 600,
+};
+
+const ruleStyle: CSSProperties = {
+  border: 0,
+  borderTop: `1px solid ${tokens.color.line.base}`,
+  margin: 0,
+  width: "100%",
 };
 
 const inlineCodeStyle: CSSProperties = {
@@ -176,6 +213,49 @@ export function InlineText({ pieces }: { pieces: Inline[] }) {
   );
 }
 
+/** A table block: scrolls sideways when wider than the reply. */
+function Table({
+  block,
+  style,
+}: {
+  block: Extract<Block, { kind: "table" }>;
+  style: CSSProperties;
+}) {
+  const aligned = (base: CSSProperties, at: number): CSSProperties => {
+    const align: Align = block.align[at] ?? null;
+    return align === null ? base : { ...base, textAlign: align };
+  };
+  return (
+    <div style={tableWrapStyle}>
+      <table style={style}>
+        <thead>
+          <tr>
+            {block.head.map((cell, at) => (
+              // biome-ignore lint/suspicious/noArrayIndexKey: fixed list
+              <th key={at} style={aligned(headCellStyle, at)}>
+                <InlineText pieces={cell} />
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {block.rows.map((row, index) => (
+            // biome-ignore lint/suspicious/noArrayIndexKey: fixed list
+            <tr key={index}>
+              {row.map((cell, at) => (
+                // biome-ignore lint/suspicious/noArrayIndexKey: fixed list
+                <td key={at} style={aligned(cellStyle, at)}>
+                  <InlineText pieces={cell} />
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 /** The smaller text a dialog's Markdown (release notes) is set in. */
 const SMALL: CSSProperties = { fontSize: "12.5px", lineHeight: 1.55 };
 
@@ -231,6 +311,14 @@ export function Markdown({
           </List>
         );
       }
+      case "rule":
+        // biome-ignore lint/suspicious/noArrayIndexKey: fixed list
+        return <hr key={index} style={ruleStyle} />;
+      case "table":
+        return (
+          // biome-ignore lint/suspicious/noArrayIndexKey: fixed list
+          <Table block={block} key={index} style={sized(tableStyle)} />
+        );
       default:
         return (
           // biome-ignore lint/suspicious/noArrayIndexKey: fixed list

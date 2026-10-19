@@ -169,3 +169,141 @@ test("a link's label is not linked again inside it", () => {
     },
   ]);
 });
+
+test("a pipe table is a table: header, rows and column alignment", () => {
+  const text = [
+    "Four plates:",
+    "| Plate | Parts | Time / plastic |",
+    "|:---|---|--:|",
+    "| 1 | Test ring: a **10mm** slice | 22 min, 13g |",
+    "| 2 | Cuff `supports` | 5.5 h, 203g |",
+    "",
+    "Print plate 1 first.",
+  ].join("\n");
+  expect(parseReply(text)).toEqual([
+    { inline: [{ kind: "text", text: "Four plates:" }], kind: "para" },
+    {
+      align: ["left", null, "right"],
+      head: [
+        [{ kind: "text", text: "Plate" }],
+        [{ kind: "text", text: "Parts" }],
+        [{ kind: "text", text: "Time / plastic" }],
+      ],
+      kind: "table",
+      rows: [
+        [
+          [{ kind: "text", text: "1" }],
+          [
+            { kind: "text", text: "Test ring: a " },
+            { children: [{ kind: "text", text: "10mm" }], kind: "bold" },
+            { kind: "text", text: " slice" },
+          ],
+          [{ kind: "text", text: "22 min, 13g" }],
+        ],
+        [
+          [{ kind: "text", text: "2" }],
+          [
+            { kind: "text", text: "Cuff " },
+            { kind: "code", text: "supports" },
+          ],
+          [{ kind: "text", text: "5.5 h, 203g" }],
+        ],
+      ],
+    },
+    { inline: [{ kind: "text", text: "Print plate 1 first." }], kind: "para" },
+  ]);
+});
+
+test("table rows are padded or cut to the header's width, and a pipe in code stays", () => {
+  const [table] = parseReply("a | b\n--- | ---\n`x | y`\n1 | 2 | 3");
+  expect(table).toEqual({
+    align: [null, null],
+    head: [[{ kind: "text", text: "a" }], [{ kind: "text", text: "b" }]],
+    kind: "table",
+    rows: [
+      [[{ kind: "code", text: "x | y" }], []],
+      [[{ kind: "text", text: "1" }], [{ kind: "text", text: "2" }]],
+    ],
+  });
+});
+
+test("a pipe line without a delimiter row under it stays prose", () => {
+  expect(parseReply("a | b\nc | d")).toEqual([
+    { inline: [{ kind: "text", text: "a | b\nc | d" }], kind: "para" },
+  ]);
+});
+
+test("a line of three dashes is a rule, not text", () => {
+  expect(parseReply("Done.\n\n---\n\nNext:")).toEqual([
+    { inline: [{ kind: "text", text: "Done." }], kind: "para" },
+    { kind: "rule" },
+    { inline: [{ kind: "text", text: "Next:" }], kind: "para" },
+  ]);
+});
+
+test("a lone backtick in a cell is a character, not the start of code", () => {
+  const [table] = parseReply(
+    "| Key | Does |\n|---|---|\n| ` | toggle console |"
+  );
+  expect(table).toMatchObject({
+    kind: "table",
+    rows: [
+      [
+        [{ kind: "text", text: "`" }],
+        [{ kind: "text", text: "toggle console" }],
+      ],
+    ],
+  });
+});
+
+test("an escaped pipe is cell text, also at the end of a row", () => {
+  const [table] = parseReply("| a | b |\n|---|---|\n| x \\| y | z \\|");
+  expect(table).toMatchObject({
+    kind: "table",
+    rows: [
+      [[{ kind: "text", text: "x | y" }], [{ kind: "text", text: "z |" }]],
+    ],
+  });
+});
+
+test("a pipe in prose over a bare `---` is a paragraph and a rule, not a table", () => {
+  expect(parseReply("Run `ls | grep foo` to check\n---")).toEqual([
+    {
+      inline: [
+        { kind: "text", text: "Run " },
+        { kind: "code", text: "ls | grep foo" },
+        { kind: "text", text: " to check" },
+      ],
+      kind: "para",
+    },
+    { kind: "rule" },
+  ]);
+});
+
+test("a table ends where a list item, heading or fence starts", () => {
+  const blocks = parseReply(
+    "| a | b |\n|---|---|\n| 1 | 2 |\n- run `a | b`\n## A | B\n```\nx | y\n```"
+  );
+  expect(blocks.map((b) => b.kind)).toEqual([
+    "table",
+    "list",
+    "heading",
+    "code",
+  ]);
+  expect(blocks[0]).toMatchObject({
+    rows: [[[{ text: "1" }], [{ text: "2" }]]],
+  });
+});
+
+test("a heading is not a table header", () => {
+  expect(parseReply("## A | B\n|---|---|")[0]).toMatchObject({
+    kind: "heading",
+  });
+});
+
+test("spaced dashes or stars are a rule, not a list", () => {
+  expect(parseReply("- - -\n\n* * *")).toEqual([
+    { kind: "rule" },
+    { kind: "rule" },
+  ]);
+});

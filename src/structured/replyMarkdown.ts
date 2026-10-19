@@ -1,7 +1,7 @@
 /**
  * The small slice of Markdown Claude's replies use, parsed for the
- * [Structured view]: fenced code, headings, lists and paragraphs, with inline
- * code, bold, italic and links. Text only — the view renders it as React
+ * [Structured view]: fenced code, headings, lists, tables, rules and
+ * paragraphs, with inline code, bold, italic and links. Text only — the view renders it as React
  * elements, never as HTML, and anything it doesn't know stays as typed.
  */
 
@@ -18,17 +18,25 @@ export type Inline =
   // in the reply. `target` is as written; the view decides what it opens.
   | { children: Inline[]; kind: "link"; target: string };
 
+/** A table column's alignment, from its delimiter cell; `null` when unset. */
+export type Align = "left" | "center" | "right" | null;
+
 export type Block =
   | { kind: "code"; text: string }
   | { kind: "heading"; inline: Inline[] }
   | { kind: "list"; items: Inline[][]; ordered: boolean }
-  | { kind: "para"; inline: Inline[] };
+  | { kind: "para"; inline: Inline[] }
+  | { kind: "rule" }
+  // Every row has the header's cell count.
+  | { align: Align[]; head: Inline[][]; kind: "table"; rows: Inline[][][] };
 
 const FENCE = /^\s*(```|~~~)/;
 const HEADING = /^#{1,6}\s+(.*)$/;
 const BULLET = /^\s*[-*+]\s+(.*)$/;
 const NUMBERED = /^\s*\d+[.)]\s+(.*)$/;
 const CRLF = /\r\n?/g;
+const RULE = /^\s{0,3}([-*_])(?:\s*\1){2,}\s*$/;
+const DELIMITER_CELL = /^:?-+:?$/;
 
 // `code`, **bold**, *italic* / _italic_, [label](target) — the earliest
 // match wins.
@@ -161,6 +169,128 @@ function readList(
   return { block: { items, kind: "list", ordered }, next: i };
 }
 
+/** A table row's cells, trimmed. A `|` inside a code span or escaped as
+ *  `\\|` is the cell's own, not a border; a backtick with no partner later
+ *  in the row is only a character. */
+function splitRow(line: string): string[] {
+  const cells: string[] = [];
+  let cell = "";
+  let inCode = false;
+  const row = line.trim();
+  for (let i = 0; i < row.length; i += 1) {
+    const ch = row[i];
+    if (ch === "\\" && row[i + 1] === "|") {
+      cell += "|";
+      i += 1;
+    } else if (ch === "|" && !inCode) {
+      cells.push(cell.trim());
+      cell = "";
+    } else {
+      if (ch === "`") {
+        inCode = !inCode && row.includes("`", i + 1);
+      }
+      cell += ch;
+    }
+  }
+  cells.push(cell.trim());
+  // The outer pipes are optional borders, not empty cells.
+  if (row.startsWith("|")) {
+    cells.shift();
+  }
+  if (row.endsWith("|") && !row.endsWith("\\|") && cells.length > 0) {
+    cells.pop();
+  }
+  return cells;
+}
+
+/** The column alignments a delimiter row (`|:---|--:|`) sets, or `null`
+ *  when `line` isn't one. A bare `---` is a rule, never a delimiter row. */
+function readDelimiter(line: string): Align[] | null {
+  if (!line.includes("|")) {
+    return null;
+  }
+  const cells = splitRow(line);
+  if (cells.length === 0 || !cells.every((c) => DELIMITER_CELL.test(c))) {
+    return null;
+  }
+  return cells.map((c) => {
+    if (c.startsWith(":") && c.endsWith(":")) {
+      return "center";
+    }
+    if (c.endsWith(":")) {
+      return "right";
+    }
+    return c.startsWith(":") ? "left" : null;
+  });
+}
+
+/** Whether `line` opens a block of its own, which ends a table above it. */
+function startsBlock(line: string): boolean {
+  return (
+    FENCE.test(line) ||
+    HEADING.test(line) ||
+    RULE.test(line) ||
+    listItem(line) !== null
+  );
+}
+
+/** The table whose header is `lines[head]`, or `null` when the next line
+ *  isn't a delimiter row of the same width. */
+function readTable(
+  lines: string[],
+  head: number
+): { block: Block; next: number } | null {
+  const header = lines[head] ?? "";
+  if (!header.includes("|") || startsBlock(header)) {
+    return null;
+  }
+  const cells = splitRow(header);
+  const align = readDelimiter(lines[head + 1] ?? "");
+  if (align === null || align.length !== cells.length) {
+    return null;
+  }
+  const width = cells.length;
+  const cellsOf = (line: string) => {
+    const split = splitRow(line);
+    return Array.from({ length: width }, (_, at) =>
+      parseInline(split[at] ?? "")
+    );
+  };
+  const rows: Inline[][][] = [];
+  let i = head + 2;
+  for (
+    let line = lines[i] ?? "";
+    i < lines.length && line.includes("|") && !startsBlock(line);
+    line = lines[i] ?? ""
+  ) {
+    rows.push(cellsOf(line));
+    i += 1;
+  }
+  return {
+    block: { align, head: cellsOf(header), kind: "table", rows },
+    next: i,
+  };
+}
+
+/** The block of several lines (code, list or table) that starts at
+ *  `lines[i]`, and the line after it; `null` when none starts there. */
+function readLong(
+  lines: string[],
+  i: number
+): { block: Block; next: number } | null {
+  const line = lines[i] ?? "";
+  const fence = FENCE.exec(line);
+  if (fence) {
+    return readFence(lines, i, fence[1] ?? "```");
+  }
+  // `- - -` is a rule, not a list item holding `- -`.
+  if (RULE.test(line)) {
+    return null;
+  }
+  const item = listItem(line);
+  return item ? readList(lines, i, item.ordered) : readTable(lines, i);
+}
+
 /** A reply's blocks, in order. */
 export function parseReply(text: string): Block[] {
   const lines = text.replace(CRLF, "\n").split("\n");
@@ -174,20 +304,19 @@ export function parseReply(text: string): Block[] {
   };
   let i = 0;
   while (i < lines.length) {
-    const line = lines[i] ?? "";
-    const fence = FENCE.exec(line);
-    const item = listItem(line);
-    const heading = HEADING.exec(line);
-    if (fence || item) {
+    const read = readLong(lines, i);
+    if (read) {
       endPara();
-      const read = fence
-        ? readFence(lines, i, fence[1] ?? "```")
-        : readList(lines, i, item?.ordered ?? false);
       blocks.push(read.block);
       i = read.next;
       continue;
     }
-    if (heading) {
+    const line = lines[i] ?? "";
+    const heading = HEADING.exec(line);
+    if (RULE.test(line)) {
+      endPara();
+      blocks.push({ kind: "rule" });
+    } else if (heading) {
       endPara();
       blocks.push({ inline: parseInline(heading[1] ?? ""), kind: "heading" });
     } else if (line.trim() === "") {
