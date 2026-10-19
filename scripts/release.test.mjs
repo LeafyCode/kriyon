@@ -476,14 +476,25 @@ describe("the changelog entry", () => {
       "v0.13.0-nightly.20261016.5",
       "feed-beta",
     ];
-    assert.equal(notesSince("0.13.0-beta.3", tags), "v0.13.0-beta.2");
-    assert.equal(notesSince("0.13.0-beta.1", tags), "v0.12.0");
     assert.equal(
-      notesSince("0.13.0-nightly.20261017.6", tags),
+      notesSince("0.13.0-beta.3", tags, tagPattern),
+      "v0.13.0-beta.2"
+    );
+    assert.equal(notesSince("0.13.0-beta.1", tags, tagPattern), "v0.12.0");
+    assert.equal(
+      notesSince("0.13.0-nightly.20261017.6", tags, tagPattern),
       "v0.13.0-nightly.20261016.5"
     );
-    assert.equal(notesSince("0.14.0-beta.1", [...tags, "v0.13.0"]), "v0.13.0");
-    assert.equal(notesSince("0.13.0-beta.1", []), undefined);
+    assert.equal(
+      notesSince("0.14.0-beta.1", [...tags, "v0.13.0"], tagPattern),
+      "v0.13.0"
+    );
+    assert.equal(notesSince("0.13.0-beta.1", [], tagPattern), undefined);
+    // Only cliff.toml's release tags count, as they do for git-cliff.
+    assert.equal(
+      notesSince("0.13.0-beta.1", [...tags, "0.12.5"], tagPattern),
+      "v0.12.0"
+    );
   });
 
   test("a draft with nothing listed gives empty pre-release notes", () => {

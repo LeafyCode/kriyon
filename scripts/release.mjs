@@ -257,7 +257,7 @@ const nightlyDate = (value) => {
 // the range. A release can still be tagged inside it, a patch shipped between
 // two betas; ignoring every tag keeps the range in one section.
 const preReleaseDraft = (version) => {
-  const since = notesSince(version, tags());
+  const since = notesSince(version, tags(), tagPattern());
   const range =
     since === undefined
       ? ["--unreleased"]

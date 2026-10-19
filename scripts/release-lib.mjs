@@ -275,13 +275,13 @@ export const compareVersions = (a, b) => {
  * of the same channel before `version`, so each beta lists what is new since
  * the last beta, and each nightly since the last nightly. Undefined when
  * there is none. A release's notes are its CHANGELOG.md entry instead.
+ * `tagPattern` is cliff.toml's, so a release counts exactly when git-cliff
+ * counts it.
  */
-export const notesSince = (version, tags) => {
+export const notesSince = (version, tags, tagPattern) => {
   const sameLine = channelOf(version) === "beta" ? BETA : NIGHTLY;
-  const counts = (tag) => {
-    const bare = tag.replace(LEADING_V, "");
-    return RELEASE.test(bare) || sameLine.test(bare);
-  };
+  const counts = (tag) =>
+    tagPattern.test(tag) || sameLine.test(tag.replace(LEADING_V, ""));
   return tags
     .filter(counts)
     .filter((tag) => compareVersions(tag, version) < 0)
