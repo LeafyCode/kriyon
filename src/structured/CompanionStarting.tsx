@@ -56,7 +56,7 @@ const linkStyle: CSSProperties = {
 const packetStyle: CSSProperties = {
   background: tokens.color.accentBright,
   borderRadius: tokens.radius.pill,
-  boxShadow: `0 0 8px ${accentAlpha(0.8)}`,
+  boxShadow: tokens.shadow.glow,
   height: "6px",
   position: "absolute",
   top: 0,
