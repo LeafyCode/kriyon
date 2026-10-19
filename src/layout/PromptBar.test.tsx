@@ -779,7 +779,8 @@ test("Up and Down walk the folder's prompt history, then give the draft back", a
  * Lay the footer's tools out as jsdom can't: each character 8px wide, in a
  * box `room` px wide.
  */
-function layOutTools(room: number): () => void {
+function layOutTools(room: number | (() => number)): () => void {
+  const roomNow = typeof room === "number" ? () => room : room;
   const isTools = (el: HTMLElement) => el.dataset.testid === "footer-tools";
   const scroll = Object.getOwnPropertyDescriptor(
     HTMLElement.prototype,
@@ -798,16 +799,21 @@ function layOutTools(room: number): () => void {
   Object.defineProperty(HTMLElement.prototype, "clientWidth", {
     configurable: true,
     get(this: HTMLElement) {
-      return isTools(this) ? room : 0;
+      return isTools(this) ? roomNow() : 0;
     },
   });
+  // jsdom keeps both on Element.prototype; what was put on HTMLElement's
+  // goes again, so the real ones show through.
+  const put = (name: string, had: PropertyDescriptor | undefined) => {
+    if (had) {
+      Object.defineProperty(HTMLElement.prototype, name, had);
+    } else {
+      Reflect.deleteProperty(HTMLElement.prototype, name);
+    }
+  };
   return () => {
-    if (scroll) {
-      Object.defineProperty(HTMLElement.prototype, "scrollWidth", scroll);
-    }
-    if (client) {
-      Object.defineProperty(HTMLElement.prototype, "clientWidth", client);
-    }
+    put("scrollWidth", scroll);
+    put("clientWidth", client);
   };
 }
 
@@ -836,6 +842,48 @@ test("a very narrow composer turns Prompts into its icon", () => {
     expect(prompts.textContent).toBe("");
     expect(prompts.querySelector("svg")).not.toBeNull();
   } finally {
+    restore();
+  }
+});
+
+test("a composer that widens gets its parts back", () => {
+  let room = 120;
+  const restore = layOutTools(() => room);
+  const original = globalThis.ResizeObserver;
+  const resized: (() => void)[] = [];
+  globalThis.ResizeObserver = class {
+    private readonly callback: ResizeObserverCallback;
+    constructor(callback: ResizeObserverCallback) {
+      this.callback = callback;
+    }
+    observe(target: Element) {
+      resized.push(() =>
+        this.callback(
+          [{ contentRect: { width: room }, target } as ResizeObserverEntry],
+          this as unknown as ResizeObserver
+        )
+      );
+    }
+    unobserve() {
+      // Nothing to stop.
+    }
+    disconnect() {
+      // Nothing to stop.
+    }
+  } as unknown as typeof ResizeObserver;
+  try {
+    render(<PromptBar />);
+    expect(screen.queryByText("Session")).toBeNull();
+    room = 1000;
+    act(() => {
+      for (const resize of resized) {
+        resize();
+      }
+    });
+    expect(screen.getByText("Session")).toBeTruthy();
+    expect(screen.getByText("⌘⇧P")).toBeTruthy();
+  } finally {
+    globalThis.ResizeObserver = original;
     restore();
   }
 });

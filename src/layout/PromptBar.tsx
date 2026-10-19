@@ -41,7 +41,7 @@ import { tokens } from "../theme/tokens.ts";
 import { Kbd } from "../ui/Kbd.tsx";
 import { showToast } from "../ui/Toast.tsx";
 import { AttachmentTray } from "./AttachmentTray.tsx";
-import { FOOTER_STEPS, type FooterFit, fitAfter } from "./composerFooterFit.ts";
+import { useFooterFit } from "./composerFooterFit.ts";
 import {
   type HistoryCursor,
   onFirstLine,
@@ -167,7 +167,7 @@ const footerStyle: CSSProperties = {
 };
 
 // Nothing in the footer wraps. The left group may shrink (and, past the last
-// step `fitAfter` has, clip); the right one, with Stop and Send, never does,
+// step `useFooterFit` takes, clip); the right one, with Stop and Send, never does,
 // so they stay in the box at any width.
 const footerLeftStyle: CSSProperties = {
   alignItems: "center",
@@ -230,28 +230,19 @@ const sendDisabledStyle: CSSProperties = {
 
 const NO_ATTACHMENTS: Attachment[] = [];
 
-/** The footer's left side: attach, the Session chip, the usage readout,
- *  Save prompt and Prompts, each as much of it as fits beside `stopping`'s
- *  buttons in the footer `footerRef` names. Fitting re-renders only this. */
-function FooterTools({
-  footerRef,
-  onAttach,
-  stopping,
-  usageLabel,
-  value,
-}: {
-  footerRef: { current: HTMLElement | null };
+interface FooterToolsProps {
   onAttach: () => void;
-  stopping: boolean;
   usageLabel: string | null;
   value: string;
-}) {
+}
+
+/** The footer's left side: attach, the Session chip, the usage readout,
+ *  Save prompt and Prompts, each as much of it as fits beside the footer's
+ *  right side. Fitting re-renders only this. */
+function FooterTools(props: FooterToolsProps) {
+  const { onAttach, usageLabel, value } = props;
   const toolsRef = useRef<HTMLSpanElement>(null);
-  const fit = useFooterFit(
-    footerRef,
-    toolsRef,
-    `${stopping}|${usageLabel ?? ""}`
-  );
+  const fit = useFooterFit(toolsRef, props);
   const empty = value.trim().length === 0;
   return (
     <span data-testid="footer-tools" ref={toolsRef} style={footerLeftStyle}>
@@ -308,60 +299,6 @@ function FooterTools({
       </button>
     </span>
   );
-}
-
-/** The element's width as it resizes; `null` until it has been laid out. */
-function useWidth(ref: { current: HTMLElement | null }): number | null {
-  const [width, setWidth] = useState<number | null>(null);
-  useLayoutEffect(() => {
-    const el = ref.current;
-    if (!el) {
-      return;
-    }
-    const observer = new ResizeObserver((entries) => {
-      let next = 0;
-      for (const entry of entries) {
-        next = entry.contentRect.width;
-      }
-      // A box not laid out yet (or a test's DOM) measures 0: not a width.
-      setWidth(next > 0 ? next : null);
-    });
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, [ref]);
-  return width;
-}
-
-/**
- * How much of the footer's left side fits, measured: after each layout, while
- * the tools' content is wider than their box, give up one more step. The
- * steps run in layout effects, so only the settled footer is painted. Any
- * change that could make it fit differently (the footer's width, what the
- * usage readout says, Stop showing) starts again from everything.
- */
-function useFooterFit(
-  footerRef: { current: HTMLElement | null },
-  toolsRef: { current: HTMLElement | null },
-  shown: string
-): FooterFit {
-  const width = useWidth(footerRef);
-  const key = `${width}|${shown}`;
-  const [fitted, setFitted] = useState({ key, steps: 0 });
-  const current = fitted.key === key ? fitted : { key, steps: 0 };
-  if (current !== fitted) {
-    setFitted(current);
-  }
-  useLayoutEffect(() => {
-    const tools = toolsRef.current;
-    if (
-      tools &&
-      current.steps < FOOTER_STEPS.length &&
-      tools.scrollWidth > tools.clientWidth
-    ) {
-      setFitted({ key: current.key, steps: current.steps + 1 });
-    }
-  });
-  return fitAfter(current.steps);
 }
 
 /** How long after a send the history is read again: the CLI records the
@@ -594,7 +531,6 @@ export function PromptBar({ suppressed = false }: PromptBarProps) {
   const editableBoxRef = useRef<HTMLDivElement>(null);
   const revealRef = useRef<HTMLButtonElement>(null);
   const boxRef = useRef<HTMLDivElement>(null);
-  const footerRef = useRef<HTMLDivElement>(null);
   // True while an IME composition is in flight. Guards two things: onKeyDown
   // must not treat the composition-confirming Enter as send/accept, and
   // onInput must not mutate the DOM (convertLeadingModeChar) out from under the
@@ -1188,11 +1124,9 @@ export function PromptBar({ suppressed = false }: PromptBarProps) {
                   {view.mode === "bash" ? "! bash command" : "# add to memory"}
                 </span>
               ) : null}
-              <div ref={footerRef} style={footerStyle}>
+              <div style={footerStyle}>
                 <FooterTools
-                  footerRef={footerRef}
                   onAttach={intake.pick}
-                  stopping={canStop}
                   usageLabel={usageLabel}
                   value={value}
                 />
