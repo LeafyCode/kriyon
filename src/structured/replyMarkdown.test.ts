@@ -240,3 +240,70 @@ test("a line of three dashes is a rule, not text", () => {
     { inline: [{ kind: "text", text: "Next:" }], kind: "para" },
   ]);
 });
+
+test("a lone backtick in a cell is a character, not the start of code", () => {
+  const [table] = parseReply(
+    "| Key | Does |\n|---|---|\n| ` | toggle console |"
+  );
+  expect(table).toMatchObject({
+    kind: "table",
+    rows: [
+      [
+        [{ kind: "text", text: "`" }],
+        [{ kind: "text", text: "toggle console" }],
+      ],
+    ],
+  });
+});
+
+test("an escaped pipe is cell text, also at the end of a row", () => {
+  const [table] = parseReply("| a | b |\n|---|---|\n| x \\| y | z \\|");
+  expect(table).toMatchObject({
+    kind: "table",
+    rows: [
+      [[{ kind: "text", text: "x | y" }], [{ kind: "text", text: "z |" }]],
+    ],
+  });
+});
+
+test("a pipe in prose over a bare `---` is a paragraph and a rule, not a table", () => {
+  expect(parseReply("Run `ls | grep foo` to check\n---")).toEqual([
+    {
+      inline: [
+        { kind: "text", text: "Run " },
+        { kind: "code", text: "ls | grep foo" },
+        { kind: "text", text: " to check" },
+      ],
+      kind: "para",
+    },
+    { kind: "rule" },
+  ]);
+});
+
+test("a table ends where a list item, heading or fence starts", () => {
+  const blocks = parseReply(
+    "| a | b |\n|---|---|\n| 1 | 2 |\n- run `a | b`\n## A | B\n```\nx | y\n```"
+  );
+  expect(blocks.map((b) => b.kind)).toEqual([
+    "table",
+    "list",
+    "heading",
+    "code",
+  ]);
+  expect(blocks[0]).toMatchObject({
+    rows: [[[{ text: "1" }], [{ text: "2" }]]],
+  });
+});
+
+test("a heading is not a table header", () => {
+  expect(parseReply("## A | B\n|---|---|")[0]).toMatchObject({
+    kind: "heading",
+  });
+});
+
+test("spaced dashes or stars are a rule, not a list", () => {
+  expect(parseReply("- - -\n\n* * *")).toEqual([
+    { kind: "rule" },
+    { kind: "rule" },
+  ]);
+});

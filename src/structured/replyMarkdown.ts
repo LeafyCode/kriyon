@@ -170,7 +170,8 @@ function readList(
 }
 
 /** A table row's cells, trimmed. A `|` inside a code span or escaped as
- *  `\\|` is the cell's own, not a border. */
+ *  `\\|` is the cell's own, not a border; a backtick with no partner later
+ *  in the row is only a character. */
 function splitRow(line: string): string[] {
   const cells: string[] = [];
   let cell = "";
@@ -186,7 +187,7 @@ function splitRow(line: string): string[] {
       cell = "";
     } else {
       if (ch === "`") {
-        inCode = !inCode;
+        inCode = !inCode && row.includes("`", i + 1);
       }
       cell += ch;
     }
@@ -203,9 +204,9 @@ function splitRow(line: string): string[] {
 }
 
 /** The column alignments a delimiter row (`|:---|--:|`) sets, or `null`
- *  when `line` isn't one. */
+ *  when `line` isn't one. A bare `---` is a rule, never a delimiter row. */
 function readDelimiter(line: string): Align[] | null {
-  if (!(line.includes("|") || line.includes("-"))) {
+  if (!line.includes("|")) {
     return null;
   }
   const cells = splitRow(line);
@@ -223,6 +224,16 @@ function readDelimiter(line: string): Align[] | null {
   });
 }
 
+/** Whether `line` opens a block of its own, which ends a table above it. */
+function startsBlock(line: string): boolean {
+  return (
+    FENCE.test(line) ||
+    HEADING.test(line) ||
+    RULE.test(line) ||
+    listItem(line) !== null
+  );
+}
+
 /** The table whose header is `lines[head]`, or `null` when the next line
  *  isn't a delimiter row of the same width. */
 function readTable(
@@ -230,7 +241,7 @@ function readTable(
   head: number
 ): { block: Block; next: number } | null {
   const header = lines[head] ?? "";
-  if (!header.includes("|")) {
+  if (!header.includes("|") || startsBlock(header)) {
     return null;
   }
   const cells = splitRow(header);
@@ -239,14 +250,20 @@ function readTable(
     return null;
   }
   const width = cells.length;
-  const cellsOf = (line: string) =>
-    Array.from({ length: width }, (_, at) =>
-      parseInline(splitRow(line)[at] ?? "")
+  const cellsOf = (line: string) => {
+    const split = splitRow(line);
+    return Array.from({ length: width }, (_, at) =>
+      parseInline(split[at] ?? "")
     );
+  };
   const rows: Inline[][][] = [];
   let i = head + 2;
-  while (i < lines.length && (lines[i] ?? "").includes("|")) {
-    rows.push(cellsOf(lines[i] ?? ""));
+  for (
+    let line = lines[i] ?? "";
+    i < lines.length && line.includes("|") && !startsBlock(line);
+    line = lines[i] ?? ""
+  ) {
+    rows.push(cellsOf(line));
     i += 1;
   }
   return {
