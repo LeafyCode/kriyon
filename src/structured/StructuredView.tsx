@@ -47,7 +47,7 @@ import {
   spinnerTip,
 } from "../terminal/spinnerTip.ts";
 import { button, chip } from "../theme/recipes.ts";
-import { tokens } from "../theme/tokens.ts";
+import { accentAlpha, tokens } from "../theme/tokens.ts";
 import { ImageLightbox } from "../ui/ImageLightbox.tsx";
 import { useImagePreview } from "../ui/imagePreview.ts";
 import {
@@ -268,13 +268,46 @@ const columnStyle: CSSProperties = {
   width: "100%",
 };
 
+/** The user's side of a turn: held to the right, so it reads as theirs at
+ *  a glance and Claude's side keeps the full column. */
+const youStyle: CSSProperties = {
+  alignItems: "flex-end",
+  display: "flex",
+  flexDirection: "column",
+  gap: tokens.space.sm,
+};
+
+/** The prompt as a speech card in a wash of the accent, its corner nearest
+ *  the user's edge tucked in like a bubble's tail. */
 const promptStyle: CSSProperties = {
+  background: accentAlpha(0.1),
+  border: `1px solid ${accentAlpha(0.22)}`,
+  borderBottomRightRadius: tokens.radius.sm,
+  borderRadius: tokens.radius.xl,
   color: tokens.color.ink.bright,
   fontSize: "14px",
-  fontWeight: 600,
   lineHeight: 1.5,
   margin: 0,
+  maxWidth: "85%",
+  overflowWrap: "anywhere",
+  padding: "10px 14px",
   whiteSpace: "pre-wrap",
+};
+
+const claudeStyle: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: tokens.space.sm,
+  minWidth: 0,
+};
+
+const speakerStyle: CSSProperties = {
+  alignItems: "center",
+  color: tokens.color.ink.secondary,
+  display: "flex",
+  fontSize: "12px",
+  fontWeight: 500,
+  gap: "6px",
 };
 
 const workingStyle: CSSProperties = {
@@ -779,6 +812,43 @@ function Reports({ reports }: { reports: WorkReport[] }) {
   );
 }
 
+/** The user's prompt, with any images they sent beside it. */
+function Prompt({
+  children,
+  images = [],
+}: {
+  children: ReactNode;
+  images?: string[];
+}) {
+  return (
+    <section aria-label="Your prompt" style={youStyle}>
+      <p style={promptStyle}>{children}</p>
+      {images.length === 0 ? null : (
+        <div style={{ ...thumbsStyle, justifyContent: "flex-end" }}>
+          {images.map((path) => (
+            <Thumb key={path} path={path} />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+/** Claude's side of a turn, under its name and the CLI's own ✻ mark. */
+function Claude({ children }: { children: ReactNode }) {
+  return (
+    <section aria-label="Claude" style={claudeStyle}>
+      <span aria-hidden style={speakerStyle}>
+        <span style={{ color: tokens.color.accentBright, fontSize: "13px" }}>
+          ✻
+        </span>
+        Claude
+      </span>
+      {children}
+    </section>
+  );
+}
+
 function Turn({
   live = null,
   turn,
@@ -792,39 +862,38 @@ function Turn({
       style={{ display: "flex", flexDirection: "column", gap: tokens.space.sm }}
     >
       {turn.prompt === null ? null : (
-        <p style={promptStyle}>
+        <Prompt images={turn.images}>
           <InlineText
             pieces={linkText(shownPrompt(turn.prompt, turn.images.length))}
           />
-        </p>
+        </Prompt>
       )}
       {turn.reports.length === 0 ? null : <Reports reports={turn.reports} />}
-      {turn.images.length === 0 ? null : (
-        <div style={thumbsStyle}>
-          {turn.images.map((path) => (
-            <Thumb key={path} path={path} />
-          ))}
-        </div>
+      {turn.did.length === 0 && (turn.reply ?? live) === null ? null : (
+        <Claude>
+          {turnSections(turn.did).map((section, index) =>
+            // Sections have no id of their own and only append.
+            section.kind === "text" ? (
+              // biome-ignore lint/suspicious/noArrayIndexKey: append-only list
+              <Markdown key={index} text={section.text} />
+            ) : (
+              // biome-ignore lint/suspicious/noArrayIndexKey: append-only list
+              <Steps items={section.items} key={index} />
+            )
+          )}
+          {/* One slot for the reply: the stream fills it, then the kept reply
+              takes it over in the same element — no blank, no jump. */}
+          {(turn.reply ?? live) === null ? null : (
+            <Markdown text={turn.reply ?? live ?? ""} />
+          )}
+          {live !== null && turn.reply === null ? (
+            <span aria-hidden style={caretStyle} />
+          ) : null}
+          {live !== null && turn.reply !== null ? (
+            <LiveReply text={live} />
+          ) : null}
+        </Claude>
       )}
-      {turnSections(turn.did).map((section, index) =>
-        // Sections have no id of their own and only append.
-        section.kind === "text" ? (
-          // biome-ignore lint/suspicious/noArrayIndexKey: append-only list
-          <Markdown key={index} text={section.text} />
-        ) : (
-          // biome-ignore lint/suspicious/noArrayIndexKey: append-only list
-          <Steps items={section.items} key={index} />
-        )
-      )}
-      {/* One slot for the reply: the stream fills it, then the kept reply
-          takes it over in the same element — no blank, no jump. */}
-      {(turn.reply ?? live) === null ? null : (
-        <Markdown text={turn.reply ?? live ?? ""} />
-      )}
-      {live !== null && turn.reply === null ? (
-        <span aria-hidden style={caretStyle} />
-      ) : null}
-      {live !== null && turn.reply !== null ? <LiveReply text={live} /> : null}
       <TurnMeta turn={turn} />
     </article>
   );
@@ -996,7 +1065,7 @@ function UsageAnswer({
     <article
       style={{ display: "flex", flexDirection: "column", gap: tokens.space.sm }}
     >
-      <p style={promptStyle}>{card.command}</p>
+      <Prompt>{card.command}</Prompt>
       <UsageCard sessionId={sessionId} />
     </article>
   );
@@ -1155,9 +1224,11 @@ export function StructuredView({ sessionId }: { sessionId: string }) {
               sessionId={sessionId}
               turns={turns ?? []}
             />
-            {pending === null ? null : <p style={promptStyle}>{pending}</p>}
+            {pending === null ? null : <Prompt>{pending}</Prompt>}
             {pending !== null && streaming !== null ? (
-              <LiveReply text={streaming} />
+              <Claude>
+                <LiveReply text={streaming} />
+              </Claude>
             ) : null}
             {busy ? <Working spinner={spinner} step={step} /> : null}
           </div>

@@ -724,3 +724,22 @@ test("a work report opens its turn as a status line, not a prompt", async () => 
   expect(screen.getByText("- Installing CocoaPods...")).toBeInTheDocument();
   expect(screen.getByText("It passed.")).toBeInTheDocument();
 });
+
+test("tells the user's prompt apart from Claude's side of the turn", async () => {
+  on();
+  render(<StructuredView sessionId="s1" />);
+  const prompt = await screen.findByRole("region", { name: "Your prompt" });
+  expect(prompt).toHaveTextContent("fix it");
+  const claude = screen.getByRole("region", { name: "Claude" });
+  expect(claude).toHaveTextContent("Fixed.");
+  expect(claude).not.toHaveTextContent("fix it");
+});
+
+test("a prompt sent from Kriyon shows as the user's before its turn arrives", async () => {
+  on();
+  vi.mocked(structuredTurns).mockResolvedValue([]);
+  useSentPrompts.setState({ sent: { s1: sentNow("hello") } });
+  render(<StructuredView sessionId="s1" />);
+  const prompt = await screen.findByRole("region", { name: "Your prompt" });
+  expect(prompt).toHaveTextContent("hello");
+});
