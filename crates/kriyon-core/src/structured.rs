@@ -187,12 +187,22 @@ fn block(value: &Value) -> Block {
     }
 }
 
-fn blocks(content: Option<&Value>) -> Vec<Block> {
-    match content {
+/// A row's blocks. A user's text is kept the way Claude Code shows it to
+/// them, without the paste markers it adds for the model.
+fn blocks(role: &str, content: Option<&Value>) -> Vec<Block> {
+    let mut blocks = match content {
         Some(Value::String(s)) => vec![Block::Text(s.clone())],
         Some(Value::Array(items)) => items.iter().map(block).collect(),
         _ => Vec::new(),
+    };
+    if role == "user" {
+        for b in &mut blocks {
+            if let Block::Text(text) = b {
+                *text = crate::transcript::unwrap_pastes(text);
+            }
+        }
     }
+    blocks
 }
 
 /// The door Claude Code posts its own copy of a message through when it
@@ -227,16 +237,16 @@ fn bridge_row(line: &str, conversation: Option<&str>) -> Option<((String, u64), 
             .to_string(),
         value.get("seq").and_then(Value::as_u64).unwrap_or_default(),
     );
+    let role = message
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
     Some((
         order,
         Row {
             uuid: value.get("uuid")?.as_str()?.to_string(),
             parent: None,
-            role: message
-                .get("type")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string(),
+            role: role.to_string(),
             name: message
                 .get("name")
                 .and_then(Value::as_str)
@@ -248,7 +258,7 @@ fn bridge_row(line: &str, conversation: Option<&str>) -> Option<((String, u64), 
                 .and_then(Value::as_str)
                 .map(str::to_string),
             sidechain: value.get("agentId").is_some_and(|a| !a.is_null()),
-            blocks: blocks(message.get("content")),
+            blocks: blocks(role, message.get("content")),
             thinking_ms: None,
             at_ms: value.get("receivedMs").and_then(Value::as_i64),
         },
@@ -288,6 +298,7 @@ fn transcript_row(line: &str) -> Option<Row> {
         // A system row (a slash command and its output) keeps its text at the
         // top level.
         blocks: blocks(
+            role,
             message
                 .and_then(|m| m.get("content"))
                 .or_else(|| value.get("content")),
@@ -859,6 +870,18 @@ mod tests {
         json!({"kind": "row", "run": run, "seq": seq, "uuid": uuid,
                "message": {"type": kind, "role": kind, "content": content}})
         .to_string()
+    }
+
+    #[test]
+    fn a_pasted_prompt_shows_without_the_paste_markers() {
+        let text = "fix this \n\n<pasted_content id=\"8239\">\npanic at main.rs:4\n</pasted_content id=\"8239\">\n";
+        let transcript = [t("u1", None, "user", &json!(text))];
+        let refs: Vec<&str> = transcript.iter().map(String::as_str).collect();
+        let turns = build_turns(&[], &refs, None);
+        assert_eq!(
+            turns[0].prompt.as_deref(),
+            Some("fix this panic at main.rs:4")
+        );
     }
 
     #[test]

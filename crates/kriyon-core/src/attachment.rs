@@ -68,6 +68,14 @@ const IMAGE_READ_MS_MAX: u64 = 2500;
 /// the TUI reads the Enter as part of a paste and inserts a newline.
 pub const SUBMIT_DELAY_MS: u64 = 80;
 
+/// The most text typed in one write. Claude Code takes a single input chunk
+/// over 800 characters (JavaScript string length, never more than the UTF-8
+/// byte count) as a paste: a longer message typed in one write is wrapped as
+/// pasted, and past the terminal's ~1 KB read all but its last chunk is lost.
+/// Within this limit the text is typing however the terminal splits or joins
+/// it; a longer message goes as one bracketed paste, which arrives whole.
+pub const TYPED_MAX_BYTES: usize = 800;
+
 /// What an attachment is, which decides how it is sent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -294,8 +302,9 @@ fn image_read_ms(bytes: u64) -> u64 {
 }
 
 /// The keystrokes that send `text` with `attachments`, ending with Enter:
-/// the text with each file's `@` mention after it, then each image as a
-/// pasted path, each given time to be read before anything follows.
+/// the text with each file's `@` mention after it (typed, or one paste past
+/// [`TYPED_MAX_BYTES`]), then each image as a pasted path, each given time to
+/// be read before anything follows.
 #[must_use]
 pub fn keystrokes(text: &str, attachments: &[Outgoing<'_>]) -> Vec<Keystroke> {
     let mut first = text.trim().to_string();
@@ -319,8 +328,15 @@ pub fn keystrokes(text: &str, attachments: &[Outgoing<'_>]) -> Vec<Keystroke> {
     }
     let mut out = Vec::new();
     if !first.trim().is_empty() {
+        let text = if first.len() <= TYPED_MAX_BYTES {
+            first
+        } else {
+            // No escape inside the paste, so nothing in the text can end it early.
+            let body = first.replace('\x1b', "");
+            format!("{PASTE_START}{body}{PASTE_END}")
+        };
         out.push(Keystroke {
-            text: first,
+            text,
             wait_ms: SUBMIT_DELAY_MS,
         });
     }
@@ -513,6 +529,54 @@ mod tests {
             ]
         );
         assert_eq!(keystrokes("   ", &[]), Vec::<Keystroke>::new());
+    }
+
+    #[test]
+    fn text_up_to_the_paste_limit_is_typed_in_one_write() {
+        let text = "\u{3042}".repeat(TYPED_MAX_BYTES / 3) + "ab";
+        assert_eq!(text.len(), TYPED_MAX_BYTES);
+        let keys = keystrokes(&text, &[]);
+        assert_eq!(keys.len(), 2);
+        assert_eq!(keys[0].text, text);
+        assert_eq!(keys[0].wait_ms, SUBMIT_DELAY_MS);
+    }
+
+    #[test]
+    fn longer_text_and_its_mentions_go_as_one_paste() {
+        let text = "a".repeat(TYPED_MAX_BYTES);
+        let keys = keystrokes(
+            &text,
+            &[Outgoing {
+                path: "/notes/todo.md",
+                kind: AttachmentKind::File,
+                bytes: 10,
+            }],
+        );
+        assert_eq!(
+            keys,
+            vec![
+                Keystroke {
+                    text: format!("{PASTE_START}{text} @/notes/todo.md {PASTE_END}"),
+                    wait_ms: SUBMIT_DELAY_MS
+                },
+                Keystroke {
+                    text: "\r".into(),
+                    wait_ms: 0
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_paste_end_in_the_text_cannot_close_the_paste_early() {
+        let long = "a".repeat(TYPED_MAX_BYTES);
+        for end in [PASTE_END.to_string(), format!("\x1b{PASTE_END}")] {
+            let keys = keystrokes(&format!("{long}{end}rest"), &[]);
+            assert_eq!(
+                keys[0].text,
+                format!("{PASTE_START}{long}[201~rest{PASTE_END}")
+            );
+        }
     }
 
     #[test]

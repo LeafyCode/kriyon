@@ -279,6 +279,65 @@ fn clamp(label: &str) -> String {
     format!("{}\u{2026}", head.trim_end())
 }
 
+/// `text` with Claude Code's paste markers taken out, shown the way Claude
+/// Code shows it.
+///
+/// Claude Code records a paste inside the prompt as
+/// `\n\n<pasted_content id="1a2b">\n…\n</pasted_content id="1a2b">\n`, so the
+/// model knows which part the user pasted. The markers are for the model, not
+/// the person. Like Claude Code, this takes only a four-hex-digit id followed by
+/// a newline, and drops up to two newlines on each side of a paste.
+#[must_use]
+pub fn unwrap_pastes(text: &str) -> String {
+    const OPEN: &str = "<pasted_content id=\"";
+    const ID_LEN: usize = 4;
+    let is_id = |id: &[u8]| {
+        id.len() == ID_LEN
+            && id
+                .iter()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(b))
+    };
+    let mut out = String::with_capacity(text.len());
+    // `kept` is where the text not yet copied starts; `from` where to look next.
+    let (mut kept, mut from) = (0, 0);
+    while let Some(found) = text[from..].find(OPEN) {
+        let open = from + found;
+        let id_at = open + OPEN.len();
+        let id = text
+            .as_bytes()
+            .get(id_at..id_at + ID_LEN)
+            .unwrap_or_default();
+        if !is_id(id) || !text[id_at + ID_LEN..].starts_with("\">\n") {
+            from = id_at;
+            continue;
+        }
+        let id = &text[id_at..id_at + ID_LEN];
+        let body_at = id_at + ID_LEN + 3;
+        let close = format!("\n</pasted_content id=\"{id}\">");
+        let Some(found) = text[body_at - 1..].find(close.as_str()) else {
+            break;
+        };
+        let body_end = body_at - 1 + found;
+        let mut typed_end = open;
+        for _ in 0..2 {
+            if typed_end > kept && text.as_bytes()[typed_end - 1] == b'\n' {
+                typed_end -= 1;
+            }
+        }
+        out.push_str(&text[kept..typed_end]);
+        out.push_str(text.get(body_at..body_end).unwrap_or_default());
+        kept = body_end + close.len();
+        for _ in 0..2 {
+            if text[kept..].starts_with('\n') {
+                kept += 1;
+            }
+        }
+        from = kept;
+    }
+    out.push_str(&text[kept..]);
+    out
+}
+
 /// The trimmed text between the first `open`/`close` pair, if both are present.
 pub(crate) fn between<'a>(text: &'a str, open: &str, close: &str) -> Option<&'a str> {
     let rest = text.split_once(open)?.1;
@@ -316,15 +375,15 @@ pub fn prompt_label_of(value: &Value) -> Option<String> {
 /// The prompt text of a `user` line: a bare string, else its first `text`
 /// block. `None` for a tool-result-only line, which carries no prompt.
 fn user_prompt_text(value: &Value) -> Option<String> {
-    match value.get("message")?.get("content")? {
-        Value::String(text) => Some(text.clone()),
+    let text = match value.get("message")?.get("content")? {
+        Value::String(text) => Some(text.as_str()),
         Value::Array(blocks) => blocks
             .iter()
             .find(|b| b.get("type").and_then(Value::as_str) == Some("text"))
-            .and_then(|b| b.get("text").and_then(Value::as_str))
-            .map(str::to_string),
+            .and_then(|b| b.get("text").and_then(Value::as_str)),
         _ => None,
-    }
+    };
+    text.map(unwrap_pastes)
 }
 
 /// Parse a single JSONL transcript line into zero or more [`StructuredEvent`]s.
@@ -375,7 +434,9 @@ fn is_control_meta(ty: &str) -> bool {
 fn parse_user(line: &str, value: &Value) -> Vec<StructuredEvent> {
     let content = value.get("message").and_then(|m| m.get("content"));
     match content {
-        Some(Value::String(text)) => vec![StructuredEvent::Prompt { text: text.clone() }],
+        Some(Value::String(text)) => vec![StructuredEvent::Prompt {
+            text: unwrap_pastes(text),
+        }],
         Some(Value::Array(blocks)) => map_blocks(line, blocks, Role::User),
         _ => vec![unknown(line)],
     }
@@ -414,7 +475,9 @@ fn map_block(line: &str, block: &Value, role: Role) -> Option<StructuredEvent> {
                 .to_string();
             Some(match role {
                 Role::Assistant => StructuredEvent::Assistant { text },
-                Role::User => StructuredEvent::Prompt { text },
+                Role::User => StructuredEvent::Prompt {
+                    text: unwrap_pastes(&text),
+                },
             })
         }
         Some("tool_use") => Some(map_tool_use(block)),
@@ -897,6 +960,50 @@ mod tests {
             prompt_label("<system-reminder>noise</system-reminder>"),
             None
         );
+    }
+
+    #[test]
+    fn unwrap_pastes_shows_a_paste_the_way_claude_code_does() {
+        // Claude Code puts two newlines before a paste and drops them, and the
+        // ones after it, when it shows the prompt.
+        let mixed = "Send this to \n\n<pasted_content id=\"2d96\">\nColonel A,\nCamp B\n</pasted_content id=\"2d96\">\n";
+        assert_eq!(unwrap_pastes(mixed), "Send this to Colonel A,\nCamp B");
+        let whole =
+            "\n\n<pasted_content id=\"e951\">\nrun the tests\n</pasted_content id=\"e951\">\n";
+        assert_eq!(unwrap_pastes(whole), "run the tests");
+    }
+
+    #[test]
+    fn unwrap_pastes_leaves_text_that_only_looks_like_a_marker() {
+        let open_only = "Why does <pasted_content id=\"8239\"> show up?";
+        assert_eq!(unwrap_pastes(open_only), open_only);
+        // Claude Code's ids are four lowercase hex digits, then a newline.
+        let quoted = "What do <pasted_content id=\"x\">a</pasted_content id=\"x\"> mean?";
+        assert_eq!(unwrap_pastes(quoted), quoted);
+        let inline = "See <pasted_content id=\"abcd\">a\n</pasted_content id=\"abcd\"> here";
+        assert_eq!(unwrap_pastes(inline), inline);
+    }
+
+    #[test]
+    fn a_pasted_prompt_reads_as_its_text_everywhere() {
+        let pasted =
+            "\n\n<pasted_content id=\"aae1\">\nRead the handoff\n</pasted_content id=\"aae1\">\n";
+        let as_string =
+            serde_json::json!({"type": "user", "message": {"role": "user", "content": pasted}});
+        let as_block = serde_json::json!({"type": "user", "message": {"role": "user",
+            "content": [{"type": "text", "text": pasted}]}});
+        for line in [as_string.to_string(), as_block.to_string()] {
+            assert_eq!(
+                parse_line(&line),
+                vec![StructuredEvent::Prompt {
+                    text: "Read the handoff".into()
+                }]
+            );
+            assert_eq!(
+                parse_provisional_title(&line),
+                Some("Read the handoff".to_string())
+            );
+        }
     }
 
     #[test]
