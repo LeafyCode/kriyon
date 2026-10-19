@@ -282,8 +282,8 @@ const youStyle: CSSProperties = {
 const promptStyle: CSSProperties = {
   background: accentAlpha(0.1),
   border: `1px solid ${accentAlpha(0.22)}`,
-  borderBottomRightRadius: tokens.radius.sm,
-  borderRadius: tokens.radius.xl,
+  // One shorthand, so no later corner key can undo the tail.
+  borderRadius: `${tokens.radius.xl} ${tokens.radius.xl} ${tokens.radius.sm} ${tokens.radius.xl}`,
   color: tokens.color.ink.bright,
   fontSize: "14px",
   lineHeight: 1.5,

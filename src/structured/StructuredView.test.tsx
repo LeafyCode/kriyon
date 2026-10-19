@@ -730,6 +730,9 @@ test("tells the user's prompt apart from Claude's side of the turn", async () =>
   render(<StructuredView sessionId="s1" />);
   const prompt = await screen.findByRole("region", { name: "Your prompt" });
   expect(prompt).toHaveTextContent("fix it");
+  // The corner nearest the user's edge stays tucked in, like a bubble's tail.
+  const card = screen.getByText("fix it").closest("p");
+  expect(card?.style.borderRadius).toBe("12px 12px 4px 12px");
   const claude = screen.getByRole("region", { name: "Claude" });
   expect(claude).toHaveTextContent("Fixed.");
   expect(claude).not.toHaveTextContent("fix it");
