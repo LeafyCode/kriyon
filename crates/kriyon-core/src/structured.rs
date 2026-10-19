@@ -559,6 +559,15 @@ fn fold(rows: Vec<(Row, bool)>) -> Vec<StructuredTurn> {
             report_turn(&mut turns, &mut current, reports, &row, is_live);
             continue;
         }
+        if row.role == "user" && row.origin.as_deref() == Some(crate::work_report::PEER_ORIGIN) {
+            let text = row.texts().collect::<Vec<_>>().join("\n");
+            let agent = crate::work_report::peer_sender(&text)
+                .and_then(|id| launched_as(&turns, current.as_ref(), id));
+            let report = crate::work_report::from_peer(&text, agent);
+            awaiting = Awaiting::Nothing;
+            report_turn(&mut turns, &mut current, vec![report], &row, is_live);
+            continue;
+        }
         let opens_turn = row.role == "user"
             && !row.is_meta
             && !row.is_interrupt()
@@ -606,6 +615,11 @@ fn fold(rows: Vec<(Row, bool)>) -> Vec<StructuredTurn> {
         if !is_live {
             turn.source = TurnSource::Transcript;
         }
+        // Claude writing after the turn's recorded end means something woke it
+        // that no row above opened a turn for: the turn is not over.
+        if row.role == "assistant" {
+            turn.ended = false;
+        }
         if row.at_ms.is_some() {
             turn.ended_ms = turn.ended_ms.max(row.at_ms);
         }
@@ -624,6 +638,29 @@ fn fold(rows: Vec<(Row, bool)>) -> Vec<StructuredTurn> {
         turns.push(finish(done));
     }
     turns
+}
+
+/// What Claude called the [Subagent] `agent_id` when it launched it: the
+/// `description` of the `Agent` step whose launch receipt names that id.
+fn launched_as<'a>(
+    turns: &'a [StructuredTurn],
+    current: Option<&'a StructuredTurn>,
+    agent_id: &str,
+) -> Option<&'a str> {
+    let receipt = format!("agentId: {agent_id}");
+    turns
+        .iter()
+        .chain(current)
+        .flat_map(|turn| &turn.did)
+        .rev()
+        .find_map(|item| match item {
+            TurnItem::Step {
+                result: Some(result),
+                description,
+                ..
+            } if result.contains(&receipt) => description.as_deref(),
+            _ => None,
+        })
 }
 
 /// Open the turn [Work report]s woke Claude for. Reports that arrive before
@@ -660,6 +697,7 @@ fn report_turn(
         )
     });
     turn.reports.extend(reports);
+    crate::work_report::drop_echoed_handbacks(&mut turn.reports);
     turn.ended_ms = turn.ended_ms.max(row.at_ms);
 }
 
@@ -1636,9 +1674,106 @@ mod tests {
                 summary: "Build finished".into(),
                 outcome: crate::work_report::ReportOutcome::Completed,
                 event: None,
+                task_id: Some("b1".into()),
+                handback: false,
             }]
         );
         assert_eq!(turns[1].reply.as_deref(), Some("It passed."));
+    }
+
+    /// A subagent's hand-back as Claude Code writes it: a meta `user` row
+    /// stamped `origin.kind: peer`.
+    fn handback_row(uuid: &str, parent: &str, from: &str) -> String {
+        json!({"type":"user","uuid":uuid,"parentUuid":parent,"isMeta":true,
+               "origin":{"kind":"peer","from":from},
+               "message":{"role":"user","content":format!(
+                   "Another Claude session sent a message:\n<agent-message from=\"{from}\">\n[Subagent hand-back] The report follows:\n  [ ]\n</agent-message>")}})
+        .to_string()
+    }
+
+    #[test]
+    fn a_subagent_handing_back_opens_its_turn_named_by_its_launch() {
+        let transcript = [
+            t("u1", None, "user", &json!("review it")),
+            t(
+                "a1",
+                Some("u1"),
+                "assistant",
+                &json!([{"type":"tool_use","id":"t1","name":"Agent",
+                         "input":{"description":"Re-check the fix","prompt":"…"}}]),
+            ),
+            t(
+                "r1",
+                Some("a1"),
+                "user",
+                &json!([{"type":"tool_result","tool_use_id":"t1","content":
+                    "Async agent launched successfully.\nagentId: af19c (internal ID)"}]),
+            ),
+            json!({"type":"system","subtype":"turn_duration","uuid":"d1","parentUuid":"r1"})
+                .to_string(),
+            handback_row("h1", "d1", "af19c"),
+            t(
+                "a2",
+                Some("h1"),
+                "assistant",
+                &json!([{"type":"tool_use","id":"t2","name":"Bash","input":{"command":"pnpm check"}}]),
+            ),
+        ];
+        let refs: Vec<&str> = transcript.iter().map(String::as_str).collect();
+        let turns = build_turns(&[], &refs, None);
+        assert_eq!(turns.len(), 2, "the hand-back opens a turn of its own");
+        assert!(turns[0].ended);
+        assert_eq!(turns[1].prompt, None);
+        assert_eq!(
+            turns[1].reports,
+            vec![crate::work_report::WorkReport {
+                summary: "Agent \"Re-check the fix\" reported back".into(),
+                outcome: crate::work_report::ReportOutcome::Completed,
+                event: None,
+                task_id: Some("af19c".into()),
+                handback: true,
+            }]
+        );
+        assert!(!turns[1].ended, "Claude is still working on it");
+        assert_eq!(turns[1].did.len(), 1);
+    }
+
+    #[test]
+    fn a_handback_from_an_agent_not_in_view_still_says_what_woke_claude() {
+        let transcript = [handback_row("h1", "", "a9")];
+        let refs: Vec<&str> = transcript.iter().map(String::as_str).collect();
+        let turns = build_turns(&[], &refs, None);
+        assert_eq!(turns[0].reports[0].summary, "A subagent reported back");
+    }
+
+    #[test]
+    fn claude_writing_after_a_recorded_end_reopens_the_turn() {
+        // Whatever woke Claude (here a meta row) opened no turn: its work
+        // joins the last one, which must not still read as over.
+        let transcript = [
+            t("u1", None, "user", &json!("go")),
+            t(
+                "a1",
+                Some("u1"),
+                "assistant",
+                &json!([{"type":"text","text":"Done."}]),
+            ),
+            json!({"type":"system","subtype":"turn_duration","uuid":"d1","parentUuid":"a1"})
+                .to_string(),
+            json!({"type":"user","uuid":"m1","parentUuid":"d1","isMeta":true,
+                   "message":{"role":"user","content":"woken"}})
+            .to_string(),
+            t(
+                "a2",
+                Some("m1"),
+                "assistant",
+                &json!([{"type":"tool_use","id":"t2","name":"Bash","input":{"command":"ls"}}]),
+            ),
+        ];
+        let refs: Vec<&str> = transcript.iter().map(String::as_str).collect();
+        let turns = build_turns(&[], &refs, None);
+        assert_eq!(turns.len(), 1);
+        assert!(!turns[0].ended);
     }
 
     #[test]
