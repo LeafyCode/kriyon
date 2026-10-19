@@ -331,8 +331,8 @@ pub fn keystrokes(text: &str, attachments: &[Outgoing<'_>]) -> Vec<Keystroke> {
         let text = if first.len() <= TYPED_MAX_BYTES {
             first
         } else {
-            // Text inside the paste must not end it early.
-            let body = first.replace(PASTE_END, &PASTE_END[1..]);
+            // No escape inside the paste, so nothing in the text can end it early.
+            let body = first.replace('\x1b', "");
             format!("{PASTE_START}{body}{PASTE_END}")
         };
         out.push(Keystroke {
@@ -569,15 +569,14 @@ mod tests {
 
     #[test]
     fn a_paste_end_in_the_text_cannot_close_the_paste_early() {
-        let text = format!("{}{PASTE_END}rest", "a".repeat(TYPED_MAX_BYTES));
-        let keys = keystrokes(&text, &[]);
-        assert_eq!(
-            keys[0].text,
-            format!(
-                "{PASTE_START}{}[201~rest{PASTE_END}",
-                "a".repeat(TYPED_MAX_BYTES)
-            )
-        );
+        let long = "a".repeat(TYPED_MAX_BYTES);
+        for end in [PASTE_END.to_string(), format!("\x1b{PASTE_END}")] {
+            let keys = keystrokes(&format!("{long}{end}rest"), &[]);
+            assert_eq!(
+                keys[0].text,
+                format!("{PASTE_START}{long}[201~rest{PASTE_END}")
+            );
+        }
     }
 
     #[test]
