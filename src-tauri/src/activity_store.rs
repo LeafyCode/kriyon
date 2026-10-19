@@ -125,6 +125,12 @@ pub struct ActivityStep {
     pub outcome: Option<String>,
     /// The user said yes to it in a permission dialog.
     pub approved: bool,
+    /// The files a command changed.
+    pub changed_files: Vec<String>,
+    /// Which agent ran it: `None` for the main agent, else the subagent's id.
+    pub agent_id: Option<String>,
+    /// For a step that started a subagent, the subagent's type.
+    pub launched_type: Option<String>,
     pub status: StepStatus,
     pub flags: u32,
     pub agent_type: Option<String>,
@@ -876,7 +882,8 @@ fn migrate_to_v6(conn: &mut Connection) -> rusqlite::Result<()> {
              ALTER TABLE steps ADD COLUMN lines_added INTEGER;
              ALTER TABLE steps ADD COLUMN lines_removed INTEGER;
              ALTER TABLE steps ADD COLUMN created INTEGER NOT NULL DEFAULT 0;
-             ALTER TABLE steps ADD COLUMN outcome TEXT;",
+             ALTER TABLE steps ADD COLUMN outcome TEXT;
+             ALTER TABLE steps ADD COLUMN changed_files TEXT;",
     )?;
     backfill_summaries(&tx)?;
     tx.execute_batch("PRAGMA user_version = 6;")?;
@@ -906,10 +913,12 @@ fn backfill_summaries(tx: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
 
 const STEP_COLUMNS: &str =
     "id, tool_name, kind, target, status, flags, agent_type, started_ms, duration_ms, summary,
-     lines_added, lines_removed, created, outcome, asked";
+     lines_added, lines_removed, created, outcome, asked, changed_files, agent_id,
+     CASE WHEN kind = 'agent' AND json_valid(input)
+          THEN json_extract(input, '$.subagent_type') END";
 
 /// The index of the first column a query selects after [`STEP_COLUMNS`].
-const AFTER_STEP: usize = 15;
+const AFTER_STEP: usize = 18;
 
 fn step_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<ActivityStep> {
     let kind: String = r.get(2)?;
@@ -931,6 +940,12 @@ fn step_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<ActivityStep> {
         outcome: r.get(13)?,
         // A dialog alone isn't a yes: only a step that then finished was approved.
         approved: r.get::<_, i64>(14)? != 0 && status == "ok",
+        changed_files: r
+            .get::<_, Option<String>>(15)?
+            .map(|files| files.lines().map(str::to_string).collect())
+            .unwrap_or_default(),
+        agent_id: r.get(16)?,
+        launched_type: r.get(17)?,
     })
 }
 
@@ -1199,9 +1214,9 @@ fn upsert_step(
         "INSERT INTO steps (session_id, turn_id, tool_use_id, agent_id, agent_type, tool_name, kind,
                             target, input, result, status, flags, permission_mode, started_ms,
                             ended_ms, duration_ms, claude_session_id, summary, lines_added,
-                            lines_removed, created, outcome)
+                            lines_removed, created, outcome, changed_files)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18,
-                 ?19, ?20, ?21, ?22)
+                 ?19, ?20, ?21, ?22, ?23)
          ON CONFLICT(session_id, tool_use_id) DO UPDATE SET
            claude_session_id = COALESCE(claude_session_id, excluded.claude_session_id),
            turn_id = COALESCE(turn_id, excluded.turn_id),
@@ -1213,6 +1228,7 @@ fn upsert_step(
            lines_removed = COALESCE(excluded.lines_removed, lines_removed),
            created = MAX(created, excluded.created),
            outcome = COALESCE(excluded.outcome, outcome),
+           changed_files = COALESCE(excluded.changed_files, changed_files),
            input = COALESCE(input, excluded.input),
            result = CASE WHEN excluded.status <> 'running' AND result = 'Did not finish: the session ended'
                          THEN excluded.result
@@ -1246,6 +1262,7 @@ fn upsert_step(
             step.lines_removed,
             i64::from(step.created == Some(true)),
             step.outcome,
+            (!step.changed_files.is_empty()).then(|| step.changed_files.join("\n")),
         ],
     )?;
     Ok(())
@@ -1467,7 +1484,13 @@ mod tests {
                     "prompt_id": "p1", "agent_id": "a35", "agent_type": "pr-scorer",
                     "command": "pnpm check", "description": "Run every check",
                     "input": "{\"command\":\"pnpm check\",\"description\":\"Run every check\"}",
-                    "outcome": "43 passed", "ts": at(2),
+                    "outcome": "43 passed", "changed_files": ["/w/a.js"], "ts": at(2),
+                })),
+                line(&serde_json::json!({
+                    "event": "PreToolUse", "tool_name": "Agent", "tool_use_id": "t0",
+                    "prompt_id": "p1", "description": "Score the findings",
+                    "input": "{\"description\":\"Score the findings\",\"subagent_type\":\"pr-scorer\"}",
+                    "ts": at(1),
                 })),
                 line(&serde_json::json!({
                     "event": "PostToolUse", "tool_name": "Write", "tool_use_id": "t2",
@@ -1486,9 +1509,13 @@ mod tests {
         );
         assert_eq!(pasted.report, None);
         assert_eq!(pasted.prompt.as_deref(), Some("run the tests"));
-        assert_eq!(pasted.steps[0].summary.as_deref(), Some("Run every check"));
-        assert_eq!(pasted.steps[0].outcome.as_deref(), Some("43 passed"));
-        let write = &pasted.steps[1];
+        assert_eq!(pasted.steps[1].summary.as_deref(), Some("Run every check"));
+        assert_eq!(pasted.steps[1].outcome.as_deref(), Some("43 passed"));
+        let (launch, bash, write) = (&pasted.steps[0], &pasted.steps[1], &pasted.steps[2]);
+        assert_eq!(launch.launched_type.as_deref(), Some("pr-scorer"));
+        assert_eq!(launch.agent_id, None);
+        assert_eq!(bash.agent_id.as_deref(), Some("a35"));
+        assert_eq!(bash.changed_files, ["/w/a.js"]);
         assert_eq!(
             (write.lines_added, write.lines_removed, write.created),
             (Some(38), Some(0), true)

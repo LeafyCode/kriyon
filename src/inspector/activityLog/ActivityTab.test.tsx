@@ -20,13 +20,16 @@ vi.mock("../../ipc/bridge.ts", () => ({
 }));
 
 const EDIT: ActivityStep = {
+  agentId: null,
   agentType: null,
   approved: false,
+  changedFiles: [],
   created: false,
   durationMs: 40,
   flags: 0,
   id: 1,
   kind: "edit",
+  launchedType: null,
   linesAdded: null,
   linesRemoved: null,
   outcome: null,

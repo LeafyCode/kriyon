@@ -327,6 +327,9 @@ pub struct HookEvent {
     /// On a file tool's `PostToolUse`, whether it made a new file.
     #[serde(default)]
     pub created: Option<bool>,
+    /// On a Bash `PostToolUse`, the files the command changed (capped).
+    #[serde(default)]
+    pub changed_files: Option<Vec<String>>,
     /// On a `PostToolUse`, what came of it in a few words: a test run's
     /// "43 passed" or "2 failed", a search's "6 files".
     #[serde(default)]
@@ -1092,6 +1095,60 @@ mod tests {
     }
 
     #[test]
+    fn the_hook_script_records_results_as_a_person_reads_them() {
+        let result = |tool: &str, response: &str| {
+            run_hook_script(&format!(
+                r#"{{"hook_event_name":"PostToolUse","tool_name":"{tool}","tool_use_id":"t","tool_input":{{}},"tool_response":{response}}}"#
+            ))
+            .expect("an event line")
+            .result
+        };
+        assert_eq!(
+            result(
+                "Bash",
+                r#"{"stdout":"found 0 vulnerabilities\nv24","stderr":"warn","interrupted":false}"#
+            )
+            .as_deref(),
+            Some("found 0 vulnerabilities\nv24\nwarn"),
+            "the output, not the JSON around it"
+        );
+        assert_eq!(
+            result(
+                "Edit",
+                r#"{"originalFile":"huge","structuredPatch":[{"lines":[" a","-b","+c"]}]}"#
+            )
+            .as_deref(),
+            Some(" a\n-b\n+c")
+        );
+        assert_eq!(
+            result(
+                "WebFetch",
+                r#"{"url":"https://x","code":200,"result":"page text"}"#
+            )
+            .as_deref(),
+            Some("page text")
+        );
+        // A long output keeps its start and its end, where the summary is.
+        let long = format!("start{}end", "x".repeat(10_000));
+        let kept =
+            result("Bash", &serde_json::json!({ "stdout": long }).to_string()).expect("a result");
+        assert!(
+            kept.starts_with("start") && kept.ends_with("end"),
+            "{kept:.40}"
+        );
+        assert!(kept.chars().count() < 4100);
+    }
+
+    #[test]
+    fn the_hook_script_names_the_files_a_command_changed() {
+        let ev = run_hook_script(
+            r#"{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_use_id":"t","tool_input":{"command":"cat > src/a.js"},"tool_response":{"stdout":"","bashEditDiff":{"files":[{"filePath":"/w/src/a.js","hunks":[{"lines":["+x"]}]}]}}}"#,
+        )
+        .expect("an event line");
+        assert_eq!(ev.changed_files, Some(vec!["/w/src/a.js".to_string()]));
+    }
+
+    #[test]
     fn the_hook_script_sums_up_what_a_command_or_search_found() {
         let outcome = |tool: &str, input: &str, response: &str| {
             run_hook_script(&format!(
@@ -1128,6 +1185,15 @@ mod tests {
         assert_eq!(
             bash("== 3 failed, 10 passed in 0.2s ==").as_deref(),
             Some("3 failed")
+        );
+        // Node's own test runner.
+        assert_eq!(
+            bash("ℹ tests 3\nℹ suites 0\nℹ pass 3\nℹ fail 0\n").as_deref(),
+            Some("3 passed")
+        );
+        assert_eq!(
+            bash("# tests 3\n# pass 2\n# fail 1\n").as_deref(),
+            Some("1 failed")
         );
         assert_eq!(bash("hello").as_deref(), None);
         assert_eq!(
@@ -1311,7 +1377,16 @@ mod tests {
             r#"{"hook_event_name":"PostToolUse","tool_name":"Grep","tool_use_id":"toolu_4","tool_response":{"numFiles":2}}"#,
         )
         .expect("an event line");
-        let others = [fields(&launched), fields(&written), fields(&found)];
+        let edited = run_hook_script(
+            r#"{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_use_id":"toolu_5","tool_response":{"stdout":"","bashEditDiff":{"files":[{"filePath":"/w/a","hunks":[]}]}}}"#,
+        )
+        .expect("an event line");
+        let others = [
+            fields(&launched),
+            fields(&written),
+            fields(&found),
+            fields(&edited),
+        ];
         for (key, value) in &fields(&answered) {
             assert!(
                 !value.is_null() || others.iter().any(|o| !o[key].is_null()),

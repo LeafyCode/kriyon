@@ -1378,10 +1378,14 @@ export type StepStatus = "running" | "ok" | "error";
 
 /** One [Activity step] as a timeline row shows it. */
 export interface ActivityStep {
+  /** Main agent when `null`; otherwise the subagent's id. */
+  agentId: string | null;
   /** Main agent when `null`; otherwise the subagent's type. */
   agentType: string | null;
   /** The user said yes to it in a permission dialog. */
   approved: boolean;
+  /** The files a command changed. */
+  changedFiles: string[];
   /** A write that made a new file. */
   created: boolean;
   durationMs: number | null;
@@ -1389,6 +1393,8 @@ export interface ActivityStep {
   flags: number;
   id: number;
   kind: StepKind;
+  /** For a step that started a subagent, the subagent's type. */
+  launchedType: string | null;
   /** The lines a file change added and removed (an edit, a write, or the
    * files a command edited). */
   linesAdded: number | null;

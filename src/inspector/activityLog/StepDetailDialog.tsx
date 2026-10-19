@@ -13,6 +13,7 @@ import {
   agentLabel,
   clockLabel,
   prettyInput,
+  prettyResult,
   stepLabel,
 } from "./activityLog.ts";
 import { useStepDetail } from "./useActivityLog.ts";
@@ -154,7 +155,7 @@ function DetailBody({
         <Fact label="Tool" value={detail.toolName} />
       </dl>
       <Block label="Input" text={prettyInput(detail.input)} />
-      <Block label="Result" text={detail.result ?? ""} />
+      <Block label="Result" text={prettyResult(detail.result)} />
     </>
   );
 }

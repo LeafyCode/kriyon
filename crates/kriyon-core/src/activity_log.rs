@@ -163,6 +163,9 @@ pub fn step_flags(
         if is_secret_path(cmd) {
             out |= flags::SECRET_FILE;
         }
+        if reaches_outside(cmd, cwd) {
+            out |= flags::OUTSIDE_PROJECT;
+        }
     }
     if let Some(path) = path {
         if is_secret_path(path) {
@@ -190,6 +193,40 @@ fn is_outside(path: &str, cwd: Option<&str>) -> bool {
     }
     let root = cwd.trim_end_matches('/');
     !(path == root || path.starts_with(&format!("{root}/")))
+}
+
+/// A path a command names in the home folder or the system's own: `~/…`,
+/// `$HOME/…`, `/Users/…`, `/etc/…`, `/Volumes/…`. Scratch places (`/tmp`,
+/// `/dev/null`) and tools (`/usr/bin`) are left out: using them is routine.
+static COMMAND_PATH: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r#"(?:^|[\s'"=(<>|;&])((?:~|\$HOME|\$\{HOME\})/[^\s'"<>|;&)]*|/(?:Users|etc|private/etc|Volumes)/[^\s'"<>|;&)]*)"#,
+    )
+    .expect("a constant pattern")
+});
+
+/// Whether a command names a file outside the session folder `cwd` — best
+/// effort, from the paths it spells out. `~` is the home folder `cwd` sits
+/// in; with `cwd` outside any home folder, a `~` path can't be inside it.
+fn reaches_outside(command: &str, cwd: Option<&str>) -> bool {
+    let Some(cwd) = cwd else {
+        return false;
+    };
+    let home = cwd
+        .strip_prefix("/Users/")
+        .and_then(|rest| rest.split('/').next())
+        .map(|user| format!("/Users/{user}"));
+    COMMAND_PATH.captures_iter(command).any(|c| {
+        let path = &c[1];
+        let rest = ["~", "$HOME", "${HOME}"]
+            .iter()
+            .find_map(|h| path.strip_prefix(h).filter(|r| r.starts_with('/')));
+        match (rest, &home) {
+            (Some(rest), Some(home)) => is_outside(&format!("{home}{rest}"), Some(cwd)),
+            (Some(_), None) => true,
+            (None, _) => is_outside(path, Some(cwd)),
+        }
+    })
 }
 
 /// Where an [Activity step] stands.
@@ -243,6 +280,8 @@ pub struct StepUpdate {
     pub created: Option<bool>,
     /// What came of the call in a few words ("43 passed", "6 files").
     pub outcome: Option<String>,
+    /// The files a command changed.
+    pub changed_files: Vec<String>,
     pub input: Option<String>,
     pub result: Option<String>,
     pub status: StepStatus,
@@ -353,13 +392,24 @@ fn step_update(ev: &HookEvent, at_ms: i64) -> Option<StepUpdate> {
     };
     let description = ev.description.as_deref().map(redact);
     let summary = step_summary(&tool_name, input.as_deref(), description.as_deref());
+    let changed_files: Vec<String> = ev
+        .changed_files
+        .iter()
+        .flatten()
+        .map(|f| redact(f))
+        .collect();
+    // A file a command changed counts like one a file tool touched.
+    let changed_flags = changed_files.iter().fold(0, |out, file| {
+        out | step_flags(StepKind::Edit, None, Some(file), ev.cwd.as_deref())
+    });
     Some(StepUpdate {
-        flags: step_flags(
-            kind,
-            ev.command.as_deref(),
-            path.as_deref(),
-            ev.cwd.as_deref(),
-        ),
+        flags: changed_flags
+            | step_flags(
+                kind,
+                ev.command.as_deref(),
+                path.as_deref(),
+                ev.cwd.as_deref(),
+            ),
         tool_use_id,
         prompt_id: ev.prompt_id.clone(),
         claude_session_id: ev.session_id.clone(),
@@ -373,6 +423,7 @@ fn step_update(ev: &HookEvent, at_ms: i64) -> Option<StepUpdate> {
         lines_removed: ev.lines_removed.and_then(|n| i64::try_from(n).ok()),
         created: ev.created,
         outcome: ev.outcome.as_deref().map(redact),
+        changed_files,
         input,
         result: result.map(redact),
         status,
@@ -650,6 +701,46 @@ mod tests {
         assert_eq!(read("/w/app/.env.example") & flags::SECRET_FILE, 0);
         assert_eq!(read("/w/app/src/environment.ts") & flags::SECRET_FILE, 0);
         assert_ne!(cmd_flags("cat .env") & flags::SECRET_FILE, 0);
+    }
+
+    #[test]
+    fn flags_a_command_that_reaches_outside_the_project() {
+        let run = |cmd: &str| {
+            step_flags(StepKind::Command, Some(cmd), None, Some("/Users/me/app"))
+                & flags::OUTSIDE_PROJECT
+        };
+        assert_ne!(run("cat ~/.claude/settings.json"), 0);
+        assert_ne!(
+            run("for f in src/*; do cat \"$f\"; done; cat $HOME/.zshrc"),
+            0
+        );
+        assert_ne!(run("ls /Users/me/other"), 0);
+        assert_ne!(run("cat /etc/hosts"), 0);
+        assert_eq!(run("cat ~/app/src/a.js"), 0, "inside, spelled from home");
+        assert_eq!(run("cat /Users/me/app/src/a.js"), 0);
+        assert_eq!(
+            run("npm test 2>/dev/null > /tmp/out.txt"),
+            0,
+            "scratch places"
+        );
+        assert_eq!(run("/usr/bin/env node a.js"), 0);
+        assert_ne!(
+            cmd_flags("cat ~/.npmrc") & flags::OUTSIDE_PROJECT,
+            0,
+            "no home known"
+        );
+    }
+
+    #[test]
+    fn a_command_that_changed_files_outside_is_flagged() {
+        let step = log_entry(&ev(
+            r#"{"event":"PostToolUse","tool_name":"Bash","tool_use_id":"t1","command":"./fix.sh","changed_files":["/w/a.js","/u/.zshrc"],"cwd":"/w","ts":"1970-01-01T00:00:01Z"}"#,
+        ));
+        let Some(LogEntry::Step(step)) = step else {
+            panic!("a step: {step:?}");
+        };
+        assert_ne!(step.flags & flags::OUTSIDE_PROJECT, 0);
+        assert_eq!(step.changed_files, ["/w/a.js", "/u/.zshrc"]);
     }
 
     #[test]

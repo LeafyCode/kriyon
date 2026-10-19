@@ -26,13 +26,13 @@ import {
   changesPathFor,
   changesUnavailableReason,
   filterCounts,
-  groupSteps,
   retentionNote,
   type StatTone,
   type StepRowView,
   stepChips,
   stepRow,
   turnHeading,
+  turnRows,
   turnTimeLabel,
   visibleTurns,
 } from "./activityLog.ts";
@@ -316,11 +316,13 @@ function FilterChips({
 }
 
 function StepRow({
+  nested = false,
   onOpen,
   row,
   toplevel,
   turnEnded,
 }: {
+  nested?: boolean;
   onOpen: (step: ActivityStep) => void;
   row: StepRowView;
   toplevel: string | null | undefined;
@@ -328,15 +330,22 @@ function StepRow({
 }) {
   const [open, setOpen] = useState(false);
   const [lead] = row.steps;
-  const folded = row.steps.length > 1;
-  const Icon = KIND_ICON[lead.kind];
-  const chips = folded ? [] : stepChips(lead, turnEnded);
+  // A subagent's block shows its rows open; a fold of reads opens on a click.
+  const folded = row.steps.length > 1 && !row.children;
+  const Icon = row.children ? Bot : KIND_ICON[lead.kind];
+  const chips = row.steps.length > 1 ? [] : stepChips(lead, turnEnded, nested);
   return (
     <>
       <button
         aria-expanded={folded ? open : undefined}
         className="kr-hover-surface"
-        onClick={() => (folded ? setOpen(!open) : onOpen(lead))}
+        onClick={() => {
+          if (folded) {
+            setOpen(!open);
+          } else if (row.steps.length === 1) {
+            onOpen(lead);
+          }
+        }}
         style={stepButtonStyle}
         type="button"
       >
@@ -382,8 +391,23 @@ function StepRow({
           {row.steps.map((step) => (
             <StepRow
               key={step.id}
+              nested={nested}
               onOpen={onOpen}
               row={stepRow(step, toplevel)}
+              toplevel={toplevel}
+              turnEnded={turnEnded}
+            />
+          ))}
+        </div>
+      ) : null}
+      {row.children ? (
+        <div data-testid="subagent-steps" style={foldStyle}>
+          {row.children.map((child) => (
+            <StepRow
+              key={child.steps[0].id}
+              nested
+              onOpen={onOpen}
+              row={child}
               toplevel={toplevel}
               turnEnded={turnEnded}
             />
@@ -422,7 +446,7 @@ function TurnBlock({
       </p>
       {turn.steps.length > 0 ? (
         <div style={stepsStyle}>
-          {groupSteps(turn.steps, toplevel).map((row) => (
+          {turnRows(turn.steps, toplevel).map((row) => (
             <StepRow
               key={row.steps[0].id}
               onOpen={onOpen}

@@ -9,6 +9,7 @@ import {
   groupSteps,
   keptFor,
   prettyInput,
+  prettyResult,
   retentionNote,
   STEP_FLAGS,
   stepChips,
@@ -16,19 +17,23 @@ import {
   stepLines,
   stepStats,
   turnHeading,
+  turnRows,
   turnTimeLabel,
   visibleTurns,
 } from "./activityLog.ts";
 
 function step(over: Partial<ActivityStep> = {}): ActivityStep {
   return {
+    agentId: null,
     agentType: null,
     approved: false,
+    changedFiles: [],
     created: false,
     durationMs: 120,
     flags: 0,
     id: 1,
     kind: "read",
+    launchedType: null,
     linesAdded: null,
     linesRemoved: null,
     outcome: null,
@@ -377,6 +382,9 @@ describe("detail helpers", () => {
   test("pretty-prints JSON input and keeps anything else raw", () => {
     expect(prettyInput('{"a":1}')).toBe('{\n  "a": 1\n}');
     expect(prettyInput("ls -la")).toBe("ls -la");
+    expect(
+      prettyInput('{"command":"npm test\\n| tail","description":"Run tests"}')
+    ).toBe("npm test\n| tail");
     expect(prettyInput(null)).toBe("");
   });
 
@@ -609,3 +617,104 @@ function stepOutsideLabel(): string {
     })
   );
 }
+
+describe("what the screenshots showed", () => {
+  test("a shell loop stays one command", () => {
+    const loop = step({
+      kind: "command",
+      target: 'for f in src/*; do echo "== $f"; cat "$f"; done; grep -n x src',
+    });
+    expect(stepLabel(loop)).toBe("Ran 2 commands");
+    expect(stepLines(loop, null)).toEqual([
+      'for f in src/*; do echo "== $f"; cat "$f"; done',
+      "grep -n x src",
+    ]);
+  });
+
+  test("a command names the files it changed", () => {
+    const write = step({
+      changedFiles: ["/w/src/format.js", "/w/src/format.test.js"],
+      kind: "command",
+      linesAdded: 18,
+      summary: "Write format module",
+      target: "cat > src/format.js <<'EOF'\nx\nEOF",
+    });
+    expect(stepLines(write, "/w")).toEqual([
+      "cat > src/format.js <<'EOF' …",
+      "Changed format.js, format.test.js",
+    ]);
+  });
+
+  test("a command's result reads as its output", () => {
+    expect(
+      prettyResult(
+        '{"stdout": "found 0\\nv24", "stderr": "", "isImage": false}'
+      )
+    ).toBe("found 0\nv24");
+    expect(prettyResult("plain text")).toBe("plain text");
+    expect(prettyResult(null)).toBe("");
+  });
+
+  test("Claude's own verbs read in the past tense", () => {
+    expect(
+      stepLabel(
+        step({
+          kind: "command",
+          summary: "Init npm project",
+          target: "npm init",
+        })
+      )
+    ).toBe("Initialized npm project");
+  });
+});
+
+describe("subagents", () => {
+  const launch = step({
+    id: 1,
+    kind: "agent",
+    launchedType: "Explore",
+    startedMs: 100,
+    summary: "Map the parser",
+    target: null,
+    toolName: "Agent",
+  });
+  const sub = (id: number, over: Partial<ActivityStep> = {}) =>
+    step({
+      agentId: "a1",
+      agentType: "Explore",
+      id,
+      startedMs: 100 + id,
+      target: `/w/${id}.rs`,
+      ...over,
+    });
+
+  test("a subagent's steps sit under the step that started it", () => {
+    const rows = turnRows(
+      [
+        launch,
+        sub(2),
+        step({ id: 3, kind: "command", startedMs: 103, target: "ls" }),
+        sub(4),
+        sub(5, { kind: "command", target: "cargo test" }),
+      ],
+      null
+    );
+    expect(rows.map((r) => r.label)).toEqual([
+      "Subagent: Map the parser",
+      "Ran a command",
+    ]);
+    expect(rows[0].children?.map((r) => r.label)).toEqual([
+      "Read 2 files",
+      "Ran a command",
+    ]);
+  });
+
+  test("a subagent with no start in sight still gets its own block", () => {
+    const rows = turnRows(
+      [sub(2), sub(3, { kind: "command", target: "ls" })],
+      null
+    );
+    expect(rows.map((r) => r.label)).toEqual(["Subagent · Explore"]);
+    expect(rows[0].children).toHaveLength(2);
+  });
+});

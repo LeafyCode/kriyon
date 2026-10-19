@@ -124,7 +124,9 @@ const PAST: Record<string, string> = {
   format: "formatted",
   generate: "generated",
   get: "got",
+  grep: "grepped",
   import: "imported",
+  init: "initialized",
   inspect: "inspected",
   install: "installed",
   kill: "killed",
@@ -140,6 +142,7 @@ const PAST: Record<string, string> = {
   move: "moved",
   open: "opened",
   print: "printed",
+  probe: "probed",
   pull: "pulled",
   push: "pushed",
   query: "queried",
@@ -151,6 +154,7 @@ const PAST: Record<string, string> = {
   render: "rendered",
   replace: "replaced",
   rerun: "reran",
+  rewrite: "rewrote",
   reset: "reset",
   restart: "restarted",
   restore: "restored",
@@ -302,7 +306,47 @@ export function splitCommands(line: string): string[] {
   }
   parts.push(line.slice(start));
   // A trailing separator (`cmd;`) ends the line, it doesn't start a command.
-  return parts.map((part) => part.trim()).filter((part) => part !== "");
+  return joinBlocks(
+    parts.map((part) => part.trim()).filter((part) => part !== "")
+  );
+}
+
+/** The word that closes each shell block a command can open. */
+const BLOCK_CLOSE: Record<string, string> = {
+  case: "esac",
+  for: "done",
+  if: "fi",
+  select: "done",
+  until: "done",
+  while: "done",
+};
+
+const FIRST_WORD = /^\S+/;
+
+/** The parts of a loop or `if` put back together: `for f in *; do …; done`
+ * is one command, not three. */
+function joinBlocks(parts: string[]): string[] {
+  const commands: string[] = [];
+  const open: string[] = [];
+  let block: string[] = [];
+  for (const part of parts) {
+    block.push(part);
+    const word = FIRST_WORD.exec(part)?.[0] ?? "";
+    // `open` holds the closing words still owed, innermost first.
+    if (BLOCK_CLOSE[word]) {
+      open.unshift(BLOCK_CLOSE[word]);
+    } else if (word === open[0]) {
+      open.shift();
+    }
+    if (open.length === 0) {
+      commands.push(block.join("; "));
+      block = [];
+    }
+  }
+  if (block.length > 0) {
+    commands.push(block.join("; "));
+  }
+  return commands;
 }
 
 /** How many commands a shell line chains — see {@link splitCommands}. */
@@ -338,6 +382,21 @@ const MAX_COMMAND_LINES = 4;
 
 /** A home folder anywhere in a line: `/Users/<name>/`. Mac-first. */
 const HOME_PATH = /\/Users\/[^/\s'"]+\//g;
+
+/** The most file names a row lists before it counts the rest. */
+const MAX_FOLDED_NAMES = 3;
+
+/** "a.js, b.js, c.js +2": the first few names of `paths`, the rest counted. */
+function namesLine(paths: readonly string[]): string {
+  const names = paths.slice(0, MAX_FOLDED_NAMES).map(fileName).join(", ");
+  const more = paths.length - MAX_FOLDED_NAMES;
+  return more > 0 ? `${names} +${more}` : names;
+}
+
+/** "Changed a.js, b.js" for the files a command changed, if any. */
+function changedLine(paths: readonly string[]): string[] {
+  return paths.length > 0 ? [`Changed ${namesLine(paths)}`] : [];
+}
 
 /** Each command of a chain by its first line, the rest counted. */
 function commandLines(target: string): string[] {
@@ -387,7 +446,7 @@ function rawLines(
     return [];
   }
   if (step.kind === "command") {
-    return commandLines(target);
+    return [...commandLines(target), ...changedLine(step.changedFiles)];
   }
   if (FILE_VERB[step.kind] === undefined) {
     return [target];
@@ -452,11 +511,15 @@ export interface StepChip {
 
 /**
  * The small trailing chips: status, the user's yes, the lead flag, a
- * subagent's type. Once
+ * subagent's type (left off when `nested` under its subagent's row). Once
  * `turnEnded`, a main-agent step whose end was never recorded isn't running:
  * Claude ends a turn only after its own calls return.
  */
-export function stepChips(step: ActivityStep, turnEnded = false): StepChip[] {
+export function stepChips(
+  step: ActivityStep,
+  turnEnded = false,
+  nested = false
+): StepChip[] {
   const chips: StepChip[] = [];
   const stale = turnEnded && step.agentType === null;
   if (step.status === "error") {
@@ -471,7 +534,8 @@ export function stepChips(step: ActivityStep, turnEnded = false): StepChip[] {
   if (flag) {
     chips.push({ text: FLAG_CHIP[flag], tone: "flag" });
   }
-  if (step.agentType) {
+  // Under its subagent's row, the type would only repeat it.
+  if (step.agentType && !nested) {
     chips.push({ text: step.agentType, tone: "muted" });
   }
   return chips;
@@ -508,6 +572,8 @@ export function stepStats(step: ActivityStep): StepStat[] {
 
 /** One timeline row: a step, or a run of reads or changes folded into one. */
 export interface StepRowView {
+  /** A subagent's own rows, under the step that started it. */
+  children?: StepRowView[];
   label: string;
   lines: string[];
   stats: StepStat[];
@@ -542,9 +608,6 @@ function foldOf(step: ActivityStep): Fold | null {
   return step.kind === "edit" || step.kind === "write" ? "change" : null;
 }
 
-/** The most file names a folded row lists before it counts the rest. */
-const MAX_FOLDED_NAMES = 3;
-
 function foldedRow(
   run: ActivityStep[],
   fold: Fold,
@@ -558,15 +621,13 @@ function foldedRow(
   if (targets.length === 1) {
     return { ...stepRow(run[0], toplevel), stats, steps: run };
   }
-  const names = targets.slice(0, MAX_FOLDED_NAMES).map(fileName).join(", ");
-  const more = targets.length - MAX_FOLDED_NAMES;
   let verb = "Read";
   if (fold === "change") {
     verb = run.every((s) => s.created) ? "Added" : "Changed";
   }
   return {
     label: `${verb} ${targets.length} files`,
-    lines: [more > 0 ? `${names} +${more}` : names],
+    lines: [namesLine(targets)],
     stats,
     steps: run,
   };
@@ -603,6 +664,80 @@ export function groupSteps(
     i = end;
   }
   return rows;
+}
+
+/** The subagent type Claude Code runs when a launch names none. */
+const DEFAULT_SUBAGENT = "general-purpose";
+
+/**
+ * A turn's timeline: the main agent's rows ({@link groupSteps}), with each
+ * subagent's steps under the step that started it — the earliest unclaimed
+ * launch of its type before its first step. A subagent whose launch isn't in
+ * sight (another turn, a filter) gets a block of its own, in time order.
+ */
+export function turnRows(
+  steps: readonly ActivityStep[],
+  toplevel: string | null | undefined
+): StepRowView[] {
+  const main = steps.filter((s) => s.agentId === null);
+  const groups = new Map<string, ActivityStep[]>();
+  for (const s of steps) {
+    if (s.agentId !== null) {
+      groups.set(s.agentId, [...(groups.get(s.agentId) ?? []), s]);
+    }
+  }
+  const claimed = new Map<number, ActivityStep[]>();
+  const orphans: ActivityStep[][] = [];
+  for (const group of groups.values()) {
+    const [first] = group;
+    const launch = main.find(
+      (s) =>
+        s.kind === "agent" &&
+        !claimed.has(s.id) &&
+        (s.launchedType ?? DEFAULT_SUBAGENT) === first.agentType &&
+        s.startedMs <= first.startedMs
+    );
+    if (launch) {
+      claimed.set(launch.id, group);
+    } else {
+      orphans.push(group);
+    }
+  }
+  const rows = groupSteps(main, toplevel).map((row) => {
+    const group = claimed.get(row.steps[0].id);
+    return group ? withChildren(row, group, toplevel) : row;
+  });
+  for (const group of orphans) {
+    const row = withChildren(
+      {
+        label: `Subagent · ${group[0].agentType ?? "unknown"}`,
+        lines: [],
+        stats: [],
+        steps: group,
+      },
+      group,
+      toplevel
+    );
+    const at = rows.findIndex((r) => r.steps[0].startedMs > group[0].startedMs);
+    rows.splice(at === -1 ? rows.length : at, 0, row);
+  }
+  return rows;
+}
+
+/** `row` with a subagent's rows under it, and their lines added up. */
+function withChildren(
+  row: StepRowView,
+  group: ActivityStep[],
+  toplevel: string | null | undefined
+): StepRowView {
+  return {
+    ...row,
+    children: groupSteps(group, toplevel),
+    stats: lineStats(
+      group.reduce((n, s) => n + (s.linesAdded ?? 0), 0),
+      group.reduce((n, s) => n + (s.linesRemoved ?? 0), 0)
+    ),
+  };
 }
 
 export type ActivityFilter = "all" | "changes" | "commands" | "flagged";
@@ -740,17 +875,47 @@ export function turnTimeLabel(turn: ActivityTurn, nowMs: number): string {
   return `${at} · ${took}`;
 }
 
-/** A step's input, pretty-printed when it is JSON. */
+/** `text` parsed as a JSON object, or `null` when it is anything else. */
+function jsonObject(text: string): Record<string, unknown> | null {
+  try {
+    const value: unknown = JSON.parse(text);
+    return value && typeof value === "object" && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : null;
+  } catch {
+    // Not JSON (a raw command line, a truncated blob).
+    return null;
+  }
+}
+
+/** A step's input as a person reads it: a command as its own text, anything
+ * else pretty-printed when it is JSON. */
 export function prettyInput(input: string | null): string {
   if (!input) {
     return "";
   }
-  try {
-    return JSON.stringify(JSON.parse(input), null, 2);
-  } catch {
-    // Not JSON (a raw command line, a truncated blob): show it as it is.
+  const value = jsonObject(input);
+  if (!value) {
     return input;
   }
+  return typeof value.command === "string"
+    ? value.command
+    : JSON.stringify(value, null, 2);
+}
+
+/** A step's result as a person reads it: a command's output, not the JSON
+ * an older hook wrapped it in. */
+export function prettyResult(result: string | null): string {
+  if (!result) {
+    return "";
+  }
+  const value = jsonObject(result);
+  const output = [value?.stdout, value?.stderr].filter(
+    (t): t is string => typeof t === "string" && t !== ""
+  );
+  return value && ("stdout" in value || "stderr" in value)
+    ? output.join("\n")
+    : result;
 }
 
 export function agentLabel(agentType: string | null): string {

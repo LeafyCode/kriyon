@@ -87,6 +87,15 @@ def cap(text, n):
     return text if len(text) <= n else text[:n] + "…"
 
 
+def cap_ends(text, n):
+    """`text` cut to about `n` characters, keeping its start and its end: a
+    command's summary ("43 passed", an error) is usually its last lines."""
+    if not isinstance(text, str) or len(text) <= n:
+        return text
+    half = n // 2
+    return text[:half] + "\n…\n" + text[-half:]
+
+
 try:
     data = json.load(sys.stdin)
 except Exception:
@@ -121,7 +130,45 @@ def file_change(tr):
     return added, removed, created
 
 
+def readable(tr):
+    """A tool's result as a person reads it: a command's output, a change's
+    patch, a new file, a page's text, the files a search found. None when it
+    has no such shape, to fall back to its JSON."""
+    out = [tr.get(k) for k in ("stdout", "stderr")]
+    if any(isinstance(t, str) for t in out):
+        return "\n".join(t for t in out if isinstance(t, str) and t)
+    hunks = tr.get("structuredPatch")
+    if isinstance(hunks, list) and hunks:
+        return "\n".join(l for h in hunks if isinstance(h, dict)
+                         for l in (h.get("lines") if isinstance(h.get("lines"), list) else [])
+                         if isinstance(l, str))
+    if tr.get("type") == "create" and isinstance(tr.get("content"), str):
+        return tr["content"]
+    file = tr.get("file")
+    if isinstance(file, dict) and isinstance(file.get("content"), str):
+        return file["content"]
+    if isinstance(tr.get("content"), str) and tr["content"]:
+        return tr["content"]
+    if isinstance(tr.get("filenames"), list):
+        return "\n".join(str(f) for f in tr["filenames"])
+    if isinstance(tr.get("result"), str):
+        return tr["result"]
+    return None
+
+
+def changed_files(tr):
+    """The files a Bash command changed, as Claude Code reports them."""
+    diff = tr.get("bashEditDiff") if isinstance(tr, dict) else None
+    files = diff.get("files") if isinstance(diff, dict) else None
+    if not isinstance(files, list):
+        return None
+    paths = [redact(f["filePath"]) for f in files
+             if isinstance(f, dict) and isinstance(f.get("filePath"), str)]
+    return paths[:20] or None
+
+
 CARGO_RESULT = re.compile(r"test result: \w+\. (\d+) passed; (\d+) failed")
+NODE_RESULT = re.compile(r"^(?:ℹ|#) (pass|fail) (\d+)\s*$", re.M)
 PASSED = re.compile(r"(\d+) passed")
 FAILED = re.compile(r"(\d+) failed")
 
@@ -139,8 +186,11 @@ def outcome_of(tool, tr):
         return None
     out = "\n".join(t for t in (tr.get("stdout"), tr.get("stderr")) if isinstance(t, str))
     cargo = CARGO_RESULT.findall(out)
+    node = dict(NODE_RESULT.findall(out))
     if cargo:
         passed, failed = sum(int(p) for p, _ in cargo), sum(int(f) for _, f in cargo)
+    elif "pass" in node:
+        passed, failed = int(node["pass"]), int(node.get("fail", 0))
     else:
         line = next((l for l in reversed(out.splitlines()) if PASSED.search(l)), None)
         if line is None:
@@ -160,8 +210,9 @@ tr = data.get("tool_response")
 try:
     lines_added, lines_removed, created = file_change(tr)
     outcome = outcome_of(data.get("tool_name"), tr)
+    edited = changed_files(tr)
 except Exception:
-    lines_added = lines_removed = created = outcome = None
+    lines_added = lines_removed = created = outcome = edited = None
 # A background Agent returns at once with a launch receipt, not its answer:
 # keep the launched agent's id (what its own tool events carry), drop the rest.
 launched = None
@@ -178,10 +229,15 @@ elif isinstance(tr, dict):
                  if isinstance(b, dict) and b.get("type") == "text"]
         result = "\n".join(p for p in parts if p) or json.dumps(tr)
     else:
-        result = json.dumps(tr)
+        try:
+            result = readable(tr)
+        except Exception:
+            result = None
+        if result is None:
+            result = json.dumps(tr)
 else:
     result = tr if isinstance(tr, str) else json.dumps(tr)
-result = cap(redact(result), 4000)
+result = cap_ends(redact(result), 4000)
 # A short human target for the tool: a file path, else a command summary.
 target = cap(redact(ti.get("file_path") or ti.get("command")), 200)
 # Ask payload: the Notification message, the AskUserQuestion questions (raw
@@ -250,6 +306,7 @@ rec = {
     "lines_removed": lines_removed,
     "created": created,
     "outcome": outcome,
+    "changed_files": edited,
     # On Stop: this turn is ending again because a Stop hook resumed it, so it
     # has already been announced once.
     "stop_hook_active": data.get("stop_hook_active"),
