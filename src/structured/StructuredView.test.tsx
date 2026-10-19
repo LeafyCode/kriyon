@@ -14,6 +14,7 @@ import {
   writeStdin,
 } from "../ipc/bridge.ts";
 import { useIntegration } from "../state/integration.ts";
+import { useLayout } from "../state/layout.ts";
 import { useOutsideOpen } from "../state/outsideOpen.ts";
 import { useSentPrompts } from "../state/sentPrompts.ts";
 import { useSessions } from "../state/sessions.ts";
@@ -44,6 +45,7 @@ const sentNow = (text: string) => ({
 });
 const WORKING = /Claude is working/;
 const NO_TURNS = /No turns yet/;
+const TRUST_HINT = /trust this folder/;
 
 function setStatus(status: SessionStatus) {
   useSessions.setState({
@@ -745,4 +747,25 @@ test("a prompt sent from Kriyon shows as the user's before its turn arrives", as
   render(<StructuredView sessionId="s1" />);
   const prompt = await screen.findByRole("region", { name: "Your prompt" });
   expect(prompt).toHaveTextContent("hello");
+});
+
+test("while the companion starts, it shows it connecting, not that it's missing", async () => {
+  vi.mocked(companionStatus).mockResolvedValue({
+    claudeVersion: null,
+    state: "starting",
+  });
+  useLayout.getState().setTranscriptView("structured", false);
+  render(<StructuredView sessionId="s1" />);
+  expect(await screen.findByRole("status")).toHaveTextContent(
+    "Starting Kriyon Companion…"
+  );
+  expect(screen.getByText(TRUST_HINT)).toBeInTheDocument();
+  expect(
+    screen.queryByText("The Structured view needs Kriyon Companion.")
+  ).toBeNull();
+  expect(
+    screen.queryByRole("button", { name: "Turn on Kriyon Companion" })
+  ).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Open the terminal" }));
+  expect(useLayout.getState().layout.transcriptView).toBe("raw");
 });
