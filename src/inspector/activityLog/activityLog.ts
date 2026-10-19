@@ -757,7 +757,9 @@ export function turnRows(
   for (const group of orphans) {
     const row = withChildren(
       {
-        label: `Subagent · ${group[0].agentType ?? "unknown"}`,
+        label: group[0].agentType
+          ? `Subagent · ${group[0].agentType}`
+          : "Claude Code in the background",
         lines: [],
         stats: [],
         steps: group,
@@ -803,8 +805,25 @@ export const ACTIVITY_FILTERS: readonly {
  * loading more of its tools. Left out of the timeline and its counts. */
 const HOUSEKEEPING = new Set(["ToolSearch"]);
 
+/** A step from a helper Claude Code forks for itself: it has an agent but
+ * no subagent type, because nobody launched it. */
+function isHelper(step: ActivityStep): boolean {
+  return step.agentId !== null && step.agentType === null;
+}
+
+/** What only Claude's own bookkeeping does, when a helper does it: a helper
+ * starting or stopping a check-in loop. */
+const HELPER_HOUSEKEEPING = new Set(["ScheduleWakeup"]);
+
+function isHousekeeping(step: ActivityStep): boolean {
+  return (
+    HOUSEKEEPING.has(step.toolName) ||
+    (isHelper(step) && HELPER_HOUSEKEEPING.has(step.toolName))
+  );
+}
+
 function matches(step: ActivityStep, filter: ActivityFilter): boolean {
-  if (HOUSEKEEPING.has(step.toolName)) {
+  if (isHousekeeping(step)) {
     return false;
   }
   switch (filter) {

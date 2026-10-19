@@ -795,3 +795,34 @@ describe("the third smoke run", () => {
     ).toBe("Deleted files");
   });
 });
+
+describe("Claude Code's own background helpers", () => {
+  const helper = (over: Partial<ActivityStep>) =>
+    step({ agentId: "a37", agentType: null, id: 9, ...over });
+
+  test("a helper's check-in is housekeeping: not shown or counted", () => {
+    const turns = [
+      turn({
+        steps: [
+          helper({ kind: "other", target: null, toolName: "ScheduleWakeup" }),
+        ],
+      }),
+    ];
+    expect(filterCounts(turns).all).toBe(0);
+    expect(visibleTurns(turns, "all")[0].steps).toEqual([]);
+    // The main agent scheduling one is Claude acting later: it stays.
+    const main = [
+      turn({
+        steps: [
+          step({ kind: "other", target: null, toolName: "ScheduleWakeup" }),
+        ],
+      }),
+    ];
+    expect(filterCounts(main).all).toBe(1);
+  });
+
+  test("anything else a helper does shows under its own name", () => {
+    const rows = turnRows([helper({ kind: "command", target: "ls" })], null);
+    expect(rows.map((r) => r.label)).toEqual(["Claude Code in the background"]);
+  });
+});
