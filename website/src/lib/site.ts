@@ -8,4 +8,4 @@ export const CHANGELOG_URL = `${GITHUB_URL}/blob/main/CHANGELOG.md`;
 export const ISSUES_URL = `${GITHUB_URL}/issues`;
 
 /* Set by `pnpm release` (rendered in the spec sheet and footer). */
-export const APP_VERSION = "v0.12.0";
+export const APP_VERSION = "v0.13.0";

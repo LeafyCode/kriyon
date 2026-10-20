@@ -2,6 +2,35 @@
 
 All notable changes to Kriyon are listed here. Dates are YYYY-MM-DD.
 
+## 0.13.0 — 2026-10-20
+
+Kriyon is now open source, and it can update itself.
+
+### Added
+
+- **Updates inside the app.** Kriyon tells you when a new version is out and
+  installs it when you say so. Your sessions keep running.
+- **Install with Homebrew:** `brew install leafycode/tap/kriyon`.
+- **Easier to read conversations.** Your messages and Claude's replies now
+  look different, so you can tell them apart at a glance.
+
+### Changed
+
+- **Clearer activity.** You can see at a glance what Claude changed on your
+  computer, such as installed or deleted files.
+- **New font and colors** for text and code.
+
+### Fixed
+
+- The Structured view now matches the terminal more closely.
+- Pasted text and long messages show and send correctly.
+- The message box fits small windows.
+- Closing a session cleans up its leftover files.
+
+### Security
+
+- Tighter limits on what the app window can load.
+
 ## 0.12.0 — 2026-10-11
 
 The Structured view now works on its own: Claude Code's dialogs open over it,
