@@ -9,7 +9,7 @@ import {
   ScriptOnce,
   Scripts,
 } from "@tanstack/react-router";
-import type { ReactNode } from "react";
+import { type ReactNode, useEffect } from "react";
 import {
   APP_VERSION,
   GITHUB_URL,
@@ -19,7 +19,11 @@ import {
   RELEASES_URL,
   SITE_URL,
 } from "../lib/site.ts";
-import { THEME_SCRIPT } from "../lib/theme.ts";
+import {
+  reapplyPinnedTheme,
+  THEME_COLORS,
+  THEME_SCRIPT,
+} from "../lib/theme.ts";
 import appCss from "../styles.css?url";
 
 /* Sized for search results: the title under 60 characters, the description
@@ -145,24 +149,31 @@ function RootComponent() {
 }
 
 function RootDocument({ children }: Readonly<{ children: ReactNode }>) {
+  // Once hydrated, every page puts a pinned theme's bar colour back in front:
+  // in development React moves the tags it renders ahead of it.
+  useEffect(() => {
+    reapplyPinnedTheme();
+  }, []);
+
   return (
     // The theme script below sets `data-theme` before React hydrates.
     <html lang="en" suppressHydrationWarning>
       <head>
-        <ScriptOnce>{THEME_SCRIPT}</ScriptOnce>
         <HeadContent />
         {/* Written here, not in `head()`: its meta merge keeps one tag per
-            name, and the browser bar needs one colour per scheme. */}
+            name, and the browser bar needs one colour per scheme. A pinned
+            theme adds its own tag ahead of these (lib/theme.ts). */}
         <meta
-          content="#ffffff"
+          content={THEME_COLORS.light}
           media="(prefers-color-scheme: light)"
           name="theme-color"
         />
         <meta
-          content="#0d1017"
+          content={THEME_COLORS.dark}
           media="(prefers-color-scheme: dark)"
           name="theme-color"
         />
+        <ScriptOnce>{THEME_SCRIPT}</ScriptOnce>
       </head>
       <body>
         {children}
