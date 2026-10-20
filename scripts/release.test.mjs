@@ -497,6 +497,20 @@ describe("the changelog entry", () => {
     );
   });
 
+  test("no comment survives, even one split around another", () => {
+    const nested = "<!<!-- x -->-- y -->";
+    assert.equal(
+      draftNotes(
+        `## 0.13.0-beta.1 — 2026-10-16\n\n${nested}\n### Added\n\n- A thing\n`
+      ),
+      "### Added\n\n- A thing\n"
+    );
+    assert.equal(
+      cleanEntry(`## 0.13.0 — 2026-10-16\n\n${nested}\n\nSummary.\n`, "0.13.0"),
+      "## 0.13.0 — 2026-10-16\n\nSummary.\n"
+    );
+  });
+
   test("a draft with nothing listed gives empty pre-release notes", () => {
     assert.equal(
       draftNotes(
