@@ -1,0 +1,319 @@
+name: Release
+
+# Builds a signed, notarized, universal (Apple Silicon + Intel) Mac release
+# as a draft GitHub release, with its update feed checked. See ADR 0046 and
+# docs/RELEASING.md.
+#
+# - Stable: a push to main that carries a new version (the release PR). The
+#   draft waits for a person to check it and run the Publish workflow.
+# - Nightly: every night from dev, only if dev changed since the last one.
+# - Beta: run by hand from dev ("Run workflow", channel beta).
+# Betas and nightlies publish themselves once the feed check passes.
+#
+# Signing secrets are plain repo secrets while the repo is private (the free
+# plan has nothing else). Once public they move into the `prerelease`
+# (dev only, no approval) and `release` (main only, needs approval)
+# environments, which the jobs below already name: the move is a settings
+# change, not an edit here.
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: "What to build from dev"
+        type: choice
+        options: [beta, nightly]
+        default: beta
+
+# Nothing by default; each job asks for what it needs.
+permissions: {}
+
+# One run per channel at a time, never cancelled halfway, shared with
+# publish.yml. GitHub keeps one waiting run per group and drops an older
+# waiting one, so per channel only an older build of the same channel can be
+# dropped: a nightly never displaces a stable build.
+concurrency:
+  group: release-${{ github.event_name == 'push' && 'stable' || github.event_name == 'schedule' && 'nightly' || inputs.channel }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Decide what to build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read # the run's start time, for the nightly's date
+    outputs:
+      channel: ${{ steps.decide.outputs.channel }}
+      commit: ${{ steps.decide.outputs.commit }}
+      build: ${{ steps.decide.outputs.build }}
+      public: ${{ steps.visibility.outputs.public }}
+      started: ${{ steps.visibility.outputs.started }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Every branch and tag: the checks count from the release tags.
+          fetch-depth: 0
+          persist-credentials: false
+      # No dependency cache in a release workflow: a poisoned cache would ship.
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - run: pnpm install --frozen-lockfile
+      # A scheduled run's event carries no repository, so ask the API. Its own
+      # line, so a failed lookup fails the step instead of reading as private.
+      - id: visibility
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          public="$(gh api "repos/$GITHUB_REPOSITORY" --jq '.private | not')"
+          echo "public=$public" >> "$GITHUB_OUTPUT"
+          # When the run was made; a re-run keeps it, so a nightly re-run
+          # after midnight keeps its version.
+          started="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --jq .created_at)"
+          echo "started=$started" >> "$GITHUB_OUTPUT"
+      - name: Check the updater key
+        env:
+          PUBLIC_REPO: ${{ steps.visibility.outputs.public }}
+        run: node scripts/publish.mjs check-key
+      - id: decide
+        env:
+          EVENT: ${{ github.event_name }}
+          CHOSEN: ${{ inputs.channel }}
+          PUBLIC_REPO: ${{ steps.visibility.outputs.public }}
+        run: |
+          case "$EVENT" in
+            push) channel=stable ;;
+            schedule) channel=nightly ;;
+            *) channel="$CHOSEN" ;;
+          esac
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+          build=true
+          commit="$GITHUB_SHA"
+          if [[ "$channel" == stable ]]; then
+            version="$(node -p 'require("./package.json").version')"
+            if git rev-parse --quiet --verify "refs/tags/v$version" >/dev/null; then
+              echo "::notice::v$version is already released; this push to main carries no new version."
+              build=false
+            else
+              # Checks main took what the entry lists; names the commit to tag.
+              commit="$(node scripts/release.mjs released --no-fetch)"
+            fi
+          else
+            if [[ "$GITHUB_REF" != refs/heads/dev ]]; then
+              echo "::error::Betas and nightlies build from dev, not $GITHUB_REF."
+              exit 1
+            fi
+            # macOS minutes cost ten times as much on a private repo, so
+            # while it is private the nightly runs only when started by hand.
+            if [[ "$EVENT" == schedule && "$PUBLIC_REPO" != true ]]; then
+              echo "::notice::The repo is private, so the nightly runs only when started by hand."
+              build=false
+            elif [[ "$channel" == nightly && -n "$(git tag --points-at HEAD | xargs node scripts/publish.mjs nightlies)" ]]; then
+              echo "::notice::No new commits on dev since the last nightly."
+              build=false
+            fi
+          fi
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build, sign and notarize (${{ needs.prepare.outputs.channel }})
+    needs: prepare
+    if: ${{ needs.prepare.outputs.build == 'true' }}
+    runs-on: macos-15
+    timeout-minutes: 120
+    environment: ${{ needs.prepare.outputs.channel == 'stable' && 'release' || 'prerelease' }}
+    permissions:
+      contents: write # the draft release
+      id-token: write # build provenance
+      attestations: write # build provenance
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+    env:
+      CHANNEL: ${{ needs.prepare.outputs.channel }}
+      BUNDLE: target/universal-apple-darwin/release/bundle
+      GH_TOKEN: ${{ github.token }}
+      PUBLIC_REPO: ${{ needs.prepare.outputs.public }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      # The runner's own rustup, with both Mac targets for the universal build.
+      - run: |
+          rustup toolchain install stable --profile minimal \
+            --target aarch64-apple-darwin --target x86_64-apple-darwin
+          rustup default stable
+      - run: pnpm install --frozen-lockfile
+
+      - name: Set the version
+        id: version
+        env:
+          STARTED: ${{ needs.prepare.outputs.started }}
+        run: |
+          case "$CHANNEL" in
+            stable) version="$(node -p 'require("./package.json").version')" ;;
+            beta) version="$(node scripts/release.mjs beta --write)" ;;
+            nightly) version="$(node scripts/release.mjs nightly --date "$STARTED" --write)" ;;
+          esac
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+
+      - name: Write the release notes
+        id: notes
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          # They become latest.json's notes too, which the update dialog shows.
+          notes="$(node scripts/release.mjs notes "$VERSION")"
+          if [[ "$CHANNEL" != stable ]]; then
+            notes="A $CHANNEL build from dev at ${GITHUB_SHA:0:7}, for testing."$'\n\n'"$notes"
+          fi
+          delimiter="notes-$(uuidgen)"
+          {
+            echo "body<<$delimiter"
+            echo "$notes"
+            echo "$delimiter"
+          } >> "$GITHUB_OUTPUT"
+
+      # A re-run reuses the version, so a draft a failed run left is replaced.
+      # A published release is never replaced: downloads never change.
+      - name: Clear a draft a failed run left
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          if draft="$(gh release view "$TAG" --json isDraft --jq .isDraft 2>/dev/null)"; then
+            if [[ "$draft" != true ]]; then
+              echo "::error::$TAG is already published."
+              exit 1
+            fi
+            gh release delete "$TAG" --yes
+          fi
+
+      - name: Write the App Store Connect key
+        env:
+          APPLE_API_KEY_BASE64: ${{ secrets.APPLE_API_KEY_BASE64 }}
+        run: |
+          umask 077
+          printf '%s' "$APPLE_API_KEY_BASE64" | base64 --decode > "$RUNNER_TEMP/AuthKey.p8"
+
+      - name: Build and sign the app and upload the draft
+        id: tauri
+        uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          # kriyon-ptyd is built for both chips too (scripts/sidecar-ptyd.mjs).
+          KRIYON_SIDECAR_TARGET: universal-apple-darwin
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          # No App Store Connect key here, so Tauri signs but doesn't notarize:
+          # the next step notarizes the DMG, which covers the app inside.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tauriScript: pnpm tauri
+          # tauri.updater.conf.json turns on the signed update files.
+          args: --target universal-apple-darwin --config src-tauri/tauri.updater.conf.json
+          tagName: ${{ steps.version.outputs.tag }}
+          releaseName: Kriyon ${{ steps.version.outputs.version }}
+          releaseBody: ${{ steps.notes.outputs.body }}
+          releaseCommitish: ${{ needs.prepare.outputs.commit }}
+          releaseDraft: true
+          prerelease: ${{ needs.prepare.outputs.channel != 'stable' }}
+
+      # Apple notarizes the outermost container only; its ticket covers the
+      # app inside (see scripts/notarize-dmg.sh).
+      - name: Notarize and staple the DMG
+        id: dmg
+        env:
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_PATH: ${{ runner.temp }}/AuthKey.p8
+        run: |
+          dmgs=("$BUNDLE"/dmg/*.dmg)
+          if (( ${#dmgs[@]} != 1 )); then
+            echo "::error::Expected one DMG, found: ${dmgs[*]}"
+            exit 1
+          fi
+          scripts/notarize-dmg.sh "${dmgs[0]}"
+          echo "path=${dmgs[0]}" >> "$GITHUB_OUTPUT"
+
+      - name: Check the app and the DMG
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          BUILT: ${{ steps.tauri.outputs.appVersion }}
+          DMG: ${{ steps.dmg.outputs.path }}
+        run: |
+          if [[ "$BUILT" != "$VERSION" ]]; then
+            echo "::error::Tauri built $BUILT, but this release is $VERSION."
+            exit 1
+          fi
+          scripts/check-mac-bundle.sh "$BUNDLE/macos/Kriyon.app" "$DMG" "$VERSION"
+
+      - name: Replace the draft's DMG with the notarized one
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+          DMG: ${{ steps.dmg.outputs.path }}
+        run: |
+          gh release upload "$TAG" "$DMG" --clobber
+          count="$(gh release view "$TAG" --json assets --jq '[.assets[].name | select(endswith(".dmg"))] | length')"
+          if [[ "$count" != 1 ]]; then
+            echo "::error::The draft has $count DMGs; the notarized one went up under another name."
+            exit 1
+          fi
+
+      # Signed proof that these files came from this workflow in this repo:
+      # `gh attestation verify <file> --repo <owner>/<repo>`. GitHub offers it
+      # to public repos on the free plan.
+      - name: Record build provenance
+        if: ${{ needs.prepare.outputs.public == 'true' }}
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            ${{ steps.dmg.outputs.path }}
+            ${{ env.BUNDLE }}/macos/Kriyon.app.tar.gz
+
+      - name: Check the update feed
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          gh release download "$TAG" --pattern latest.json --dir "$RUNNER_TEMP"
+          node scripts/publish.mjs check-feed "$RUNNER_TEMP/latest.json" --version "$VERSION"
+
+      - name: Remove the App Store Connect key
+        if: ${{ always() }}
+        run: rm -f "$RUNNER_TEMP/AuthKey.p8"
+
+  publish:
+    name: Publish (${{ needs.prepare.outputs.channel }})
+    needs: [prepare, build]
+    # Stable waits for a person: they check the draft, then run publish.yml.
+    if: ${{ needs.prepare.outputs.channel != 'stable' }}
+    runs-on: ubuntu-24.04
+    environment: prerelease
+    permissions:
+      contents: write # publish the release and upload the feed
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          PUBLIC_REPO: ${{ needs.prepare.outputs.public }}
+          TAG: ${{ needs.build.outputs.tag }}
+        run: scripts/publish-release.sh "$TAG"

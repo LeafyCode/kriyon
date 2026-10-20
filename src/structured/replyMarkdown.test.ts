@@ -1,0 +1,309 @@
+import { expect, test } from "vitest";
+import { parseInline, parseReply } from "./replyMarkdown.ts";
+
+test("a fenced block is code, kept verbatim, not prose with stray backticks", () => {
+  const blocks = parseReply(
+    "The closest line was:\n\n```\nadded 1 package\n  in 804ms\n```\n\nDone."
+  );
+  expect(blocks).toEqual([
+    { inline: [{ kind: "text", text: "The closest line was:" }], kind: "para" },
+    { kind: "code", text: "added 1 package\n  in 804ms" },
+    { inline: [{ kind: "text", text: "Done." }], kind: "para" },
+  ]);
+});
+
+test("an unclosed fence still reads as code to the end", () => {
+  expect(parseReply("```sh\nls -la")).toEqual([
+    { kind: "code", text: "ls -la" },
+  ]);
+});
+
+test("inline code and bold lose their markers", () => {
+  expect(parseInline("**curl -sI:** failed, run `! curl` yourself")).toEqual([
+    { children: [{ kind: "text", text: "curl -sI:" }], kind: "bold" },
+    { kind: "text", text: " failed, run " },
+    { kind: "code", text: "! curl" },
+    { kind: "text", text: " yourself" },
+  ]);
+});
+
+test("code inside bold or italic keeps its code, without stray backticks", () => {
+  expect(parseInline("**`npm init -y`:** worked, *see `ls`*")).toEqual([
+    {
+      children: [
+        { kind: "code", text: "npm init -y" },
+        { kind: "text", text: ":" },
+      ],
+      kind: "bold",
+    },
+    { kind: "text", text: " worked, " },
+    {
+      children: [
+        { kind: "text", text: "see " },
+        { kind: "code", text: "ls" },
+      ],
+      kind: "italic",
+    },
+  ]);
+});
+
+test("a bold marker inside code stays code", () => {
+  expect(parseInline("run `a ** b ** c` now")).toEqual([
+    { kind: "text", text: "run " },
+    { kind: "code", text: "a ** b ** c" },
+    { kind: "text", text: " now" },
+  ]);
+});
+
+test("an unmatched marker stays as typed", () => {
+  expect(parseInline("2 ** 3 and a ` tick")).toEqual([
+    { kind: "text", text: "2 ** 3 and a ` tick" },
+  ]);
+});
+
+test("bullet and numbered lists group their items", () => {
+  expect(parseReply("- one `a`\n- two\n\n1. first\n2. second")).toEqual([
+    {
+      items: [
+        [
+          { kind: "text", text: "one " },
+          { kind: "code", text: "a" },
+        ],
+        [{ kind: "text", text: "two" }],
+      ],
+      kind: "list",
+      ordered: false,
+    },
+    {
+      items: [
+        [{ kind: "text", text: "first" }],
+        [{ kind: "text", text: "second" }],
+      ],
+      kind: "list",
+      ordered: true,
+    },
+  ]);
+});
+
+test("headings and soft-wrapped paragraphs", () => {
+  expect(parseReply("## Result\nline one\nline two")).toEqual([
+    { inline: [{ kind: "text", text: "Result" }], kind: "heading" },
+    { inline: [{ kind: "text", text: "line one\nline two" }], kind: "para" },
+  ]);
+});
+
+test("a markdown link keeps its label and target", () => {
+  expect(parseInline("see [the docs](https://x.dev) now")).toEqual([
+    { kind: "text", text: "see " },
+    {
+      children: [{ kind: "text", text: "the docs" }],
+      kind: "link",
+      target: "https://x.dev",
+    },
+    { kind: "text", text: " now" },
+  ]);
+});
+
+test("bare URLs and paths in prose become links", () => {
+  expect(parseInline("open https://x.dev or src/a.ts:4.")).toEqual([
+    { kind: "text", text: "open " },
+    {
+      children: [{ kind: "text", text: "https://x.dev" }],
+      kind: "link",
+      target: "https://x.dev",
+    },
+    { kind: "text", text: " or " },
+    {
+      children: [{ kind: "text", text: "src/a.ts:4" }],
+      kind: "link",
+      target: "src/a.ts:4",
+    },
+    { kind: "text", text: "." },
+  ]);
+});
+
+test("a code span that is a path or URL is a link around the code", () => {
+  expect(parseInline("edit `src/a.ts:4`, see `https://x.dev`")).toEqual([
+    { kind: "text", text: "edit " },
+    {
+      children: [{ kind: "code", text: "src/a.ts:4" }],
+      kind: "link",
+      target: "src/a.ts:4",
+    },
+    { kind: "text", text: ", see " },
+    {
+      children: [{ kind: "code", text: "https://x.dev" }],
+      kind: "link",
+      target: "https://x.dev",
+    },
+  ]);
+});
+
+test("code that only looks like a file name stays code", () => {
+  // A bare `name.ext` is as often an identifier as a file, and a click on one
+  // would only fail; the terminal's strict rule (a `/` and an extension) holds.
+  for (const code of ["console.log", "Next.js", "process.env", "origin/main"]) {
+    expect(parseInline(`\`${code}\``)).toEqual([{ kind: "code", text: code }]);
+  }
+  expect(parseInline("`see src/a.ts`")).toEqual([
+    { kind: "code", text: "see src/a.ts" },
+  ]);
+});
+
+test("a markdown link's target may hold balanced parentheses", () => {
+  expect(parseInline("[Rust](https://x.dev/wiki/Rust_(lang))")).toEqual([
+    {
+      children: [{ kind: "text", text: "Rust" }],
+      kind: "link",
+      target: "https://x.dev/wiki/Rust_(lang)",
+    },
+  ]);
+});
+
+test("a link's label is not linked again inside it", () => {
+  expect(parseInline("[`src/a.ts`](src/a.ts#L2)")).toEqual([
+    {
+      children: [{ kind: "code", text: "src/a.ts" }],
+      kind: "link",
+      target: "src/a.ts#L2",
+    },
+  ]);
+});
+
+test("a pipe table is a table: header, rows and column alignment", () => {
+  const text = [
+    "Four plates:",
+    "| Plate | Parts | Time / plastic |",
+    "|:---|---|--:|",
+    "| 1 | Test ring: a **10mm** slice | 22 min, 13g |",
+    "| 2 | Cuff `supports` | 5.5 h, 203g |",
+    "",
+    "Print plate 1 first.",
+  ].join("\n");
+  expect(parseReply(text)).toEqual([
+    { inline: [{ kind: "text", text: "Four plates:" }], kind: "para" },
+    {
+      align: ["left", null, "right"],
+      head: [
+        [{ kind: "text", text: "Plate" }],
+        [{ kind: "text", text: "Parts" }],
+        [{ kind: "text", text: "Time / plastic" }],
+      ],
+      kind: "table",
+      rows: [
+        [
+          [{ kind: "text", text: "1" }],
+          [
+            { kind: "text", text: "Test ring: a " },
+            { children: [{ kind: "text", text: "10mm" }], kind: "bold" },
+            { kind: "text", text: " slice" },
+          ],
+          [{ kind: "text", text: "22 min, 13g" }],
+        ],
+        [
+          [{ kind: "text", text: "2" }],
+          [
+            { kind: "text", text: "Cuff " },
+            { kind: "code", text: "supports" },
+          ],
+          [{ kind: "text", text: "5.5 h, 203g" }],
+        ],
+      ],
+    },
+    { inline: [{ kind: "text", text: "Print plate 1 first." }], kind: "para" },
+  ]);
+});
+
+test("table rows are padded or cut to the header's width, and a pipe in code stays", () => {
+  const [table] = parseReply("a | b\n--- | ---\n`x | y`\n1 | 2 | 3");
+  expect(table).toEqual({
+    align: [null, null],
+    head: [[{ kind: "text", text: "a" }], [{ kind: "text", text: "b" }]],
+    kind: "table",
+    rows: [
+      [[{ kind: "code", text: "x | y" }], []],
+      [[{ kind: "text", text: "1" }], [{ kind: "text", text: "2" }]],
+    ],
+  });
+});
+
+test("a pipe line without a delimiter row under it stays prose", () => {
+  expect(parseReply("a | b\nc | d")).toEqual([
+    { inline: [{ kind: "text", text: "a | b\nc | d" }], kind: "para" },
+  ]);
+});
+
+test("a line of three dashes is a rule, not text", () => {
+  expect(parseReply("Done.\n\n---\n\nNext:")).toEqual([
+    { inline: [{ kind: "text", text: "Done." }], kind: "para" },
+    { kind: "rule" },
+    { inline: [{ kind: "text", text: "Next:" }], kind: "para" },
+  ]);
+});
+
+test("a lone backtick in a cell is a character, not the start of code", () => {
+  const [table] = parseReply(
+    "| Key | Does |\n|---|---|\n| ` | toggle console |"
+  );
+  expect(table).toMatchObject({
+    kind: "table",
+    rows: [
+      [
+        [{ kind: "text", text: "`" }],
+        [{ kind: "text", text: "toggle console" }],
+      ],
+    ],
+  });
+});
+
+test("an escaped pipe is cell text, also at the end of a row", () => {
+  const [table] = parseReply("| a | b |\n|---|---|\n| x \\| y | z \\|");
+  expect(table).toMatchObject({
+    kind: "table",
+    rows: [
+      [[{ kind: "text", text: "x | y" }], [{ kind: "text", text: "z |" }]],
+    ],
+  });
+});
+
+test("a pipe in prose over a bare `---` is a paragraph and a rule, not a table", () => {
+  expect(parseReply("Run `ls | grep foo` to check\n---")).toEqual([
+    {
+      inline: [
+        { kind: "text", text: "Run " },
+        { kind: "code", text: "ls | grep foo" },
+        { kind: "text", text: " to check" },
+      ],
+      kind: "para",
+    },
+    { kind: "rule" },
+  ]);
+});
+
+test("a table ends where a list item, heading or fence starts", () => {
+  const blocks = parseReply(
+    "| a | b |\n|---|---|\n| 1 | 2 |\n- run `a | b`\n## A | B\n```\nx | y\n```"
+  );
+  expect(blocks.map((b) => b.kind)).toEqual([
+    "table",
+    "list",
+    "heading",
+    "code",
+  ]);
+  expect(blocks[0]).toMatchObject({
+    rows: [[[{ text: "1" }], [{ text: "2" }]]],
+  });
+});
+
+test("a heading is not a table header", () => {
+  expect(parseReply("## A | B\n|---|---|")[0]).toMatchObject({
+    kind: "heading",
+  });
+});
+
+test("spaced dashes or stars are a rule, not a list", () => {
+  expect(parseReply("- - -\n\n* * *")).toEqual([
+    { kind: "rule" },
+    { kind: "rule" },
+  ]);
+});

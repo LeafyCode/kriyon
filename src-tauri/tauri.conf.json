@@ -1,0 +1,82 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Kriyon",
+  "version": "../package.json",
+  "identifier": "com.leafycode.kriyon",
+  "build": {
+    "beforeDevCommand": "node scripts/sidecar-ptyd.mjs && pnpm dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "node scripts/sidecar-ptyd.mjs --release && pnpm build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "macOSPrivateApi": true,
+    "windows": [
+      {
+        "title": "Kriyon",
+        "width": 1280,
+        "height": 820,
+        "minWidth": 920,
+        "minHeight": 600,
+        "decorations": true,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "trafficLightPosition": { "x": 19, "y": 23 }
+      }
+    ],
+    "security": {
+      "csp": {
+        "default-src": "'self'",
+        "script-src": "'self'",
+        "style-src": "'self' 'unsafe-inline'",
+        "img-src": "'self' blob: data:",
+        "font-src": "'self' data:",
+        "connect-src": "'self' ipc: http://ipc.localhost",
+        "object-src": "'none'",
+        "base-uri": "'self'",
+        "frame-src": "'none'"
+      },
+      "devCsp": {
+        "default-src": "'self'",
+        "script-src": "'self' 'unsafe-inline'",
+        "style-src": "'self' 'unsafe-inline'",
+        "img-src": "'self' blob: data:",
+        "font-src": "'self' data:",
+        "connect-src": "'self' ipc: http://ipc.localhost ws://localhost:1420",
+        "object-src": "'none'",
+        "base-uri": "'self'",
+        "frame-src": "'none'"
+      },
+      "dangerousDisableAssetCspModification": ["style-src"]
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "externalBin": ["binaries/kriyon-ptyd"],
+    "resources": {
+      "sounds/marimba.wav": "marimba.wav",
+      "sounds/music_box.wav": "music_box.wav",
+      "sounds/vibraphone.wav": "vibraphone.wav",
+      "sounds/kalimba.wav": "kalimba.wav",
+      "sounds/bell.wav": "bell.wav"
+    },
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "macOS": {
+      "hardenedRuntime": true,
+      "entitlements": "Entitlements.plist",
+      "minimumSystemVersion": "10.15",
+      "dmg": {
+        "windowSize": { "width": 660, "height": 400 },
+        "appPosition": { "x": 180, "y": 170 },
+        "applicationFolderPosition": { "x": 480, "y": 170 }
+      }
+    }
+  }
+}

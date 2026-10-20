@@ -1,0 +1,55 @@
+[
+  { "in": "ls -la src", "out": "ls -la src" },
+  {
+    "in": "export ANTHROPIC_API_KEY=sk-ant-api03-abcdefghijklmnop",
+    "out": "export ANTHROPIC_API_KEY=[REDACTED]"
+  },
+  {
+    "in": "OPENAI_KEY sk-proj-abcdefghijklmnopqrstu used",
+    "out": "OPENAI_KEY [REDACTED] used"
+  },
+  {
+    "in": "gh auth login --with-token ghp_abcdefghijklmnopqrstuvwxyz0123",
+    "out": "gh auth login --with-token [REDACTED]"
+  },
+  {
+    "in": "token github_pat_11ABCDEFG0abcdefghijkl_mnopqrstuv",
+    "out": "token [REDACTED]"
+  },
+  {
+    "in": "aws AKIAABCDEFGHIJKLMNOP done",
+    "out": "aws [REDACTED] done"
+  },
+  {
+    "in": "slack xoxb-1234567890-abcdefghij",
+    "out": "slack [REDACTED]"
+  },
+  {
+    "in": "curl -H 'Authorization: Bearer abc.def.ghi123' x",
+    "out": "curl -H 'Authorization: Bearer [REDACTED]' x"
+  },
+  {
+    "in": "git clone https://user:hunter2@github.com/x",
+    "out": "git clone https://user:[REDACTED]@github.com/x"
+  },
+  {
+    "in": "mysql --password=hunter2 next",
+    "out": "mysql --password=[REDACTED] next"
+  },
+  {
+    "in": "DB_PASSWORD: 'hunter 2' rest",
+    "out": "DB_PASSWORD: '[REDACTED]' rest"
+  },
+  {
+    "in": "{\"client_secret\": \"abc123\", \"max_tokens\": 100}",
+    "out": "{\"client_secret\": \"[REDACTED]\", \"max_tokens\": 100}"
+  },
+  {
+    "in": "-----BEGIN RSA PRIVATE KEY-----\nMIIEow\nabc\n-----END RSA PRIVATE KEY-----\nafter",
+    "out": "[REDACTED PRIVATE KEY]\nafter"
+  },
+  {
+    "in": "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNz cut off",
+    "out": "[REDACTED PRIVATE KEY]"
+  }
+]

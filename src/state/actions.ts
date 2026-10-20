@@ -1,0 +1,523 @@
+import {
+  type BootstrapReport,
+  bootstrapWorktree,
+  captureBaseline,
+  createWorktree,
+  isTauriRuntime,
+  pickDirectory,
+  sleepIdleSessions,
+  upsertProject,
+  upsertSession,
+  worktreePathFor,
+} from "../ipc/bridge.ts";
+import {
+  disposeSession,
+  ensureSession,
+  launchClaudeOnce,
+  noteSessionStarted,
+  startFreshClaude,
+} from "../terminal/sessionHost.ts";
+import type { PastSession, ProjectRow, SessionRow } from "../types.ts";
+import { showToast } from "../ui/Toast.tsx";
+import { useCompletions } from "./completions.ts";
+import { useLayout } from "./layout.ts";
+import { idleSession, type UiSession, useSessions } from "./sessions.ts";
+import { freedMemoryNote } from "./stopCost.ts";
+
+/**
+ * Archive a session: tidy it out of sight **and stop its processes**. The row,
+ * the Claude transcript and the worktree all stay, so un-archiving and opening
+ * it again resumes the conversation (`claude --resume`) in a fresh terminal.
+ *
+ * Every archive goes through here. Setting the flag alone — what archiving used
+ * to do — left the session's `claude` running where nobody could see it,
+ * holding memory until the machine rebooted. Stopping is fire-and-forget:
+ * `disposeSession` never rejects, and the flag must not wait on a socket.
+ */
+export function archiveSessionAndStop(sessionId: string): void {
+  const freed = freedMemoryNote(
+    "Archived",
+    useSessions.getState().memory[sessionId]
+  );
+  disposeSession(sessionId).catch(() => {
+    // Unreachable: disposeSession swallows its own failures.
+  });
+  useSessions.getState().archiveSession(sessionId);
+  if (freed) {
+    showToast(freed);
+  }
+}
+
+/**
+ * "Sleep idle sessions now": get memory back without quitting. Every quiescent
+ * session is put to sleep at once, whatever the auto-sleep setting; one that is
+ * mid-turn, on screen, or running a subagent or background command is never
+ * touched. Always says what happened — a command that frees memory invisibly,
+ * or does nothing silently, looks broken either way.
+ */
+export async function sleepIdleSessionsNow(): Promise<void> {
+  let slept: number;
+  try {
+    slept = await sleepIdleSessions();
+  } catch (error) {
+    showToast(
+      `Could not sleep idle sessions: ${error instanceof Error ? error.message : String(error)}`,
+      "error"
+    );
+    return;
+  }
+  if (slept === 0) {
+    showToast(
+      "Nothing to sleep — every session is busy, on screen, or already asleep"
+    );
+    return;
+  }
+  showToast(
+    slept === 1
+      ? "1 session going to sleep — it wakes when you open it"
+      : `${slept} sessions going to sleep — each wakes when you open it`
+  );
+}
+
+/**
+ * The resolved absolute home directory, fetched once at startup. Used as the
+ * cwd for default "Home" sessions so the pty and the transcript watcher resolve
+ * the same real path (an empty cwd makes the watcher look in the wrong place).
+ */
+let defaultCwd = "";
+
+/**
+ * How long a session may show the loading overlay before it is force-cleared.
+ * The safety net for a boot/resume whose `SessionStart` never reaches the
+ * frontend; the primary launch path (App) arms it, and every in-place restart
+ * must too, or the overlay can hang forever.
+ */
+export const BOOT_TIMEOUT_MS = 20_000;
+
+/** Stash the resolved home path; called once at startup. */
+export function setDefaultCwd(path: string): void {
+  defaultCwd = path;
+}
+
+/** Last path segment of an absolute path, e.g. `/a/b/c` → `c`. */
+function basename(path: string): string {
+  return path.split("/").filter(Boolean).pop() ?? path;
+}
+
+/**
+ * Persist a project + session row to the backend store, then warm the
+ * completion catalog for its cwd. Ordering matters: the `list_slash_commands`
+ * probe validates its `cwd` against the store's known session/project roots (the
+ * IPC trust boundary), so the row must exist there before the probe runs. The
+ * debounced persistence subscription would not have written it yet at this
+ * point, so we persist explicitly here and chain the warmup. Fire-and-forget —
+ * the composer degrades gracefully if any of this never resolves. In the
+ * browser (no backend) it just warms; `listSlashCommands` degrades on its own.
+ */
+/** Swallow a fire-and-forget promise's rejection (the persistence layer's
+ * idiom): an intake-time backend write must never surface as an unhandled
+ * rejection, and the debounced persistence subscription retries it anyway. */
+function ignore(promise: Promise<unknown>): void {
+  promise.catch(() => {
+    // Intentionally empty: best-effort write, caller degrades gracefully.
+  });
+}
+
+function persistThenWarm(project: ProjectRow, session: SessionRow): void {
+  const warm = (): void => {
+    ignore(useCompletions.getState().warmup(session.cwd));
+  };
+  if (!isTauriRuntime()) {
+    warm();
+    return;
+  }
+  ignore(
+    Promise.allSettled([upsertProject(project), upsertSession(session)]).then(
+      warm
+    )
+  );
+}
+
+/**
+ * Open a new session in `project` (created if absent), with `cwd` and `title`.
+ * The one intake transaction: ensure the project, build the row, add it, and make
+ * it active — all in one place so a new field or side effect has a single home.
+ * Making it active is what launches `claude` (the active-session effect in `App`
+ * launches/resumes a session the first time it is viewed).
+ */
+function createSession(
+  project: ProjectRow,
+  cwd: string,
+  title: string,
+  opts?: {
+    parentSessionId?: string;
+    seedPrompt?: string;
+    worktreePath?: string | null;
+  }
+): string {
+  const state = useSessions.getState();
+  // `addProject` is a no-op if the project id already exists.
+  state.addProject(project);
+  const id = crypto.randomUUID();
+  const row: SessionRow = {
+    archivedAt: null,
+    baselineOid: null,
+    claudeSessionId: null,
+    createdAt: Date.now(),
+    cwd,
+    id,
+    parentSessionId: opts?.parentSessionId ?? null,
+    projectId: project.id,
+    title,
+    titleLocked: false,
+    worktreePath: opts?.worktreePath ?? null,
+  };
+  state.addSession(idleSession(row));
+  if (opts?.seedPrompt) {
+    state.setPendingSeedPrompt(id, opts.seedPrompt);
+  }
+  // `addSession` only activates the *first* session, so switch explicitly —
+  // otherwise a new session opened while another is active is created hidden.
+  // `revealSessionView` for the same reason: `+` lives in the sidebar, which
+  // is on screen in Settings and Prompts too, and a session created behind a
+  // full view is indistinguishable from a button that did nothing.
+  state.setActiveSession(id);
+  useLayout.getState().revealSessionView();
+  // Persist the row, then warm the composer's slash-command catalog for this
+  // cwd so it's ready before the user's first `/`.
+  persistThenWarm(project, row);
+  // Fire-and-forget: capture a git baseline for the Changes view to diff
+  // against later. Must never block session creation or throw — `ignore`
+  // swallows a rejection (cwd isn't a git repo, capture failed), leaving
+  // `baselineOid` null, which the Changes view already treats as "fall back
+  // to the whole-working-tree diff path".
+  //
+  // Skipped entirely for the default ("Home") cwd: `captureBaseline` runs
+  // `git add -A` over the whole tree (see `snapshot_tree`), and if `~` is
+  // itself a git repo (a dotfiles checkout — common), that walks and
+  // content-hashes every non-ignored file under the user's HOME directory,
+  // blocking a pool thread for minutes and permanently growing
+  // `~/.git/objects` — once per Home session. There is no real "project" to
+  // baseline for a Home session anyway.
+  if (cwd !== defaultCwd) {
+    ignore(
+      captureBaseline(cwd).then((oid) =>
+        useSessions.getState().setBaseline(id, oid)
+      )
+    );
+  }
+  return id;
+}
+
+/**
+ * Create a session in the `default` ("Home") project. The cwd is the user's
+ * home directory.
+ */
+export function createSessionInDefaultProject(): void {
+  createSession(
+    {
+      color: null,
+      id: "default",
+      name: "Home",
+      path: defaultCwd,
+      setupCommand: null,
+    },
+    defaultCwd,
+    "Session"
+  );
+}
+
+/**
+ * Create a session whose working directory is `path`. The folder becomes a
+ * project (keyed by its absolute path, named after its last segment) so all
+ * sessions opened against the same folder group under one workspace.
+ */
+export function createSessionInFolder(path: string): void {
+  const name = basename(path);
+  createSession(
+    { color: null, id: path, name, path, setupCommand: null },
+    path,
+    name
+  );
+}
+
+/**
+ * Create a session in an existing project right away (the sidebar's quick
+ * per-project "+" — runs in the project folder on the current branch). The
+ * worktree path goes through the spawn dialog instead, which needs a branch
+ * name and explains the trade-off.
+ */
+export function createSessionInProject(project: ProjectRow): void {
+  createSession(project, project.path, project.name);
+}
+
+/**
+ * Resume a discovered past session into a live one. Ensures the folder is a
+ * project, then creates a session row carrying Claude's own session id and
+ * activates it — which makes the activation-launch effect in `App` run
+ * `claude --resume <claude-id>`, restoring the session's terminal. The
+ * past session's `cwd` is trusted as its working directory (Claude wrote it).
+ */
+export function resumePastSession(past: PastSession): void {
+  const state = useSessions.getState();
+  const cwd = past.cwd ?? defaultCwd;
+  const name = basename(cwd);
+  const project: ProjectRow = {
+    color: null,
+    id: cwd,
+    name,
+    path: cwd,
+    setupCommand: null,
+  };
+  state.addProject(project);
+  const id = crypto.randomUUID();
+  const row: SessionRow = {
+    archivedAt: null,
+    baselineOid: null,
+    claudeSessionId: past.claudeSessionId,
+    createdAt: Date.now(),
+    cwd,
+    id,
+    projectId: cwd,
+    // Show the label the user clicked: Claude's ai-title if any, else the
+    // first prompt, else the folder name. `claude --resume` re-emits the
+    // ai-title once it boots, which then refreshes this in place.
+    title: past.title ?? past.preview ?? name,
+    titleLocked: false,
+    worktreePath: null,
+  };
+  state.addSession(idleSession(row));
+  state.setActiveSession(id);
+  useLayout.getState().revealSessionView();
+  // Persist + warm so the composer's completions validate against a known root
+  // and are ready before the first `/`, the same as a fresh session.
+  persistThenWarm(project, row);
+}
+
+/**
+ * The "New session" entry point: ask the user for a folder, then open a session
+ * there. Cancelling the picker does nothing. In the browser (no picker) it
+ * falls back to a Home session so the button still works for visual QA.
+ */
+export async function startNewSession(): Promise<void> {
+  const path = await pickDirectory();
+  if (path) {
+    createSessionInFolder(path);
+    return;
+  }
+  if (!isTauriRuntime()) {
+    createSessionInDefaultProject();
+  }
+}
+
+/**
+ * Spawn a session, optionally in a fresh [Worktree]. Two intakes share this:
+ * a [Follow-up session] from `predecessor` (seeded with `promptText`), and a
+ * project-anchored spawn (no predecessor — the sidebar's "new worktree
+ * session"). When `worktree` is given, create and bootstrap the [Worktree]
+ * first and run the session there; otherwise run in the predecessor's working
+ * directory (or the project root when there is none). Returns the bootstrap
+ * report (if any) so the UI can surface a failed setup.
+ */
+export async function spawnFollowUpSession(args: {
+  predecessor?: UiSession;
+  project: ProjectRow;
+  promptText: string;
+  worktree: { branch: string; path?: string } | null;
+}): Promise<{
+  bootstrap: BootstrapReport | null;
+  error: string | null;
+  ok: boolean;
+}> {
+  const { predecessor, project, promptText, worktree } = args;
+  const repoRoot = project.path;
+  let title = project.name;
+  if (worktree) {
+    title = worktree.branch;
+  } else if (predecessor) {
+    title = `${predecessor.title} (follow-up)`;
+  }
+
+  if (!worktree) {
+    createSession(project, predecessor?.cwd ?? project.path, title, {
+      parentSessionId: predecessor?.id,
+      seedPrompt: promptText,
+    });
+    return { bootstrap: null, error: null, ok: true };
+  }
+
+  try {
+    // Use the caller's chosen location when given; otherwise the default
+    // sibling path (`<repo>-worktrees/<branch>`) resolved by the Rust core.
+    const path =
+      worktree.path ?? (await worktreePathFor(repoRoot, worktree.branch));
+    await createWorktree(repoRoot, worktree.branch, path);
+    const bootstrap = await bootstrapWorktree(
+      repoRoot,
+      path,
+      project.setupCommand
+    );
+    createSession(project, path, title, {
+      parentSessionId: predecessor?.id,
+      seedPrompt: promptText,
+      worktreePath: path,
+    });
+    return { bootstrap, error: null, ok: bootstrap.ok };
+  } catch (e) {
+    return {
+      bootstrap: null,
+      error: e instanceof Error ? e.message : String(e),
+      ok: false,
+    };
+  }
+}
+
+/**
+ * The single boot-overlay safety-net timer per session, owned here so the
+ * [Boot phase] machine (not a React effect) controls it. Keyed by session id;
+ * {@link armBootTimeout} cancels any prior timer before arming a new one, so a
+ * timer from an earlier boot cycle can never fire during a later one and clear
+ * its overlay early.
+ */
+const bootTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+/** Cancel and forget a session's pending boot-timeout, if any. */
+function clearBootTimeout(sessionId: string): void {
+  const timer = bootTimers.get(sessionId);
+  if (timer !== undefined) {
+    clearTimeout(timer);
+    bootTimers.delete(sessionId);
+  }
+}
+
+/** (Re)arm the boot safety net, replacing any timer from a prior boot cycle. */
+function armBootTimeout(sessionId: string): void {
+  clearBootTimeout(sessionId);
+  bootTimers.set(
+    sessionId,
+    setTimeout(() => {
+      bootTimers.delete(sessionId);
+      useSessions.getState().applyBootEvent(sessionId, "timeout");
+    }, BOOT_TIMEOUT_MS)
+  );
+}
+
+/**
+ * A resumed/started session is live for real (its `SessionStart` hook fired):
+ * the transition that ends the boot/resume lifecycle. Disarm the resume-failure
+ * watchdog, cancel the safety-net timer, and advance the [Boot phase] to `live`
+ * (which clears both the loading overlay and any recovery prompt at once).
+ */
+export function sessionBecameLive(sessionId: string): void {
+  noteSessionStarted(sessionId);
+  clearBootTimeout(sessionId);
+  useSessions.getState().applyBootEvent(sessionId, "started");
+}
+
+/**
+ * The resume watchdog (in sessionHost) detected a `claude --resume` that never
+ * started: cancel the safety-net timer and move the [Boot phase] to
+ * `resumeFailed` so the recovery prompt replaces the loading overlay.
+ */
+export function noteResumeFailed(sessionId: string): void {
+  // With Kriyon's hooks off ([Hooks off]) even a resume that worked never
+  // fires SessionStart, so the watchdog can't tell it from one that failed.
+  // Say nothing; the boot timeout still clears the loading overlay.
+  if (useSessions.getState().hooksOff[sessionId]) {
+    return;
+  }
+  clearBootTimeout(sessionId);
+  useSessions.getState().applyBootEvent(sessionId, "resumeFailed");
+}
+
+/**
+ * A `claude` launch is genuinely underway in this session's pty: move the [Boot
+ * phase] to `booting` (showing the overlay) and arm its safety net. The timeout
+ * belongs to the session, not to whichever pane is active — switching away
+ * never cancels it, and re-entering ({@link armBootTimeout}) replaces the prior
+ * cycle's timer so a stale one can't clear a later boot.
+ */
+export function beginBoot(sessionId: string): void {
+  const state = useSessions.getState();
+  state.applyBootEvent(sessionId, "launch");
+  armBootTimeout(sessionId);
+}
+
+/**
+ * Launch (or resume) `claude` in a session's pty the first time it is viewed,
+ * and track the boot lifecycle. Extracted from the App activation effect so the
+ * boot state is armed unconditionally once a launch really happened — the
+ * effect's cleanup must not be able to skip it (the user switching away
+ * mid-launch is routine). Idempotent per session via `launchClaudeOnce`;
+ * resolves false on reattach (claude already running — nothing to track).
+ */
+export async function launchActiveSession(sessionId: string): Promise<void> {
+  const state = useSessions.getState();
+  const session = state.sessions[sessionId];
+  if (!session) {
+    return;
+  }
+  // Idempotent for a live pty; for a session whose creation failed earlier
+  // this is the retry — every activation gets one, so a transient failure
+  // (daemon spawn timeout, stale socket) heals on the next visit instead of
+  // wedging the pane blank forever.
+  try {
+    await ensureSession(sessionId, session.cwd, () =>
+      showToast("Could not start the session", "error")
+    );
+  } catch {
+    return;
+  }
+  const result = await launchClaudeOnce(
+    sessionId,
+    session.claudeSessionId,
+    state.consumePendingSeedPrompt(sessionId)
+  );
+  switch (result.kind) {
+    case "launched":
+      beginBoot(sessionId);
+      break;
+    case "seedDropped":
+      // The session started, just without the follow-up prompt it was seeded
+      // with — tell the user so they can re-enter it instead of wondering why
+      // claude is idle.
+      beginBoot(sessionId);
+      showToast(
+        "Could not send the first prompt — enter it in the terminal",
+        "error"
+      );
+      break;
+    case "writeFailed":
+      // Nothing launched, so no boot overlay: surface the failure directly.
+      showToast("Could not start the session", "error");
+      break;
+    default:
+      // `reattached` (claude already live) or `skipped` (nothing to do).
+      break;
+  }
+}
+
+/**
+ * The user chose "start fresh" on a failed-resume prompt: show the loading
+ * overlay again and launch a plain `claude` in the same pty. `beginBoot`'s
+ * `launch` event moves `resumeFailed` straight back to `booting`, so the
+ * recovery prompt clears without a separate dismiss.
+ */
+export function restartSessionFresh(sessionId: string): void {
+  beginBoot(sessionId);
+  ignore(startFreshClaude(sessionId));
+}
+
+/**
+ * Focus the session a clicked OS notification points at, routing to its Raw
+ * view — the same landing as the Needs-you overlay's Enter. `sessionId` crosses
+ * the IPC trust boundary, so an unknown id is ignored rather than trusted.
+ */
+export function focusSessionFromNotification(sessionId: string): void {
+  const sessions = useSessions.getState();
+  if (!sessions.sessions[sessionId]) {
+    return;
+  }
+  sessions.setActiveSession(sessionId);
+  useLayout.getState().revealSessionView();
+}

@@ -1,0 +1,72 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Rust workspace
+/target
+
+# Signing / notarization secrets (never commit)
+.env
+.env.*.local
+*.p8
+*.p12
+AuthKey_*.p8
+
+# Tauri sidecar staging (built from target/ by scripts/sidecar-ptyd.mjs)
+/src-tauri/binaries
+
+# QA / tooling artifacts
+.playwright-mcp/
+.gstack/
+
+# Affinity Designer lock files
+*.af~lock~
+
+# agent-native local plan bridge token (local only)
+plans/**/.plan-url
+plans/**/.plan-state.json
+# generated block-catalog scratch
+plan-blocks.md
+
+# claude --worktree checkouts (Claude Code docs: keep out of the repo)
+.claude/worktrees/
+
+# Personal agent/editor config (machine paths; never commit)
+.claude/settings.local.json
+.codex/hooks.json
+.cursor/hooks.json
+.impeccable/*.local.json
+
+# Local scratch: notes, reports, crash logs, loose screenshots
+.context/
+research_notes/
+reports/
+mascots/
+crashlog.txt
+/*.png
+/*.jpeg
+/*.jpg
+
+# Affinity Designer sources (can embed local file paths; the SVG exports are the sources)
+*.af

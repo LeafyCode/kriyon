@@ -1,0 +1,590 @@
+/* The [Mascot]s (structured/Mascot.tsx, drawn by scripts/mascots.py): glowing
+   AI orbs, the Visor, the Gem and the Hex, pivoting in the drawing's own
+   200×200 units and coloured by the --kr-m-* variables of the chosen hue.
+
+   By default it just floats. One face shows at a time (`data-face`), and a
+   change of face fades across. While Claude works (`data-busy`) thought
+   bubbles rise and little lights circle it. Everything else is a trick
+   (`data-move`, mascotMoves.ts), played once and handed back. */
+.kr-mascot {
+  flex: none;
+  overflow: visible;
+}
+
+.kr-mascot g,
+.kr-mascot ellipse,
+.kr-mascot rect {
+  transform-box: view-box;
+}
+
+.kr-mascot .whole {
+  transform-origin: 100px 110px;
+  animation: kr-mascot-float 3.6s ease-in-out infinite;
+}
+
+.kr-mascot .head,
+.kr-mascot .halo,
+.kr-mascot .orbit {
+  transform-origin: 100px 108px;
+}
+
+.kr-mascot .blink,
+.kr-mascot .bubble,
+.kr-mascot .spark,
+.kr-mascot .glint {
+  transform-origin: 50% 50%;
+  transform-box: fill-box;
+}
+
+.kr-mascot .scan {
+  transform-origin: 0% 50%;
+  transform-box: fill-box;
+}
+
+.kr-mascot .face,
+.kr-mascot .bubble,
+.kr-mascot .spark,
+.kr-mascot .orbit {
+  opacity: 0;
+}
+
+.kr-mascot .face {
+  transition: opacity 160ms ease-out;
+}
+
+.kr-mascot[data-face="happy"] .face-happy,
+.kr-mascot[data-face="curious"] .face-curious,
+.kr-mascot[data-face="thinking"] .face-thinking,
+.kr-mascot[data-face="surprised"] .face-surprised,
+.kr-mascot[data-face="sleepy"] .face-sleepy,
+.kr-mascot[data-face="wink"] .face-wink,
+.kr-mascot[data-face="laugh"] .face-laugh,
+.kr-mascot[data-face="puzzled"] .face-puzzled {
+  opacity: 1;
+}
+
+/* Thinking, while Claude works. */
+.kr-mascot[data-busy] .bubble {
+  animation: kr-mascot-bubble 2.4s ease-out infinite;
+}
+
+.kr-mascot[data-busy] .bubble-2 {
+  animation-delay: 0.35s;
+}
+
+.kr-mascot[data-busy] .bubble-3 {
+  animation-delay: 0.7s;
+}
+
+.kr-mascot[data-busy] .orbit {
+  opacity: 1;
+  animation: kr-mascot-orbit 3s linear infinite;
+}
+
+.kr-mascot[data-busy] .dots circle {
+  animation: kr-mascot-dots 1.2s ease-in-out infinite;
+}
+
+.kr-mascot[data-busy] .dots circle:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.kr-mascot[data-busy] .dots circle:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+/* Tricks: one play each. */
+.kr-mascot[data-move="blink"] .blink {
+  animation: kr-move-blink 0.6s ease-in-out 1;
+}
+
+.kr-mascot[data-move="hop"] .whole {
+  animation: kr-move-hop 0.9s ease-out 1;
+}
+
+.kr-mascot[data-move="spin"] .whole {
+  animation: kr-move-spin 1.1s ease-in-out 1;
+}
+
+.kr-mascot[data-move="look-around"] .head {
+  animation: kr-move-look 1.8s ease-in-out 1;
+}
+
+.kr-mascot[data-move="wink"] .head {
+  animation: kr-move-wink-head 0.9s ease-in-out 1;
+}
+
+.kr-mascot[data-move="surprise"] .whole,
+.kr-mascot[data-move="aha"] .whole {
+  animation: kr-move-jolt 1s ease-out 1;
+}
+
+.kr-mascot[data-move="aha"] .spark {
+  animation: kr-move-spark 1.3s ease-out 1;
+}
+
+.kr-mascot[data-move="nod"] .head {
+  animation: kr-move-nod 0.9s ease-in-out 1;
+}
+
+.kr-mascot[data-move="shiver"] .whole {
+  animation: kr-move-shiver 0.7s linear 1;
+}
+
+.kr-mascot[data-move="doze"] .whole {
+  animation: kr-move-doze 3.2s ease-in-out 1;
+}
+
+.kr-mascot[data-move="doze"] .halo {
+  animation: kr-move-dim 3.2s ease-in-out 1;
+}
+
+.kr-mascot[data-move="peek"] .whole {
+  animation: kr-move-peek 1.4s ease-in-out 1;
+}
+
+.kr-mascot[data-move="giggle"] .whole {
+  animation: kr-move-giggle 1.3s ease-in-out 1;
+}
+
+.kr-mascot[data-move="glow"] .halo {
+  animation: kr-move-glow 1.6s ease-in-out 1;
+}
+
+.kr-mascot[data-move="tilt"] .whole {
+  animation: kr-move-tilt 1.5s ease-in-out 1;
+}
+
+.kr-mascot[data-move="ponder"] .head {
+  animation: kr-move-ponder 2.2s ease-in-out 1;
+}
+
+.kr-mascot[data-move="sparkle"] .glint {
+  animation: kr-move-sparkle 1.1s ease-out 1;
+}
+
+.kr-mascot[data-move="sparkle"] .spark {
+  animation: kr-move-spark 1.1s ease-out 1;
+}
+
+.kr-mascot[data-move="orbit"] .orbit {
+  animation: kr-move-orbit 1.8s ease-in-out 1;
+}
+
+.kr-mascot[data-move="scan"] .scan {
+  animation: kr-move-scan 1.4s ease-in-out 1;
+}
+
+.kr-mascot[data-move="glitch"] .whole {
+  animation: kr-move-glitch 0.7s steps(1) 1;
+}
+
+.kr-mascot[data-move="glitch"] .head {
+  animation: kr-move-flicker 0.7s steps(1) 1;
+}
+
+.kr-mascot[data-move="facet-flash"] .facet {
+  animation: kr-move-facet 0.7s ease-in-out 1;
+}
+
+.kr-mascot[data-move="facet-flash"] .facet-2 {
+  animation-delay: 0.12s;
+}
+
+.kr-mascot[data-move="facet-flash"] .facet-3 {
+  animation-delay: 0.24s;
+}
+
+.kr-mascot[data-move="facet-flash"] .facet-4 {
+  animation-delay: 0.36s;
+}
+
+.kr-mascot[data-move="facet-flash"] .facet-5 {
+  animation-delay: 0.48s;
+}
+
+.kr-mascot[data-move="facet-flash"] .facet-6 {
+  animation-delay: 0.6s;
+}
+
+.kr-mascot[data-move="twirl"] .whole {
+  animation: kr-move-twirl 1.2s ease-in-out 1;
+}
+
+@keyframes kr-mascot-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-6px);
+  }
+}
+
+/* A thought bubble rises into place, holds, and fades. */
+@keyframes kr-mascot-bubble {
+  0% {
+    opacity: 0;
+    transform: scale(0.2) translateY(6px);
+  }
+  20%,
+  70% {
+    opacity: 0.95;
+    transform: scale(1) translateY(0);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.05) translateY(-4px);
+  }
+}
+
+@keyframes kr-mascot-orbit {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes kr-mascot-dots {
+  0%,
+  100% {
+    opacity: 0.3;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@keyframes kr-move-blink {
+  0%,
+  100% {
+    transform: scaleY(1);
+  }
+  25%,
+  75% {
+    transform: scaleY(0.1);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}
+
+@keyframes kr-move-hop {
+  0% {
+    transform: translateY(0) scale(1, 1);
+  }
+  15% {
+    transform: translateY(0) scale(1.1, 0.88);
+  }
+  40% {
+    transform: translateY(-24px) scale(0.94, 1.08);
+  }
+  62% {
+    transform: translateY(0) scale(1.1, 0.88);
+  }
+  80% {
+    transform: translateY(-4px) scale(0.98, 1.02);
+  }
+  100% {
+    transform: translateY(0) scale(1, 1);
+  }
+}
+
+@keyframes kr-move-spin {
+  0%,
+  100% {
+    transform: scaleX(1);
+  }
+  25% {
+    transform: scaleX(0.05) translateY(-6px);
+  }
+  50% {
+    transform: scaleX(-1) translateY(-8px);
+  }
+  75% {
+    transform: scaleX(0.05) translateY(-6px);
+  }
+}
+
+@keyframes kr-move-look {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  25%,
+  40% {
+    transform: translateX(-8px) translateY(-1px);
+  }
+  60%,
+  78% {
+    transform: translateX(8px) translateY(-2px);
+  }
+}
+
+@keyframes kr-move-wink-head {
+  0%,
+  100% {
+    transform: rotate(0deg);
+  }
+  30%,
+  70% {
+    transform: rotate(6deg);
+  }
+}
+
+@keyframes kr-move-jolt {
+  0%,
+  100% {
+    transform: translateY(0) scale(1);
+  }
+  12% {
+    transform: translateY(-12px) scale(1.04);
+  }
+  30% {
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* The "aha": a spark pops above the head, turns, and fades. */
+@keyframes kr-move-spark {
+  0% {
+    opacity: 0;
+    transform: scale(0.2) rotate(0deg);
+  }
+  20% {
+    opacity: 1;
+    transform: scale(1.35) rotate(25deg);
+  }
+  45% {
+    opacity: 1;
+    transform: scale(1) rotate(45deg);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(0.8) rotate(90deg);
+  }
+}
+
+@keyframes kr-move-nod {
+  0%,
+  50%,
+  100% {
+    transform: translateY(0);
+  }
+  25%,
+  75% {
+    transform: translateY(6px);
+  }
+}
+
+@keyframes kr-move-shiver {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  10%,
+  30%,
+  50%,
+  70%,
+  90% {
+    transform: translateX(-3px) rotate(-2deg);
+  }
+  20%,
+  40%,
+  60%,
+  80% {
+    transform: translateX(3px) rotate(2deg);
+  }
+}
+
+@keyframes kr-move-doze {
+  0%,
+  100% {
+    transform: translateY(0) rotate(0deg);
+  }
+  35%,
+  78% {
+    transform: translateY(8px) rotate(6deg);
+  }
+  84% {
+    transform: translateY(-8px) rotate(-3deg);
+  }
+}
+
+@keyframes kr-move-dim {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  35%,
+  78% {
+    opacity: 0.35;
+  }
+}
+
+@keyframes kr-move-peek {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  30%,
+  55% {
+    transform: translateY(150px);
+  }
+  75% {
+    transform: translateY(-8px);
+  }
+}
+
+@keyframes kr-move-giggle {
+  0%,
+  100% {
+    transform: rotate(0deg) translateY(0);
+  }
+  15%,
+  45%,
+  75% {
+    transform: rotate(-7deg) translateY(-3px);
+  }
+  30%,
+  60%,
+  90% {
+    transform: rotate(7deg) translateY(0);
+  }
+}
+
+@keyframes kr-move-glow {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  40% {
+    opacity: 1;
+    transform: scale(1.25);
+  }
+}
+
+@keyframes kr-move-tilt {
+  0%,
+  100% {
+    transform: rotate(0deg);
+  }
+  25%,
+  70% {
+    transform: rotate(-14deg) translateY(-2px);
+  }
+}
+
+@keyframes kr-move-ponder {
+  0%,
+  100% {
+    transform: rotate(0deg);
+  }
+  25%,
+  45% {
+    transform: rotate(-10deg) translateX(-3px);
+  }
+  65%,
+  85% {
+    transform: rotate(9deg) translateX(3px);
+  }
+}
+
+@keyframes kr-move-sparkle {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  30% {
+    opacity: 1;
+    transform: scale(2.2);
+  }
+}
+
+@keyframes kr-move-orbit {
+  0% {
+    opacity: 0;
+    transform: rotate(0deg);
+  }
+  15%,
+  85% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes kr-move-scan {
+  0%,
+  100% {
+    opacity: 0.3;
+    transform: scaleX(1);
+  }
+  10% {
+    opacity: 0.9;
+    transform: scaleX(0.08);
+  }
+  60% {
+    opacity: 0.9;
+    transform: scaleX(1);
+  }
+}
+
+@keyframes kr-move-glitch {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  15% {
+    transform: translateX(-5px);
+  }
+  30% {
+    transform: translateX(4px) skewX(-6deg);
+  }
+  45% {
+    transform: translateX(-2px);
+  }
+  60% {
+    transform: translateX(3px) skewX(5deg);
+  }
+  80% {
+    transform: translateX(0);
+  }
+}
+
+@keyframes kr-move-flicker {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  20%,
+  55% {
+    opacity: 0.2;
+  }
+  35%,
+  70% {
+    opacity: 1;
+  }
+}
+
+@keyframes kr-move-facet {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}
+
+@keyframes kr-move-twirl {
+  0% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
+}

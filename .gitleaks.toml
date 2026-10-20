@@ -1,0 +1,8 @@
+# gitleaks config: default rules, plus the redaction test fixtures, whose
+# "secrets" are fake strings that exist to be caught.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Fake secrets used to test transcript redaction"
+paths = ['''crates/kriyon-core/scripts/redaction-cases\.json''']

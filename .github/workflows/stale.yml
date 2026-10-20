@@ -1,0 +1,36 @@
+name: Close unreproduced issues
+
+# Issues labelled "needs repro" get a warning after 7 quiet days and close
+# 7 days later (14 in all). Any comment resets the clock. Nothing else is
+# touched: no other issues, and no pull requests.
+on:
+  schedule:
+    - cron: "30 1 * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  stale:
+    name: Close "needs repro" issues
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: write # save and clear the action's run state in the cache
+      issues: write # label, comment on and close issues
+    steps:
+      - uses: actions/stale@4391f3da665fdf50b6810c1a66712fb9ba21aa93 # v11.0.0
+        with:
+          only-issue-labels: needs repro
+          days-before-issue-stale: 7
+          days-before-issue-close: 7
+          days-before-pr-stale: -1
+          days-before-pr-close: -1
+          stale-issue-label: stale
+          close-issue-reason: not_planned
+          stale-issue-message: >
+            This issue still needs steps that reproduce the problem. If there's
+            no reply in 7 days it will close. Adding the steps, or any comment,
+            keeps it open.
+          close-issue-message: >
+            Closing because we couldn't reproduce this. If you can share steps
+            that show the problem, comment here and we'll reopen it.

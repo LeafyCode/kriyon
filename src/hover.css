@@ -1,0 +1,93 @@
+/*
+ * The fill-and-hover family, shared by both of the app's documents.
+ *
+ * The main window loads it through `App.css`; the tray popover imports it
+ * directly from `tray/main.tsx`. It lives apart from `App.css` because the
+ * tray deliberately does not load that sheet — it is its own document with its
+ * own scroll rules — and a `kr-hover-*` className there was naming rules the
+ * popover never had, which left every hover in the tray inert.
+ *
+ * Everything here resolves through custom properties `applyTheme` publishes,
+ * so the sheet is theme-agnostic and both documents get the same behaviour as
+ * long as they have applied a theme (both do, at startup).
+ *
+ * Why these own `background` rather than the inline style: an inline
+ * declaration outranks every class rule without `!important`, and none of
+ * these carries one. A recipe that painted its own resting fill therefore
+ * killed the hover it told callers to add. The resting fill arrives as
+ * `--kr-fill` instead (see `theme/recipes.ts`), and an element that publishes
+ * none is transparent at rest — what it was before these rules existed.
+ */
+
+/*
+ * The resting fill, for every host that publishes one — hoverable or not.
+ *
+ * `--kr-fill` paints nothing by itself; only a rule that reads it does. So a
+ * `<button>` that published a fill without also carrying one of the classes
+ * below declared no `background` at all and fell through to the UA's
+ * `buttonface` — a flat light-grey block in the middle of a flat blue-black
+ * plane, which is what the nav rows, the composer's footer actions and every
+ * secondary button in the Changes views turned into.
+ *
+ * Painting it at element specificity is what makes the family whole: a class
+ * is what adds the *hover*, not what makes the control visible at all. Both
+ * `:hover` rules still win, being class-level, and a style that paints its own
+ * `background` inline (`button("danger")`, a disabled Send) still outranks
+ * every one of them.
+ */
+button,
+.kr-hover-surface,
+.kr-hover-accent {
+  background: var(--kr-fill, transparent);
+}
+
+.kr-hover-surface {
+  transition:
+    background var(--kr-motion-hover),
+    color var(--kr-motion-hover),
+    border-color var(--kr-motion-hover);
+}
+/* `:not(:disabled)` for the same reason the accent rule has it: `:hover` does
+ * match a disabled button, so without this an unpressable control still lit up
+ * under the pointer. It matches every non-form host unchanged. */
+.kr-hover-surface:hover:not(:disabled) {
+  background: var(
+    --kr-fill-hover,
+    var(--kr-surface-hover, rgba(255, 255, 255, 0.04))
+  );
+}
+
+/* The accent-filled control's hover. An accent button's hover is a *different
+ * fill* rather than a wash laid over it, so it can't reuse
+ * `.kr-hover-surface`. */
+.kr-hover-accent {
+  transition: background var(--kr-motion-hover);
+}
+.kr-hover-accent:hover:not(:disabled) {
+  background: var(--kr-fill-hover, var(--kr-accent-hover));
+}
+
+/* A list row whose resting fill varies by state — a waiting session's amber
+ * wash, an active row's white 6%, a plain row's nothing. Same reason the fill
+ * can't be inline; the row publishes both fills and this owns the painting.
+ * Main-window only today, but it is the same family and belongs beside them. */
+.kr-row {
+  background: var(--kr-row-bg, transparent);
+  transition: background var(--kr-motion-hover);
+}
+.kr-row:hover {
+  background: var(--kr-row-hover, var(--kr-surface-hover));
+}
+
+/* Text that navigates — a caption-sized button such as a session row's
+ * "↓ from <parent>". It rests muted like the text around it; the accent and an
+ * underline on hover are what say it can be clicked. The resting colour comes
+ * in as `--kr-link`, since an inline `color` would outrank the hover. */
+.kr-link {
+  color: var(--kr-link);
+  transition: color var(--kr-motion-hover);
+}
+.kr-link:hover {
+  color: var(--kr-accent);
+  text-decoration: underline;
+}

@@ -1,0 +1,68 @@
+/*
+ * The app's two self-hosted faces, in their own file because two documents
+ * need them: the main window (via `App.css`) and the tray popover (via
+ * `tray/main.tsx`), which has its own HTML entry and deliberately does NOT
+ * take the rest of `App.css` — that file locks the document's scrolling and
+ * paints a 8px scrollbar, and the popover hides its scrollbars entirely.
+ *
+ * No network fonts anywhere: the app must render identically offline.
+ */
+
+/* Geist (Vercel) — the UI face. Licensed under the SIL Open Font License 1.1,
+ * whose text ships beside the files as `public/fonts/Geist-LICENSE.txt`.
+ * Three weights: 400 / 500 / 700. There is deliberately no 600 face — asking
+ * for one makes the browser synthesize a fake semibold, which at 12.5px reads
+ * as a smudge. */
+@font-face {
+  font-family: "Geist";
+  src: url("/fonts/Geist-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: block;
+}
+@font-face {
+  font-family: "Geist";
+  src: url("/fonts/Geist-Medium.woff2") format("woff2");
+  font-weight: 500;
+  font-style: normal;
+  font-display: block;
+}
+@font-face {
+  font-family: "Geist";
+  src: url("/fonts/Geist-Bold.woff2") format("woff2");
+  font-weight: 700;
+  font-style: normal;
+  font-display: block;
+}
+
+/* JetBrains Mono + Nerd Font glyphs — everything machine-shaped, and the
+ * terminal itself (powerline segments and TUI icons need the Nerd patches).
+ * SIL Open Font License 1.1: `public/fonts/JetBrainsMono-LICENSE.txt`. */
+@font-face {
+  font-family: "JetBrainsMono Nerd Font";
+  src: url("/fonts/JetBrainsMonoNerdFontMono-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: block;
+}
+@font-face {
+  font-family: "JetBrainsMono Nerd Font";
+  src: url("/fonts/JetBrainsMonoNerdFontMono-Bold.woff2") format("woff2");
+  font-weight: 700;
+  font-style: normal;
+  font-display: block;
+}
+@font-face {
+  font-family: "JetBrainsMono Nerd Font";
+  src: url("/fonts/JetBrainsMonoNerdFontMono-Italic.woff2") format("woff2");
+  font-weight: 400;
+  font-style: italic;
+  font-display: block;
+}
+@font-face {
+  font-family: "JetBrainsMono Nerd Font";
+  src: url("/fonts/JetBrainsMonoNerdFontMono-BoldItalic.woff2") format("woff2");
+  font-weight: 700;
+  font-style: italic;
+  font-display: block;
+}

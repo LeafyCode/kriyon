@@ -1,0 +1,628 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kriyon — Color Palette</title>
+<style>
+  /* Geist, self-hosted. This file is opened straight from `docs/`, so the
+     faces are reached relatively rather than through the app's `/fonts/` root.
+     Geist is shipped at 400 / 500 / 700 and no 600 — a 600 anywhere on this page
+     would be a browser-synthesized fake semibold. */
+  @font-face {
+    font-family: "Geist";
+    src: url("../public/fonts/Geist-Regular.woff2") format("woff2");
+    font-weight: 400;
+    font-style: normal;
+    font-display: swap;
+  }
+  @font-face {
+    font-family: "Geist";
+    src: url("../public/fonts/Geist-Medium.woff2") format("woff2");
+    font-weight: 500;
+    font-style: normal;
+    font-display: swap;
+  }
+  @font-face {
+    font-family: "Geist";
+    src: url("../public/fonts/Geist-Bold.woff2") format("woff2");
+    font-weight: 700;
+    font-style: normal;
+    font-display: swap;
+  }
+
+  html { -webkit-text-size-adjust: 100%; }
+  img { max-width: 100%; }
+  :root {
+    --bg: #0d1017;
+    --window: #0d1017;
+    --content: #0d1017;
+    --rail: #0f131c;
+    --raised: #10141d;
+    --overlay: #161b26;
+    --border: #1f2531;
+    --input-well: #1a2030;
+
+    --ink-bright: #f2f5fa;
+    --ink-primary: #eceff5;
+    --ink-secondary: #aab3c5;
+    --ink-muted: #79839a;
+    --ink-dim: #5c677d;
+    --ink-faint: #525d72;
+
+    --line-soft: #161b26;
+    --line-base: #1c212c;
+    --line-strong: #232937;
+    --surface: rgba(255,255,255,0.03);
+    --surface-hover: rgba(255,255,255,0.04);
+
+    --accent: #007ea2;
+    --accent-bright: #49b3d8;
+
+    --sans: 'Geist', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+    --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink-primary);
+    font-family: var(--sans);
+    -webkit-font-smoothing: antialiased;
+    line-height: 1.5;
+  }
+
+  .page {
+    max-width: 1080px;
+    margin: 0 auto;
+    padding: 72px 40px 120px;
+  }
+
+  /* ---- Masthead ---- */
+  header {
+    border-bottom: 1px solid var(--line-strong);
+    padding-bottom: 32px;
+    margin-bottom: 8px;
+  }
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--ink-dim);
+    margin: 0 0 18px;
+  }
+  h1 {
+    font-size: clamp(34px, 5vw, 52px);
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    line-height: 1.04;
+    color: var(--ink-bright);
+    margin: 0;
+    text-wrap: balance;
+  }
+  .lede {
+    max-width: 58ch;
+    color: var(--ink-muted);
+    font-size: 15px;
+    margin: 20px 0 0;
+  }
+  .lede strong { color: var(--ink-secondary); font-weight: 500; }
+
+  /* ---- Section ---- */
+  section { margin-top: 72px; }
+  .sec-head {
+    display: flex;
+    align-items: baseline;
+    gap: 14px;
+    border-bottom: 1px solid var(--line-base);
+    padding-bottom: 12px;
+    margin-bottom: 28px;
+  }
+  .sec-num {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--accent-bright);
+    font-weight: 700;
+  }
+  h2 {
+    font-size: 19px;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    color: var(--ink-bright);
+    margin: 0;
+  }
+  .sec-note {
+    margin-left: auto;
+    font-size: 13px;
+    color: var(--ink-faint);
+    max-width: 40ch;
+    text-align: right;
+  }
+  @media (max-width: 620px) {
+    .sec-note { display: none; }
+  }
+
+  /* ---- Swatch grid ---- */
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 14px;
+  }
+  .swatch {
+    background: var(--raised);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    transition: border-color 0.14s ease, transform 0.14s ease;
+  }
+  .swatch:hover { border-color: var(--line-strong); transform: translateY(-1px); }
+  .chip {
+    height: 84px;
+    border-bottom: 1px solid var(--line-soft);
+    position: relative;
+  }
+  .chip.checker {
+    background-image:
+      linear-gradient(45deg, #1c212c 25%, transparent 25%),
+      linear-gradient(-45deg, #1c212c 25%, transparent 25%),
+      linear-gradient(45deg, transparent 75%, #1c212c 75%),
+      linear-gradient(-45deg, transparent 75%, #1c212c 75%);
+    background-size: 14px 14px;
+    background-position: 0 0, 0 7px, 7px -7px, -7px 0;
+  }
+  .chip .fill { position: absolute; inset: 0; }
+  .meta { padding: 11px 13px 13px; }
+  .name {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--ink-secondary);
+    margin: 0;
+  }
+  .role {
+    font-size: 11.5px;
+    color: var(--ink-faint);
+    margin: 2px 0 0;
+  }
+  .hex {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--ink-muted);
+    margin: 9px 0 0;
+    letter-spacing: 0.01em;
+    text-transform: uppercase;
+  }
+
+  /* ---- Accent theme cards ---- */
+  .themes {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+    gap: 16px;
+  }
+  .theme {
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+    background: var(--raised);
+  }
+  .theme-hero {
+    height: 110px;
+    display: flex;
+    align-items: flex-end;
+    padding: 14px;
+    position: relative;
+    border-bottom: 1px solid var(--line-base);
+  }
+  .theme-hero .btn {
+    font-size: 12.5px;
+    font-weight: 700;
+    padding: 7px 15px;
+    border-radius: 6px;
+    z-index: 1;
+  }
+  .theme-hero .ramp {
+    position: absolute;
+    top: 14px; right: 14px;
+    display: flex;
+    gap: 5px;
+  }
+  .theme-hero .ramp span {
+    width: 15px; height: 15px;
+    border-radius: 50%;
+    border: 1px solid rgba(255,255,255,0.12);
+  }
+  .theme-body { padding: 13px 15px 16px; }
+  .theme-name {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--ink-bright);
+    margin: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .default-tag {
+    font-family: var(--mono);
+    font-size: 9.5px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--accent-bright);
+    border: 1px solid rgba(0,126,162,0.5);
+    border-radius: 4px;
+    padding: 1px 5px;
+  }
+  .theme-desc { font-size: 12.5px; color: var(--ink-faint); margin: 5px 0 12px; }
+  .theme-rows { display: grid; gap: 6px; }
+  .theme-rows .row {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: var(--ink-muted);
+    text-transform: uppercase;
+  }
+  .theme-rows .dot {
+    width: 13px; height: 13px;
+    border-radius: 4px;
+    flex-shrink: 0;
+    border: 1px solid var(--line-soft);
+  }
+  .theme-rows .row .lbl {
+    color: var(--ink-faint);
+    text-transform: none;
+    font-family: var(--sans);
+    font-size: 11px;
+    margin-left: auto;
+  }
+
+  /* ---- Inline swatch (ramp / status rows) ---- */
+  .strip {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  .cell {
+    flex: 1 1 128px;
+    min-width: 128px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    background: var(--raised);
+  }
+  .cell .bar { height: 52px; border-bottom: 1px solid var(--line-soft); }
+  .cell .cmeta { padding: 9px 11px 11px; }
+  .cell .cname { font-size: 12px; color: var(--ink-secondary); font-weight: 500; }
+  .cell .chex {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--ink-muted);
+    text-transform: uppercase;
+    margin-top: 5px;
+  }
+  .cell .cnote { font-size: 10.5px; color: var(--ink-faint); margin-top: 3px; }
+
+  /* ---- Foundations table ---- */
+  .foundations {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 44px;
+  }
+  @media (max-width: 720px) { .foundations { grid-template-columns: 1fr; gap: 32px; } }
+  .found-block h3 {
+    font-size: 12px;
+    font-family: var(--mono);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ink-dim);
+    margin: 0 0 14px;
+    font-weight: 700;
+  }
+  .kv { display: grid; gap: 0; }
+  .kv .line {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 16px;
+    padding: 9px 0;
+    border-bottom: 1px solid var(--line-soft);
+  }
+  .kv .k { font-size: 13px; color: var(--ink-secondary); }
+  .kv .v {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--ink-muted);
+    text-align: right;
+  }
+  .kv .k small { color: var(--ink-faint); font-size: 11px; margin-left: 7px; }
+
+  .font-sample { font-size: 20px; color: var(--ink-bright); margin: 0 0 3px; letter-spacing: -0.01em; }
+  .font-sample.mono { font-family: var(--mono); font-size: 16px; letter-spacing: 0; }
+  .font-label { font-size: 11px; color: var(--ink-faint); margin: 0 0 20px; }
+  .font-label code { font-family: var(--mono); color: var(--ink-dim); }
+
+  footer {
+    margin-top: 88px;
+    padding-top: 26px;
+    border-top: 1px solid var(--line-base);
+    font-size: 12.5px;
+    color: var(--ink-faint);
+    display: flex;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+  footer .mono { font-family: var(--mono); text-transform: uppercase; letter-spacing: 0.06em; }
+</style>
+
+<div class="page">
+  <header>
+    <p class="eyebrow">Kriyon · Design System · Color</p>
+    <h1>The Kriyon palette</h1>
+    <p class="lede">The <strong>BisBig direction</strong>: one flat cool blue-black plane, hairline borders, a long cool ink ramp, and a single configurable accent that punctuates. Regions are told apart by a one-step lightness shift and a 1px line — never by a gradient, a blur, or an elevation; outside a true overlay nothing casts a shadow. Every value below is a live token; nothing in the app hard-codes color.</p>
+  </header>
+
+  <!-- 1. ACCENT THEMES -->
+  <section>
+    <div class="sec-head">
+      <span class="sec-num">01</span>
+      <h2>Accent themes</h2>
+      <p class="sec-note">Five shipped palettes. They share the dark chrome and differ only in the accent block layered on top.</p>
+    </div>
+    <div class="themes">
+
+      <div class="theme">
+        <div class="theme-hero" style="background:#0d1017;">
+          <div class="ramp">
+            <span style="background:#93d9f5;"></span>
+            <span style="background:#49b3d8;"></span>
+            <span style="background:#007ea2;"></span>
+          </div>
+          <div class="btn" style="background:#007ea2;color:#ffffff;">Send</div>
+        </div>
+        <div class="theme-body">
+          <p class="theme-name">Steel <span class="default-tag">Default</span></p>
+          <p class="theme-desc">The direction's own steel blue — hue 225, the same family as the chrome.</p>
+          <div class="theme-rows">
+            <div class="row"><span class="dot" style="background:#007ea2;"></span>#007EA2<span class="lbl">accent</span></div>
+            <div class="row"><span class="dot" style="background:#49b3d8;"></span>#49B3D8<span class="lbl">bright</span></div>
+            <div class="row"><span class="dot" style="background:#93d9f5;"></span>#93D9F5<span class="lbl">ink</span></div>
+            <div class="row"><span class="dot" style="background:#ffffff;"></span>#FFFFFF<span class="lbl">on-accent</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="theme">
+        <div class="theme-hero" style="background:#0d1017;">
+          <div class="ramp">
+            <span style="background:#9BA2F0;"></span>
+            <span style="background:#7B85E0;"></span>
+            <span style="background:#5E6AD2;"></span>
+          </div>
+          <div class="btn" style="background:#5E6AD2;color:#F2F3FF;">Send</div>
+        </div>
+        <div class="theme-body">
+          <p class="theme-name">Indigo</p>
+          <p class="theme-desc">Calm, product-grade indigo.</p>
+          <div class="theme-rows">
+            <div class="row"><span class="dot" style="background:#5E6AD2;"></span>#5E6AD2<span class="lbl">accent</span></div>
+            <div class="row"><span class="dot" style="background:#7B85E0;"></span>#7B85E0<span class="lbl">bright</span></div>
+            <div class="row"><span class="dot" style="background:#9BA2F0;"></span>#9BA2F0<span class="lbl">ink</span></div>
+            <div class="row"><span class="dot" style="background:#F2F3FF;"></span>#F2F3FF<span class="lbl">on-accent</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="theme">
+        <div class="theme-hero" style="background:#0d1017;">
+          <div class="ramp">
+            <span style="background:#82ABF9;"></span>
+            <span style="background:#5D93F8;"></span>
+            <span style="background:#3D7BF5;"></span>
+          </div>
+          <div class="btn" style="background:#3D7BF5;color:#EFF5FF;">Send</div>
+        </div>
+        <div class="theme-body">
+          <p class="theme-name">Cool blue</p>
+          <p class="theme-desc">Brighter cool blue, classic dev-tool energy.</p>
+          <div class="theme-rows">
+            <div class="row"><span class="dot" style="background:#3D7BF5;"></span>#3D7BF5<span class="lbl">accent</span></div>
+            <div class="row"><span class="dot" style="background:#5D93F8;"></span>#5D93F8<span class="lbl">bright</span></div>
+            <div class="row"><span class="dot" style="background:#82ABF9;"></span>#82ABF9<span class="lbl">ink</span></div>
+            <div class="row"><span class="dot" style="background:#EFF5FF;"></span>#EFF5FF<span class="lbl">on-accent</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="theme">
+        <div class="theme-hero" style="background:#0d1017;">
+          <div class="ramp">
+            <span style="background:#52C7B4;"></span>
+            <span style="background:#3FC2AE;"></span>
+            <span style="background:#2BA391;"></span>
+          </div>
+          <div class="btn" style="background:#2BA391;color:#EAFBF7;">Send</div>
+        </div>
+        <div class="theme-body">
+          <p class="theme-name">Teal</p>
+          <p class="theme-desc">The original Kriyon teal, cooled and desaturated.</p>
+          <div class="theme-rows">
+            <div class="row"><span class="dot" style="background:#2BA391;"></span>#2BA391<span class="lbl">accent</span></div>
+            <div class="row"><span class="dot" style="background:#3FC2AE;"></span>#3FC2AE<span class="lbl">bright</span></div>
+            <div class="row"><span class="dot" style="background:#52C7B4;"></span>#52C7B4<span class="lbl">ink</span></div>
+            <div class="row"><span class="dot" style="background:#EAFBF7;"></span>#EAFBF7<span class="lbl">on-accent</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="theme">
+        <div class="theme-hero" style="background:#0d1017;">
+          <div class="ramp">
+            <span style="background:#C8CAD0;"></span>
+            <span style="background:#E6E7EB;"></span>
+            <span style="background:#C8CAD0;"></span>
+          </div>
+          <div class="btn" style="background:#C8CAD0;color:#0d1017;">Send</div>
+        </div>
+        <div class="theme-body">
+          <p class="theme-name">Graphite</p>
+          <p class="theme-desc">No hue at all — the accent is white, ultra-restrained.</p>
+          <div class="theme-rows">
+            <div class="row"><span class="dot" style="background:#C8CAD0;"></span>#C8CAD0<span class="lbl">accent</span></div>
+            <div class="row"><span class="dot" style="background:#E6E7EB;"></span>#E6E7EB<span class="lbl">bright</span></div>
+            <div class="row"><span class="dot" style="background:#C8CAD0;"></span>#C8CAD0<span class="lbl">ink</span></div>
+            <div class="row"><span class="dot" style="background:#0d1017;border-color:var(--line-strong);"></span>#0D1017<span class="lbl">on-accent</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- 2. CHROME -->
+  <section>
+    <div class="sec-head">
+      <span class="sec-num">02</span>
+      <h2>Chrome &amp; grounds</h2>
+      <p class="sec-note">Flat, opaque fills. Window and content are the same plane; the rails sit one notch darker so the working column reads as the lit surface between them.</p>
+    </div>
+    <div class="grid">
+      <div class="swatch">
+        <div class="chip"><div class="fill" style="background:#0d1017;"></div></div>
+        <div class="meta"><p class="name">Plane</p><p class="role">window · content · terminal · diff well</p><p class="hex">#0D1017</p></div>
+      </div>
+      <div class="swatch">
+        <div class="chip"><div class="fill" style="background:#0f131c;"></div></div>
+        <div class="meta"><p class="name">Rails</p><p class="role">sidebar · Details · focus rail</p><p class="hex">#0F131C</p></div>
+      </div>
+      <div class="swatch">
+        <div class="chip"><div class="fill" style="background:#10141d;"></div></div>
+        <div class="meta"><p class="name">Card</p><p class="role">composer · diff file · settings group · stat tile</p><p class="hex">#10141D</p></div>
+      </div>
+      <div class="swatch">
+        <div class="chip"><div class="fill" style="background:#161b26;"></div></div>
+        <div class="meta"><p class="name">Overlay</p><p class="role">modals · command palette · kbd chips</p><p class="hex">#161B26</p></div>
+      </div>
+      <div class="swatch">
+        <div class="chip"><div class="fill" style="background:#1a2030;"></div></div>
+        <div class="meta"><p class="name">Input well</p><p class="role">sunken fill: search boxes, progress tracks, switch tracks</p><p class="hex">#1A2030</p></div>
+      </div>
+      <div class="swatch">
+        <div class="chip"><div class="fill" style="background:#1f2531;"></div></div>
+        <div class="meta"><p class="name">Border</p><p class="role">the line around a card</p><p class="hex">#1F2531</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 3. INK RAMP -->
+  <section>
+    <div class="sec-head">
+      <span class="sec-num">03</span>
+      <h2>Text ramp</h2>
+      <p class="sec-note">A six-stop cool ink ramp. On the <code>#0d1017</code> plane only Muted and brighter clear AA, so the ramp is a rule as much as a scale: Muted and up for anything the user reads, Dim for icons and gutters (it clears the 3:1 a non-text indicator owes, and nothing more), Faint for decoration alone.</p>
+    </div>
+    <div class="strip">
+      <div class="cell"><div class="bar" style="background:#f2f5fa;"></div><div class="cmeta"><div class="cname">Bright</div><div class="chex">#F2F5FA</div><div class="cnote">headings</div></div></div>
+      <div class="cell"><div class="bar" style="background:#eceff5;"></div><div class="cmeta"><div class="cname">Primary</div><div class="chex">#ECEFF5</div><div class="cnote">body</div></div></div>
+      <div class="cell"><div class="bar" style="background:#aab3c5;"></div><div class="cmeta"><div class="cname">Secondary</div><div class="chex">#AAB3C5</div><div class="cnote">labels</div></div></div>
+      <div class="cell"><div class="bar" style="background:#79839a;"></div><div class="cmeta"><div class="cname">Muted</div><div class="chex">#79839A</div><div class="cnote">supporting · the AA floor</div></div></div>
+      <div class="cell"><div class="bar" style="background:#5c677d;"></div><div class="cmeta"><div class="cname">Dim</div><div class="chex">#5C677D</div><div class="cnote">mono counts</div></div></div>
+      <div class="cell"><div class="bar" style="background:#525d72;"></div><div class="cmeta"><div class="cname">Faint</div><div class="chex">#525D72</div><div class="cnote">chevrons · placeholders · section labels</div></div></div>
+    </div>
+  </section>
+
+  <!-- 4. STATUS + GIT -->
+  <section>
+    <div class="sec-head">
+      <span class="sec-num">04</span>
+      <h2>Status &amp; diff semantics</h2>
+      <p class="sec-note">GitHub's status family, separate from the accent: one green for running <em>and</em> done, amber for waiting, coral for error; git add / delete mirror the diff view.</p>
+    </div>
+    <div class="strip">
+      <div class="cell"><div class="bar" style="background:#3fb950;"></div><div class="cmeta"><div class="cname">Running</div><div class="chex">#3FB950</div><div class="cnote">live session</div></div></div>
+      <div class="cell"><div class="bar" style="background:#d29922;"></div><div class="cmeta"><div class="cname">Waiting</div><div class="chex">#D29922</div><div class="cnote">needs you — the dot</div></div></div>
+      <div class="cell"><div class="bar" style="background:#e3b341;"></div><div class="cmeta"><div class="cname">Waiting ink</div><div class="chex">#E3B341</div><div class="cnote">waiting label ink</div></div></div>
+      <div class="cell"><div class="bar" style="background:#3fb950;"></div><div class="cmeta"><div class="cname">Done</div><div class="chex">#3FB950</div><div class="cnote">complete · git add — same green, told apart by a quiet ✓</div></div></div>
+      <div class="cell"><div class="bar" style="background:#525d72;"></div><div class="cmeta"><div class="cname">Idle</div><div class="chex">#525D72</div><div class="cnote">dormant</div></div></div>
+      <div class="cell"><div class="bar" style="background:#f0716f;"></div><div class="cmeta"><div class="cname">Error</div><div class="chex">#F0716F</div><div class="cnote">failed · git del</div></div></div>
+    </div>
+  </section>
+
+  <!-- 5. PROJECT PALETTE -->
+  <section>
+    <div class="sec-head">
+      <span class="sec-num">05</span>
+      <h2>Project identity hues</h2>
+      <p class="sec-note">Eight muted hues, matched in saturation so no project shouts. Assigned deterministically per project id.</p>
+    </div>
+    <div class="grid">
+      <div class="swatch"><div class="chip"><div class="fill" style="background:#7fb3e6;"></div></div><div class="meta"><p class="name">Blue</p><p class="hex">#7FB3E6</p></div></div>
+      <div class="swatch"><div class="chip"><div class="fill" style="background:#a293e8;"></div></div><div class="meta"><p class="name">Violet</p><p class="hex">#A293E8</p></div></div>
+      <div class="swatch"><div class="chip"><div class="fill" style="background:#e096c8;"></div></div><div class="meta"><p class="name">Pink</p><p class="hex">#E096C8</p></div></div>
+      <div class="swatch"><div class="chip"><div class="fill" style="background:#e8a06a;"></div></div><div class="meta"><p class="name">Orange</p><p class="hex">#E8A06A</p></div></div>
+      <div class="swatch"><div class="chip"><div class="fill" style="background:#d9c06a;"></div></div><div class="meta"><p class="name">Gold</p><p class="hex">#D9C06A</p></div></div>
+      <div class="swatch"><div class="chip"><div class="fill" style="background:#8fce9a;"></div></div><div class="meta"><p class="name">Green</p><p class="hex">#8FCE9A</p></div></div>
+      <div class="swatch"><div class="chip"><div class="fill" style="background:#6ec6c9;"></div></div><div class="meta"><p class="name">Cyan</p><p class="hex">#6EC6C9</p></div></div>
+      <div class="swatch"><div class="chip"><div class="fill" style="background:#c9a2e8;"></div></div><div class="meta"><p class="name">Lavender</p><p class="hex">#C9A2E8</p></div></div>
+    </div>
+  </section>
+
+  <!-- 6. FOUNDATIONS -->
+  <section>
+    <div class="sec-head">
+      <span class="sec-num">06</span>
+      <h2>Foundations</h2>
+      <p class="sec-note">Type, hairlines, radii and spacing that the color sits inside.</p>
+    </div>
+    <div class="foundations">
+      <div class="found-block">
+        <h3>Typography</h3>
+        <p class="font-sample">Aa — Sessions &amp; structure</p>
+        <p class="font-label">Sans · <code>'Geist', -apple-system, BlinkMacSystemFont, system-ui</code> — self-hosted; 400 / 500 / 700 only, there is no 600</p>
+        <p class="font-sample mono">Aa — /path · id · 1,204 · code</p>
+        <p class="font-label">Mono · <code>JetBrains Mono</code> — carries anything machine-shaped</p>
+
+        <h3 style="margin-top:26px;">Hairlines</h3>
+        <div class="kv">
+          <div class="line"><span class="k">Soft</span><span class="v">#161B26</span></div>
+          <div class="line"><span class="k">Base</span><span class="v">#1C212C</span></div>
+          <div class="line"><span class="k">Strong</span><span class="v">#232937</span></div>
+        </div>
+        <p class="font-label" style="margin-top:10px;">Opaque, not white alphas — on a plane this dark an alpha line disappears over a card and doubles over a rail.</p>
+      </div>
+
+      <div class="found-block">
+        <h3>Radius</h3>
+        <div class="kv">
+          <div class="line"><span class="k">Small <small>chips · kbd</small></span><span class="v">4px</span></div>
+          <div class="line"><span class="k">Medium <small>rows · buttons · inputs</small></span><span class="v">6px</span></div>
+          <div class="line"><span class="k">Large <small>cards</small></span><span class="v">8px</span></div>
+          <div class="line"><span class="k">XL <small>dialogs</small></span><span class="v">12px</span></div>
+          <div class="line"><span class="k">Pill</span><span class="v">9999px</span></div>
+        </div>
+
+        <h3 style="margin-top:26px;">Spacing</h3>
+        <div class="kv">
+          <div class="line"><span class="k">xs · sm · md · lg · xl</span><span class="v">4 · 8 · 12 · 16 · 24</span></div>
+        </div>
+
+        <h3 style="margin-top:26px;">macOS traffic lights</h3>
+        <div class="kv">
+          <div class="line"><span class="k"><span style="display:inline-block;width:11px;height:11px;border-radius:50%;background:#ff5f57;margin-right:8px;vertical-align:-1px;"></span>Close</span><span class="v">#FF5F57</span></div>
+          <div class="line"><span class="k"><span style="display:inline-block;width:11px;height:11px;border-radius:50%;background:#febc2e;margin-right:8px;vertical-align:-1px;"></span>Minimize</span><span class="v">#FEBC2E</span></div>
+          <div class="line"><span class="k"><span style="display:inline-block;width:11px;height:11px;border-radius:50%;background:#28c840;margin-right:8px;vertical-align:-1px;"></span>Maximize</span><span class="v">#28C840</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <span>Source of truth · <span class="mono">src/theme/tokens.ts</span> + <span class="mono">themes/</span> · <span class="mono">ADR-0023</span></span>
+    <span class="mono">Kriyon · dark-only shell</span>
+  </footer>
+</div>
+
+</body>
+</html>

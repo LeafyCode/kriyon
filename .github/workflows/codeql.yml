@@ -1,0 +1,39 @@
+name: CodeQL
+
+# Code scanning is free for public repositories and needs GitHub Advanced
+# Security on private ones, so this runs only once the repo is public.
+on:
+  push:
+    branches: [dev, main]
+  pull_request:
+    branches: [dev, main]
+  schedule:
+    - cron: "17 3 * * 1"
+
+permissions: {}
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    if: ${{ !github.event.repository.private }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      security-events: write # upload the results to code scanning
+    strategy:
+      fail-fast: false
+      matrix:
+        # `none`: CodeQL reads the source without building it, so the Tauri
+        # system packages and the PTY sidecar are not needed here.
+        language: [actions, javascript-typescript, rust]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: github/codeql-action/init@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+      - uses: github/codeql-action/analyze@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
+        with:
+          category: /language:${{ matrix.language }}

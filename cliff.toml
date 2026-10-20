@@ -1,0 +1,66 @@
+# git-cliff: picks the next version and drafts the CHANGELOG.md entry from the
+# conventional commits since the last v* tag. `pnpm release` runs it; the draft
+# is always rewritten in plain words before it ships. See ADR 0045.
+# Docs: https://git-cliff.org/docs/configuration
+
+[changelog]
+# CHANGELOG.md keeps its own header; scripts/release.mjs only inserts entries.
+header = ""
+body = """
+{%- set team = ["Pubudu Kodikara", "Kriyon Dev", "dependabot[bot]", "github-actions[bot]", "Claude"] -%}
+{% if version -%}
+## {{ version | trim_start_matches(pat="v") }} — {{ timestamp | date(format="%Y-%m-%d") }}
+{% else -%}
+## Unreleased
+{% endif %}
+<!-- One short paragraph: what this release means for someone using Kriyon. -->
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group | striptags | trim }}
+{% for commit in commits %}
+- {% if commit.breaking %}**Breaking:** {% endif %}{{ commit.message | split(pat="\n") | first | trim | upper_first }}\
+{% if commit.author.name not in team %} Thanks, {{ commit.author.name }}.{% endif %}
+{%- endfor %}
+{% endfor %}
+"""
+trim = true
+footer = ""
+
+[git]
+conventional_commits = true
+# Keep commits that don't follow the format out of the draft rather than failing.
+filter_unconventional = true
+split_commits = false
+# A breaking change shows even when its type is one we hide.
+protect_breaking_commits = true
+filter_commits = false
+topo_order = false
+sort_commits = "oldest"
+# Releases are v1.2.3; nothing else is a release tag. So betas and nightlies
+# (v1.2.3-beta.1, v1.2.3-nightly.…) don't close a changelog section or move
+# the base for the next version. scripts/release.mjs reads this line too, so
+# it is the one definition of a release tag.
+tag_pattern = "^v[0-9]+\\.[0-9]+\\.[0-9]+$"
+# Keep a Changelog order. The <!-- N --> prefix sorts groups and is stripped
+# when rendered.
+commit_parsers = [
+  { message = "^chore\\(release\\)", skip = true },
+  { message = "^feat(\\(.*\\))?!?: *[Rr]emove", group = "<!-- 3 -->Removed" },
+  { message = "^feat", group = "<!-- 0 -->Added" },
+  { message = "^fix\\(security\\)", group = "<!-- 5 -->Security" },
+  { body = "(?i)security", message = "^fix", group = "<!-- 5 -->Security" },
+  { message = "^fix", group = "<!-- 4 -->Fixed" },
+  { message = "^perf", group = "<!-- 1 -->Changed" },
+  { message = "^revert", group = "<!-- 1 -->Changed" },
+  # Any other breaking change still shows (protect_breaking_commits).
+  { message = "^[a-z]+(\\(.*\\))?!:", group = "<!-- 1 -->Changed" },
+  { footer = "^BREAKING[ -]CHANGE", group = "<!-- 1 -->Changed" },
+  # Not something a user sees: chore, test, ci, refactor, docs, style, build.
+  { message = ".*", skip = true },
+]
+
+[bump]
+# feat → minor, fix → patch, also before 1.0.
+features_always_bump_minor = true
+# Before 1.0 a breaking change bumps the minor number (0.13 → 0.14), not 1.0.
+breaking_always_bump_major = false
+initial_tag = "v0.1.0"

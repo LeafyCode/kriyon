@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Question or idea
+    url: https://github.com/LeafyCode/kriyon/discussions
+    about: Ask questions and talk through ideas in GitHub Discussions.
+  - name: Security problem
+    url: https://github.com/LeafyCode/kriyon/security/advisories/new
+    about: Report security problems privately. Never open a public issue for them.

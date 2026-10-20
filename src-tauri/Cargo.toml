@@ -1,0 +1,85 @@
+[package]
+name = "kriyon"
+version.workspace = true
+description = "Kriyon — a GUI for the Claude Code CLI"
+authors = ["Leafy Code International (Pvt) Ltd"]
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+# The `_lib` suffix may seem redundant but it is necessary
+# to make the lib name unique and wouldn't conflict with the bin name.
+# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+name = "kriyon_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# 2.12.1 is the floor: it brings tray-icon 0.25.1, which stops macOS 27 opening
+# the right-click menu on a left-click, which would hide the menu-bar popover.
+tauri = { version = "2.12.1", features = ["tray-icon", "macos-private-api", "image-png"] }
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+kriyon-core = { path = "../crates/kriyon-core" }
+tauri-plugin-notification = "2"
+tauri-plugin-fs = "2"
+tauri-plugin-shell = "2"
+tauri-plugin-deep-link = "2"
+tauri-plugin-dialog = "2"
+portable-pty = "0.9"
+parking_lot = "0.12"
+tempfile = "3"
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+thiserror = "2.0.18"
+notify = "8.2.0"
+arboard = "3"
+tauri-plugin-positioner = { version = "2.3.2", features = ["tray-icon"] }
+window-vibrancy = "0.8.1"
+ignore = "0.4"
+plist = "1"
+semver = "1"
+tauri-plugin-updater = "2"
+
+[features]
+# Lets a local test build read its update feed from `KRIYON_UPDATE_FEED`, to
+# test the update loop against a feed served on this Mac (docs/RELEASING.md).
+# Never on in CI: a shipped build reads only its channel's fixed feed.
+local-feed = []
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = { version = "0.6", features = ["exception"] }
+objc2-app-kit = { version = "0.3", features = ["NSSound", "NSGraphics", "NSPasteboard", "NSPasteboardItem"] }
+objc2-foundation = { version = "0.3", features = ["NSString", "NSDictionary", "NSObject", "NSError", "NSBundle", "NSFileManager", "NSURL"] }
+objc2-user-notifications = { version = "0.3", features = [
+    "UNUserNotificationCenter",
+    "UNNotificationContent",
+    "UNNotificationRequest",
+    "UNNotificationResponse",
+    "UNNotification",
+    "UNNotificationSound",
+    "UNNotificationTrigger",
+] }
+block2 = "0.6"
+uuid = { version = "1", features = ["v4"] }
+libproc = "0.14"
+
+[target."cfg(unix)".dependencies]
+libc = "0.2.189"
+
+[dev-dependencies]
+# The mock runtime behind `tauri::test`, so the watch-signal route (state
+# mutation + event emits) is unit-testable without a real webview/tray.
+tauri = { version = "2", features = ["test"] }
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"
+suspicious = "deny"
+correctness = "deny"
+

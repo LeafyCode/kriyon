@@ -1,0 +1,118 @@
+name: Publish
+
+# Publishes a draft release the Release workflow built: checks its update
+# feed again, publishes it (GitHub makes the tag then), moves the feed and,
+# for stable, bumps the Homebrew tap. Run it on main for a stable release
+# once you have checked the draft; run it on dev to retry a beta or nightly
+# whose publish failed. See ADR 0046 and docs/RELEASING.md.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "The draft release to publish, e.g. v0.13.0"
+        required: true
+        type: string
+
+# Nothing by default; each job asks for what it needs.
+permissions: {}
+
+jobs:
+  # The channel decides the queue and the environment, so it comes from
+  # channelOf (scripts/release-lib.mjs), the one reader of version shapes.
+  channel:
+    name: Read the channel
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      channel: ${{ steps.channel.outputs.channel }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      # The environments enforce where each channel publishes from once the
+      # repo is public; until then this step does.
+      - id: channel
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          channel="$(node scripts/publish.mjs channel "$TAG")"
+          expected=refs/heads/dev
+          if [[ "$channel" == stable ]]; then
+            expected=refs/heads/main
+          fi
+          if [[ "$GITHUB_REF" != "$expected" ]]; then
+            echo "::error::Publish a $channel release from ${expected#refs/heads/}, not $GITHUB_REF."
+            exit 1
+          fi
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+
+  publish:
+    name: Publish ${{ inputs.tag }}
+    needs: channel
+    runs-on: ubuntu-24.04
+    # One run per channel at a time, the same queue release.yml uses (see there).
+    concurrency:
+      group: release-${{ needs.channel.outputs.channel }}
+      cancel-in-progress: false
+    # Once public, `release` lets only main deploy and waits for approval.
+    environment: ${{ needs.channel.outputs.channel == 'stable' && 'release' || 'prerelease' }}
+    permissions:
+      contents: write # publish the release and upload the feed
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ inputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+
+      - name: Check whether the repo is public
+        # Its own line, so a failed lookup fails the step.
+        run: |
+          public="$(gh api "repos/$GITHUB_REPOSITORY" --jq '.private | not')"
+          echo "PUBLIC_REPO=$public" >> "$GITHUB_ENV"
+
+      - run: scripts/publish-release.sh "$TAG"
+
+      - name: Bump the Homebrew tap
+        if: ${{ needs.channel.outputs.channel == 'stable' }}
+        env:
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          if [[ -z "$TAP_TOKEN" ]]; then
+            echo "::warning::No HOMEBREW_TAP_TOKEN secret, so the tap still names the last version. See docs/RELEASING.md."
+            exit 0
+          fi
+          # The tap follows GitHub's latest release, which publish-release.sh
+          # moves only to the newest stable version, so the tap moves forward too.
+          if [[ "$(gh release view --json tagName --jq .tagName)" != "$TAG" ]]; then
+            echo "::notice::$TAG is not the latest release, so the tap is left as it is."
+            exit 0
+          fi
+          work="$(mktemp -d)"
+          gh release download "$TAG" --pattern '*.dmg' --dir "$work"
+          dmg="$(basename "$work"/*.dmg)"
+          url="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/$dmg"
+          git clone --quiet --depth 1 \
+            "https://x-access-token:$TAP_TOKEN@github.com/LeafyCode/homebrew-tap.git" "$work/tap"
+          mkdir -p "$work/tap/Casks"
+          node scripts/publish.mjs cask "${TAG#v}" "$work/$dmg" "$url" > "$work/tap/Casks/kriyon.rb"
+          cd "$work/tap"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Casks/kriyon.rb
+          # A re-run after the tap was bumped has nothing to commit.
+          if git diff --cached --quiet; then
+            echo "The tap already names ${TAG#v}."
+            exit 0
+          fi
+          git commit --quiet --message "kriyon ${TAG#v}"
+          git push --quiet origin HEAD

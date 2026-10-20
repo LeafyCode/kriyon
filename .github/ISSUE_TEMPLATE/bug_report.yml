@@ -1,0 +1,74 @@
+name: Bug report
+description: Something in Kriyon doesn't work the way it should.
+labels: [bug, needs triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. First check whether the same thing happens when you run `claude` in a plain terminal. If it does, it's a Claude Code problem; please report it to Anthropic instead.
+
+        Before posting logs or screenshots, remove anything private: project names, file paths, or session content.
+  - type: input
+    id: kriyon-version
+    attributes:
+      label: Kriyon version
+      description: Kriyon menu > About Kriyon.
+      placeholder: 0.12.0
+    validations:
+      required: true
+  - type: dropdown
+    id: channel
+    attributes:
+      label: Update channel
+      options:
+        - stable
+        - beta
+        - nightly
+        - built from source
+    validations:
+      required: true
+  - type: input
+    id: macos-version
+    attributes:
+      label: macOS version
+      description: Apple menu > About This Mac.
+      placeholder: macOS 15.3, Apple silicon
+    validations:
+      required: true
+  - type: input
+    id: claude-version
+    attributes:
+      label: Claude Code CLI version
+      description: Output of `claude --version`.
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you saw, and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: The smallest set of steps that shows the problem every time.
+      placeholder: |
+        1. Open a project
+        2. Start a session
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: |
+        Any error text. For more detail, quit Kriyon and start it from Terminal with `/Applications/Kriyon.app/Contents/MacOS/kriyon`, reproduce the problem, and paste what it prints.
+      render: text
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else
+      description: Screenshots, screen recordings, or other context.

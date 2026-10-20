@@ -1,0 +1,92 @@
+# Weekly dependency updates, grouped so each ecosystem is one pull request.
+# Actions stay pinned to commit SHAs; Dependabot updates the SHA and the
+# version comment together.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    target-branch: dev
+    schedule:
+      interval: weekly
+    # Wait a week after a release before proposing it, so a compromised or
+    # broken version is usually caught and pulled first.
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: chore
+      include: scope
+    groups:
+      npm:
+        patterns: ["*"]
+    # `tauri build` refuses a Tauri npm package and its Rust crate on
+    # different minor versions, and Dependabot can't bump npm and Cargo in one
+    # pull request. So minor and major version updates of these pairs are done
+    # by hand, both sides together; patches still come. Security updates ignore
+    # this rule and can bring one side's minor alone: bump its pair in the same
+    # pull request. The same list, by crate name, is in the cargo entry below.
+    ignore:
+      - { dependency-name: "@tauri-apps/api", update-types: ["version-update:semver-minor", "version-update:semver-major"] }
+      - { dependency-name: "@tauri-apps/plugin-deep-link", update-types: ["version-update:semver-minor", "version-update:semver-major"] }
+      - { dependency-name: "@tauri-apps/plugin-dialog", update-types: ["version-update:semver-minor", "version-update:semver-major"] }
+      - { dependency-name: "@tauri-apps/plugin-fs", update-types: ["version-update:semver-minor", "version-update:semver-major"] }
+      - { dependency-name: "@tauri-apps/plugin-notification", update-types: ["version-update:semver-minor", "version-update:semver-major"] }
+      - { dependency-name: "@tauri-apps/plugin-opener", update-types: ["version-update:semver-minor", "version-update:semver-major"] }
+      - { dependency-name: "@tauri-apps/plugin-shell", update-types: ["version-update:semver-minor", "version-update:semver-major"] }
+
+  - package-ecosystem: npm
+    directory: /website
+    target-branch: dev
+    schedule:
+      interval: weekly
+    # Wait a week after a release before proposing it, so a compromised or
+    # broken version is usually caught and pulled first.
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: chore
+      include: scope
+    groups:
+      website:
+        patterns: ["*"]
+
+  - package-ecosystem: cargo
+    directory: /
+    target-branch: dev
+    schedule:
+      interval: weekly
+    # Wait a week after a release before proposing it, so a compromised or
+    # broken version is usually caught and pulled first.
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: chore
+      include: scope
+    groups:
+      cargo:
+        patterns: ["*"]
+    # The crates paired with an npm package (see the npm entry above). Crates
+    # with no npm side, like tauri-build, tauri-plugin-positioner and
+    # tauri-plugin-updater, keep their minor updates.
+    ignore:
+      - { dependency-name: "tauri", update-types: ["version-update:semver-minor", "version-update:semver-major"] }
+      - { dependency-name: "tauri-plugin-deep-link", update-types: ["version-update:semver-minor", "version-update:semver-major"] }
+      - { dependency-name: "tauri-plugin-dialog", update-types: ["version-update:semver-minor", "version-update:semver-major"] }
+      - { dependency-name: "tauri-plugin-fs", update-types: ["version-update:semver-minor", "version-update:semver-major"] }
+      - { dependency-name: "tauri-plugin-notification", update-types: ["version-update:semver-minor", "version-update:semver-major"] }
+      - { dependency-name: "tauri-plugin-opener", update-types: ["version-update:semver-minor", "version-update:semver-major"] }
+      - { dependency-name: "tauri-plugin-shell", update-types: ["version-update:semver-minor", "version-update:semver-major"] }
+
+  - package-ecosystem: github-actions
+    directory: /
+    target-branch: dev
+    schedule:
+      interval: weekly
+    # Wait a week after a release before proposing it, so a compromised or
+    # broken version is usually caught and pulled first.
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: ci
+    groups:
+      actions:
+        patterns: ["*"]

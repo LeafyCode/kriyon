@@ -1,0 +1,275 @@
+/*
+ * Global stage for the app. Per-component visuals come from inline styles
+ * driven by `theme/tokens.ts`; this file owns only the things that must be
+ * global: the document background, scrollbars, selection, and the shared
+ * keyframes the UI animates with. The `@font-face` blocks live in
+ * `fonts.css`, and the fill-and-hover family in `hover.css`, because the tray
+ * popover needs both without the rest of this.
+ */
+
+@import "./fonts.css";
+@import "./hover.css";
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  padding: 0;
+  margin: 0;
+  /* The shell owns all scrolling. Lock the document itself so an overscroll
+   * inside an inner pane (transcript, sidebar) can't chain up and rubber-band
+   * the whole WKWebView down — which would expose the white html background
+   * under the native traffic-light overlay. */
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+body {
+  /* Mirrors tokens.font.sans — this one can't reference it, being CSS. */
+  font-family:
+    "Geist", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  line-height: 1.45;
+  color: var(--kr-ink-primary, #eceff5);
+  /* Transparent so the borderless OS window shows the rounded app shell (and
+   * the desktop at its corners). The dark ambient gradient lives on the shell
+   * stage in `Shell.tsx`. */
+  background: transparent;
+  text-rendering: optimizeLegibility;
+}
+
+::selection {
+  color: #fff;
+  background: rgba(var(--kr-accent-rgb), 0.32);
+}
+
+/* Thinner and quieter than the old 9px bar: on a flat plane a chunky thumb is
+ * the loudest thing on screen. */
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.08);
+  background-clip: content-box;
+  border: 2px solid transparent;
+  border-radius: 8px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.16);
+  background-clip: content-box;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/*
+ * Terminal (xterm v6) scrollbar. xterm renders two scroll mechanisms side by
+ * side: a native `.xterm-viewport` (overflow-y: scroll) and a VS Code-style
+ * fading overlay (`.xterm-scrollable-element > .scrollbar > .slider`) synced to
+ * it. The global rule above would paint the native one as a chunky 9px bar that
+ * also steals layout width, clashing with the overlay. So: hide the native bar
+ * (scrollbar-width/::-webkit-scrollbar — scrolling still works, xterm handles
+ * the wheel), and shape the overlay into a thin, rounded, translucent pill that
+ * fades in on scroll — a shadcn ScrollArea look, fully native (no JS listeners).
+ */
+.xterm .xterm-viewport::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+.xterm .xterm-viewport {
+  scrollbar-width: none;
+}
+.xterm .xterm-scrollable-element > .scrollbar > .slider {
+  background: rgba(255, 255, 255, 0.2) !important;
+  border-radius: 8px !important;
+  transition: background 120ms linear;
+}
+.xterm .xterm-scrollable-element > .scrollbar > .slider:hover {
+  background: rgba(255, 255, 255, 0.34) !important;
+}
+.xterm .xterm-scrollable-element > .scrollbar > .slider.active {
+  background: rgba(255, 255, 255, 0.42) !important;
+}
+/* Thin, centered pill (only the vertical bar carries width/offset). */
+.xterm .xterm-scrollable-element > .scrollbar.vertical > .slider {
+  left: 4px !important;
+  width: 7px !important;
+}
+
+@keyframes kr-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@keyframes kr-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
+}
+
+/* The waking-session spinner: a [Sleeping session] whose resume is typed but
+   not yet confirmed. One continuous rotation, so the row reads "loading" while
+   claude comes back. Honors reduced-motion via the global override below. */
+@keyframes kr-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes kr-dots {
+  0% {
+    opacity: 0.25;
+  }
+  20% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0.25;
+  }
+}
+
+@keyframes kr-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(7px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Light sweep across text — the "thinking" status shimmer. Pairs with a
+ * background-clip:text gradient sized to 200% so the highlight travels. */
+@keyframes kr-shimmer {
+  to {
+    background-position: -200% center;
+  }
+}
+
+@keyframes kr-pop-in {
+  from {
+    opacity: 0;
+    transform: scale(0.98) translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+/* The hover affordances inline styles can't express live in `hover.css`, which
+ * the tray popover imports too — see the note at the top of that file. */
+
+/* Row actions (session close, per-project new-session) stay hidden until
+ * their row is hovered or focused, so secondary affordances don't crowd
+ * every row. */
+.kr-reveal-parent .kr-reveal {
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity var(--kr-motion-hover);
+}
+.kr-reveal-parent:hover .kr-reveal,
+.kr-reveal-parent:focus-within .kr-reveal {
+  pointer-events: auto;
+  opacity: 1;
+}
+
+/* A reveal *cluster* (e.g. the session row's close/⋯ actions) is an
+ * absolutely-positioned, partly-transparent strip laid ON TOP of the row's
+ * full-width "Open" button. If the container itself caught pointer events, its
+ * see-through padding/gradient would swallow clicks meant to open the session
+ * (the row would need a second click). So the container stays click-through and
+ * only fades on hover; its buttons take clicks, and only once revealed — an
+ * invisible strip must never eat a click while idle. */
+.kr-reveal-parent .kr-reveal-cluster {
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity var(--kr-motion-hover);
+}
+.kr-reveal-parent:hover .kr-reveal-cluster,
+.kr-reveal-parent:focus-within .kr-reveal-cluster {
+  opacity: 1;
+}
+.kr-reveal-parent:hover .kr-reveal-cluster > *,
+.kr-reveal-parent:focus-within .kr-reveal-cluster > * {
+  pointer-events: auto;
+}
+
+/* Inline disclosure content (history list, tree groups) eases in instead of
+ * popping. Pure entrance animation — collapse is instant by design. The
+ * duration/easing resolves through the same --kr-motion-disclose seam as
+ * tokens.motion.disclose, so the two can no longer drift. */
+.kr-disclose {
+  animation: kr-fade-up var(--kr-motion-disclose);
+}
+
+/* Live-activity pulse for a Project terminal with a running process. Reuses the
+ * shared `kr-pulse` keyframe (same as the running status dot), so the two can't
+ * drift; reduced-motion is neutralized by the global rule below. */
+.kr-term-pulse {
+  animation: kr-pulse 1.6s ease-in-out infinite;
+}
+
+.kr-filter-input::placeholder {
+  color: var(--kr-ink-faint, #525d72);
+}
+.kr-filter-box:focus-within {
+  border-color: rgba(var(--kr-accent-rgb), 0.45);
+}
+
+/* The composer's focus state is a brighter hairline, not a glow — the whole
+ * chrome is flat, and a ring around the one box you type into would be the
+ * only lit edge on the screen. */
+.kr-composer-box {
+  transition: border-color var(--kr-motion-hover);
+}
+.kr-composer-box:focus-within {
+  border-color: var(--kr-line-strong);
+}
+
+.kr-focusable:focus-visible {
+  outline: 2px solid rgba(var(--kr-accent-rgb), 0.55);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.001ms !important;
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}
+
+/* Copy buttons on replies and code blocks sit quiet until the block is
+   hovered or the button is focused. */
+.kr-copy-host .kr-copy {
+  opacity: 0.5;
+  transition: opacity var(--kr-motion-hover);
+}
+
+.kr-copy-host:hover .kr-copy,
+.kr-copy-host .kr-copy:focus-visible {
+  opacity: 1;
+}
