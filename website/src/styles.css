@@ -2366,8 +2366,12 @@ html:not(.js) .fig1 .mini-button {
 .landmarks {
   position: relative;
   max-width: 100%;
-  aspect-ratio: 1915 / 821;
   margin: 0;
+}
+
+.landmarks-art {
+  position: relative;
+  aspect-ratio: 1915 / 821;
 }
 
 .landmarks img {
@@ -2466,21 +2470,6 @@ html:not(.js) .fig1 .mini-button {
     display: block;
     margin: 0 var(--gutter);
     background: none;
-  }
-
-  .landmarks {
-    aspect-ratio: auto;
-  }
-
-  .landmarks img {
-    position: relative;
-    height: auto;
-  }
-
-  .landmarks .landmarks-colour {
-    position: absolute;
-    inset: 0;
-    height: auto;
   }
 }
 

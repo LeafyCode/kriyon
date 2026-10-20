@@ -45,42 +45,46 @@ export function Origin() {
       </div>
 
       <figure className="landmarks" data-painting={painting} ref={ref}>
-        <img
-          alt="Line drawing: Sigiriya rock with a glass lift, a train on the Nine Arches bridge, a robot holding a glowing orb, and the Lotus Tower"
-          className="landmarks-pencil"
-          decoding="async"
-          height={821}
-          loading="lazy"
-          sizes={ART_SIZES}
-          src="/art/landmarks-pencil-1600.webp"
-          srcSet="/art/landmarks-pencil-960.webp 960w, /art/landmarks-pencil-1600.webp 1600w"
-          width={1915}
-        />
-        <img
-          alt=""
-          className="landmarks-colour"
-          decoding="async"
-          height={821}
-          loading="lazy"
-          sizes={ART_SIZES}
-          src="/art/landmarks-colour-1600.webp"
-          srcSet="/art/landmarks-colour-960.webp 960w, /art/landmarks-colour-1600.webp 1600w"
-          width={1915}
-        />
-        <span aria-hidden="true" className="landmarks-beam" />
-        <span aria-hidden="true" className="landmarks-train" />
-        {ORBS.map((o) => (
-          <span
-            aria-hidden="true"
-            className="landmarks-orb"
-            key={`${o.left},${o.top}`}
-            style={{
-              left: `${o.left}%`,
-              top: `${o.top}%`,
-              animationDelay: `${o.delay}s`,
-            }}
+        {/* The art box has the drawing's own shape, so the overlays' %
+            positions stay on the drawing whatever the caption does. */}
+        <div className="landmarks-art">
+          <img
+            alt="Line drawing: Sigiriya rock with a glass lift, a train on the Nine Arches bridge, a robot holding a glowing orb, and the Lotus Tower"
+            className="landmarks-pencil"
+            decoding="async"
+            height={821}
+            loading="lazy"
+            sizes={ART_SIZES}
+            src="/art/landmarks-pencil-1600.webp"
+            srcSet="/art/landmarks-pencil-960.webp 960w, /art/landmarks-pencil-1600.webp 1600w"
+            width={1915}
           />
-        ))}
+          <img
+            alt=""
+            className="landmarks-colour"
+            decoding="async"
+            height={821}
+            loading="lazy"
+            sizes={ART_SIZES}
+            src="/art/landmarks-colour-1600.webp"
+            srcSet="/art/landmarks-colour-960.webp 960w, /art/landmarks-colour-1600.webp 1600w"
+            width={1915}
+          />
+          <span aria-hidden="true" className="landmarks-beam" />
+          <span aria-hidden="true" className="landmarks-train" />
+          {ORBS.map((o) => (
+            <span
+              aria-hidden="true"
+              className="landmarks-orb"
+              key={`${o.left},${o.top}`}
+              style={{
+                left: `${o.left}%`,
+                top: `${o.top}%`,
+                animationDelay: `${o.delay}s`,
+              }}
+            />
+          ))}
+        </div>
         <figcaption className="landmarks-caption">
           FIG. 7 · SIGIRIYA · NINE ARCHES, ELLA · LOTUS TOWER, COLOMBO · AND A
           FEW AGENTS
