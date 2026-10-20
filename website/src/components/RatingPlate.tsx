@@ -20,7 +20,8 @@ const CELLS: readonly Cell[] = [
     label: "REV",
     value: MAJOR_MINOR,
     unit: PATCH,
-    note: "FIRST STABLE RELEASE",
+    // Under a version `pnpm release` rewrites: true for every release.
+    note: "LATEST RELEASE",
   },
   {
     label: "LICENCE",
@@ -110,7 +111,8 @@ export function RatingPlate() {
         <div className="plate-foot">
           <span aria-hidden="true" className="barcode" />
           <span className="plate-serial">
-            SER. 2026-10-20 · GITHUB.COM/LEAFYCODE/KRIYON · APACHE-2.0
+            SER. KRIYON-{APP_VERSION.replace("v", "")} ·
+            GITHUB.COM/LEAFYCODE/KRIYON · APACHE-2.0
           </span>
         </div>
       </div>

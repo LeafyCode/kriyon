@@ -67,7 +67,7 @@ export function Activity() {
         </table>
       </div>
       <div className="man-foot">
-        <span>KEPT 30 DAYS · ONLY ON THIS MAC · EXPORT ANY TIME</span>
+        <span>KEPT 30 DAYS · ONLY ON THIS MAC</span>
         <span>DEMO DATA</span>
       </div>
     </ManSection>

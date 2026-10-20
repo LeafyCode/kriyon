@@ -58,6 +58,11 @@ export function Contribute() {
           </div>
           <div>
             <span className="term-prompt">$</span>{" "}
+            <span className="term-cmd">node scripts/sidecar-ptyd.mjs</span>{" "}
+            <span className="term-dim"># builds the terminal daemon</span>
+          </div>
+          <div>
+            <span className="term-prompt">$</span>{" "}
             <span className="term-cmd">pnpm check</span>{" "}
             <span className="term-dim"># lint, types, every test</span>
           </div>

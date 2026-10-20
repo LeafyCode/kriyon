@@ -2,7 +2,8 @@
  * Renders the social card, `og/og.html`, to `public/og.jpg` (1200x630) with
  * the local Chrome in headless mode, then recompresses it with sharp.
  *
- * Run after changing the card or the release it names:  node scripts/build-og.mjs
+ * Run after changing the card:  pnpm og   (it names no version, so a release
+ * does not make it stale)
  * Set CHROME to the browser binary when it is not in the macOS default place.
  */
 import { execFileSync } from "node:child_process";
