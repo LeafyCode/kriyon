@@ -9,7 +9,7 @@ export function Activity() {
   const rows = rowsFor(filter);
 
   return (
-    <ManSection id="activity" name="ACTIVITY">
+    <ManSection id="activity">
       <div className="man-head">
         <h3 className="slash-title">/what-claude-did</h3>
         <fieldset className="flags">

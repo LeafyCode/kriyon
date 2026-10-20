@@ -34,7 +34,7 @@ const STARTS = [
 
 export function Contribute() {
   return (
-    <ManSection id="contribute" name="CONTRIBUTING">
+    <ManSection id="contribute">
       <div className="split split-end">
         <div className="split-text">
           <h3 className="slash-title">/contribute</h3>

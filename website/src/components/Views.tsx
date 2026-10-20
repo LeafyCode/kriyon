@@ -11,7 +11,7 @@ export function Views() {
   const portrait = view.shot === "menu-bar";
 
   return (
-    <ManSection id="views" name="VIEWS" shaded>
+    <ManSection id="views" shaded>
       <div className="views">
         <div className="views-list">
           <h3 className="slash-title">/views</h3>

@@ -1,23 +1,25 @@
 import { useEffect, useRef, useState } from "react";
+import {
+  NAV_SECTIONS,
+  SECTION_IDS,
+  type SectionId,
+  sectionLabel,
+} from "../lib/sections.ts";
 import { APP_VERSION, LATEST_RELEASE_URL } from "../lib/site.ts";
 import { currentTheme, pinTheme, type Theme } from "../lib/theme.ts";
 import { useActiveSection } from "../lib/useActiveSection.ts";
 
-/** Man-page section names, in page order. */
-export const SECTIONS = [
-  { id: "name", label: "NAME" },
-  { id: "synopsis", label: "SYNOPSIS" },
-  { id: "activity", label: "ACTIVITY" },
-  { id: "views", label: "VIEWS" },
-  { id: "sessions", label: "SESSIONS" },
-  { id: "source", label: "SOURCE" },
-  { id: "contribute", label: "CONTRIBUTE" },
-] as const;
-
-const SECTION_IDS = SECTIONS.map((s) => s.id);
-
 function index(i: number): string {
   return `[ ${String(i).padStart(2, "0")} ]`;
+}
+
+/** The menu button names where you are: an indexed nav section, or a `§`
+    section past the listed ones (install, origin). */
+function menuLabel(active: SectionId): string {
+  const i = NAV_SECTIONS.findIndex((s) => s.id === active);
+  return i === -1
+    ? `§ ${sectionLabel(active)}`
+    : `${index(i)} ${sectionLabel(active)}`;
 }
 
 export function Nav() {
@@ -64,14 +66,13 @@ export function Nav() {
         ref={menuRef}
         type="button"
       >
-        {index(SECTIONS.findIndex((s) => s.id === active))}{" "}
-        {SECTIONS.find((s) => s.id === active)?.label}
+        {menuLabel(active)}
         <span aria-hidden="true" className="nav-menu-caret">
           {open ? "▴" : "▾"}
         </span>
       </button>
       <ul className="nav-links" data-open={open} id="nav-sections">
-        {SECTIONS.map((s, i) => (
+        {NAV_SECTIONS.map((s, i) => (
           <li key={s.id}>
             <a
               aria-current={s.id === active ? "location" : undefined}

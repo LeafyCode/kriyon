@@ -1,11 +1,15 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
+import { SECTION_IDS } from "../lib/sections.ts";
+import { APP_VERSION } from "../lib/site.ts";
 import { THEME_KEY } from "../lib/theme.ts";
 import { Nav } from "./Nav.tsx";
 
 const NAME = /NAME/;
-const VERSION = /v0\.13\.0/;
+const INSTALL = /§ INSTALL/;
+
 afterEach(() => {
+  document.body.innerHTML = "";
   delete document.documentElement.dataset.theme;
   localStorage.clear();
 });
@@ -36,7 +40,10 @@ test("the theme toggle pins dark mode and remembers it", () => {
 
 test("the version badge links to the latest release", () => {
   render(<Nav />);
-  const badge = screen.getByRole("link", { name: VERSION });
+  // `pnpm release` rewrites APP_VERSION, so the test must not pin a number.
+  const badge = screen.getByRole("link", {
+    name: new RegExp(APP_VERSION.replaceAll(".", "\\.")),
+  });
   expect(badge.getAttribute("href")).toBe(
     "https://github.com/LeafyCode/kriyon/releases/latest"
   );
@@ -58,4 +65,20 @@ test("an open menu closes on Escape and on a press outside the nav", () => {
   fireEvent.click(menu);
   fireEvent.pointerDown(screen.getByText("outside"));
   expect(menu.getAttribute("aria-expanded")).toBe("false");
+});
+
+test("past the listed sections the nav names where you are, and marks no link", () => {
+  for (const id of SECTION_IDS) {
+    const el = document.createElement("section");
+    el.id = id;
+    // Every section up to Install has scrolled past the nav; Origin has not.
+    el.getBoundingClientRect = () =>
+      ({ top: id === "origin" ? 800 : -100 }) as DOMRect;
+    document.body.append(el);
+  }
+
+  render(<Nav />);
+
+  expect(screen.getByRole("button", { name: INSTALL })).toBeTruthy();
+  expect(document.querySelector("[aria-current]")).toBeNull();
 });

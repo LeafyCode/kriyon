@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 
 /** How far below the top of the viewport a section must start to count as
-    current: the sticky nav plus a little air, matching `scroll-padding-top`. */
+    current. Below the 64px where `scroll-padding-top` lands a jumped-to
+    heading, so a section reached by a link always counts. */
 const READ_LINE_PX = 96;
 
 /**
@@ -10,7 +11,7 @@ const READ_LINE_PX = 96;
  * page is scrolled to the bottom (a short final section never reaches the
  * line). Starts at the first id so SSR and hydration agree.
  */
-export function useActiveSection(ids: readonly string[]): string {
+export function useActiveSection<Id extends string>(ids: readonly Id[]): Id {
   const [active, setActive] = useState(ids[0]);
 
   useEffect(() => {

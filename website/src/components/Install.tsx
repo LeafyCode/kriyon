@@ -1,3 +1,4 @@
+import { sectionLabel } from "../lib/sections.ts";
 import {
   BREW_COMMAND,
   GITHUB_URL,
@@ -10,7 +11,7 @@ export function Install() {
   return (
     <section aria-labelledby="install-title" className="install" id="install">
       <div className="install-call">
-        <span className="label">§ INSTALL</span>
+        <span className="label">§ {sectionLabel("install")}</span>
         <h2 className="install-title" id="install-title">
           man kriyon
           <br />

@@ -12,7 +12,7 @@ export function Sessions() {
   const [picked, setPicked] = useState(1);
 
   return (
-    <ManSection id="sessions" name="SESSIONS">
+    <ManSection id="sessions">
       <div className="split">
         <div className="split-text">
           <h3 className="slash-title">/status</h3>

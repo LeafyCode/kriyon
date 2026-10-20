@@ -1,4 +1,5 @@
 import { useCallback, useRef, useState } from "react";
+import { sectionLabel } from "../lib/sections.ts";
 import { LEAFYCODE_NAME, LEAFYCODE_URL } from "../lib/site.ts";
 import { useOnceVisible } from "../lib/useOnceVisible.ts";
 import { MakerCard } from "./MakerCard.tsx";
@@ -31,7 +32,7 @@ export function Origin() {
     <section aria-labelledby="origin-title" className="origin" id="origin">
       <div className="origin-head">
         <h2 className="slash-title" id="origin-title">
-          /made-in-sri-lanka
+          /{sectionLabel("origin").toLowerCase().replaceAll(" ", "-")}
         </h2>
         <p className="lede">
           Kriyon is a{" "}

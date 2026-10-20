@@ -12,7 +12,7 @@ export function Synopsis() {
   );
 
   return (
-    <ManSection id="synopsis" name="SYNOPSIS">
+    <ManSection id="synopsis">
       <div className="synopsis">
         <div
           className="term term-lg"

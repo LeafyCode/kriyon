@@ -1,3 +1,4 @@
+import { sectionLabel } from "../lib/sections.ts";
 import { GITHUB_URL } from "../lib/site.ts";
 import { LeafyCredit } from "./LeafyCredit.tsx";
 
@@ -10,7 +11,7 @@ export function Hero() {
       <div className="hero-inner" id="name">
         <div className="hero-meta">
           <span>
-            § NAME — KRIYON(1) · OPEN SOURCE ·{" "}
+            § {sectionLabel("name")} — KRIYON(1) · OPEN SOURCE ·{" "}
             <span className="tone-amber">MADE IN SRI LANKA</span>
           </span>
           <LeafyCredit />

@@ -4,7 +4,7 @@ import { ManSection } from "./ManSection.tsx";
 
 export function Source() {
   return (
-    <ManSection id="source" name="SOURCE">
+    <ManSection id="source">
       <div className="man-head">
         <h3 className="slash-title">/source</h3>
         <a
