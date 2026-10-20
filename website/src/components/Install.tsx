@@ -3,8 +3,8 @@ import {
   BREW_COMMAND,
   GITHUB_URL,
   ISSUES_URL,
+  LATEST_DMG_URL,
   LEAFYCODE_NAME,
-  RELEASES_URL,
 } from "../lib/site.ts";
 
 export function Install() {
@@ -17,12 +17,7 @@ export function Install() {
           <br />
           <span className="tone-blue-dark">→ install it.</span>
         </h2>
-        <a
-          className="btn-download btn-download-light"
-          href={RELEASES_URL}
-          rel="noreferrer"
-          target="_blank"
-        >
+        <a className="btn-download btn-download-light" href={LATEST_DMG_URL}>
           <span aria-hidden="true" className="btn-download-icon">
             ↓
           </span>

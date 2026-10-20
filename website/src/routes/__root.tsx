@@ -13,10 +13,10 @@ import { type ReactNode, useEffect } from "react";
 import {
   APP_VERSION,
   GITHUB_URL,
+  LATEST_DMG_URL,
   LEAFYCODE,
   LEAFYCODE_NAME,
   LEAFYCODE_URL,
-  RELEASES_URL,
   SITE_URL,
 } from "../lib/site.ts";
 import {
@@ -68,7 +68,7 @@ const STRUCTURED_DATA = {
   operatingSystem: "macOS 13 or later",
   softwareVersion: APP_VERSION.replace("v", ""),
   license: "https://www.apache.org/licenses/LICENSE-2.0",
-  downloadUrl: RELEASES_URL,
+  downloadUrl: LATEST_DMG_URL,
   codeRepository: GITHUB_URL,
   image: SOCIAL_IMAGE,
   offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },

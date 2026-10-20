@@ -1,5 +1,5 @@
 import { sectionLabel } from "../lib/sections.ts";
-import { GITHUB_URL } from "../lib/site.ts";
+import { GITHUB_URL, LATEST_DMG_URL } from "../lib/site.ts";
 import { LeafyCredit } from "./LeafyCredit.tsx";
 
 /** The headline, as one sentence for tests and the page title to share. */
@@ -67,7 +67,7 @@ export function Hero() {
               already use exactly as it is.
             </p>
             <div className="cta-row">
-              <a className="btn-download" href="#install">
+              <a className="btn-download" href={LATEST_DMG_URL}>
                 <span aria-hidden="true" className="btn-download-icon">
                   ↓
                 </span>

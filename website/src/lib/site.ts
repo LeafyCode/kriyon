@@ -33,6 +33,10 @@ export const LEAFYCODE = {
 } as const;
 export const RELEASES_URL = `${GITHUB_URL}/releases`;
 export const LATEST_RELEASE_URL = `${RELEASES_URL}/latest`;
+/* The newest stable DMG, whatever its version: every release also uploads
+   its DMG as `Kriyon.dmg` (.github/workflows/release.yml), and GitHub's
+   latest/download path serves that name from the newest stable release. */
+export const LATEST_DMG_URL = `${RELEASES_URL}/latest/download/Kriyon.dmg`;
 export const CHANGELOG_URL = `${GITHUB_URL}/blob/main/CHANGELOG.md`;
 export const ISSUES_URL = `${GITHUB_URL}/issues`;
 export const DISCUSSIONS_URL = `${GITHUB_URL}/discussions`;
