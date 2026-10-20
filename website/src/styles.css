@@ -788,6 +788,10 @@ fieldset {
   animation-delay: 1.4s;
 }
 
+.diff-line:nth-child(5) {
+  animation-delay: 1.7s;
+}
+
 .diff-sign {
   display: inline-block;
   width: 2ch;
@@ -1061,7 +1065,7 @@ fieldset {
   position: relative;
   aspect-ratio: 1600 / 977;
   overflow: hidden;
-  background: #ffffff;
+  background: var(--ground);
   border: 1px solid var(--frame);
   border-radius: clamp(6px, 1vw, 12px);
   box-shadow: 12px 12px 0 var(--shadow);
