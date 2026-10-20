@@ -300,12 +300,24 @@ export const isNewest = (version, others) =>
 export const isNightly = (version) =>
   NIGHTLY.test(version.replace(LEADING_V, ""));
 
+/** `text` without HTML comments. One pass can leave one behind when a
+ *  comment is split around another (`<!<!-- -->-- -->`), so it repeats. */
+const stripComments = (text) => {
+  let stripped = text;
+  let previous;
+  do {
+    previous = stripped;
+    stripped = stripped.replace(COMMENT, "");
+  } while (stripped !== previous);
+  return stripped;
+};
+
 /**
  * Strips guidance comments, then refuses an entry whose heading isn't
  * `## <version> — <date>` (the shape cliff.toml writes) or that is empty below it.
  */
 export const cleanEntry = (text, version) => {
-  const entry = `${text.replace(COMMENT, "").replace(BLANK_RUN, "\n\n").trim()}\n`;
+  const entry = `${stripComments(text).replace(BLANK_RUN, "\n\n").trim()}\n`;
   const [heading, ...body] = entry.split("\n");
   if (!heading.startsWith(`## ${version} — `)) {
     throw new Error(
@@ -323,7 +335,7 @@ export const cleanEntry = (text, version) => {
  * comments. Empty when the draft lists nothing.
  */
 export const draftNotes = (draft) => {
-  const body = draft.replace(COMMENT, "").replace(HEADING_LINE, "").trim();
+  const body = stripComments(draft).replace(HEADING_LINE, "").trim();
   return body ? `${body.replace(BLANK_RUN, "\n\n")}\n` : "";
 };
 
