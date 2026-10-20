@@ -25,7 +25,7 @@ installed and signed in.
 
 - **Download:** get the latest signed DMG from
   [Releases](https://github.com/LeafyCode/kriyon/releases/latest).
-- **Homebrew (coming soon):** `brew install leafycode/tap/kriyon`
+- **Homebrew:** `brew install leafycode/tap/kriyon`
 - **Build from source:** see below.
 
 ## Build from source
