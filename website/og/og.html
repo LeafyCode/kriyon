@@ -1,0 +1,317 @@
+<!doctype html>
+<!-- The social card (public/og.jpg). Rebuild with: node scripts/build-og.mjs -->
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <style>
+    @font-face {
+      font-family: "Archivo";
+      src: url("../node_modules/@fontsource-variable/archivo/files/archivo-latin-wdth-normal.woff2")
+        format("woff2");
+      font-weight: 100 900;
+      font-stretch: 62% 125%;
+    }
+    @font-face {
+      font-family: "Mono";
+      src: url("../node_modules/@fontsource-variable/spline-sans-mono/files/spline-sans-mono-latin-wght-normal.woff2")
+        format("woff2");
+      font-weight: 300 700;
+    }
+    * {
+      box-sizing: border-box;
+      padding: 0;
+      margin: 0;
+    }
+    html,
+    body {
+      width: 1200px;
+      height: 630px;
+      overflow: hidden;
+    }
+    body {
+      position: relative;
+      font-family: "Mono", monospace;
+      color: #0e1012;
+      background: #fefefe;
+    }
+    .bar {
+      position: absolute;
+      right: 0;
+      left: 0;
+      display: flex;
+      align-items: stretch;
+      font-size: 15px;
+      letter-spacing: 0.05em;
+    }
+    .top {
+      top: 0;
+      height: 56px;
+      border-bottom: 1px solid #e4e4e0;
+    }
+    .top > span {
+      display: flex;
+      align-items: center;
+      padding: 0 22px;
+      color: #62666d;
+      border-right: 1px solid #e4e4e0;
+    }
+    .top .brand {
+      padding: 0 40px;
+      font-size: 17px;
+      font-weight: 700;
+      color: #0e1012;
+    }
+    .top .now {
+      font-weight: 700;
+      color: #0e1012;
+    }
+    .top .ver {
+      gap: 10px;
+      margin-left: auto;
+      font-weight: 700;
+      color: #1a7f37;
+      border-right: 0;
+      border-left: 1px solid #e4e4e0;
+    }
+    .dot {
+      width: 9px;
+      height: 9px;
+      background: #1a7f37;
+      border-radius: 50%;
+      box-shadow: 0 0 0 5px rgba(26, 127, 55, 0.15);
+    }
+    .marks {
+      position: absolute;
+      top: 150px;
+      left: 0;
+      display: grid;
+      gap: 6px;
+    }
+    .marks i {
+      display: block;
+      width: 5px;
+      height: 40px;
+    }
+    .copy {
+      position: absolute;
+      top: 92px;
+      left: 40px;
+      width: 580px;
+    }
+    .meta {
+      font-size: 14px;
+      color: #62666d;
+      letter-spacing: 0.06em;
+    }
+    .meta b {
+      font-weight: 400;
+      color: #8f6500;
+    }
+    h1 {
+      margin-top: 30px;
+      font-family: "Archivo", sans-serif;
+      font-size: 68px;
+      font-weight: 650;
+      line-height: 1.06;
+      letter-spacing: -0.035em;
+    }
+    h1 .lead {
+      display: block;
+      font-stretch: 125%;
+    }
+    h1 .roll {
+      display: block;
+      font-weight: 500;
+      color: #007ea2;
+    }
+    h1 .caret {
+      display: inline-block;
+      width: 0.08em;
+      height: 0.72em;
+      margin-left: 0.06em;
+      vertical-align: -0.02em;
+      background: #007ea2;
+    }
+    .lede {
+      margin-top: 30px;
+      font-family: "Archivo", sans-serif;
+      font-size: 23px;
+      line-height: 1.42;
+      color: #24272c;
+    }
+    .lede code {
+      font-family: "Mono", monospace;
+      font-size: 21px;
+    }
+    .shot {
+      position: absolute;
+      top: 96px;
+      left: 640px;
+      width: 600px;
+      height: 420px;
+      overflow: hidden;
+      background: #0d1017;
+      border: 1.5px solid #0e1012;
+      border-right: 0;
+      border-radius: 12px 0 0 12px;
+      box-shadow: -1px 12px 0 rgba(14, 16, 18, 0.08);
+    }
+    .shot img {
+      position: absolute;
+      top: -8px;
+      left: -440px;
+      width: 1040px;
+    }
+    .hit {
+      position: absolute;
+      left: 377px;
+      width: 214px;
+      height: 30px;
+      border: 2.5px solid var(--c);
+      border-radius: 7px;
+      box-shadow: 0 0 0 5px color-mix(in srgb, var(--c) 18%, transparent);
+    }
+    .hit span {
+      position: absolute;
+      top: 50%;
+      right: calc(100% + 10px);
+      padding: 4px 9px;
+      font-size: 13px;
+      color: var(--ink);
+      letter-spacing: 0.05em;
+      white-space: nowrap;
+      background: var(--c);
+      transform: translateY(-50%);
+    }
+    .spec {
+      position: absolute;
+      top: 448px;
+      left: 40px;
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      width: 560px;
+      border: 1px solid #0e1012;
+    }
+    .spec div {
+      display: grid;
+      gap: 6px;
+      padding: 12px 14px;
+      border-right: 1px solid #0e1012;
+    }
+    .spec div:last-child {
+      border-right: 0;
+    }
+    .spec dt {
+      font-size: 11px;
+      color: #62666d;
+      letter-spacing: 0.08em;
+    }
+    .spec dd {
+      font-family: "Archivo", sans-serif;
+      font-size: 22px;
+      font-weight: 600;
+      font-stretch: 118%;
+      letter-spacing: -0.01em;
+    }
+    .spec small {
+      font-size: 13px;
+      font-weight: 500;
+      font-stretch: 100%;
+    }
+    .bottom {
+      bottom: 0;
+      align-items: center;
+      justify-content: space-between;
+      height: 62px;
+      padding: 0 40px;
+      color: #e9ebee;
+      background: #0e1012;
+      border-top: 1px solid #0e1012;
+    }
+    .maker {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+    }
+    .maker img {
+      width: 32px;
+      height: 32px;
+      border-radius: 5px;
+    }
+    .maker b {
+      font-weight: 700;
+      color: #e3b341;
+    }
+    .facts {
+      color: #aab3c5;
+    }
+    .site {
+      font-weight: 700;
+      color: #49b3d8;
+    }
+    </style>
+  </head>
+  <body>
+    <div class="bar top">
+      <span class="brand">KRIYON(1)</span>
+      <span class="now">[ 00 ] NAME</span>
+      <span>[ 01 ] SYNOPSIS</span>
+      <span>[ 02 ] ACTIVITY</span>
+      <span class="ver"><i class="dot"></i>v0.13.0 STABLE</span>
+    </div>
+    <div class="marks">
+      <i style="background:#007ea2"></i><i style="background:#e3b341"></i
+      ><i style="background:#1a7f37"></i>
+    </div>
+    <div class="copy">
+      <p class="meta">§ NAME — OPEN SOURCE · <b>MADE IN SRI LANKA</b></p>
+      <h1>
+        <span class="lead">Run them all.</span
+        ><span class="roll">Watch one screen.<i class="caret"></i></span>
+      </h1>
+      <p class="lede">
+        The desktop home for Claude Code. Every session in one window: which one
+        needs you, and what each one changed.
+      </p>
+    </div>
+    <dl class="spec">
+      <div>
+        <dt>ACCOUNTS</dt>
+        <dd style="color:#1a7f37">None</dd>
+      </div>
+      <div>
+        <dt>RECORD</dt>
+        <dd style="color:#8f6500">30 <small>days, kept locally</small></dd>
+      </div>
+      <div>
+        <dt>LICENCE</dt>
+        <dd style="color:#007ea2">Apache <small>2.0</small></dd>
+      </div>
+    </dl>
+    <div class="shot">
+      <img alt="" src="../public/art/fig1-app-1600.webp">
+      <!-- Activity rows, at the % offsets FIG. 1 uses, on a 1040x635 image moved up 8px (plus the 1px frame). -->
+      <div class="hit" style="top: 89px; --c: #007ea2; --ink: #fff">
+        <span>2 FILES CHANGED</span>
+      </div>
+      <div class="hit" style="top: 119px; --c: #1a7f37; --ink: #fff">
+        <span>2 TESTS PASSED</span>
+      </div>
+      <div class="hit" style="top: 320px; --c: #e3b341; --ink: #0e1012">
+        <span>WEB REQUEST</span>
+      </div>
+      <div class="hit" style="top: 351px; --c: #e3b341; --ink: #0e1012">
+        <span>WEB REQUEST</span>
+      </div>
+    </div>
+    <div class="bar bottom">
+      <span class="maker"
+        ><img alt="" src="../public/leafycode-logo.svg">A
+        <b>LEAFY CODE INTERNATIONAL</b>
+        PROJECT</span
+      >
+      <span class="facts">FREE · APACHE-2.0 · macOS 13+</span>
+      <span class="site">KRIYON.APP</span>
+    </div>
+  </body>
+</html>

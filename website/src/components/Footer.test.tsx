@@ -10,3 +10,11 @@ test("the footer carries the full Anthropic disclaimer", () => {
 
   expect(screen.getByText(DISCLAIMER)).toBeTruthy();
 });
+
+test("the footer credits Leafy Code International", () => {
+  render(<Footer />);
+
+  expect(
+    screen.getByRole("link", { name: "LEAFY CODE INTERNATIONAL" })
+  ).toBeTruthy();
+});

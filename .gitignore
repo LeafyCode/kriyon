@@ -70,3 +70,6 @@ crashlog.txt
 
 # Affinity Designer sources (can embed local file paths; the SVG exports are the sources)
 *.af
+
+# Raw macOS window captures; scripts/crop-shots.mjs cuts them into shots-src/.
+website/shots-src/new-shots/

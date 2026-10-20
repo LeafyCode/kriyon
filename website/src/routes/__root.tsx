@@ -1,25 +1,76 @@
 /* The two faces the first screenful actually paints in. Without these they are
    discovered only after `styles.css` parses, one round-trip too late. */
 import archivoUrl from "@fontsource-variable/archivo/files/archivo-latin-wdth-normal.woff2?url";
-import monoUrl from "@fontsource-variable/jetbrains-mono/files/jetbrains-mono-latin-wght-normal.woff2?url";
+import monoUrl from "@fontsource-variable/spline-sans-mono/files/spline-sans-mono-latin-wght-normal.woff2?url";
 import {
   createRootRoute,
   HeadContent,
   Outlet,
+  ScriptOnce,
   Scripts,
 } from "@tanstack/react-router";
 import type { ReactNode } from "react";
-import { SITE_URL } from "../lib/site.ts";
+import {
+  APP_VERSION,
+  GITHUB_URL,
+  LEAFYCODE,
+  LEAFYCODE_NAME,
+  LEAFYCODE_URL,
+  RELEASES_URL,
+  SITE_URL,
+} from "../lib/site.ts";
+import { THEME_SCRIPT } from "../lib/theme.ts";
 import appCss from "../styles.css?url";
 
-const TITLE = "Kriyon — Run ten Claude Code sessions. Stay one person.";
+/* Sized for search results: the title under 60 characters, the description
+   under 160, so neither is cut off. */
+const TITLE = "Kriyon — the desktop home for Claude Code";
 const DESCRIPTION =
-  "Kriyon wraps your own claude command line in a calm, cinematic macOS window. Run many sessions across projects, see exactly what each one changed, and know the moment one needs you. Free and open source, by Leafy Code International.";
-const SOCIAL_DESCRIPTION =
-  "A calm, cinematic macOS window around your own claude CLI. Free and open source, by Leafy Code International.";
+  "Run every Claude Code session, across every project, in one window. See which one needs you and what each one changed. Free and open source.";
+/* Social cards lead with the tagline; search results lead with what it is. */
+const SOCIAL_TITLE = "Kriyon — Run them all. Watch one screen.";
+const SOCIAL_DESCRIPTION = `The desktop home for Claude Code: every session in one window, which one needs you, and what each one changed. Free and open source, by ${LEAFYCODE_NAME}.`;
 /* Purpose-built 1200x630 JPEG: absolute URL, and a format every scraper renders
    (LinkedIn will not unfurl a WebP, and the 3600px hero crops badly at 1.91:1). */
 const SOCIAL_IMAGE = `${SITE_URL}/og.jpg`;
+const SOCIAL_IMAGE_ALT =
+  "Kriyon: Run them all. Watch one screen. A Claude Code session with its Activity record marking files changed, tests passed and web requests.";
+
+/* Structured data for search engines: the app, and the company behind it
+   with the contact details from leafycode.com/contact. */
+const LEAFYCODE_ORG = {
+  "@type": "Organization",
+  name: LEAFYCODE_NAME,
+  url: LEAFYCODE_URL,
+  logo: `${SITE_URL}/leafycode-logo.svg`,
+  email: LEAFYCODE.email,
+  telephone: LEAFYCODE.phone,
+  address: {
+    "@type": "PostalAddress",
+    streetAddress: "2nd Floor, 269, 1 High Level Rd",
+    addressLocality: "Pannipitiya",
+    postalCode: "10230",
+    addressCountry: "LK",
+  },
+  sameAs: LEAFYCODE.social.map((s) => s.href),
+};
+const STRUCTURED_DATA = {
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  name: "Kriyon",
+  url: `${SITE_URL}/`,
+  description: DESCRIPTION,
+  applicationCategory: "DeveloperApplication",
+  operatingSystem: "macOS 13 or later",
+  softwareVersion: APP_VERSION.replace("v", ""),
+  license: "https://www.apache.org/licenses/LICENSE-2.0",
+  downloadUrl: RELEASES_URL,
+  codeRepository: GITHUB_URL,
+  image: SOCIAL_IMAGE,
+  offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
+  author: LEAFYCODE_ORG,
+  publisher: LEAFYCODE_ORG,
+};
 
 export const Route = createRootRoute({
   head: () => ({
@@ -28,23 +79,32 @@ export const Route = createRootRoute({
       { name: "viewport", content: "width=device-width, initial-scale=1" },
       { title: TITLE },
       { name: "description", content: DESCRIPTION },
-      { name: "theme-color", content: "#05060b" },
-      { property: "og:title", content: TITLE },
+      { name: "author", content: LEAFYCODE_NAME },
+      {
+        name: "robots",
+        content: "index, follow, max-image-preview:large",
+      },
+      { name: "color-scheme", content: "light dark" },
+      { property: "og:title", content: SOCIAL_TITLE },
       { property: "og:description", content: SOCIAL_DESCRIPTION },
       { property: "og:type", content: "website" },
       { property: "og:url", content: `${SITE_URL}/` },
       { property: "og:site_name", content: "Kriyon" },
+      { property: "og:locale", content: "en_US" },
       { property: "og:image", content: SOCIAL_IMAGE },
+      { property: "og:image:type", content: "image/jpeg" },
       { property: "og:image:width", content: "1200" },
       { property: "og:image:height", content: "630" },
       {
         property: "og:image:alt",
-        content: "Kriyon running several Claude Code sessions in one window",
+        content: SOCIAL_IMAGE_ALT,
       },
       { name: "twitter:card", content: "summary_large_image" },
-      { name: "twitter:title", content: TITLE },
+      { name: "twitter:site", content: "@LeafyCode" },
+      { name: "twitter:title", content: SOCIAL_TITLE },
       { name: "twitter:description", content: SOCIAL_DESCRIPTION },
       { name: "twitter:image", content: SOCIAL_IMAGE },
+      { name: "twitter:image:alt", content: SOCIAL_IMAGE_ALT },
     ],
     links: [
       { rel: "stylesheet", href: appCss },
@@ -63,7 +123,14 @@ export const Route = createRootRoute({
         crossOrigin: "anonymous",
       },
       { rel: "canonical", href: `${SITE_URL}/` },
-      { rel: "icon", href: "/logo-purple.svg", type: "image/svg+xml" },
+      { rel: "icon", href: "/logo-steel.svg", type: "image/svg+xml" },
+      { rel: "apple-touch-icon", href: "/apple-touch-icon.png" },
+    ],
+    scripts: [
+      {
+        type: "application/ld+json",
+        children: JSON.stringify(STRUCTURED_DATA),
+      },
     ],
   }),
   component: RootComponent,
@@ -79,9 +146,23 @@ function RootComponent() {
 
 function RootDocument({ children }: Readonly<{ children: ReactNode }>) {
   return (
-    <html lang="en">
+    // The theme script below sets `data-theme` before React hydrates.
+    <html lang="en" suppressHydrationWarning>
       <head>
+        <ScriptOnce>{THEME_SCRIPT}</ScriptOnce>
         <HeadContent />
+        {/* Written here, not in `head()`: its meta merge keeps one tag per
+            name, and the browser bar needs one colour per scheme. */}
+        <meta
+          content="#ffffff"
+          media="(prefers-color-scheme: light)"
+          name="theme-color"
+        />
+        <meta
+          content="#0d1017"
+          media="(prefers-color-scheme: dark)"
+          name="theme-color"
+        />
       </head>
       <body>
         {children}
