@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { agentGraph } from "../lib/icosahedron.ts";
 import { useIsVisible } from "../lib/useIsVisible.ts";
 
@@ -40,11 +40,20 @@ export function FigOne() {
   const ref = useRef<HTMLElement>(null);
   const visible = useIsVisible(ref, 0.2);
   const [paused, setPaused] = useState(false);
+  // Until its first play the loop would sit on its empty first frame, so the
+  // CSS shows the whole sketch while this is false.
+  const [started, setStarted] = useState(false);
+  useEffect(() => {
+    if (visible && !paused) {
+      setStarted(true);
+    }
+  }, [visible, paused]);
 
   return (
     <figure
       className="fig1"
       data-playing={visible && !paused}
+      data-started={started}
       id="fig-1"
       ref={ref}
     >

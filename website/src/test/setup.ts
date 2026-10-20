@@ -47,4 +47,6 @@ if (!globalThis.IntersectionObserver) {
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
+  // Undoes `controlledIntersection()` (src/test/intersection.ts).
+  vi.unstubAllGlobals();
 });

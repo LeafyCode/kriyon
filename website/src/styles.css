@@ -1180,6 +1180,30 @@ fieldset {
   animation: k-l3 12s steps(1) infinite;
 }
 
+/* Before the first play, the whole sketch rather than the loop's empty first
+   frame. Its animation starts fresh with the rest when play begins. */
+.fig1:not([data-started="true"]) .fig1-sketch {
+  animation: none;
+}
+
+/* Without scripts nothing would ever start it: show the finished frame, as
+   reduced motion does, and drop the pause button that cannot work. */
+html:not(.js) .fig1 * {
+  animation: none !important;
+}
+
+html:not(.js) .fig1 :is(.fig1-beam, .fig1-l1, .fig1-l2) {
+  opacity: 0;
+}
+
+html:not(.js) .fig1 :is(.fig1-hit, .fig1-l3) {
+  opacity: 1;
+}
+
+html:not(.js) .fig1 .mini-button {
+  display: none;
+}
+
 .fig1-dims {
   display: flex;
   gap: 12px;
