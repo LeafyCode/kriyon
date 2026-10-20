@@ -26,6 +26,7 @@ Kriyon is now open source, and it can update itself.
 - Pasted text and long messages show and send correctly.
 - The message box fits small windows.
 - Closing a session cleans up its leftover files.
+- Release notes no longer show hidden comments.
 
 ### Security
 
