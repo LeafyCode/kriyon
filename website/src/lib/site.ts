@@ -12,7 +12,14 @@ export const LEAFYCODE = {
   phone: "+94 766 707 355",
   phoneHref: "tel:+94766707355",
   whatsappHref: "https://wa.me/94766707355",
-  address: "2nd Floor, 269, 1 High Level Rd, Pannipitiya 10230, Sri Lanka",
+  /* In parts, for the JSON-LD PostalAddress; `postalAddressLine` joins them. */
+  address: {
+    street: "2nd Floor, 269, 1 High Level Rd",
+    locality: "Pannipitiya",
+    postalCode: "10230",
+    country: "Sri Lanka",
+    countryCode: "LK",
+  },
   mapHref:
     "https://www.google.com/maps/search/2nd+Floor+269+1+High+Level+Rd+Pannipitiya+10230",
   hours: ["Mon–Fri 09:00–18:00", "Sat 10:00–14:00", "Times in IST, UTC+5:30"],
@@ -36,3 +43,8 @@ export const BREW_COMMAND = "brew install leafycode/tap/kriyon";
 
 /* Set by `pnpm release` (rendered in the nav, rating plate and footer). */
 export const APP_VERSION = "v0.13.0";
+
+/** The studio address as one line, the way leafycode.com/contact writes it. */
+export function postalAddressLine(a: typeof LEAFYCODE.address): string {
+  return `${a.street}, ${a.locality} ${a.postalCode}, ${a.country}`;
+}

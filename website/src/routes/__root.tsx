@@ -51,10 +51,10 @@ const LEAFYCODE_ORG = {
   telephone: LEAFYCODE.phone,
   address: {
     "@type": "PostalAddress",
-    streetAddress: "2nd Floor, 269, 1 High Level Rd",
-    addressLocality: "Pannipitiya",
-    postalCode: "10230",
-    addressCountry: "LK",
+    streetAddress: LEAFYCODE.address.street,
+    addressLocality: LEAFYCODE.address.locality,
+    postalCode: LEAFYCODE.address.postalCode,
+    addressCountry: LEAFYCODE.address.countryCode,
   },
   sameAs: LEAFYCODE.social.map((s) => s.href),
 };

@@ -1,4 +1,9 @@
-import { LEAFYCODE, LEAFYCODE_NAME, LEAFYCODE_URL } from "../lib/site.ts";
+import {
+  LEAFYCODE,
+  LEAFYCODE_NAME,
+  LEAFYCODE_URL,
+  postalAddressLine,
+} from "../lib/site.ts";
 import { LeafyMark } from "./LeafyCredit.tsx";
 
 /**
@@ -51,7 +56,7 @@ export function MakerCard() {
             <dt className="label">STUDIO</dt>
             <dd>
               <a href={LEAFYCODE.mapHref} rel="noreferrer" target="_blank">
-                {LEAFYCODE.address} ↗
+                {postalAddressLine(LEAFYCODE.address)} ↗
               </a>
             </dd>
           </div>
