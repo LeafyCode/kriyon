@@ -1,41 +1,38 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { expect, test } from "vitest";
-import { Hero } from "./Hero.tsx";
+import { HEADLINE, Hero } from "./Hero.tsx";
 
-const PAUSE = /pause/i;
-const PLAY = /play/i;
-const CLAUDES = /Claudes/i;
-const SESSIONS_HEADLINE = /Run ten\s*Claude Code\s*sessions\./i;
-const USAGE_LINE =
-  /All sessions use your own Claude plan and its usage limits\./;
+const LEAFY_CODE_INTERNATIONAL = /LEAFY CODE INTERNATIONAL/;
+const SANDBOX_CLAIM = /desktop app|sandbox/i;
+const PLATFORM = /mac|windows|linux/i;
+const DOWNLOAD = /DOWNLOAD FOR MAC/;
 
-test("the ticker offers a pause control reachable without a mouse (WCAG 2.2.2)", () => {
+test("the headline is the tagline, with no platform in it", () => {
+  // Kriyon is Mac-only today but not by design; the tagline must outlive that.
   render(<Hero />);
-  const button = screen.getByRole("button", { name: PAUSE });
+  const h1 = screen.getByRole("heading", { level: 1 });
 
-  fireEvent.click(button);
-  expect(screen.getByRole("button", { name: PLAY })).toBeTruthy();
+  expect(h1.textContent).toBe(HEADLINE);
+  expect(h1.textContent).not.toMatch(PLATFORM);
 });
 
-test("the ticker strip itself is hidden from assistive tech", () => {
-  // Every claim it scrolls past is made in prose elsewhere on the page, and it
-  // is duplicated for the seamless loop — announcing it would read twice.
+test("makes no claim about how other Claude apps run Claude Code", () => {
+  // Softened on purpose: the page says what Kriyon does, not what others limit.
   const { container } = render(<Hero />);
-  expect(
-    container.querySelector(".ticker-track")?.getAttribute("aria-hidden")
-  ).toBe("true");
+  expect(container.textContent).not.toMatch(SANDBOX_CLAIM);
 });
 
-test("the headline counts Claude Code sessions, never 'Claudes'", () => {
+test("credits Leafy Code International by its full name", () => {
   render(<Hero />);
-  const title = screen.getByRole("heading", { level: 1 }).textContent ?? "";
-
-  expect(title).not.toMatch(CLAUDES);
-  expect(title).toMatch(SESSIONS_HEADLINE);
+  const credit = screen.getByRole("link", { name: LEAFY_CODE_INTERNATIONAL });
+  expect(credit.getAttribute("href")).toBe("https://leafycode.com/");
 });
 
-test("says every session spends the user's own plan", () => {
+test("the download button fetches the newest DMG, whatever its version", () => {
   render(<Hero />);
+  const download = screen.getByRole("link", { name: DOWNLOAD });
 
-  expect(screen.getByText(USAGE_LINE)).toBeTruthy();
+  expect(download.getAttribute("href")).toBe(
+    "https://github.com/LeafyCode/kriyon/releases/latest/download/Kriyon.dmg"
+  );
 });

@@ -222,7 +222,7 @@ cask "kriyon" do
       verified: "github.com/LeafyCode/kriyon/"
   name "Kriyon"
   desc "Desktop app for the Claude Code CLI, with a Changes view beside it"
-  homepage "https://kriyon.app/"
+  homepage "https://kriyonapp.com/"
 
   livecheck do
     url :url

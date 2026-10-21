@@ -14,6 +14,11 @@ notarized, and checked by `scripts/check-mac-bundle.sh`. It lands as a draft rel
 DMG, the signed update file (`Kriyon.app.tar.gz` and its `.sig`) and `latest.json`. Nothing
 reaches anyone until the draft is published, and publishing first checks `latest.json` again.
 
+The DMG is uploaded twice: once with its version in the name (`Kriyon_0.13.0_universal.dmg`,
+which the Homebrew cask uses) and once as `Kriyon.dmg`. The website's download button links to
+`https://github.com/LeafyCode/kriyon/releases/latest/download/Kriyon.dmg`, which always serves
+the newest stable release.
+
 Update feeds, which the in-app updater reads (ADR 0047):
 
 - Stable: `https://github.com/LeafyCode/kriyon/releases/latest/download/latest.json`

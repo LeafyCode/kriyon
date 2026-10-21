@@ -6,6 +6,7 @@
     "build": "vite build",
     "check": "pnpm typecheck && pnpm test && pnpm build",
     "dev": "vite dev",
+    "og": "node scripts/build-og.mjs",
     "preview": "vite preview",
     "shots": "node scripts/build-shots.mjs",
     "test": "vitest run",
@@ -13,8 +14,7 @@
   },
   "dependencies": {
     "@fontsource-variable/archivo": "^5.3.0",
-    "@fontsource-variable/jetbrains-mono": "^5.3.0",
-    "@fontsource/instrument-serif": "^5.3.0",
+    "@fontsource-variable/spline-sans-mono": "^5.3.0",
     "@tanstack/react-router": "^1.170.41",
     "@tanstack/react-start": "^1.168.60",
     "react": "^19.3.0",
