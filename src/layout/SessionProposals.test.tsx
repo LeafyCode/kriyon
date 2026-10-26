@@ -63,3 +63,21 @@ test("another session's suggestions stay off this one", () => {
   render(<SessionProposals />);
   expect(screen.queryByTestId("session-proposals")).not.toBeInTheDocument();
 });
+
+test("a session you asked for that hit your limit says so, not that Claude suggested it", () => {
+  useSessionProposals.setState({
+    proposals: [
+      {
+        leadSessionId: "lead",
+        request: { ...REQUEST, initiation: "user_asked" },
+      },
+    ],
+  });
+  useSessions.setState({ activeSessionId: "lead" });
+  render(<SessionProposals />);
+  const card = screen.getByTestId("session-proposal-tu9");
+  expect(card).toHaveTextContent(
+    "You asked for this session · held back by your limit on busy sessions"
+  );
+  expect(card).not.toHaveTextContent("Claude suggests");
+});

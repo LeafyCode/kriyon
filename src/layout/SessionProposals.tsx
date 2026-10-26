@@ -63,7 +63,11 @@ function ProposalCard({ proposal }: { proposal: SessionProposal }) {
       style={cardStyle}
     >
       <div style={textStyle}>
-        <span style={kickerStyle}>Claude suggests a session</span>
+        <span style={kickerStyle}>
+          {request.initiation === "user_asked"
+            ? "You asked for this session · held back by your limit on busy sessions"
+            : "Claude suggests a session"}
+        </span>
         <span style={titleStyle}>{request.title}</span>
         <button
           aria-expanded={showTask}
@@ -123,7 +127,8 @@ const cardStyle: CSSProperties = {
   borderLeft: `2px solid ${tokens.color.accent}`,
   display: "flex",
   gap: tokens.space.lg,
-  padding: `${tokens.space.sm} ${tokens.space.xl} ${tokens.space.sm} 22px`,
+  // The xl gutter the header and terminal use, less the 2px accent rule.
+  padding: `${tokens.space.sm} ${tokens.space.xl} ${tokens.space.sm} calc(${tokens.space.xl} - 2px)`,
 };
 
 const textStyle: CSSProperties = {

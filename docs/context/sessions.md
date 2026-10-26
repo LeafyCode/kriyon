@@ -122,7 +122,8 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
   and kept once by its tool call id. _Avoid_: spawn request.
 - **Session proposal** — a [Session request] Kriyon did not start: Claude's own idea, or one
   past the [Nested session cap]. Shown as a card under the lead session's header ("Claude
-  suggests a session"), with Start session and Not now. In memory only. _Avoid_: suggestion
+  suggests a session", or "You asked for this session · held back by your limit on busy
+  sessions"), with Start session and Not now. In memory only. _Avoid_: suggestion
   card, pending session.
 - **Nested session cap** — the most sessions that may be busy (working, waiting on the person,
   or still starting) before a requested session becomes a [Session proposal] instead of
