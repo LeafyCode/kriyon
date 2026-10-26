@@ -218,6 +218,10 @@ describe("handleSessionRequests", () => {
   });
 
   it("two asked-for requests in one batch count each other against the cap", async () => {
+    vi.mocked(launchClaudeOnce).mockResolvedValue({
+      kind: "launched",
+      resuming: false,
+    });
     useLayout.getState().setNestedSessionCap("2");
     await deliver([
       { leadSessionId: "lead", request: { ...REQUEST, requestId: "a" } },
@@ -231,6 +235,16 @@ describe("handleSessionRequests", () => {
     expect(
       useSessionProposals.getState().proposals.map((p) => p.request.requestId)
     ).toEqual(["c"]);
+    vi.mocked(launchClaudeOnce).mockResolvedValue({ kind: "skipped" });
+  });
+
+  it("a nested session whose launch fails is not left booting", async () => {
+    vi.mocked(launchClaudeOnce).mockResolvedValueOnce({ kind: "writeFailed" });
+    await startNestedSession("lead", REQUEST, { focus: false });
+    const id = child()?.id ?? "";
+    await vi.waitFor(() => expect(launchClaudeOnce).toHaveBeenCalled());
+    await Promise.resolve();
+    expect(useSessions.getState().bootPhase[id] ?? "idle").not.toBe("booting");
   });
 
   it("one request that fails doesn't stop the ones after it", async () => {

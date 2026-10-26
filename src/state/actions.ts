@@ -198,10 +198,11 @@ export function createSession(
     // a shown session never runs for it.
     state.warmSession(id);
     persistThenWarm(project, row);
-    // Booting from now, not from when the pty is up: the [Nested session cap]
-    // counts a boot, and a second request in the same batch must see this one.
-    beginBoot(id);
-    ignore(launchActiveSession(id));
+    // Counted as launching until the launch settles: then it is booting, or
+    // nothing started. The [Nested session cap] counts both, so a second
+    // request in the same batch sees this one.
+    launching.add(id);
+    ignore(launchActiveSession(id).finally(() => launching.delete(id)));
     captureBaselineFor(id, cwd);
     return id;
   }
@@ -242,6 +243,15 @@ function captureBaselineFor(id: string, cwd: string): void {
       )
     );
   }
+}
+
+/** Sessions created out of sight whose first launch hasn't settled yet. */
+const launching = new Set<string>();
+
+/** Whether a session opened in the background is still on its way to
+ *  booting: its pty and `claude` launch haven't settled. */
+export function isLaunching(sessionId: string): boolean {
+  return launching.has(sessionId);
 }
 
 /**

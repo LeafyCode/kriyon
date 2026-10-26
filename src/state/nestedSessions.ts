@@ -6,6 +6,7 @@ import { showToast } from "../ui/Toast.tsx";
 import {
   createSession,
   createWorktreeSession,
+  isLaunching,
   type SpawnResult,
 } from "./actions.ts";
 import { nestedCapCount, useLayout } from "./layout.ts";
@@ -116,9 +117,10 @@ export function startProblem(result: SpawnResult): string | null {
 
 /**
  * Sessions counted against the [Nested session cap]: working, waiting on the
- * person mid-task, or still starting. A session started a moment ago is
- * idle until its first prompt lands, so the boot counts too: otherwise every
- * request in one batch would see the same number and all start.
+ * person mid-task, or still starting (launching or booting). A session
+ * started a moment ago is idle until its first prompt lands, so starting
+ * counts too: otherwise every request in one batch would see the same number
+ * and all start.
  */
 function busyCount(): number {
   const { bootPhase, sessions } = useSessions.getState();
@@ -127,7 +129,8 @@ function busyCount(): number {
       s.archivedAt === null &&
       (s.status === "running" ||
         s.status === "waiting" ||
-        bootPhase[s.id] === "booting")
+        bootPhase[s.id] === "booting" ||
+        isLaunching(s.id))
   ).length;
 }
 
