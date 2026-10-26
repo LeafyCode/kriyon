@@ -69,8 +69,22 @@ _Current as of v0.9.0. Every entry here is shipped and reflected in `CHANGELOG.m
 - **The focus rail goes to the session that wants you** — one waiting on you first, then one that's working, then the most recent.
 - **Two layouts** — Sessions (full sidebar + Details rail) and Focus (a stripped-down project-rail layout).
 - **Command palette (⌘K)** — search box to jump to any session or run any action.
+- **Task progress on every row** — an open task list shows as "3/7" beside the title, with the current item in its tooltip.
+- **Context use on every row** — how full each session's context window is ("85% ctx"), amber from 80%, as Claude reports it.
+- **Terminal ready before you click** — resting the pointer on a row opens that session's shell early, so opening it only has `claude` left to start. The Inspector shows how long the last start took.
+
+## Nested sessions
+
+- **A session can start sessions** — ask Claude to split work off and it starts a real session beside this one, listed under it in the sidebar, in the same folder or on its own worktree. You can open and steer it like any session.
+- **Only your own words start one** — a session starts at once only when you asked for it in a prompt you typed (or sent from your phone). Claude's own idea, another session's message or a scheduled run becomes a "Claude suggests a session" card that starts nothing until you press Start.
+- **A cap you set** — past the number of running sessions you choose in Settings (default 4), a request becomes a suggestion instead.
+- **Reports back** — when a nested session's first task ends, it sends its reply to the session that started it.
+- **Split off by hand** — "Split off a session…" in a session's menu starts one yourself.
 
 ## Knowing what needs you
+
+- **Task strip** — the active session's open task list sits between its header and the terminal: count, bar and current item, unfolding to the whole list.
+- **Turn recap** — when Claude stops, a card says what that turn did (files changed, commands run and failed, tasks done) and its last line or what it needs, with Review changes and Follow up.
 
 - **Per-session status** — idle, running, waiting-for-input, done, or error, shown as a colored dot.
 - **One-line progress summary** per session (e.g. "Editing foo.rs", "Waiting for your reply").
@@ -115,6 +129,7 @@ _Current as of v0.9.0. Every entry here is shipped and reflected in `CHANGELOG.m
 - **Changed files** — the session's changed files, click one to jump to it in the Changes view.
 - **A nested Claude can't pollute the view** — tool use by a one-shot `claude` run started by a hook or subagent isn't blamed on the main agent.
 - **Idle state stays visible** instead of vanishing when nothing runs.
+- **Limit pace** — when a plan window is on course to run out before it resets at the last hour's rate, the Inspector says so ("Weekly limit runs out in about 9h at this rate").
 - **Git changes, usage, and session info** — uncommitted-change count, ahead/behind, context-window %, token count, cost, branch, start time, and working folder.
 
 ## Memory and session lifecycle
