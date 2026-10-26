@@ -48,6 +48,8 @@ describe("validateBranchName", () => {
     for (const name of [
       "ends.",
       "feature.lock",
+      "feat/x.lock/y",
+      "feat/X.LOCK",
       "a..b",
       ".hidden",
       "dir/.hidden",
