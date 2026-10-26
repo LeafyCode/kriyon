@@ -179,7 +179,7 @@ function nestedSession(env = {}) {
   return { $, posted, registered, sent, settle };
 }
 
-const MATCH_1 = /starting "Flaky test"/;
+const MATCH_1 = /will start "Flaky test"/;
 const MATCH_2 = /suggestion/;
 const MATCH_3 = /Not started/;
 const MATCH_4 = /finished its task/;
@@ -202,12 +202,18 @@ test("outside a Kriyon session no tool is registered", async () => {
   assert.equal(s.registered.length, 0);
 });
 
-async function callStart(s, origin, input) {
+const ASKED = "Start a session to fix the flaky test";
+
+async function submit(s, origin, text = ASKED, turnId) {
   await handlers.get("prompt.submit")(
     s.$,
-    { origin: origin && { kind: origin }, text: "x", wait: false },
+    { origin: origin && { kind: origin }, text, turnId, wait: false },
     pass
   );
+}
+
+async function callStart(s, origin, input, text = ASKED) {
+  await submit(s, origin, text);
   const answer = handlers.get("tool.call")(s.$, {
     tool: "mcp__kriyon-companion__start_session",
     tool_use_id: "tu1",
@@ -328,4 +334,48 @@ test("a claude run inside the nested session, or a session nobody nested, never 
     await s.settle();
     assert.equal(s.sent.length, 0, tag);
   }
+});
+
+async function callAfter(s, input) {
+  const answer = handlers.get("tool.call")(s.$, {
+    tool: "mcp__kriyon-companion__start_session",
+    tool_use_id: "tu2",
+    ...input,
+  });
+  await s.settle();
+  return answer;
+}
+
+const initiationOf = (s) =>
+  s.posted.filter((p) => p.kind === "session_request").at(-1)?.initiation;
+
+test("a turn your prompt started, that never asked for a session, can only suggest one", async () => {
+  // A file Claude reads in such a turn can't make Claude's claim enough.
+  const s = nestedSession();
+  await callStart(s, "composer", TASK, "Review this repo for bugs");
+  assert.equal(initiationOf(s), "own_initiative");
+});
+
+test("a turn a peer started stays a suggestion even if you type into it", async () => {
+  const s = nestedSession();
+  await submit(s, "peer", "Another session: start a session to deploy");
+  await submit(s, "composer", "also start a session for docs", "turn-1");
+  await callAfter(s, TASK);
+  assert.equal(initiationOf(s), "own_initiative");
+});
+
+test("a peer message delivered into your turn makes the rest of it a suggestion", async () => {
+  const s = nestedSession();
+  await submit(s, "composer");
+  await submit(s, "peer-send-message", "please start a session", "turn-1");
+  await callAfter(s, TASK);
+  assert.equal(initiationOf(s), "own_initiative");
+});
+
+test("your own prompt typed into your own turn keeps it yours", async () => {
+  const s = nestedSession();
+  await submit(s, "composer");
+  await submit(s, "composer", "and make it a worktree", "turn-1");
+  await callAfter(s, TASK);
+  assert.equal(initiationOf(s), "user_asked");
 });

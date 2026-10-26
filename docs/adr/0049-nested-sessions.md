@@ -6,39 +6,42 @@
 
 ## Context
 
-Claude Code's desktop app now lets a session start other sessions for
-parallel work. Each one reports back to the session that started it, and the
-sidebar shows them nested under it. People who run several sessions at once
-in Kriyon start the extra ones by hand and then carry results between them.
+People who run several sessions at once in Kriyon start the extra ones by
+hand and then carry results between them. Letting a session start another
+for parallel work, and report back to it, removes that busywork. Claude Code
+gives mods what this needs: a tool the model can call, and cross-session
+delivery.
 
 ADR-0034 kept the Companion read-only: it never registers a tool and never
 steers. A session can't start another without a tool, and it can't report
 back without sending something.
 
-The desktop app's own rule is the right default. A session starts at once
-only when the person asked for it in their own words to that session.
-Anything else becomes a suggestion they click: Claude's own idea, a peer
-session's message, a scheduled run, a subagent. That blocks a prompt
-injected through a file or a peer message from fanning out sessions that
-spend the person's plan.
+The risk is a session that starts sessions on its own, each one spending the
+person's plan. So a session starts at once only when the person asked for it
+in their own words to that session. Anything else becomes a suggestion they
+click: Claude's own idea, a peer session's message, a scheduled run, a
+subagent, or text in a file Claude read.
 
 ## Decision
 
 - **One tool, deferred.** In a Kriyon session the Companion registers
   `start_session` (`mcp__kriyon-companion__start_session`). It is left behind
   ToolSearch, so only its name costs tokens until Claude asks for it.
-- **The mod reports who asked; Kriyon decides.** The mod remembers the origin
-  of the newest prompt the main loop read. A call counts as `user_asked` only
-  when Claude said the person asked, the call is on the main loop, and that
-  prompt was typed at the terminal (`composer`) or sent over Remote Control
-  (`bridge`). Everything else is `own_initiative`. The request travels as
-  one more bridge event, so the daemon's owner check still drops posts from
-  a nested `claude -p`.
+- **The mod checks who asked; Kriyon decides.** The mod tracks the running
+  turn. A call counts as `user_asked` only when all of these hold: Claude
+  said the person asked, the call is on the main loop, the prompt that
+  started the turn was typed at the terminal (`composer`) or sent over Remote
+  Control (`bridge`), that prompt names a session, and nothing in anyone
+  else's words (a peer's message, a task notification, a schedule) has been
+  delivered into the turn since. Everything else is `own_initiative`. So a
+  file Claude reads can't start a session in a turn where the person never
+  asked for one. The request travels as one more bridge event, so the
+  daemon's owner check still drops posts from a nested `claude -p`.
 - **Kriyon starts only what the person asked for, under their cap.** The Rust
   core validates every field: prompt and title are trimmed and capped, and a
   branch name that isn't plainly safe is dropped. It then decides:
-  `user_asked` while fewer sessions run than the [Nested session cap]
-  (default 4) starts in the background. Anything else is a [Session
+  `user_asked` while fewer sessions are busy (working, waiting or starting)
+  than the [Nested session cap] (default 4) starts in the background. Anything else is a [Session
   proposal] card on the lead session, and nothing starts until the person
   presses Start.
 - **Requests are kept once.** Each is stored by its tool call's id in the

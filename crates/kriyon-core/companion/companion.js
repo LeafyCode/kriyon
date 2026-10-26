@@ -165,10 +165,36 @@ const START_SESSION = "start_session";
  *  terminal, or sent from their phone over Remote Control. */
 const OWN_WORDS = new Set(["composer", "bridge"]);
 
-/** Where the newest prompt the main loop read came from. A peer's message,
- *  a task notification or a schedule delivered after the person's prompt
- *  replaces it: the turn then answers someone else too. */
-let promptOrigin = null;
+/** The running turn: where the prompt that started it came from, whether
+ *  that prompt asked for a session, and whether anything not in the person's
+ *  own words (a peer's message, a task notification, a schedule) has been
+ *  delivered into it since. */
+let turn = { asked: false, mixed: false, origin: null };
+
+/** The person's prompt has to ask for a session in so many words. */
+const ASKS_FOR_SESSION = /\bsessions?\b/i;
+
+/** Note one prompt the main loop reads. A prompt with no `turnId` starts a
+ *  turn; one with a `turnId` is delivered into the running one. */
+function notePrompt(e) {
+  const origin = e.origin?.kind ?? null;
+  if (e.turnId === undefined) {
+    turn = {
+      asked: OWN_WORDS.has(origin) && ASKS_FOR_SESSION.test(e.text ?? ""),
+      mixed: false,
+      origin,
+    };
+  } else if (!OWN_WORDS.has(origin)) {
+    turn = { ...turn, mixed: true };
+  }
+}
+
+/** Whether this turn is the person asking for a session: started by their
+ *  own prompt, which names a session, with nobody else's words since. A
+ *  file or tool result Claude reads can't make this true on its own. */
+function personAsked() {
+  return OWN_WORDS.has(turn.origin) && turn.asked && !turn.mixed;
+}
 
 const START_SESSION_SPEC = {
   name: START_SESSION,
@@ -176,8 +202,9 @@ const START_SESSION_SPEC = {
     "Start a separate Claude Code session in Kriyon, beside this one, to do one piece of work in parallel. " +
     "The person sees it nested under this session in Kriyon's sidebar and can open and steer it like any session. " +
     "When its first task ends it sends you its result as a message. " +
-    "Use initiation 'user_asked' only when the person asked you, in their own words in this conversation, to start a session; " +
-    "otherwise use 'own_initiative', and Kriyon shows the person a suggestion to start it instead.",
+    "Use initiation 'user_asked' only when the person's own message that started this turn asked you to start a session; " +
+    "otherwise use 'own_initiative', and Kriyon shows the person a suggestion to start it instead. " +
+    "Kriyon also checks this itself, so a session another source asked for is only ever suggested.",
   inputSchema: {
     type: "object",
     properties: {
@@ -223,9 +250,7 @@ function startSession($, e) {
     return { result: "Not started: a session needs a prompt and a title." };
   }
   const asked =
-    e.initiation === "user_asked" &&
-    e.agentId === undefined &&
-    OWN_WORDS.has(promptOrigin);
+    e.initiation === "user_asked" && e.agentId === undefined && personAsked();
   post($, {
     kind: "session_request",
     requestId: e.tool_use_id ?? `${run}-${seq + 1}`,
@@ -237,7 +262,7 @@ function startSession($, e) {
   });
   return {
     result: asked
-      ? `Kriyon is starting "${title}". It will message you its result when its first task ends; you don't need to wait for it.`
+      ? `Kriyon will start "${title}" unless the person's limit on busy sessions is reached; then it shows them a suggestion to start it instead. Once it runs, it messages you its result when its first task ends; you don't need to wait for it.`
       : `Kriyon is showing the person a suggestion to start "${title}". It starts only if they choose it; don't assume it ran.`,
   };
 }
@@ -363,7 +388,7 @@ export function register(on) {
   // Only the main loop's prompts raise `prompt.submit`; a subagent's run
   // starts from its Agent call instead.
   on("prompt.submit", (_$, e, next) => {
-    promptOrigin = e.origin?.kind ?? null;
+    notePrompt(e);
     return next(e);
   });
 

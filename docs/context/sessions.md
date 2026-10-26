@@ -116,9 +116,10 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
 - **Lead session** — the [Session] a [Nested session] was started from, and the one it reports
   to. _Avoid_: parent session, owner.
 - **Session request** — one `start_session` call as Kriyon receives it: the task prompt, a
-  title, whether to use a worktree (and its branch), and who wanted it (`user_asked` only for
-  the person's own typed or Remote Control words, otherwise `own_initiative`). Validated in the
-  Rust core and kept once by its tool call id. _Avoid_: spawn request.
+  title, whether to use a worktree (and its branch), and who wanted it (`user_asked` only when
+  the person's own typed or Remote Control prompt started the turn and names a session, with
+  no one else's words delivered since; otherwise `own_initiative`). Validated in the Rust core
+  and kept once by its tool call id. _Avoid_: spawn request.
 - **Session proposal** — a [Session request] Kriyon did not start: Claude's own idea, or one
   past the [Nested session cap]. Shown as a card under the lead session's header ("Claude
   suggests a session"), with Start session and Not now. In memory only. _Avoid_: suggestion
