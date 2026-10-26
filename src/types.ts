@@ -122,6 +122,39 @@ export interface PastSessionPage {
   total: number;
 }
 
+/**
+ * Where a [Nested session] sends its first answer: the Claude session id of
+ * the session that started it (`to`), and the id its own conversation is
+ * started with (`from`), so only that conversation reports (ADR-0049).
+ */
+export interface NestedReport {
+  from: string;
+  to: string;
+}
+
+/** Who wanted a [Nested session] started (mirrors Rust `nested::Initiation`). */
+export type NestedInitiation = "user_asked" | "own_initiative";
+
+/** One validated request to start a [Nested session] (mirrors Rust
+ *  `nested::SessionRequest`). */
+export interface SessionRequest {
+  branch: string | null;
+  initiation: NestedInitiation;
+  prompt: string;
+  requestId: string;
+  title: string;
+  worktree: boolean;
+}
+
+/** A request with the session that asked (mirrors Rust `NestedRequest`). */
+export interface NestedRequest {
+  leadSessionId: string;
+  request: SessionRequest;
+}
+
+/** What Kriyon does with a request (mirrors Rust `nested::Outcome`). */
+export type NestedOutcome = "start" | "propose";
+
 /** A persisted session (mirrors Rust `SessionRow`). */
 export interface SessionRow {
   /** When the session was archived (ms since epoch), or null while active. */
@@ -140,6 +173,9 @@ export interface SessionRow {
   createdAt: number;
   cwd: string;
   id: string;
+  /** The session this [Nested session] was started from, or null/absent for
+   *  a top-level one (mirrors Rust `nested_under`, ADR-0049). */
+  nestedUnder?: string | null;
   /** The [Handoff link]: the session this [Follow-up session] was spawned
    *  from, or null/absent for an ordinary session. Display only. */
   parentSessionId?: string | null;

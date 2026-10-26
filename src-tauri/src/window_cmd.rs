@@ -376,6 +376,7 @@ mod tray_command_tests {
                 baseline_oid: None,
                 title_locked: false,
                 parent_session_id: None,
+                nested_under: None,
             })
             .expect("session");
         let store = StoreState(Mutex::new(store));

@@ -485,7 +485,57 @@ function computeMatched(
     hide.threshold,
     hide.now
   );
-  return { collapsedDone: ordered.collapsedDone, collapsedOld, rows };
+  return {
+    collapsedDone: ordered.collapsedDone,
+    collapsedOld,
+    rows: nestRows(rows, input.sessions),
+  };
+}
+
+/**
+ * `rows` with every [Nested session] moved to just under the session it was
+ * started from, its own nested ones under it, in their listed order. One
+ * whose parent isn't listed (closed, folded, another project) keeps its
+ * place. The same array back when nothing moves.
+ */
+export function nestRows(
+  rows: string[],
+  sessions: Record<string, UiSession>
+): string[] {
+  const listed = new Set(rows);
+  const children = new Map<string, string[]>();
+  for (const id of rows) {
+    const parent = sessions[id]?.nestedUnder;
+    if (parent && parent !== id && listed.has(parent)) {
+      children.set(parent, [...(children.get(parent) ?? []), id]);
+    }
+  }
+  if (children.size === 0) {
+    return rows;
+  }
+  const nestedIds = new Set([...children.values()].flat());
+  const out: string[] = [];
+  const placed = new Set<string>();
+  const place = (id: string) => {
+    if (placed.has(id)) {
+      return;
+    }
+    placed.add(id);
+    out.push(id);
+    for (const child of children.get(id) ?? []) {
+      place(child);
+    }
+  };
+  for (const id of rows) {
+    if (!nestedIds.has(id)) {
+      place(id);
+    }
+  }
+  // A cycle (a under b under a) has no top: list what's left as it came.
+  for (const id of rows) {
+    place(id);
+  }
+  return out;
 }
 
 interface OrderCacheEntry {

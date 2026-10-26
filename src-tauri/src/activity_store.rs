@@ -343,15 +343,7 @@ impl ActivityStore {
                  PRAGMA user_version = 5; COMMIT;",
             )?;
         }
-        if version < 6 {
-            migrate_to_v6(&mut conn)?;
-        }
-        if version < 7 {
-            migrate_to_v7(&conn)?;
-        }
-        if version < 8 {
-            migrate_to_v8(&conn)?;
-        }
+        migrate_from_v6(&mut conn, version)?;
         Ok(Self { conn })
     }
 
@@ -853,6 +845,33 @@ impl ActivityStore {
             .optional()?)
     }
 
+    /// Every [Nested session] request not yet taken, oldest first, as
+    /// `(parent session id, request)`; each is marked taken, so it is handed
+    /// out once.
+    ///
+    /// # Errors
+    /// On a database error; nothing is marked then.
+    pub fn take_session_requests(
+        &mut self,
+    ) -> Result<Vec<(String, kriyon_core::nested::SessionRequest)>, ActivityError> {
+        let tx = self.conn.transaction()?;
+        let taken = {
+            let mut stmt = tx.prepare(
+                "SELECT session_id, request FROM session_requests WHERE taken = 0 ORDER BY rowid",
+            )?;
+            let rows = stmt
+                .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
+                .collect::<Result<Vec<_>, _>>()?;
+            rows
+        };
+        tx.execute("UPDATE session_requests SET taken = 1 WHERE taken = 0", [])?;
+        tx.commit()?;
+        Ok(taken
+            .into_iter()
+            .filter_map(|(id, json)| Some((id, serde_json::from_str(&json).ok()?)))
+            .collect())
+    }
+
     /// The companion's rows for `session_id`: runs in the order they first
     /// appeared, rows by the mod's number — the Structured view's live input.
     ///
@@ -977,6 +996,39 @@ fn migrate_to_v8(conn: &Connection) -> rusqlite::Result<()> {
          WHERE kind = 'agent';
          PRAGMA user_version = 8; COMMIT;"
     ))
+}
+
+/// The migrations after v5, each run once in order.
+fn migrate_from_v6(conn: &mut Connection, version: i64) -> rusqlite::Result<()> {
+    if version < 6 {
+        migrate_to_v6(conn)?;
+    }
+    if version < 7 {
+        migrate_to_v7(conn)?;
+    }
+    if version < 8 {
+        migrate_to_v8(conn)?;
+    }
+    if version < 9 {
+        migrate_to_v9(conn)?;
+    }
+    Ok(())
+}
+
+/// The [Nested session] requests a session's companion posted (ADR-0049),
+/// each kept once by its tool call's id until the app has taken it.
+fn migrate_to_v9(conn: &Connection) -> rusqlite::Result<()> {
+    conn.execute_batch(
+        "BEGIN;
+         CREATE TABLE IF NOT EXISTS session_requests (
+           session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+           request_id TEXT NOT NULL,
+           request TEXT NOT NULL,
+           taken INTEGER NOT NULL DEFAULT 0,
+           PRIMARY KEY (session_id, request_id)
+         ) STRICT;
+         PRAGMA user_version = 9; COMMIT;",
+    )
 }
 
 /// Each kept step's summary, from the input it recorded.
@@ -1144,6 +1196,15 @@ fn apply_bridge(
                      ON CONFLICT(session_id, tool_use_id) DO UPDATE SET
                        decision = excluded.decision, rule = excluded.rule",
                 params![session_id, tool_use_id, check.decision, check.rule],
+            )?;
+        }
+        // Kept once per tool call, however often the spool is re-read.
+        BridgeEvent::SessionRequest(request) => {
+            let json = serde_json::to_string(&request).unwrap_or_default();
+            tx.execute(
+                "INSERT OR IGNORE INTO session_requests (session_id, request_id, request)
+                     VALUES (?1, ?2, ?3)",
+                params![session_id, request.request_id, json],
             )?;
         }
         // An end closes the run's current conversation only: a late
@@ -2020,6 +2081,21 @@ mod tests {
         let owned: Vec<String> = lines.iter().map(ToString::to_string).collect();
         let refs: Vec<&str> = owned.iter().map(String::as_str).collect();
         store.ingest_bridge("s1", &refs, CUR, 0).expect("ingests");
+    }
+
+    #[test]
+    fn a_session_request_is_handed_out_once_however_often_it_is_read() {
+        let mut store = ActivityStore::open_in_memory().expect("opens");
+        let request = serde_json::json!({"kind":"session_request","run":"r1","seq":4,
+            "requestId":"tu1","initiation":"user_asked","prompt":"Fix it","title":"Fix"});
+        bridge(&mut store, std::slice::from_ref(&request));
+        // A spool re-read from the start brings the same line again.
+        bridge(&mut store, &[request]);
+        let taken = store.take_session_requests().expect("takes");
+        assert_eq!(taken.len(), 1);
+        assert_eq!(taken[0].0, "s1");
+        assert_eq!(taken[0].1.title, "Fix");
+        assert_eq!(store.take_session_requests().expect("takes").len(), 0);
     }
 
     #[test]

@@ -7,10 +7,15 @@
 // Mac.
 //
 // What it never does: answer for a hook, change a prompt, a tool call or a
-// result, approve or block anything, register a tool (that would cost tokens
-// on every request), call a model, or read credentials. Every hook passes its
-// event on unchanged and posts after `next`, without waiting for the post —
-// the streaming one passes each piece on as it came, the same object.
+// result, approve or block anything, call a model, or read credentials. Every
+// hook passes its event on unchanged and posts after `next`, without waiting
+// for the post — the streaming one passes each piece on as it came, the same
+// object.
+//
+// Two things it adds, for [Nested session]s (ADR-0049): one deferred tool,
+// `start_session`, that asks Kriyon to start a session beside this one, and,
+// in a session Kriyon started that way, one message back to the session that
+// asked when its first turn ends. Neither changes anything the session does.
 
 // This process's run: a restarted claude numbers its posts from 1 again, so
 // readers order by (run, seq).
@@ -151,6 +156,127 @@ function greet($) {
   hello($);
 }
 
+// ---- Nested sessions (ADR-0049) ----
+
+/** The tool's short name; Claude Code lists it as `mcp__<plugin>__<name>`. */
+const START_SESSION = "start_session";
+
+/** Prompts that are the person's own words to this session: typed at the
+ *  terminal, or sent from their phone over Remote Control. */
+const OWN_WORDS = new Set(["composer", "bridge"]);
+
+/** Where the newest prompt the main loop read came from. A peer's message,
+ *  a task notification or a schedule delivered after the person's prompt
+ *  replaces it: the turn then answers someone else too. */
+let promptOrigin = null;
+
+const START_SESSION_SPEC = {
+  name: START_SESSION,
+  description:
+    "Start a separate Claude Code session in Kriyon, beside this one, to do one piece of work in parallel. " +
+    "The person sees it nested under this session in Kriyon's sidebar and can open and steer it like any session. " +
+    "When its first task ends it sends you its result as a message. " +
+    "Use initiation 'user_asked' only when the person asked you, in their own words in this conversation, to start a session; " +
+    "otherwise use 'own_initiative', and Kriyon shows the person a suggestion to start it instead.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      prompt: {
+        type: "string",
+        description:
+          "The whole task for the new session: it starts with no memory of this conversation.",
+      },
+      title: {
+        type: "string",
+        description: "A short name for the session in the sidebar.",
+      },
+      worktree: {
+        type: "boolean",
+        description:
+          "Run it on its own git worktree and branch, so it can't overwrite files this session is changing.",
+      },
+      branch: {
+        type: "string",
+        description: "The worktree's branch name, when worktree is true.",
+      },
+      initiation: {
+        type: "string",
+        enum: ["user_asked", "own_initiative"],
+      },
+    },
+    required: ["prompt", "title", "initiation"],
+  },
+};
+
+/** The text a tool argument carries, trimmed and capped; "" when absent. */
+function arg(value, max) {
+  return typeof value === "string" ? (cap(value.trim(), max) ?? "") : "";
+}
+
+/** Answer one `start_session` call: hand the request to Kriyon and tell the
+ *  model what happens next. Kriyon decides, not this mod: it starts the
+ *  session only for the person's own words and under their cap. */
+function startSession($, e) {
+  const prompt = arg(e.prompt, 20_000);
+  const title = arg(e.title, 80);
+  if (!(prompt && title)) {
+    return { result: "Not started: a session needs a prompt and a title." };
+  }
+  const asked =
+    e.initiation === "user_asked" &&
+    e.agentId === undefined &&
+    OWN_WORDS.has(promptOrigin);
+  post($, {
+    kind: "session_request",
+    requestId: e.tool_use_id ?? `${run}-${seq + 1}`,
+    initiation: asked ? "user_asked" : "own_initiative",
+    prompt,
+    title,
+    worktree: e.worktree === true,
+    branch: arg(e.branch, 120) || undefined,
+  });
+  return {
+    result: asked
+      ? `Kriyon is starting "${title}". It will message you its result when its first task ends; you don't need to wait for it.`
+      : `Kriyon is showing the person a suggestion to start "${title}". It starts only if they choose it; don't assume it ran.`,
+  };
+}
+
+/** The session that asked for this one, by Claude session id, when Kriyon
+ *  started this one as a [Nested session] (`KRIYON_REPORT_TO`, beside
+ *  `KRIYON_REPORT_FROM`, the conversation Kriyon started); "" otherwise. */
+let reportTo = null;
+let reported = false;
+
+/** When this nested session's first turn ends, send its answer to the
+ *  session that asked for it — once, and never from a subagent's loop. */
+async function reportBack($, e, result) {
+  if (reported || e.agentId !== undefined) {
+    return;
+  }
+  reported = true;
+  try {
+    if (reportTo === null) {
+      reportTo = (await $.env.get("KRIYON_REPORT_TO")) ?? "";
+    }
+    // Only the conversation Kriyon started: a `claude -p` run inside the
+    // nested session inherits the same env and must not speak for it.
+    const from = (await $.env.get("KRIYON_REPORT_FROM")) ?? "";
+    if (!(reportTo && from) || from !== (await $.session.id())) {
+      return;
+    }
+    const answer = cap(result?.text ?? "", 4000) || "(no reply text)";
+    const ending =
+      e.reason === "answer" ? "finished its task" : `stopped (${e.reason})`;
+    await $.session.send({
+      to: { sessionId: reportTo },
+      text: `The nested session you started ${ending}. Its reply:\n\n${answer}`,
+    });
+  } catch {
+    // A report that can't be sent never troubles this session.
+  }
+}
+
 /** Conversations that take over a running process: no `session.start`
  *  fires for them, only the classic hook. */
 const TAKEOVERS = new Set(["resume", "clear", "fork"]);
@@ -221,9 +347,35 @@ async function* streamReply($, e, next) {
 export function register(on) {
   on("turn.step", streamReply);
 
-  on("session.start", ($, e, next) => {
+  on("session.start", async ($, e, next) => {
     greet($);
+    try {
+      // Only in a Kriyon session: elsewhere there is nobody to start it.
+      if (await $.env.get("KRIYON_BRIDGE_SOCKET")) {
+        await $.tool.register(START_SESSION_SPEC);
+      }
+    } catch {
+      // No tool, no nested sessions; the session itself is untouched.
+    }
     return next(e);
+  });
+
+  // Only the main loop's prompts raise `prompt.submit`; a subagent's run
+  // starts from its Agent call instead.
+  on("prompt.submit", (_$, e, next) => {
+    promptOrigin = e.origin?.kind ?? null;
+    return next(e);
+  });
+
+  // The literal name, so `claude plugin validate` can list the matcher.
+  on("tool.call", { tool: "mcp__kriyon-companion__start_session" }, ($, e) =>
+    startSession($, e)
+  );
+
+  on("turn.complete", async ($, e, next) => {
+    const result = await next(e);
+    reportBack($, e, result);
+    return result;
   });
 
   // A resume, /clear or /branch ends the conversation, not the companion:

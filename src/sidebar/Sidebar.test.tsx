@@ -41,6 +41,7 @@ import { prewarmSession } from "../state/actions.ts";
 import { useChanges } from "../state/changes.ts";
 import { useDrafts } from "../state/drafts.ts";
 import { DEFAULT_LAYOUT, useLayout } from "../state/layout.ts";
+import { useSessionProposals } from "../state/nestedSessions.ts";
 import { type UiSession, useSessions } from "../state/sessions.ts";
 import { useUi } from "../state/ui.ts";
 import { statusMeta } from "../theme/status.ts";
@@ -2962,4 +2963,63 @@ test("resting the pointer on a row opens its pty early; sweeping past does not",
   vi.advanceTimersByTime(PREWARM_DWELL_MS);
   expect(prewarm).toHaveBeenCalledWith("s1");
   vi.useRealTimers();
+});
+
+test("a nested session steps in under the session it was started from", () => {
+  seed();
+  useSessions.getState().addSession({
+    archivedAt: null,
+    baselineOid: null,
+    claudeSessionId: null,
+    createdAt: 4,
+    cwd: "",
+    id: "s4",
+    nestedUnder: "s1",
+    projectId: "p1",
+    status: "running",
+    summary: "",
+    title: "Nested One",
+    titleLocked: false,
+    worktreePath: null,
+  });
+  render(
+    <Sidebar
+      onCloseSession={vi.fn()}
+      onNewSession={vi.fn()}
+      onShowAbout={vi.fn()}
+    />
+  );
+  const titles = screen
+    .getAllByTestId("session-row")
+    .map((row) => row.getAttribute("data-status") && row.textContent);
+  const parentAt = titles.findIndex((t) => t?.includes("Session One"));
+  expect(titles[parentAt + 1]).toContain("Nested One");
+  const nestedRow = screen
+    .getAllByTestId("session-row")
+    .find((row) => row.textContent?.includes("Nested One"));
+  expect(nestedRow?.querySelector("[data-nest-depth='1']")).not.toBeNull();
+});
+
+test("a row says when Claude suggested a session from it", () => {
+  seedSession("s1", { title: "Lead" });
+  useSessionProposals.setState({
+    proposals: [
+      {
+        leadSessionId: "s1",
+        request: {
+          branch: null,
+          initiation: "own_initiative",
+          prompt: "p",
+          requestId: "r1",
+          title: "T",
+          worktree: false,
+        },
+      },
+    ],
+  });
+  renderRow("s1", false);
+  expect(screen.getByTestId("suggested-chip-s1")).toHaveTextContent(
+    "1 suggested"
+  );
+  useSessionProposals.setState({ proposals: [] });
 });

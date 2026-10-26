@@ -26,6 +26,7 @@ import { UpdateDialog } from "../update/UpdateDialog.tsx";
 import { FocusRail } from "./FocusRail.tsx";
 import { PromptBar } from "./PromptBar.tsx";
 import { SessionHeader } from "./SessionHeader.tsx";
+import { SessionProposals } from "./SessionProposals.tsx";
 import { TaskStrip } from "./TaskStrip.tsx";
 import { TerminalDock } from "./TerminalDock.tsx";
 
@@ -156,6 +157,7 @@ function SessionBody({
     >
       <div style={centerStyle}>
         <SessionHeader />
+        <SessionProposals />
         <TaskStrip />
         <div
           style={

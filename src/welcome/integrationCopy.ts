@@ -38,7 +38,7 @@ export function companionHint(available: boolean): string {
   if (!available) {
     return "Needs Kriyon's hooks on as a per-session plugin, which your setup doesn't allow.";
   }
-  return "Optional, read-only mod in Kriyon's sessions (Claude Code 2.1.287+). It sees your prompts, Claude's replies and every tool call, and sends them only to Kriyon on this Mac. It never approves, blocks or changes anything, and never uses your plan. Gives exact state and the Structured view.";
+  return "Optional mod in Kriyon's sessions (Claude Code 2.1.287+). It sees your prompts, Claude's replies and every tool call, and sends them only to Kriyon on this Mac. It never approves, blocks or changes anything. Gives exact state, the Structured view, and nested sessions: Claude can start a session beside this one, but it starts only when you asked for it in your own words; anything else waits for you to choose it.";
 }
 
 /** One short line per addition that is on: what goes when it is removed. */

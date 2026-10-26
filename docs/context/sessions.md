@@ -107,3 +107,24 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
   its [Worktree] is **not** removed unless the user explicitly asks. Reversible
   (un-archive). Shown in a collapsed "Archived" sidebar group. _Avoid_: deleted session,
   closed session.
+- **Nested session** — a [Session] started from another one to do one piece of its work in
+  parallel, and listed under it in the sidebar (`nested_under`). Claude starts one through the
+  Companion's `start_session` tool. The person starts one with [Split off]. It is a real
+  session with its own terminal, in its [Lead session]'s folder or on a new [Worktree], and its
+  first answer is sent back to the lead session once. ADR-0049. _Avoid_: child session (that's
+  a [Subagent]), sub-session, spawned session.
+- **Lead session** — the [Session] a [Nested session] was started from, and the one it reports
+  to. _Avoid_: parent session, owner.
+- **Session request** — one `start_session` call as Kriyon receives it: the task prompt, a
+  title, whether to use a worktree (and its branch), and who wanted it (`user_asked` only for
+  the person's own typed or Remote Control words, otherwise `own_initiative`). Validated in the
+  Rust core and kept once by its tool call id. _Avoid_: spawn request.
+- **Session proposal** — a [Session request] Kriyon did not start: Claude's own idea, or one
+  past the [Nested session cap]. Shown as a card under the lead session's header ("Claude
+  suggests a session"), with Start session and Not now. In memory only. _Avoid_: suggestion
+  card, pending session.
+- **Nested session cap** — the most sessions that may be running before a requested session
+  becomes a [Session proposal] instead of starting (Settings, default 4, or no cap). _Avoid_:
+  concurrency limit.
+- **Split off** — the sidebar menu action that starts a [Nested session] by hand from the
+  [Spawn dialog], with an empty task. _Avoid_: fork, branch off.

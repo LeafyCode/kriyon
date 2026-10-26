@@ -290,6 +290,13 @@ export function parseLayout(json: string | null): Layout | undefined {
     manualProjectOrder: parseManualProjectOrder(parsed.manualProjectOrder),
     manualSessionOrder: parseManualOrders(parsed.manualSessionOrder),
     menuBarMode: parseMenuBarMode(parsed.menuBarMode),
+    nestedSessionCap:
+      parsed.nestedSessionCap === "off" ||
+      parsed.nestedSessionCap === "2" ||
+      parsed.nestedSessionCap === "4" ||
+      parsed.nestedSessionCap === "6"
+        ? parsed.nestedSessionCap
+        : DEFAULT_LAYOUT.nestedSessionCap,
     autoSleepAfter:
       parsed.autoSleepAfter === "off" ||
       parsed.autoSleepAfter === "1h" ||

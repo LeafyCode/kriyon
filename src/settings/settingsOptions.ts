@@ -2,6 +2,7 @@ import type { UpdateChannel } from "../ipc/bridge.ts";
 import type {
   AutoSleepAfter,
   MenuBarMode,
+  NestedSessionCap,
   SidebarMode,
 } from "../state/layout.ts";
 import type { NotifyPreference, NotifySound } from "../types.ts";
@@ -54,6 +55,13 @@ export const AUTO_SLEEP_OPTIONS: readonly SettingOption<AutoSleepAfter>[] = [
   { label: "After 1h", value: "1h" },
   { label: "After 3h", value: "3h" },
   { label: "After 6h", value: "6h" },
+];
+
+export const NESTED_CAP_OPTIONS: readonly SettingOption<NestedSessionCap>[] = [
+  { label: "No cap", value: "off" },
+  { label: "2", value: "2" },
+  { label: "4", value: "4" },
+  { label: "6", value: "6" },
 ];
 
 export const NOTIFY_SOUND_OPTIONS: readonly SettingOption<NotifySound>[] = [

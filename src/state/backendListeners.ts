@@ -1,4 +1,5 @@
 import {
+  onCompanionChanged,
   onFocusSession,
   onPlanLimits,
   onSessionActivity,
@@ -17,6 +18,7 @@ import { onEvent, stopAll } from "../ipc/onEvent.ts";
 import { focusSessionFromNotification, sessionBecameLive } from "./actions.ts";
 import { applyWorkingTreeChange } from "./changesRefresh.ts";
 import { useHandoffs } from "./handoffs.ts";
+import { handleSessionRequests } from "./nestedSessions.ts";
 import { usePlanLimits } from "./planLimits.ts";
 import { useSessions } from "./sessions.ts";
 
@@ -30,6 +32,10 @@ import { useSessions } from "./sessions.ts";
 export function installSessionListeners(): () => void {
   const sessions = () => useSessions.getState();
   return stopAll([
+    // A companion posted: it may have asked for a [Nested session].
+    onEvent(onCompanionChanged, () => {
+      handleSessionRequests();
+    }),
     onEvent(onSessionStatus, (u) =>
       sessions().applyStatus(u.sessionId, u.status, u.summary, u.seeded)
     ),

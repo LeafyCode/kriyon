@@ -17,7 +17,12 @@ import {
   noteSessionStarted,
   startFreshClaude,
 } from "../terminal/sessionHost.ts";
-import type { PastSession, ProjectRow, SessionRow } from "../types.ts";
+import type {
+  NestedReport,
+  PastSession,
+  ProjectRow,
+  SessionRow,
+} from "../types.ts";
 import { showToast } from "../ui/Toast.tsx";
 import { markBootLive, markBootStart } from "./bootTiming.ts";
 import { useCompletions } from "./completions.ts";
@@ -147,12 +152,18 @@ function persistThenWarm(project: ProjectRow, session: SessionRow): void {
  * Making it active is what launches `claude` (the active-session effect in `App`
  * launches/resumes a session the first time it is viewed).
  */
-function createSession(
+export function createSession(
   project: ProjectRow,
   cwd: string,
   title: string,
   opts?: {
+    /** Show it at once (the default). A [Nested session] Claude started is
+     *  opened in the background instead, as a [Warm pane]. */
+    focus?: boolean;
+    nestedUnder?: string;
     parentSessionId?: string;
+    /** Where a [Nested session] sends its first answer. */
+    report?: NestedReport;
     seedPrompt?: string;
     worktreePath?: string | null;
   }
@@ -168,6 +179,7 @@ function createSession(
     createdAt: Date.now(),
     cwd,
     id,
+    nestedUnder: opts?.nestedUnder ?? null,
     parentSessionId: opts?.parentSessionId ?? null,
     projectId: project.id,
     title,
@@ -177,6 +189,18 @@ function createSession(
   state.addSession(idleSession(row));
   if (opts?.seedPrompt) {
     state.setPendingSeedPrompt(id, opts.seedPrompt);
+  }
+  if (opts?.report) {
+    state.setPendingReport(id, opts.report);
+  }
+  if (opts?.focus === false) {
+    // Mounted out of sight, then launched: the activation effect that starts
+    // a shown session never runs for it.
+    state.warmSession(id);
+    persistThenWarm(project, row);
+    ignore(launchActiveSession(id));
+    captureBaselineFor(id, cwd);
+    return id;
   }
   // `addSession` only activates the *first* session, so switch explicitly —
   // otherwise a new session opened while another is active is created hidden.
@@ -201,6 +225,13 @@ function createSession(
   // blocking a pool thread for minutes and permanently growing
   // `~/.git/objects` — once per Home session. There is no real "project" to
   // baseline for a Home session anyway.
+  captureBaselineFor(id, cwd);
+  return id;
+}
+
+/** Capture the session's git baseline, except for the Home cwd (see
+ *  {@link createSession}). Never blocks and never throws. */
+function captureBaselineFor(id: string, cwd: string): void {
   if (cwd !== defaultCwd) {
     ignore(
       captureBaseline(cwd).then((oid) =>
@@ -208,7 +239,6 @@ function createSession(
       )
     );
   }
-  return id;
 }
 
 /**
@@ -499,7 +529,8 @@ export async function launchActiveSession(sessionId: string): Promise<void> {
   const result = await launchClaudeOnce(
     sessionId,
     session.claudeSessionId,
-    state.consumePendingSeedPrompt(sessionId)
+    state.consumePendingSeedPrompt(sessionId),
+    state.consumePendingReport(sessionId)
   );
   switch (result.kind) {
     case "launched":

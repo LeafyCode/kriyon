@@ -28,7 +28,7 @@ import {
 import { type UiSession, useSessions } from "../state/sessions.ts";
 import { useUi } from "../state/ui.ts";
 import type { ProjectRow } from "../types.ts";
-import { SpawnDialog } from "./SpawnDialog.tsx";
+import { nestedTitle, SpawnDialog } from "./SpawnDialog.tsx";
 
 const project: ProjectRow = {
   color: null,
@@ -70,6 +70,7 @@ beforeEach(() => {
     spawnOpen: true,
     spawnPredecessorId: "pre",
     spawnProjectId: null,
+    spawnNest: false,
     spawnSeed: null,
     spawnWorktreeDefault: false,
   });
@@ -260,4 +261,30 @@ test("a failed worktree bootstrap locks the dialog against re-spawn; primary but
 
   fireEvent.click(screen.getByTestId("spawn-confirm"));
   expect(useUi.getState().spawnOpen).toBe(false);
+});
+
+test("split off titles a nested session from its task's first words", () => {
+  expect(nestedTitle("Fix the flaky login test on CI please now", "P")).toBe(
+    "Fix the flaky login test on"
+  );
+  expect(nestedTitle("   ", "Parent")).toBe("Parent (split)");
+});
+
+test("split off starts an empty task and nests the new session under this one", async () => {
+  useUi.getState().openSpawn({ predecessorId: "pre" }, { nest: true });
+  render(<SpawnDialog />);
+  expect(screen.getByTestId("spawn-dialog")).toHaveTextContent(
+    "Split off from “T pre”"
+  );
+  const box = screen.getByTestId("spawn-prompt") as HTMLTextAreaElement;
+  expect(box.value).toBe("");
+  fireEvent.change(box, { target: { value: "Write the release notes" } });
+  fireEvent.click(screen.getByTestId("spawn-confirm"));
+  await waitFor(() => expect(useUi.getState().spawnOpen).toBe(false));
+  const created = Object.values(useSessions.getState().sessions).find(
+    (s) => s.id !== "pre"
+  );
+  expect(created?.nestedUnder).toBe("pre");
+  expect(created?.parentSessionId ?? null).toBeNull();
+  expect(created?.title).toBe("Write the release notes");
 });

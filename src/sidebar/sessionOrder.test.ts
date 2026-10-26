@@ -1,4 +1,4 @@
-import { expect, test } from "vitest";
+import { describe, expect, it, test } from "vitest";
 import type { UiSession } from "../state/sessions.ts";
 import type { ProjectRow, SessionStatus } from "../types.ts";
 import {
@@ -6,6 +6,7 @@ import {
   EMPTY_ORDER,
   type HideInputs,
   inactiveProjectIds,
+  nestRows,
   type OrderInputs,
   orderMatched,
   orderSessions,
@@ -820,4 +821,36 @@ test("pickFocusSession falls back to newest createdAt with no lastChangeMs", () 
 
 test("pickFocusSession returns undefined for an empty list", () => {
   expect(pickFocusSession([], {})).toBeUndefined();
+});
+
+describe("nestRows", () => {
+  const nested = (id: string, under: string | null) =>
+    ({ id, nestedUnder: under }) as UiSession;
+
+  it("lists each nested session right under the one it was started from", () => {
+    const sessions = {
+      a: nested("a", null),
+      b: nested("b", null),
+      c: nested("c", "a"),
+      d: nested("d", "c"),
+    };
+    expect(nestRows(["c", "b", "a", "d"], sessions)).toEqual([
+      "b",
+      "a",
+      "c",
+      "d",
+    ]);
+  });
+
+  it("keeps a nested session in place when its parent isn't listed", () => {
+    const sessions = { a: nested("a", "gone"), b: nested("b", null) };
+    expect(nestRows(["a", "b"], sessions)).toEqual(["a", "b"]);
+  });
+
+  it("returns the same array when nothing is nested", () => {
+    const rows = ["a", "b"];
+    expect(nestRows(rows, { a: nested("a", null), b: nested("b", null) })).toBe(
+      rows
+    );
+  });
 });

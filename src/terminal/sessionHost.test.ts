@@ -509,6 +509,36 @@ test("a seeded launch reads the prompt file and self-cleans", async () => {
   disposeSession("s1");
 });
 
+test("a nested session starts under its own id, told where to report", async () => {
+  ensureSession("s1", "/work", noop);
+  await launchClaudeOnce("s1", null, "Fix it", {
+    from: "child-uuid",
+    to: "parent-uuid",
+  });
+  expect(mockedWriteStdin).toHaveBeenCalledWith(
+    "s1",
+    new TextEncoder().encode(
+      'p="$(cat "/run/s1.prompt")"; rm -f "/run/s1.prompt"; KRIYON_REPORT_TO=parent-uuid KRIYON_REPORT_FROM=child-uuid claude --session-id child-uuid "$p"\r'
+    )
+  );
+  disposeSession("s1");
+});
+
+test("a report address that isn't a bare id is never typed", async () => {
+  ensureSession("s1", "/work", noop);
+  await launchClaudeOnce("s1", null, "Fix it", {
+    from: "child; rm -rf ~",
+    to: "parent-uuid",
+  });
+  expect(mockedWriteStdin).toHaveBeenCalledWith(
+    "s1",
+    new TextEncoder().encode(
+      'p="$(cat "/run/s1.prompt")"; rm -f "/run/s1.prompt"; claude "$p"\r'
+    )
+  );
+  disposeSession("s1");
+});
+
 test("an unseeded launch is a plain claude", async () => {
   ensureSession("s2", "/work", noop);
   await launchClaudeOnce("s2", null);

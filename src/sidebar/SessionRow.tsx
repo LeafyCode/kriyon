@@ -22,6 +22,7 @@ import { archiveSessionAndStop, prewarmSession } from "../state/actions.ts";
 import { useChanges } from "../state/changes.ts";
 import { useDrafts } from "../state/drafts.ts";
 import { type SidebarMode, useLayout } from "../state/layout.ts";
+import { useSessionProposals } from "../state/nestedSessions.ts";
 import {
   sessionWorkingDir,
   useSessions,
@@ -361,11 +362,33 @@ function SessionMetaLine({
   const ctxPct = useSessions(
     (state) => sessionUsageView(state.usage[sessionId]).ctxPct
   );
-  if (!(context || branchLabel || memoryChip || progress || ctxPct !== null)) {
+  const suggested = useSessionProposals(
+    (state) =>
+      state.proposals.filter((p) => p.leadSessionId === sessionId).length
+  );
+  if (
+    !(
+      context ||
+      branchLabel ||
+      memoryChip ||
+      progress ||
+      ctxPct !== null ||
+      suggested > 0
+    )
+  ) {
     return null;
   }
   return (
     <span style={metaLineStyle}>
+      {suggested > 0 ? (
+        <span
+          data-testid={`suggested-chip-${sessionId}`}
+          style={suggestedChipStyle}
+          title="Claude suggested starting a session from this one; open it to decide"
+        >
+          {suggested} suggested
+        </span>
+      ) : null}
       {progress ? (
         <span
           data-testid={`task-progress-${sessionId}`}
@@ -638,6 +661,12 @@ function taskProgressTitle(
   };
 }
 
+const suggestedChipStyle: CSSProperties = {
+  color: tokens.color.accentBright,
+  flex: "none",
+  fontSize: "10.5px",
+};
+
 const taskProgressStyle: CSSProperties = {
   color: tokens.color.ink.muted,
   flex: "none",
@@ -854,6 +883,41 @@ const rowContentStyle: CSSProperties = {
   textAlign: "left",
 };
 
+/** How far each level of [Nested session] steps in. */
+const NEST_INDENT_PX = 14;
+
+/** A nested row steps in under the session it came from, with a hairline
+ *  down its left edge so the group reads as one. */
+function nestedContentStyle(depth: number): CSSProperties {
+  if (depth === 0) {
+    return rowContentStyle;
+  }
+  return {
+    ...rowContentStyle,
+    borderLeft: `1px solid ${tokens.color.line.base}`,
+    marginLeft: `${depth * NEST_INDENT_PX - 7}px`,
+    paddingLeft: "7px",
+  };
+}
+
+/** How deep a session sits under the sessions it was started from (0 for
+ *  top level); a parent that is closed or archived ends the chain. */
+function useNestDepth(sessionId: string): number {
+  return useSessions((state) => {
+    let depth = 0;
+    let id = state.sessions[sessionId]?.nestedUnder;
+    while (id && depth < 4) {
+      const parent = state.sessions[id];
+      if (!parent || parent.archivedAt !== null) {
+        break;
+      }
+      depth += 1;
+      id = parent.nestedUnder;
+    }
+    return depth;
+  });
+}
+
 /**
  * The row's hover-revealed "⋯" overflow menu: rename, spawn a follow-up,
  * archive, and (for a worktree session) remove the worktree. Extracted from
@@ -903,6 +967,23 @@ function SessionActionsMenu({
         type="button"
       >
         Spawn follow-up
+      </button>
+      <button
+        className="kr-hover-surface"
+        data-testid={`split-off-${sessionId}`}
+        onClick={(event) => {
+          event.stopPropagation();
+          close();
+          useUi
+            .getState()
+            .openSpawn({ predecessorId: sessionId }, { nest: true });
+        }}
+        role="menuitem"
+        style={menuItemStyle}
+        title="Start a session for one piece of this work, nested under this one"
+        type="button"
+      >
+        Split off a session…
       </button>
       <button
         className="kr-hover-surface"
@@ -1012,6 +1093,7 @@ export const SessionRow = memo(function SessionRow({
   );
   const removal = useWorktreeRemoval(sessionId);
   const prewarm = useHoverPrewarm(sessionId);
+  const nestDepth = useNestDepth(sessionId);
   // The two "would this close silently discard something?" signals — see
   // {@link unsentWorkFor}. A blank composer draft or an empty stashed-drafts
   // record both read as "nothing here", same as never having touched them.
@@ -1094,7 +1176,7 @@ export const SessionRow = memo(function SessionRow({
           type="button"
         />
       )}
-      <div style={rowContentStyle}>
+      <div data-nest-depth={nestDepth} style={nestedContentStyle(nestDepth)}>
         <DragHandle
           sessionId={sessionId}
           sortable={sortable}

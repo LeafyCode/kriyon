@@ -397,6 +397,8 @@ pub fn run() {
             activity_rt::activity_step,
             activity_rt::activity_stats,
             activity_rt::activity_delete_session,
+            activity_rt::take_session_requests,
+            activity_rt::nested_outcome,
             activity_rt::activity_delete_all,
             integration::integration_status,
             integration::integration_set,

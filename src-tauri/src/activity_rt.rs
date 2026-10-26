@@ -440,6 +440,46 @@ pub fn activity_step(
     with_store(|s| s.step(&session_id, step_id))
 }
 
+/// One [Nested session] request, with the session that asked for it.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NestedRequest {
+    pub lead_session_id: String,
+    pub request: kriyon_core::nested::SessionRequest,
+}
+
+/// Hand the UI every [Nested session] request the companions posted since
+/// it last asked, each once (ADR-0049). The UI decides with
+/// `nested_outcome`; nothing is started here.
+///
+/// # Errors
+/// On a database error.
+#[tauri::command]
+pub fn take_session_requests() -> Result<Vec<NestedRequest>, String> {
+    Ok(with_store(ActivityStore::take_session_requests)?
+        .into_iter()
+        .map(|(lead_session_id, request)| NestedRequest {
+            lead_session_id,
+            request,
+        })
+        .collect())
+}
+
+/// Whether a request starts now or becomes a suggestion: started only for
+/// the person's own words and while fewer than `cap` sessions run.
+///
+/// # Errors
+/// Never; a `Result` like every command.
+#[allow(clippy::needless_pass_by_value)]
+#[tauri::command]
+pub fn nested_outcome(
+    initiation: kriyon_core::nested::Initiation,
+    running: usize,
+    cap: Option<usize>,
+) -> Result<kriyon_core::nested::Outcome, String> {
+    Ok(kriyon_core::nested::outcome(initiation, running, cap))
+}
+
 /// The log's size and retention, for Settings.
 ///
 /// # Errors

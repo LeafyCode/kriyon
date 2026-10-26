@@ -76,6 +76,7 @@ function fullyPopulatedSession(): UiSession {
     createdAt: 1_690_000_000_000,
     cwd: "/repo",
     id: "s-full",
+    nestedUnder: "s-lead",
     parentSessionId: "s-parent",
     projectId: "p-full",
     status: "running",

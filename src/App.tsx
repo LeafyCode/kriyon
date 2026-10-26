@@ -27,6 +27,7 @@ import { useIntegration } from "./state/integration.ts";
 import { useLayout } from "./state/layout.ts";
 import { installMainWindowActions } from "./state/mainWindowActions.ts";
 import { installMenuBarModeSync } from "./state/menuBarModeSync.ts";
+import { sessionRequestsReady } from "./state/nestedSessions.ts";
 import { hydrate, installPersistence } from "./state/persistence.ts";
 import { useSessions } from "./state/sessions.ts";
 import { freedMemoryNote } from "./state/stopCost.ts";
@@ -287,7 +288,7 @@ function App() {
     const stopUpdateAnswered = onEvent(onUpdateChannelAnswered, (snapshot) =>
       useUpdates.getState().answerMove(snapshot)
     );
-    ignore(hydrate());
+    ignore(hydrate().then(sessionRequestsReady));
     const stopPersistence = installPersistence();
     const stopListeners = installSessionListeners();
     const stopCommandCenter = installCommandCenterListeners();

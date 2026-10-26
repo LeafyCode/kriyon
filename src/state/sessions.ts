@@ -7,6 +7,7 @@ import type {
 import { upsertSession } from "../ipc/bridge.ts";
 import type {
   HooksOffScope,
+  NestedReport,
   ProjectRow,
   SessionActivity,
   SessionRow,
@@ -101,6 +102,9 @@ export interface UiSession {
   createdAt: number;
   cwd: string;
   id: string;
+  /** The session this [Nested session] was started from (see
+   *  {@link SessionRow.nestedUnder}). */
+  nestedUnder?: string | null;
   /** The [Handoff link] (see {@link SessionRow.parentSessionId}). */
   parentSessionId?: string | null;
   projectId: string;
@@ -140,6 +144,7 @@ export function sessionRow(session: UiSession): SessionRow {
     createdAt: session.createdAt,
     cwd: session.cwd,
     id: session.id,
+    nestedUnder: session.nestedUnder ?? null,
     parentSessionId: session.parentSessionId ?? null,
     projectId: session.projectId,
     title: session.title,
@@ -228,6 +233,8 @@ export interface SessionsState {
   /** Each session's [Boot phase]; absent ⇒ `idle`. */
   bootPhase: Record<string, BootPhase>;
   clearEvents: (sessionId: string) => void;
+  /** Reads and removes a [Nested session]'s report address (one-shot at launch). */
+  consumePendingReport: (id: string) => NestedReport | undefined;
   /** Reads and removes a session's seed prompt, if any (one-shot at launch). */
   consumePendingSeedPrompt: (id: string) => string | undefined;
   /**
@@ -262,6 +269,8 @@ export interface SessionsState {
    * panes). See {@link SessionsState.exited}.
    */
   noteSessionExited: (id: string) => void;
+  /** Where each [Nested session] not yet launched reports its first answer. */
+  pendingReport: Record<string, NestedReport>;
   /** In-memory seed prompts for follow-up sessions, consumed at first launch. Never persisted. */
   pendingSeedPrompt: Record<string, string>;
   projects: ProjectRow[];
@@ -321,6 +330,7 @@ export interface SessionsState {
    * legacy whole-working-tree diff.
    */
   setBaseline: (id: string, oid: string | null) => void;
+  setPendingReport: (id: string, report: NestedReport) => void;
   setPendingSeedPrompt: (id: string, text: string) => void;
   /** Sets a project's identity color; null returns it to the automatic hue. */
   setProjectColor: (projectId: string, color: string | null) => void;
@@ -406,6 +416,12 @@ export interface SessionsState {
    * restored active session resumes `claude`. Runtime-only (never persisted).
    */
   warmPanes: string[];
+  /**
+   * Keep a session's pane mounted without showing it — a [Nested session]
+   * started in the background — so its terminal and watch run as a [Warm
+   * pane]'s do. The active session is unchanged.
+   */
+  warmSession: (id: string) => void;
 }
 
 /**
@@ -676,6 +692,7 @@ const PER_SESSION_KEYS = [
   "exited",
   "hooksOff",
   "memory",
+  "pendingReport",
   "pendingSeedPrompt",
   "repoToplevel",
   "repoToplevelCwd",
@@ -715,6 +732,7 @@ export const useSessions = create<SessionsState>((set, get) => ({
   bootPhase: {},
   cpu: {},
   events: {},
+  pendingReport: {},
   pendingSeedPrompt: {},
   statusOrigin: {},
   usage: {},
@@ -1053,6 +1071,18 @@ export const useSessions = create<SessionsState>((set, get) => ({
       events: { ...state.events, [sessionId]: [] },
     })),
 
+  consumePendingReport: (id) => {
+    const report = get().pendingReport[id];
+    if (report !== undefined) {
+      set((state) => {
+        const next = { ...state.pendingReport };
+        delete next[id];
+        return { pendingReport: next };
+      });
+    }
+    return report;
+  },
+
   consumePendingSeedPrompt: (id) => {
     const text = get().pendingSeedPrompt[id];
     if (text !== undefined) {
@@ -1127,4 +1157,23 @@ export const useSessions = create<SessionsState>((set, get) => ({
     set((state) => ({
       pendingSeedPrompt: { ...state.pendingSeedPrompt, [id]: text },
     })),
+
+  setPendingReport: (id, report) =>
+    set((state) => ({
+      pendingReport: { ...state.pendingReport, [id]: report },
+    })),
+
+  warmSession: (id) =>
+    set((state) => {
+      if (state.activeSessionId === id || state.warmPanes.includes(id)) {
+        return {};
+      }
+      return {
+        warmPanes: nextWarmPanes(
+          state.warmPanes,
+          id,
+          state.activeSessionId ?? ""
+        ).warm,
+      };
+    }),
 }));

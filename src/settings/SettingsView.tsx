@@ -37,6 +37,7 @@ import {
   MEMORY_BUDGET_OPTIONS,
   MEMORY_WARN_OPTIONS,
   MENU_BAR_OPTIONS,
+  NESTED_CAP_OPTIONS,
   NOTIFY_OPTIONS,
   NOTIFY_SOUND_OPTIONS,
   ON_OFF_OPTIONS,
@@ -513,6 +514,8 @@ export function SettingsView() {
     (state) => state.layout.memoryWarnEnabled
   );
   const setMemoryWarnEnabled = useLayout((state) => state.setMemoryWarnEnabled);
+  const nestedSessionCap = useLayout((state) => state.layout.nestedSessionCap);
+  const setNestedSessionCap = useLayout((state) => state.setNestedSessionCap);
   const autoSleepAfter = useLayout((state) => state.layout.autoSleepAfter);
   const setAutoSleepAfter = useLayout((state) => state.setAutoSleepAfter);
 
@@ -647,6 +650,21 @@ export function SettingsView() {
             }
             hint="Stop an idle session's Claude to free its memory; the row stays and clicking it resumes where it left off. Sessions that are busy or running something are never slept."
             label="Sleep idle sessions"
+          />
+        </SettingGroup>
+
+        <SettingGroup label="Nested sessions">
+          <SettingRow
+            control={
+              <Segmented
+                ariaLabel="Sessions Claude may start"
+                onChange={setNestedSessionCap}
+                options={NESTED_CAP_OPTIONS}
+                value={nestedSessionCap}
+              />
+            }
+            hint="When you ask Claude to start a session and this many are already running, Kriyon shows it as a suggestion you start yourself, so parallel work can't run through your plan unseen."
+            label="Most running at once"
           />
         </SettingGroup>
 
