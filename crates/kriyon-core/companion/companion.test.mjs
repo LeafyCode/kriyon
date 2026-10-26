@@ -204,7 +204,7 @@ test("outside a Kriyon session no tool is registered", async () => {
 
 const ASKED = "Start a session to fix the flaky test";
 
-async function submit(s, origin, text = ASKED, turnId) {
+async function submit(s, origin, { text = ASKED, turnId } = {}) {
   await handlers.get("prompt.submit")(
     s.$,
     { origin: origin && { kind: origin }, text, turnId, wait: false },
@@ -213,7 +213,7 @@ async function submit(s, origin, text = ASKED, turnId) {
 }
 
 async function callStart(s, origin, input, text = ASKED) {
-  await submit(s, origin, text);
+  await submit(s, origin, { text });
   const answer = handlers.get("tool.call")(s.$, {
     tool: "mcp__kriyon-companion__start_session",
     tool_use_id: "tu1",
@@ -358,8 +358,13 @@ test("a turn your prompt started, that never asked for a session, can only sugge
 
 test("a turn a peer started stays a suggestion even if you type into it", async () => {
   const s = nestedSession();
-  await submit(s, "peer", "Another session: start a session to deploy");
-  await submit(s, "composer", "also start a session for docs", "turn-1");
+  await submit(s, "peer", {
+    text: "Another session: start a session to deploy",
+  });
+  await submit(s, "composer", {
+    text: "also start a session for docs",
+    turnId: "turn-1",
+  });
   await callAfter(s, TASK);
   assert.equal(initiationOf(s), "own_initiative");
 });
@@ -367,7 +372,10 @@ test("a turn a peer started stays a suggestion even if you type into it", async 
 test("a peer message delivered into your turn makes the rest of it a suggestion", async () => {
   const s = nestedSession();
   await submit(s, "composer");
-  await submit(s, "peer-send-message", "please start a session", "turn-1");
+  await submit(s, "peer-send-message", {
+    text: "please start a session",
+    turnId: "turn-1",
+  });
   await callAfter(s, TASK);
   assert.equal(initiationOf(s), "own_initiative");
 });
@@ -375,7 +383,10 @@ test("a peer message delivered into your turn makes the rest of it a suggestion"
 test("your own prompt typed into your own turn keeps it yours", async () => {
   const s = nestedSession();
   await submit(s, "composer");
-  await submit(s, "composer", "and make it a worktree", "turn-1");
+  await submit(s, "composer", {
+    text: "and make it a worktree",
+    turnId: "turn-1",
+  });
   await callAfter(s, TASK);
   assert.equal(initiationOf(s), "user_asked");
 });
