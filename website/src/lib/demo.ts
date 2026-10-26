@@ -25,8 +25,18 @@ export const TICKER: readonly TickerEvent[] = [
   { time: "10:42:48", text: "ADDED UsageFooter.test.tsx +41", tone: "change" },
   { time: "10:43:10", text: "RAN THE TESTS · 43 PASSED", tone: "ok" },
   {
+    time: "10:43:22",
+    text: "STARTED A NESTED SESSION · Fix the flaky date test",
+    tone: "ok",
+  },
+  {
     time: "10:44:02",
     text: "READ ~/.claude/settings.json · OUTSIDE PROJECT",
+    tone: "look",
+  },
+  {
+    time: "10:44:40",
+    text: "WEEKLY LIMIT · RUNS OUT IN ABOUT 9H AT THIS RATE",
     tone: "look",
   },
 ];
@@ -189,22 +199,38 @@ export type SessionState = "WORKING" | "NEEDS YOU" | "DONE";
 export interface DemoSession {
   last: string;
   name: string;
+  /** Started by the session above it, and listed under it. */
+  nested?: boolean;
+  project: string;
   state: SessionState;
+  /** Its task list, as the row shows it: "3/5". */
+  tasks?: string;
 }
 
 export const SESSIONS: readonly DemoSession[] = [
   {
     name: "Show plan limits in footer",
+    project: "orbit-web",
     state: "WORKING",
+    tasks: "3/5",
     last: "RAN THE TESTS · 43 PASSED",
   },
   {
+    name: "Fix the flaky date test",
+    nested: true,
+    project: "orbit-web",
+    state: "WORKING",
+    last: "STARTED BY Show plan limits in footer · ON ITS OWN WORKTREE",
+  },
+  {
     name: "Welcome screen copy",
+    project: "orbit-web",
     state: "NEEDS YOU",
-    last: "WANTS TO RUN npm install",
+    last: "WANTS TO RUN npm install · ANSWER IN ITS TERMINAL",
   },
   {
     name: "Prune old event logs",
+    project: "orbit-api",
     state: "DONE",
     last: "DELETED 2 FILES · src/legacy",
   },

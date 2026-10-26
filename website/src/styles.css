@@ -792,6 +792,10 @@ fieldset {
   animation-delay: 1.7s;
 }
 
+.diff-line:nth-child(6) {
+  animation-delay: 2s;
+}
+
 .diff-sign {
   display: inline-block;
   width: 2ch;
@@ -2113,6 +2117,32 @@ html:not(.js) .fig1 .mini-button {
 
 .status-name {
   flex: 1;
+}
+
+.status-project {
+  padding: 10px 16px 6px;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--muted);
+  letter-spacing: 0.04em;
+  background: var(--ground);
+  border-bottom: 1px solid var(--line);
+}
+
+.status-row[data-nested="true"] {
+  padding-left: 40px;
+}
+
+.status-row[data-nested="true"] .status-name::before {
+  color: var(--muted);
+  content: "↳ ";
+}
+
+.status-tasks {
+  flex: none;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--muted);
 }
 
 .status-state {
