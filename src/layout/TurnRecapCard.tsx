@@ -1,6 +1,7 @@
 import { CircleCheck, MessageCircleQuestion, X } from "lucide-react";
 import { type CSSProperties, useMemo } from "react";
 import { create } from "zustand";
+import { basename } from "../state/actions.ts";
 import { useLayout } from "../state/layout.ts";
 import { useSessions } from "../state/sessions.ts";
 import { recapHeadline, turnRecap } from "../state/turnRecap.ts";
@@ -20,10 +21,6 @@ const useRecapDismissals = create<{
     set((state) => ({ closed: { ...state.closed, [sessionId]: key } })),
   closed: {},
 }));
-
-function basename(path: string): string {
-  return path.slice(path.lastIndexOf("/") + 1) || path;
-}
 
 /**
  * The [Turn recap] card: when the active session's Claude stops, what that

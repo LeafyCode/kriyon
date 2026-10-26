@@ -79,3 +79,7 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
   (`pending | in_progress | completed`), and an optional active-form label. The parser maps both
   tool families onto this one term. _Avoid_: todo, checklist item. NB: distinct from the legacy
   `Task` *tool* that spawns a [Subagent] — that maps to Subagent, never to a Task.
+- **Event digest** — what a run of a session's [Studio event]s did: files changed (each once,
+  in the order first touched), commands run and how many failed, subagents started, and the
+  first line of Claude's last reply. Zero-token. The [Turn recap] and the [Handoff prompt] both
+  read it (`digestEvents`), so they count the same work the same way. _Avoid_: event summary.

@@ -29,7 +29,7 @@ Session diff, File diff, File change, Diff hunk, File kind, Visible files, Diff 
 
 How Kriyon reads what Claude writes: the transcript file, structured events and the screen.
 
-Studio event, Structured view, Work report, Partial reply, Spinner tip, CLI dialog, Structured event, Transcript schema, Drift report, Drift guard, Transcript, Clean copy, Task.
+Studio event, Structured view, Work report, Partial reply, Spinner tip, CLI dialog, Structured event, Transcript schema, Drift report, Drift guard, Transcript, Clean copy, Task, Event digest.
 
 ## [Composer and prompts](docs/context/composer.md)
 

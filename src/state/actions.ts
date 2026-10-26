@@ -107,7 +107,7 @@ export function setDefaultCwd(path: string): void {
 }
 
 /** Last path segment of an absolute path, e.g. `/a/b/c` → `c`. */
-function basename(path: string): string {
+export function basename(path: string): string {
   return path.split("/").filter(Boolean).pop() ?? path;
 }
 
