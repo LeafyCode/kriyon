@@ -900,24 +900,6 @@ function nestedContentStyle(depth: number): CSSProperties {
   };
 }
 
-/** How deep a session sits under the sessions it was started from (0 for
- *  top level); a parent that is closed or archived ends the chain. */
-function useNestDepth(sessionId: string): number {
-  return useSessions((state) => {
-    let depth = 0;
-    let id = state.sessions[sessionId]?.nestedUnder;
-    while (id && depth < 4) {
-      const parent = state.sessions[id];
-      if (!parent || parent.archivedAt !== null) {
-        break;
-      }
-      depth += 1;
-      id = parent.nestedUnder;
-    }
-    return depth;
-  });
-}
-
 /**
  * The row's hover-revealed "⋯" overflow menu: rename, spawn a follow-up,
  * archive, and (for a worktree session) remove the worktree. Extracted from
@@ -1038,6 +1020,9 @@ function SessionActionsMenu({
 interface SessionRowProps {
   /** The sidebar's calm/triage mode; drives the unread-finish "new" badge. */
   mode: SidebarMode;
+  /** How deep it sits under its lead session in this list (the ordering's
+   *  `nestDepth`); 0, the default, is top level. */
+  nestDepth?: number;
   onCloseSession: (id: string) => void;
   onSelect: (id: string) => void;
   sessionId: string;
@@ -1054,6 +1039,7 @@ interface SessionRowProps {
  */
 export const SessionRow = memo(function SessionRow({
   mode,
+  nestDepth = 0,
   onCloseSession,
   onSelect,
   sessionId,
@@ -1093,7 +1079,6 @@ export const SessionRow = memo(function SessionRow({
   );
   const removal = useWorktreeRemoval(sessionId);
   const prewarm = useHoverPrewarm(sessionId);
-  const nestDepth = useNestDepth(sessionId);
   // The two "would this close silently discard something?" signals — see
   // {@link unsentWorkFor}. A blank composer draft or an empty stashed-drafts
   // record both read as "nothing here", same as never having touched them.

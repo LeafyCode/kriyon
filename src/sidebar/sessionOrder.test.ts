@@ -834,23 +834,25 @@ describe("nestRows", () => {
       c: nested("c", "a"),
       d: nested("d", "c"),
     };
-    expect(nestRows(["c", "b", "a", "d"], sessions)).toEqual([
-      "b",
-      "a",
-      "c",
-      "d",
-    ]);
+    expect(nestRows(["c", "b", "a", "d"], sessions)).toEqual({
+      depth: { c: 1, d: 2 },
+      rows: ["b", "a", "c", "d"],
+    });
   });
 
   it("keeps a nested session in place when its parent isn't listed", () => {
     const sessions = { a: nested("a", "gone"), b: nested("b", null) };
-    expect(nestRows(["a", "b"], sessions)).toEqual(["a", "b"]);
+    // Its lead is folded, filtered out or closed: not nested, not indented.
+    expect(nestRows(["a", "b"], sessions)).toEqual({
+      depth: {},
+      rows: ["a", "b"],
+    });
   });
 
   it("returns the same array when nothing is nested", () => {
     const rows = ["a", "b"];
-    expect(nestRows(rows, { a: nested("a", null), b: nested("b", null) })).toBe(
-      rows
-    );
+    expect(
+      nestRows(rows, { a: nested("a", null), b: nested("b", null) }).rows
+    ).toBe(rows);
   });
 });

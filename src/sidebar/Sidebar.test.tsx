@@ -3023,3 +3023,36 @@ test("a row says when Claude suggested a session from it", () => {
   );
   useSessionProposals.setState({ proposals: [] });
 });
+
+test("a nested session whose lead is filtered out isn't drawn indented", () => {
+  seed();
+  useSessions.getState().addSession({
+    archivedAt: null,
+    baselineOid: null,
+    claudeSessionId: null,
+    createdAt: 4,
+    cwd: "",
+    id: "s4",
+    nestedUnder: "s1",
+    projectId: "p1",
+    status: "running",
+    summary: "",
+    title: "Nested One",
+    titleLocked: false,
+    worktreePath: null,
+  });
+  render(
+    <Sidebar
+      onCloseSession={vi.fn()}
+      onNewSession={vi.fn()}
+      onShowAbout={vi.fn()}
+    />
+  );
+  fireEvent.change(screen.getByLabelText("Filter sessions"), {
+    target: { value: "Nested" },
+  });
+  const nestedRow = screen
+    .getAllByTestId("session-row")
+    .find((row) => row.textContent?.includes("Nested One"));
+  expect(nestedRow?.querySelector("[data-nest-depth='0']")).not.toBeNull();
+});

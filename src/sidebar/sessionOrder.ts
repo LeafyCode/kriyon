@@ -197,6 +197,16 @@ export interface OrderedSessions {
   rows: string[];
 }
 
+/** A project's ordered rows as the sidebar draws them: {@link OrderedSessions}
+ *  with each [Nested session] placed under its lead session, and how deep it
+ *  sits there. */
+export interface MatchedSessions extends OrderedSessions {
+  /** Depth under its lead session for each row {@link nestRows} placed under
+   *  one; absent means top level. The row's indent reads this, so a row is
+   *  drawn nested exactly when it was placed nested. */
+  nestDepth: Record<string, number>;
+}
+
 /** Stable empty manual order — callers pass this when a project has none, so
  *  the memo cache's identity guard sees one unchanged value. */
 export const EMPTY_ORDER: string[] = [];
@@ -465,7 +475,7 @@ function computeMatched(
   sort: SessionSort,
   manual: string[],
   hide: HideInputs
-): OrderedSessions {
+): MatchedSessions {
   const list = Object.values(input.sessions).filter(
     (session) =>
       session.projectId === project.id &&
@@ -485,64 +495,74 @@ function computeMatched(
     hide.threshold,
     hide.now
   );
+  const nested = nestRows(rows, input.sessions);
   return {
     collapsedDone: ordered.collapsedDone,
     collapsedOld,
-    rows: nestRows(rows, input.sessions),
+    nestDepth: nested.depth,
+    rows: nested.rows,
   };
 }
 
+/** No row nested: one shared object, so the memo's result stays stable. */
+const NO_NESTING: Record<string, number> = {};
+
 /**
  * `rows` with every [Nested session] moved to just under the session it was
- * started from, its own nested ones under it, in their listed order. One
- * whose parent isn't listed (closed, folded, another project) keeps its
- * place. The same array back when nothing moves.
+ * started from, its own nested ones under it, in their listed order, and the
+ * depth each moved row sits at. One whose lead session isn't listed (closed,
+ * folded, filtered out, another project) keeps its place at the top level.
+ * The same array back when nothing moves.
  */
 export function nestRows(
   rows: string[],
   sessions: Record<string, UiSession>
-): string[] {
+): { depth: Record<string, number>; rows: string[] } {
   const listed = new Set(rows);
   const children = new Map<string, string[]>();
   for (const id of rows) {
-    const parent = sessions[id]?.nestedUnder;
-    if (parent && parent !== id && listed.has(parent)) {
-      children.set(parent, [...(children.get(parent) ?? []), id]);
+    const lead = sessions[id]?.nestedUnder;
+    if (lead && lead !== id && listed.has(lead)) {
+      children.set(lead, [...(children.get(lead) ?? []), id]);
     }
   }
   if (children.size === 0) {
-    return rows;
+    return { depth: NO_NESTING, rows };
   }
   const nestedIds = new Set([...children.values()].flat());
   const out: string[] = [];
+  const depth: Record<string, number> = {};
   const placed = new Set<string>();
-  const place = (id: string) => {
+  const place = (id: string, level: number) => {
     if (placed.has(id)) {
       return;
     }
     placed.add(id);
     out.push(id);
+    if (level > 0) {
+      depth[id] = level;
+    }
     for (const child of children.get(id) ?? []) {
-      place(child);
+      place(child, level + 1);
     }
   };
   for (const id of rows) {
     if (!nestedIds.has(id)) {
-      place(id);
+      place(id, 0);
     }
   }
   // A cycle (a under b under a) has no top: list what's left as it came.
   for (const id of rows) {
-    place(id);
+    place(id, 0);
   }
-  return out;
+  return { depth, rows: out };
 }
 
 interface OrderCacheEntry {
   appendSeq: Record<string, number>;
   lastChangeMs: Record<string, number>;
   manual: string[];
-  result: OrderedSessions;
+  result: MatchedSessions;
   statusOrigin: Record<string, "seeded" | "live">;
   viewed: Record<string, ViewedMarker>;
 }
@@ -579,7 +599,7 @@ export function orderMatched(
   sort: SessionSort,
   manual: string[],
   hide: HideInputs
-): OrderedSessions {
+): MatchedSessions {
   let byKey = orderCache.get(input.sessions);
   if (!byKey) {
     byKey = new Map<string, OrderCacheEntry>();
