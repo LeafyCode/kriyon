@@ -186,6 +186,15 @@ describe("limitPace", () => {
     ).toBeNull();
   });
 
+  it("says nothing about a window that has already run out", () => {
+    const pace = limitPace(
+      [{ atMs: now - 30 * MIN, usedPercentage: 90 }],
+      { resetsAt: resetsIn(HOUR), usedPercentage: 100 },
+      now
+    );
+    expect(pace).toBeNull();
+  });
+
   it("reads the rate over the last hour only", () => {
     const pace = limitPace(
       [

@@ -147,6 +147,10 @@ export function limitPace(
   window: LimitWindow,
   nowMs: number
 ): { runsOutInMs: number } | null {
+  // A window at 100% has run out: the limit alert says so, not a forecast.
+  if (window.usedPercentage >= 100) {
+    return null;
+  }
   const first = samples.find((s) => s.atMs >= nowMs - PACE_LOOKBACK_MS);
   if (!first) {
     return null;
