@@ -169,7 +169,7 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
 - **Task progress** — how far a Session's [Task] list has got: done and total ("3/7"), the
   current item (the in-progress task's active form, else the next pending task) and whether
   every task is done. One derivation (`taskProgress`) that the sidebar row, the [Task strip]
-  and the menu bar share. Shown only while the list is open. _Avoid_: todo count.
+  and the [Turn recap] share. Shown only while the list is open. _Avoid_: todo count.
 - **Task strip** — the one-line [Task progress] bar pinned between the session header and
   the terminal: count, a thin bar and the current item, unfolding to the whole list. Gone
   while there is no list and once every task is done. _Avoid_: todo bar, checklist header.

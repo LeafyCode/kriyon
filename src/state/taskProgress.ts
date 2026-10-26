@@ -2,7 +2,7 @@ import type { Task } from "../types.ts";
 
 /**
  * How far a session's [Task] list has got, as the sidebar row, the task strip
- * above the terminal and the menu bar show it. One derivation, so the three
+ * above the terminal and the turn recap show it. One derivation, so the three
  * can never disagree about "3/7" or which item is current.
  */
 export interface TaskProgress {
