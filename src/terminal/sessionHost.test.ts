@@ -524,6 +524,21 @@ test("a nested session starts under its own id, told where to report", async () 
   disposeSession("s1");
 });
 
+test("a nested session with no task still starts under its own id, told where to report", async () => {
+  ensureSession("s1", "/work", noop);
+  await launchClaudeOnce("s1", null, undefined, {
+    from: "child-uuid",
+    to: "lead-uuid",
+  });
+  expect(mockedWriteStdin).toHaveBeenCalledWith(
+    "s1",
+    new TextEncoder().encode(
+      "KRIYON_REPORT_TO=lead-uuid KRIYON_REPORT_FROM=child-uuid claude --session-id child-uuid\r"
+    )
+  );
+  disposeSession("s1");
+});
+
 test("a report address that isn't a bare id is never typed", async () => {
   ensureSession("s1", "/work", noop);
   await launchClaudeOnce("s1", null, "Fix it", {

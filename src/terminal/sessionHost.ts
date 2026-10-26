@@ -415,11 +415,11 @@ export async function launchClaudeOnce(
     } else {
       // The seed file write failed: the user's first prompt is gone. Launch a
       // usable session anyway and let the caller surface the loss.
-      command = "claude\r";
+      command = `${nestedLaunch(report)}claude${nestedFlags(report)}\r`;
       seedDropped = true;
     }
   } else {
-    command = "claude\r";
+    command = `${nestedLaunch(report)}claude${nestedFlags(report)}\r`;
   }
 
   let wrote = true;
