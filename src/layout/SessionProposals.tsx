@@ -2,6 +2,7 @@ import { type CSSProperties, useState } from "react";
 import {
   type SessionProposal,
   startNestedSession,
+  startProblem,
   useSessionProposals,
 } from "../state/nestedSessions.ts";
 import { useSessions } from "../state/sessions.ts";
@@ -46,15 +47,17 @@ function ProposalCard({ proposal }: { proposal: SessionProposal }) {
       { focus: false }
     );
     setBusy(false);
-    if (!result.ok) {
-      showToast(
-        `Could not start “${request.title}”: ${result.error ?? "unknown error"}`,
-        "error"
-      );
+    const problem = startProblem(result);
+    if (!result.ok && result.bootstrap === null) {
+      // Nothing was created: keep the card so they can try again.
+      showToast(`“${request.title}”: ${problem}`, "error");
       return;
     }
     dismiss();
-    showToast(`Started “${request.title}”`, "success");
+    showToast(
+      problem ? `“${request.title}”: ${problem}` : `Started “${request.title}”`,
+      problem ? "error" : "success"
+    );
   };
   return (
     <section

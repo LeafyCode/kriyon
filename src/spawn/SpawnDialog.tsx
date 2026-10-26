@@ -5,7 +5,7 @@ import {
   pickDirectory,
   worktreePathFor,
 } from "../ipc/bridge.ts";
-import { spawnFollowUpSession } from "../state/actions.ts";
+import { type SpawnResult, spawnFollowUpSession } from "../state/actions.ts";
 import { detectCollision } from "../state/collision.ts";
 import { startNestedSession } from "../state/nestedSessions.ts";
 import {
@@ -338,7 +338,7 @@ function splitOff(
   lead: UiSession,
   prompt: string,
   worktree: { branch: string; path: string | undefined; use: boolean }
-): Promise<{ error: string | null; ok: boolean }> {
+): Promise<SpawnResult> {
   return startNestedSession(
     lead.id,
     {
@@ -498,7 +498,7 @@ export function SpawnDialog() {
         use: useWorktree,
       });
       setBusy(false);
-      applyResult({ bootstrap: null, ...nested });
+      applyResult(nested);
       return;
     }
     const result = await spawnFollowUpSession({

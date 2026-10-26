@@ -1,14 +1,12 @@
 import { create } from "zustand";
-import {
-  bootstrapWorktree,
-  createWorktree,
-  nestedOutcome,
-  takeSessionRequests,
-  worktreePathFor,
-} from "../ipc/bridge.ts";
+import { nestedOutcome, takeSessionRequests } from "../ipc/bridge.ts";
 import type { NestedRequest, SessionRequest } from "../types.ts";
 import { showToast } from "../ui/Toast.tsx";
-import { createSession } from "./actions.ts";
+import {
+  createSession,
+  createWorktreeSession,
+  type SpawnResult,
+} from "./actions.ts";
 import { nestedCapCount, useLayout } from "./layout.ts";
 import { useSessions } from "./sessions.ts";
 
@@ -70,58 +68,57 @@ export function branchForTitle(title: string, suffix: string): string {
  * lead when the lead session's Claude session id is known. `focus: false` opens
  * it in the background, which is how a session Claude started arrives.
  */
-export async function startNestedSession(
+export function startNestedSession(
   leadId: string,
   request: Pick<SessionRequest, "branch" | "prompt" | "title" | "worktree"> & {
     /** Where the worktree goes, when the person chose; else beside the repo. */
     worktreePath?: string;
   },
   options: { focus: boolean }
-): Promise<{ error: string | null; ok: boolean }> {
+): Promise<SpawnResult> {
   const state = useSessions.getState();
   const lead = state.sessions[leadId];
   const project = lead
     ? state.projects.find((p) => p.id === lead.projectId)
     : undefined;
   if (!(lead && project)) {
-    return { error: "The session that asked is gone.", ok: false };
+    return Promise.resolve({
+      bootstrap: null,
+      error: "The session that asked is gone.",
+      ok: false,
+    });
   }
   const report = lead.claudeSessionId
     ? { from: crypto.randomUUID(), to: lead.claudeSessionId }
     : undefined;
-  const base = {
+  const opts = {
     focus: options.focus,
     nestedUnder: lead.id,
     report,
     seedPrompt: request.prompt,
   };
   if (!request.worktree) {
-    createSession(project, lead.worktreePath ?? lead.cwd, request.title, base);
-    return { error: null, ok: true };
+    createSession(project, lead.worktreePath ?? lead.cwd, request.title, opts);
+    return Promise.resolve({ bootstrap: null, error: null, ok: true });
   }
-  try {
-    const branch =
-      request.branch ??
-      branchForTitle(request.title, crypto.randomUUID().slice(0, 4));
-    const path =
-      request.worktreePath ?? (await worktreePathFor(project.path, branch));
-    await createWorktree(project.path, branch, path);
-    const bootstrap = await bootstrapWorktree(
-      project.path,
-      path,
-      project.setupCommand
-    );
-    createSession(project, path, request.title, {
-      ...base,
-      worktreePath: path,
-    });
-    return {
-      error: bootstrap.ok ? null : "The worktree's setup step failed.",
-      ok: true,
-    };
-  } catch (e) {
-    return { error: e instanceof Error ? e.message : String(e), ok: false };
+  const branch =
+    request.branch ??
+    branchForTitle(request.title, crypto.randomUUID().slice(0, 4));
+  return createWorktreeSession(
+    project,
+    { branch, path: request.worktreePath },
+    request.title,
+    opts
+  );
+}
+
+/** What went wrong starting one, for a toast; `null` when nothing did. A
+ *  failed setup step still started the session. */
+export function startProblem(result: SpawnResult): string | null {
+  if (result.bootstrap && !result.bootstrap.ok) {
+    return "it started, but the worktree's setup step failed";
   }
+  return result.ok ? null : (result.error ?? "unknown error");
 }
 
 /**
@@ -155,11 +152,11 @@ async function handleOne({
     useSessionProposals.getState().add({ leadSessionId, request });
     return;
   }
-  const result = await startNestedSession(leadSessionId, request, {
-    focus: false,
-  });
-  if (result.error) {
-    showToast(`Could not start “${request.title}”: ${result.error}`, "error");
+  const problem = startProblem(
+    await startNestedSession(leadSessionId, request, { focus: false })
+  );
+  if (problem) {
+    showToast(`“${request.title}”: ${problem}`, "error");
   }
 }
 

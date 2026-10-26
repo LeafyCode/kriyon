@@ -288,3 +288,28 @@ test("split off starts an empty task and nests the new session under this one", 
   expect(created?.parentSessionId ?? null).toBeNull();
   expect(created?.title).toBe("Write the release notes");
 });
+
+test("a split off whose worktree setup fails shows the failure instead of closing", async () => {
+  vi.mocked(bootstrapWorktree).mockResolvedValueOnce({
+    ok: false,
+    output: "install failed: boom",
+    steps: [{ label: "install (pnpm install)", ok: false }],
+  });
+  useUi.getState().openSpawn({ predecessorId: "pre" }, { nest: true });
+  render(<SpawnDialog />);
+  fireEvent.change(screen.getByTestId("spawn-prompt"), {
+    target: { value: "Write the docs" },
+  });
+  fireEvent.click(screen.getByTestId("spawn-mode-worktree"));
+  fireEvent.change(screen.getByTestId("spawn-branch"), {
+    target: { value: "wt/docs" },
+  });
+  fireEvent.click(screen.getByTestId("spawn-confirm"));
+  await waitFor(() => {
+    expect(screen.getByTestId("spawn-confirm").textContent).toBe("Close");
+  });
+  expect(useUi.getState().spawnOpen).toBe(true);
+  expect(screen.getByTestId("spawn-dialog").textContent).toContain(
+    "install failed"
+  );
+});

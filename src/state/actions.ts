@@ -354,18 +354,13 @@ export async function startNewSession(): Promise<void> {
  * directory (or the project root when there is none). Returns the bootstrap
  * report (if any) so the UI can surface a failed setup.
  */
-export async function spawnFollowUpSession(args: {
+export function spawnFollowUpSession(args: {
   predecessor?: UiSession;
   project: ProjectRow;
   promptText: string;
   worktree: { branch: string; path?: string } | null;
-}): Promise<{
-  bootstrap: BootstrapReport | null;
-  error: string | null;
-  ok: boolean;
-}> {
+}): Promise<SpawnResult> {
   const { predecessor, project, promptText, worktree } = args;
-  const repoRoot = project.path;
   let title = project.name;
   if (worktree) {
     title = worktree.branch;
@@ -378,9 +373,37 @@ export async function spawnFollowUpSession(args: {
       parentSessionId: predecessor?.id,
       seedPrompt: promptText,
     });
-    return { bootstrap: null, error: null, ok: true };
+    return Promise.resolve({ bootstrap: null, error: null, ok: true });
   }
 
+  return createWorktreeSession(project, worktree, title, {
+    parentSessionId: predecessor?.id,
+    seedPrompt: promptText,
+  });
+}
+
+/** What starting a session reports: a failed setup step still made the
+ *  worktree and the session (`ok: false` with the `bootstrap` report), while
+ *  `error` without a report means nothing was created. */
+export interface SpawnResult {
+  bootstrap: BootstrapReport | null;
+  error: string | null;
+  ok: boolean;
+}
+
+/**
+ * Make a fresh [Worktree] of `project` on `worktree.branch` (at the chosen
+ * path, or the sibling one the Rust core picks), run its [Worktree
+ * bootstrap], then start a session in it. The one worktree intake, shared by
+ * follow-ups and [Nested session]s.
+ */
+export async function createWorktreeSession(
+  project: ProjectRow,
+  worktree: { branch: string; path?: string },
+  title: string,
+  opts: Omit<NonNullable<Parameters<typeof createSession>[3]>, "worktreePath">
+): Promise<SpawnResult> {
+  const repoRoot = project.path;
   try {
     // Use the caller's chosen location when given; otherwise the default
     // sibling path (`<repo>-worktrees/<branch>`) resolved by the Rust core.
@@ -392,11 +415,7 @@ export async function spawnFollowUpSession(args: {
       path,
       project.setupCommand
     );
-    createSession(project, path, title, {
-      parentSessionId: predecessor?.id,
-      seedPrompt: promptText,
-      worktreePath: path,
-    });
+    createSession(project, path, title, { ...opts, worktreePath: path });
     return { bootstrap, error: null, ok: bootstrap.ok };
   } catch (e) {
     return {

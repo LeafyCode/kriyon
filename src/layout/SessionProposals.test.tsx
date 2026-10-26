@@ -3,7 +3,9 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 vi.mock("../state/nestedSessions.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../state/nestedSessions.ts")>()),
-  startNestedSession: vi.fn(() => Promise.resolve({ error: null, ok: true })),
+  startNestedSession: vi.fn(() =>
+    Promise.resolve({ bootstrap: null, error: null, ok: true })
+  ),
 }));
 vi.mock("../ui/Toast.tsx", () => ({ showToast: vi.fn() }));
 
@@ -13,6 +15,7 @@ import {
 } from "../state/nestedSessions.ts";
 import { useSessions } from "../state/sessions.ts";
 import type { SessionRequest } from "../types.ts";
+import { showToast } from "../ui/Toast.tsx";
 import { SessionProposals } from "./SessionProposals.tsx";
 
 const REQUEST: SessionRequest = {
@@ -80,4 +83,21 @@ test("a session you asked for that hit your limit says so, not that Claude sugge
     "You asked for this session · held back by your limit on busy sessions"
   );
   expect(card).not.toHaveTextContent("Claude suggests");
+});
+
+test("a suggestion that starts but whose worktree setup fails says so", async () => {
+  vi.mocked(startNestedSession).mockResolvedValueOnce({
+    bootstrap: { ok: false, output: "boom", steps: [] },
+    error: null,
+    ok: false,
+  });
+  render(<SessionProposals />);
+  fireEvent.click(screen.getByRole("button", { name: "Start session" }));
+  await vi.waitFor(() =>
+    expect(showToast).toHaveBeenCalledWith(
+      "“Changelog”: it started, but the worktree's setup step failed",
+      "error"
+    )
+  );
+  expect(useSessionProposals.getState().proposals).toEqual([]);
 });
