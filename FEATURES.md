@@ -78,7 +78,7 @@ _Current as of v0.9.0. Every entry here is shipped and reflected in `CHANGELOG.m
 - **A session can start sessions** — ask Claude to split work off and it starts a real session beside this one, listed under it in the sidebar, in the same folder or on its own worktree. You can open and steer it like any session.
 - **Only your own words start one** — a session starts at once only when the prompt you typed (or sent from your phone) to start that turn asks for a session. Claude's own idea, another session's message or a scheduled run becomes a "Claude suggests a session" card that starts nothing until you press Start.
 - **A cap you set** — once as many sessions as you choose in Settings (default 4) are working, waiting on you or starting, a request becomes a suggestion instead.
-- **Reports back** — when a nested session's first task ends, it sends its reply to the session that started it.
+- **Reports back** — when a nested session's first task ends, it sends its reply to the session that started it. (A session split off before its lead session's Claude has started has nowhere to report to, so it doesn't.)
 - **Split off by hand** — "Split off a session…" in a session's menu starts one yourself.
 
 ## Knowing what needs you
