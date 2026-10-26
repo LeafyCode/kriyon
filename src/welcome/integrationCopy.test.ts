@@ -54,6 +54,10 @@ test("the companion hint says what it sees and what it never does", () => {
   expect(hint).toContain("only to Kriyon on this Mac");
   expect(hint).toContain("never approves, blocks or changes anything");
   // Nested sessions spend plan use, so the hint says when one starts.
-  expect(hint).toContain("only when you asked for it in your own words");
+  expect(hint).toContain("only when you asked for one in your own words");
+  // It also sends something to another session, so it says so.
+  expect(hint).toContain(
+    "sends its first reply to the session that started it"
+  );
   expect(companionHint(false)).toContain("per-session plugin");
 });
