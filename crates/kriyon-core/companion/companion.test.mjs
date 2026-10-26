@@ -379,3 +379,38 @@ test("your own prompt typed into your own turn keeps it yours", async () => {
   await callAfter(s, TASK);
   assert.equal(initiationOf(s), "user_asked");
 });
+
+const STOPPED_ERROR = /stopped \(error\)/;
+const MATCH_MAIN = /main/;
+
+test("a nested session whose first turn ends badly reports that it stopped", async () => {
+  const fresh = await freshHandlers("stopped");
+  const s = nestedSession({
+    KRIYON_REPORT_FROM: "child-conv",
+    KRIYON_REPORT_TO: "lead-conv",
+  });
+  await fresh.get("turn.complete")(s.$, { reason: "error" }, async () => ({
+    text: "API error",
+  }));
+  await s.settle();
+  assert.equal(s.sent.length, 1);
+  assert.match(s.sent[0].text, STOPPED_ERROR);
+});
+
+test("a subagent's turn ending neither reports nor uses up the one report", async () => {
+  const fresh = await freshHandlers("subagent");
+  const s = nestedSession({
+    KRIYON_REPORT_FROM: "child-conv",
+    KRIYON_REPORT_TO: "lead-conv",
+  });
+  const complete = fresh.get("turn.complete");
+  await complete(s.$, { agentId: "a1", reason: "answer" }, async () => ({
+    text: "sub",
+  }));
+  await s.settle();
+  assert.equal(s.sent.length, 0);
+  await complete(s.$, { reason: "answer" }, async () => ({ text: "main" }));
+  await s.settle();
+  assert.equal(s.sent.length, 1);
+  assert.match(s.sent[0].text, MATCH_MAIN);
+});

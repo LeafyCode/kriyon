@@ -770,3 +770,12 @@ test("parseLayout keeps the chosen mascot and hue, falling back to a cobalt Viso
     parseLayoutForTest(JSON.stringify({ mascotHue: "plaid" }))?.mascotHue
   ).toBe("cobalt");
 });
+
+test("the nested session cap survives a save, defaults to 4 and drops a bad value", () => {
+  const saved = (cap: unknown) => JSON.stringify({ nestedSessionCap: cap });
+  expect(parseLayoutForTest(saved("off"))?.nestedSessionCap).toBe("off");
+  expect(parseLayoutForTest(saved("6"))?.nestedSessionCap).toBe("6");
+  // A layout saved before the setting existed, or a value no build wrote.
+  expect(parseLayoutForTest(JSON.stringify({}))?.nestedSessionCap).toBe("4");
+  expect(parseLayoutForTest(saved(9))?.nestedSessionCap).toBe("4");
+});
