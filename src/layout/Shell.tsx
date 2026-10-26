@@ -29,6 +29,7 @@ import { SessionHeader } from "./SessionHeader.tsx";
 import { SessionProposals } from "./SessionProposals.tsx";
 import { TaskStrip } from "./TaskStrip.tsx";
 import { TerminalDock } from "./TerminalDock.tsx";
+import { TurnRecapCard } from "./TurnRecapCard.tsx";
 
 export interface ShellProps {
   children: ReactNode;
@@ -158,6 +159,7 @@ function SessionBody({
       <div style={centerStyle}>
         <SessionHeader />
         <SessionProposals />
+        <TurnRecapCard />
         <TaskStrip />
         <div
           style={

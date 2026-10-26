@@ -47,7 +47,7 @@ Status, Hooks off, Integration, Integration prefs, Hook route, Companion folder,
 
 What a session is doing right now, when it needs the user, and how Kriyon tells them.
 
-Session engagement, Subagent, Background shell, Main turn, Waiting for, In-flight work, Background agent, Session activity, Session activity projection, Main agent, Tool activity, Current tool, Agent id / Agent type, Settle, Command center, Session standing, Standing state, Needs-you rail, Pending ask, Viewed marker, Needs-you section, Needs-you overlay, Standing staleness, Session heartbeat, Notify preference, Notify sound, Notification kind, Notification content, Notification plan, Settle window, Pty-quiet confirm, Task progress, Task strip.
+Session engagement, Subagent, Background shell, Main turn, Waiting for, In-flight work, Background agent, Session activity, Session activity projection, Main agent, Tool activity, Current tool, Agent id / Agent type, Settle, Command center, Session standing, Standing state, Needs-you rail, Pending ask, Viewed marker, Needs-you section, Needs-you overlay, Standing staleness, Session heartbeat, Notify preference, Notify sound, Notification kind, Notification content, Notification plan, Settle window, Pty-quiet confirm, Task progress, Task strip, Turn recap.
 
 ## [App runtime, resources and usage](docs/context/runtime.md)
 
