@@ -663,8 +663,8 @@ export function SettingsView() {
                 value={nestedSessionCap}
               />
             }
-            hint="When you ask Claude to start a session and this many are already running, Kriyon shows it as a suggestion you start yourself, so parallel work can't run through your plan unseen."
-            label="Most running at once"
+            hint="When you ask Claude to start a session and this many sessions are already working, waiting on you or starting, Kriyon shows it as a suggestion you start yourself instead."
+            label="Most busy at once"
           />
         </SettingGroup>
 

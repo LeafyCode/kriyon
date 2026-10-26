@@ -202,7 +202,33 @@ describe("handleSessionRequests", () => {
 
   it("drops a request from a session that no longer exists", async () => {
     await deliver([{ leadSessionId: "gone", request: REQUEST }]);
+    expect(nestedOutcome).not.toHaveBeenCalled();
     expect(useSessionProposals.getState().proposals).toEqual([]);
+  });
+
+  it("two asked-for requests in one batch count each other against the cap", async () => {
+    useLayout.getState().setNestedSessionCap("2");
+    await deliver([
+      { leadSessionId: "lead", request: { ...REQUEST, requestId: "a" } },
+      { leadSessionId: "lead", request: { ...REQUEST, requestId: "b" } },
+      { leadSessionId: "lead", request: { ...REQUEST, requestId: "c" } },
+    ]);
+    // The first starts and is booting, then the second: the third is over.
+    expect(vi.mocked(nestedOutcome).mock.calls.map((c) => c[1])).toEqual([
+      0, 1, 2,
+    ]);
+    expect(
+      useSessionProposals.getState().proposals.map((p) => p.request.requestId)
+    ).toEqual(["c"]);
+  });
+
+  it("one request that fails doesn't stop the ones after it", async () => {
+    vi.mocked(nestedOutcome).mockRejectedValueOnce(new Error("ipc down"));
+    await deliver([
+      { leadSessionId: "lead", request: { ...REQUEST, requestId: "a" } },
+    ]);
+    await deliver([{ leadSessionId: "lead", request: REQUEST }]);
+    expect(child()).toBeDefined();
   });
 
   it("a dismissed suggestion leaves the list", () => {

@@ -123,8 +123,9 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
   past the [Nested session cap]. Shown as a card under the lead session's header ("Claude
   suggests a session"), with Start session and Not now. In memory only. _Avoid_: suggestion
   card, pending session.
-- **Nested session cap** — the most sessions that may be running before a requested session
-  becomes a [Session proposal] instead of starting (Settings, default 4, or no cap). _Avoid_:
-  concurrency limit.
+- **Nested session cap** — the most sessions that may be busy (working, waiting on the person,
+  or still starting) before a requested session becomes a [Session proposal] instead of
+  starting (Settings, default 4, or no cap). A session counts from the moment Kriyon starts it,
+  so requests arriving together count each other. _Avoid_: concurrency limit.
 - **Split off** — the sidebar menu action that starts a [Nested session] by hand from the
   [Spawn dialog], with an empty task. _Avoid_: fork, branch off.

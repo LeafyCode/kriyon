@@ -124,10 +124,20 @@ export async function startNestedSession(
   }
 }
 
-/** Sessions working right now, across every project. */
-function runningCount(): number {
-  return Object.values(useSessions.getState().sessions).filter(
-    (s) => s.status === "running" && s.archivedAt === null
+/**
+ * Sessions counted against the [Nested session cap]: working, waiting on the
+ * person mid-task, or still starting. A session started a moment ago is
+ * idle until its first prompt lands, so the boot counts too: otherwise every
+ * request in one batch would see the same number and all start.
+ */
+function busyCount(): number {
+  const { bootPhase, sessions } = useSessions.getState();
+  return Object.values(sessions).filter(
+    (s) =>
+      s.archivedAt === null &&
+      (s.status === "running" ||
+        s.status === "waiting" ||
+        bootPhase[s.id] === "booting")
   ).length;
 }
 
@@ -140,7 +150,7 @@ async function handleOne({
     return;
   }
   const cap = nestedCapCount(useLayout.getState().layout.nestedSessionCap);
-  const outcome = await nestedOutcome(request.initiation, runningCount(), cap);
+  const outcome = await nestedOutcome(request.initiation, busyCount(), cap);
   if (outcome === "propose") {
     useSessionProposals.getState().add({ leadSessionId, request });
     return;
@@ -183,8 +193,16 @@ export function handleSessionRequests(): Promise<void> {
       // The store couldn't be read; the next post asks again.
     }
     for (const request of requests) {
-      // biome-ignore lint/performance/noAwaitInLoops: in order, each counted.
-      await handleOne(request);
+      try {
+        // biome-ignore lint/performance/noAwaitInLoops: in order, each counted.
+        await handleOne(request);
+      } catch (e) {
+        // One failed request must not stop the queue for the rest of the run.
+        showToast(
+          `Could not start “${request.request.title}”: ${e instanceof Error ? e.message : String(e)}`,
+          "error"
+        );
+      }
     }
   });
   return draining;

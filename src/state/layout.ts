@@ -22,8 +22,9 @@ export type HideOlderThan = "off" | "1h" | "6h" | "1d" | "3d" | "1w";
 /** How long a session must sit idle before it is slept. `off` never sleeps. */
 export type AutoSleepAfter = "off" | "1h" | "3h" | "6h";
 
-/** The [Nested session cap]: how many sessions may be running before one
- *  Claude asks to start is shown as a suggestion instead. */
+/** The [Nested session cap]: how many sessions may be busy (working,
+ *  waiting or starting) before one Claude asks to start is shown as a
+ *  suggestion instead. */
 export type NestedSessionCap = "off" | "2" | "4" | "6";
 
 /** The cap as a number, or `null` when there is none. */

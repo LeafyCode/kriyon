@@ -198,6 +198,9 @@ export function createSession(
     // a shown session never runs for it.
     state.warmSession(id);
     persistThenWarm(project, row);
+    // Booting from now, not from when the pty is up: the [Nested session cap]
+    // counts a boot, and a second request in the same batch must see this one.
+    beginBoot(id);
     ignore(launchActiveSession(id));
     captureBaselineFor(id, cwd);
     return id;
