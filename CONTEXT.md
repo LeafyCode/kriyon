@@ -53,7 +53,7 @@ Session engagement, Subagent, Background shell, Main turn, Waiting for, In-fligh
 
 Boot, the per-session runtime, memory and process limits, usage numbers, stopping processes, and updates.
 
-Boot phase, Main session lock, Session runtime, Watch route, Event subscription helper, Status-line, Usage snapshot, Plan limits, Limit reading, Session footprint, Memory budget, Session resources, Resource sweep, Process tree, Sleeping session, Sleep ledger, Usage card, Plan limits view, Session usage view, Tree stop, Surveyor, Process survey, Stop target, Signal gate, Handover, Quit intent, Daemon adoption, Orphan daemon, Detached lease, Stop cost, SWR resource, AppKit exception guard, Update channel, Update feed, Channel step-down, Skipped version.
+Boot phase, Main session lock, Session runtime, Watch route, Event subscription helper, Status-line, Usage snapshot, Plan limits, Limit reading, Session footprint, Memory budget, Session resources, Resource sweep, Process tree, Sleeping session, Sleep ledger, Usage card, Plan limits view, Session usage view, Tree stop, Surveyor, Process survey, Stop target, Signal gate, Handover, Quit intent, Daemon adoption, Orphan daemon, Detached lease, Stop cost, SWR resource, AppKit exception guard, Update channel, Update feed, Channel step-down, Skipped version, Boot time, Pty prewarm.
 
 ## [App shell and look](docs/context/ui.md)
 

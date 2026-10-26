@@ -178,3 +178,11 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
   (too broad: the feed can never downgrade within a channel), rollback.
 - **Skipped version** — the one version "Skip this version" hides from quiet update checks. "Check
   now" still shows it, and any newer version is offered as usual. Kept in Rust's `UpdatePrefs`.
+- **Boot time** — how long one session took from Kriyon launching or resuming `claude` (the
+  [Boot phase] entering `booting`) to the session going live (its `SessionStart` hook). Kept
+  per session for this run only and shown in the Inspector as "Start time". A reading, not a
+  record. _Avoid_: startup latency, TTFT.
+- **Pty prewarm** — opening a session's pty and shell when the pointer rests on its sidebar row
+  (150 ms) while its pane isn't mounted, so a click only has `claude` left to start. Never
+  launches `claude` and never reports a failure; the activation that follows retries.
+  _Avoid_: preload, warm start (a [Warm pane] is a different thing).

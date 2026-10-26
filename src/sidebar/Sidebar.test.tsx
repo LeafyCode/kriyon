@@ -26,11 +26,18 @@ vi.mock("../ipc/bridge.ts", async (importOriginal) => {
   };
 });
 
+// Only the hover prewarm is stubbed: it would open a real pty.
+vi.mock("../state/actions.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../state/actions.ts")>()),
+  prewarmSession: vi.fn(() => Promise.resolve()),
+}));
+
 import {
   activityDeleteSession,
   removeWorktree,
   repoStatus,
 } from "../ipc/bridge.ts";
+import { prewarmSession } from "../state/actions.ts";
 import { useChanges } from "../state/changes.ts";
 import { useDrafts } from "../state/drafts.ts";
 import { DEFAULT_LAYOUT, useLayout } from "../state/layout.ts";
@@ -41,7 +48,7 @@ import { themeById } from "../theme/themes/index.ts";
 import { tokens } from "../theme/tokens.ts";
 import type { ProjectRow, TaskStatus } from "../types.ts";
 import { Toast } from "../ui/Toast.tsx";
-import { SessionRow } from "./SessionRow.tsx";
+import { PREWARM_DWELL_MS, SessionRow } from "./SessionRow.tsx";
 import { Sidebar } from "./Sidebar.tsx";
 
 /** The rail's empty-state copy, as one top-level matcher. */
@@ -2937,4 +2944,22 @@ test("a row without Claude's context reading shows no context chip", () => {
   });
   renderRow("s1", false);
   expect(screen.queryByTestId("context-chip-s1")).not.toBeInTheDocument();
+});
+
+test("resting the pointer on a row opens its pty early; sweeping past does not", () => {
+  vi.useFakeTimers();
+  seedSession("s1", { title: "Hover me" });
+  const prewarm = vi.mocked(prewarmSession);
+  prewarm.mockClear();
+  renderRow("s1", false);
+  const row = screen.getByTestId("session-row");
+  fireEvent.pointerEnter(row);
+  vi.advanceTimersByTime(PREWARM_DWELL_MS - 1);
+  fireEvent.pointerLeave(row);
+  vi.advanceTimersByTime(PREWARM_DWELL_MS);
+  expect(prewarm).not.toHaveBeenCalled();
+  fireEvent.pointerEnter(row);
+  vi.advanceTimersByTime(PREWARM_DWELL_MS);
+  expect(prewarm).toHaveBeenCalledWith("s1");
+  vi.useRealTimers();
 });

@@ -13,10 +13,12 @@ import {
   memo,
   type ReactNode,
   useCallback,
+  useEffect,
+  useRef,
   useState,
 } from "react";
 import type { SleepPhase } from "../ipc/bridge.ts";
-import { archiveSessionAndStop } from "../state/actions.ts";
+import { archiveSessionAndStop, prewarmSession } from "../state/actions.ts";
 import { useChanges } from "../state/changes.ts";
 import { useDrafts } from "../state/drafts.ts";
 import { type SidebarMode, useLayout } from "../state/layout.ts";
@@ -58,6 +60,31 @@ import { closeConfirmFor, unsentWorkFor } from "./sessionClose.ts";
 import { type ContextTone, contextLine } from "./sessionContext.ts";
 import { sessionRowView } from "./sessionOrder.ts";
 import { useWorktreeRemoval } from "./useWorktreeRemoval.ts";
+
+/** How long the pointer rests on a row before its pty is opened early. Long
+ *  enough that sweeping down the rail opens nothing. */
+export const PREWARM_DWELL_MS = 150;
+
+/** Open a row's pty once the pointer has rested on it ({@link prewarmSession}). */
+function useHoverPrewarm(sessionId: string): {
+  onPointerEnter: () => void;
+  onPointerLeave: () => void;
+} {
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const cancel = useCallback(() => {
+    clearTimeout(timer.current);
+    timer.current = undefined;
+  }, []);
+  useEffect(() => cancel, [cancel]);
+  const onPointerEnter = useCallback(() => {
+    cancel();
+    timer.current = setTimeout(() => {
+      timer.current = undefined;
+      prewarmSession(sessionId);
+    }, PREWARM_DWELL_MS);
+  }, [cancel, sessionId]);
+  return { onPointerEnter, onPointerLeave: cancel };
+}
 
 /** The `--kr-row-bg` / `--kr-row-hover` pair `.kr-row` paints from. */
 function rowFillVars(
@@ -984,6 +1011,7 @@ export const SessionRow = memo(function SessionRow({
     [sessionId]
   );
   const removal = useWorktreeRemoval(sessionId);
+  const prewarm = useHoverPrewarm(sessionId);
   // The two "would this close silently discard something?" signals — see
   // {@link unsentWorkFor}. A blank composer draft or an empty stashed-drafts
   // record both read as "nothing here", same as never having touched them.
@@ -1047,6 +1075,8 @@ export const SessionRow = memo(function SessionRow({
       data-active={active ? "true" : "false"}
       data-status={session.status}
       data-testid="session-row"
+      onPointerEnter={prewarm.onPointerEnter}
+      onPointerLeave={prewarm.onPointerLeave}
       ref={setRowRef}
       style={sortableSessionRowStyle(active, session.status, sortableRow)}
       tabIndex={-1}

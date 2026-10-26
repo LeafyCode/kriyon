@@ -1,6 +1,7 @@
 import { PanelRight } from "lucide-react";
 import { type CSSProperties, type ReactNode, useMemo } from "react";
 import { topBandRow } from "../layout/topBand.ts";
+import { formatBootTime, useBootTimes } from "../state/bootTiming.ts";
 import {
   computeTotalsFromFiles,
   useChanges,
@@ -352,6 +353,9 @@ export function Inspector() {
   const activity = useSessions((state) =>
     activeSessionId ? state.activity[activeSessionId] : undefined
   );
+  const bootMs = useBootTimes((state) =>
+    activeSessionId ? state.ms[activeSessionId] : undefined
+  );
   const projectPath = useSessions((state) =>
     session
       ? (state.projects.find((p) => p.id === session.projectId)?.path ?? null)
@@ -454,6 +458,12 @@ export function Inspector() {
           <Kv label="Status" value={<StatusValue status={session.status} />} />
           <Kv label="Branch" mono value={repo ? repo.branch : "—"} />
           <Kv label="Started" value={startedLabel(session.createdAt)} />
+          <Kv
+            label="Start time"
+            mono
+            title="How long claude took to start or resume in this session, last time"
+            value={formatBootTime(bootMs)}
+          />
           <Kv
             label="Directory"
             last

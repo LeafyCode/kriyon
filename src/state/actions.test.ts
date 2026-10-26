@@ -49,6 +49,7 @@ import {
   focusSessionFromNotification,
   launchActiveSession,
   noteResumeFailed,
+  prewarmSession,
   restartSessionFresh,
   resumePastSession,
   sessionBecameLive,
@@ -56,6 +57,7 @@ import {
   sleepIdleSessionsNow,
   spawnFollowUpSession,
 } from "./actions.ts";
+import { useBootTimes } from "./bootTiming.ts";
 import { DEFAULT_LAYOUT, useLayout } from "./layout.ts";
 import {
   idleSession,
@@ -640,6 +642,58 @@ describe("resume lifecycle transitions", () => {
     await launchActiveSession("s1");
     expect(launchClaudeOnce).not.toHaveBeenCalled();
     expect(phaseOf("s1")).not.toBe("booting");
+  });
+
+  it("times a boot from launch to live", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    seedSession("s1");
+    beginBoot("s1");
+    vi.setSystemTime(11_300);
+    sessionBecameLive("s1");
+    expect(useBootTimes.getState().ms.s1).toBe(1300);
+    vi.useRealTimers();
+  });
+
+  it("a live signal with no boot underway records no time", () => {
+    seedSession("s1");
+    useBootTimes.setState({ ms: {}, started: {} });
+    sessionBecameLive("s1");
+    expect(useBootTimes.getState().ms.s1).toBeUndefined();
+  });
+
+  it("prewarmSession opens the pty early without launching claude", async () => {
+    // The first session added becomes the active one; s2 is not mounted.
+    seedSession("s1");
+    seedSession("s2");
+    vi.mocked(ensureSession).mockClear();
+    vi.mocked(launchClaudeOnce).mockClear();
+    await prewarmSession("s2");
+    expect(ensureSession).toHaveBeenCalledWith(
+      "s2",
+      "/tmp",
+      expect.any(Function)
+    );
+    expect(launchClaudeOnce).not.toHaveBeenCalled();
+  });
+
+  it("prewarmSession leaves a pane that is already mounted alone", async () => {
+    seedSession("s1");
+    useSessions.getState().setActiveSession("s1");
+    vi.mocked(ensureSession).mockClear();
+    await prewarmSession("s1");
+    expect(ensureSession).not.toHaveBeenCalled();
+  });
+
+  it("prewarmSession swallows a pty that fails to open", async () => {
+    seedSession("s1");
+    seedSession("s2");
+    vi.mocked(ensureSession).mockRejectedValueOnce(new Error("spawn timeout"));
+    await expect(prewarmSession("s2")).resolves.toBeUndefined();
+    expect(showToast).not.toHaveBeenCalledWith(
+      "Could not start the session",
+      "error"
+    );
   });
 });
 

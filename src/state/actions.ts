@@ -19,10 +19,12 @@ import {
 } from "../terminal/sessionHost.ts";
 import type { PastSession, ProjectRow, SessionRow } from "../types.ts";
 import { showToast } from "../ui/Toast.tsx";
+import { markBootLive, markBootStart } from "./bootTiming.ts";
 import { useCompletions } from "./completions.ts";
 import { useLayout } from "./layout.ts";
 import { idleSession, type UiSession, useSessions } from "./sessions.ts";
 import { freedMemoryNote } from "./stopCost.ts";
+import { sessionPaneMounts } from "./warmPanes.ts";
 
 /**
  * Archive a session: tidy it out of sight **and stop its processes**. The row,
@@ -410,6 +412,7 @@ function armBootTimeout(sessionId: string): void {
  */
 export function sessionBecameLive(sessionId: string): void {
   noteSessionStarted(sessionId);
+  markBootLive(sessionId, Date.now());
   clearBootTimeout(sessionId);
   useSessions.getState().applyBootEvent(sessionId, "started");
 }
@@ -441,6 +444,31 @@ export function beginBoot(sessionId: string): void {
   const state = useSessions.getState();
   state.applyBootEvent(sessionId, "launch");
   armBootTimeout(sessionId);
+  markBootStart(sessionId, Date.now());
+}
+
+/**
+ * Open a session's pty (its shell) ahead of the click, when the pointer rests
+ * on a sidebar row whose pane isn't mounted yet: the user's zsh startup then
+ * runs while they move to click, and opening the session only has `claude`
+ * left to start. Never launches `claude` — a hover must not spend the user's
+ * plan or memory on a session they may not open — and never complains: the
+ * activation that follows retries and reports its own failure.
+ */
+export async function prewarmSession(sessionId: string): Promise<void> {
+  const state = useSessions.getState();
+  const session = state.sessions[sessionId];
+  if (
+    !session ||
+    sessionPaneMounts(state.activeSessionId, state.warmPanes, sessionId)
+  ) {
+    return;
+  }
+  try {
+    await ensureSession(sessionId, session.cwd, () => undefined);
+  } catch {
+    // The click's own activation retries and says so.
+  }
 }
 
 /**
