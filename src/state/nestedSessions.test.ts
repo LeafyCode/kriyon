@@ -50,6 +50,8 @@ import {
 } from "./nestedSessions.ts";
 import { idleSession, useSessions } from "./sessions.ts";
 
+const NESTED_BRANCH = /^nested\/flaky-test-[0-9a-f]{4}$/;
+
 const REQUEST: SessionRequest = {
   branch: null,
   initiation: "user_asked",
@@ -149,6 +151,15 @@ describe("startNestedSession", () => {
       "nested/fix-the-flaky-test-ab12"
     );
     expect(branchForTitle("!!!", "ab12")).toBe("nested/session-ab12");
+  });
+
+  it("names its own branch when Claude's isn't one git would take", async () => {
+    await startNestedSession(
+      "lead",
+      { ...REQUEST, branch: "feat/.wip", worktree: true },
+      { focus: false }
+    );
+    expect(vi.mocked(createWorktree).mock.calls[0]?.[1]).toMatch(NESTED_BRANCH);
   });
 
   it("reports nothing when the lead session is gone", async () => {

@@ -86,7 +86,9 @@ pub fn parse(value: &serde_json::Value) -> Option<SessionRequest> {
 
 /// A branch name git would take and that can't be read as an option or a
 /// path outside the repo: letters, digits, `.`, `_`, `-`, `/`, no `..`, no
-/// leading `-` or `/`, no trailing `/` or `.lock`.
+/// leading `-` or `/`, no trailing `/` or `.`, and no part (between slashes)
+/// that is empty, starts with `.` or ends in `.lock` — git's own rules, as the
+/// Spawn dialog's `validateBranchName` checks them.
 #[must_use]
 pub fn safe_branch(name: &str) -> bool {
     !name.is_empty()
@@ -94,11 +96,14 @@ pub fn safe_branch(name: &str) -> bool {
         && name
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '/'))
-        && !name.starts_with(['-', '/', '.'])
+        && !name.starts_with(['-', '/'])
         && !name.ends_with(['/', '.'])
-        && !name.to_ascii_lowercase().ends_with(".lock")
         && !name.contains("..")
-        && !name.contains("//")
+        && name.split('/').all(|part| {
+            !part.is_empty()
+                && !part.starts_with('.')
+                && !part.to_ascii_lowercase().ends_with(".lock")
+        })
 }
 
 #[cfg(test)]
@@ -154,7 +159,17 @@ mod tests {
     #[test]
     fn an_unsafe_branch_is_dropped_not_passed_to_git() {
         for bad in [
-            "-rf", "/etc", "a..b", "a b", "a;rm", "x.lock", "a//b", ".hidden", "a/",
+            "-rf",
+            "/etc",
+            "a..b",
+            "a b",
+            "a;rm",
+            "x.lock",
+            "a//b",
+            ".hidden",
+            "a/",
+            "feat/.wip",
+            "feat/x.lock/y",
         ] {
             let req = line(&format!(
                 r#"{{"requestId":"a","initiation":"user_asked","prompt":"P","title":"T","branch":"{bad}"}}"#

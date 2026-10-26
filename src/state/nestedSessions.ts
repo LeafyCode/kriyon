@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { nestedOutcome, takeSessionRequests } from "../ipc/bridge.ts";
+import { branchSlug, validateBranchName } from "../spawn/branchName.ts";
 import type { NestedRequest, SessionRequest } from "../types.ts";
 import { showToast } from "../ui/Toast.tsx";
 import {
@@ -48,18 +49,8 @@ export const useSessionProposals = create<ProposalsState>((set) => ({
 
 /** A branch for a nested worktree when Claude named none:
  *  `nested/<title-slug>-<suffix>`. */
-const NOT_SLUG = /[^a-z0-9]+/g;
-const EDGE_DASHES = /^-+|-+$/g;
-const TRAILING_DASHES = /-+$/;
-
 export function branchForTitle(title: string, suffix: string): string {
-  const slug = title
-    .toLowerCase()
-    .replace(NOT_SLUG, "-")
-    .replace(EDGE_DASHES, "")
-    .slice(0, 40)
-    .replace(TRAILING_DASHES, "");
-  return `nested/${slug || "session"}-${suffix}`;
+  return `nested/${branchSlug(title) || "session"}-${suffix}`;
 }
 
 /**
@@ -101,9 +92,11 @@ export function startNestedSession(
     createSession(project, lead.worktreePath ?? lead.cwd, request.title, opts);
     return Promise.resolve({ bootstrap: null, error: null, ok: true });
   }
+  // Claude's name, when git would take it; otherwise one from the title.
   const branch =
-    request.branch ??
-    branchForTitle(request.title, crypto.randomUUID().slice(0, 4));
+    request.branch && validateBranchName(request.branch) === null
+      ? request.branch.trim()
+      : branchForTitle(request.title, crypto.randomUUID().slice(0, 4));
   return createWorktreeSession(
     project,
     { branch, path: request.worktreePath },

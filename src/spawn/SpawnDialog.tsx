@@ -17,7 +17,7 @@ import { useUi } from "../state/ui.ts";
 import { button, card, inputBox, overlayPanel } from "../theme/recipes.ts";
 import { accentAlpha, tokens } from "../theme/tokens.ts";
 import { Overlay } from "../ui/Overlay.tsx";
-import { validateBranchName } from "./branchName.ts";
+import { branchSlug, validateBranchName } from "./branchName.ts";
 import { buildHandoffPrompt } from "./handoffPrompt.ts";
 
 /** Last path segment of an absolute path, e.g. `/a/b/c` → `c`. */
@@ -192,12 +192,7 @@ const primaryStyle: CSSProperties = button("primary");
 
 /** `"My Session Title"` → `wt/my-session-title`, falling back to `wt/followup`. */
 function branchFor(title: string): string {
-  const slug = title
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-|-$/g, "")
-    .slice(0, 32);
-  return `wt/${slug || "followup"}`;
+  return `wt/${branchSlug(title) || "followup"}`;
 }
 
 /**
