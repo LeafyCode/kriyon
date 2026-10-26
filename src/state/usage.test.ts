@@ -1,8 +1,9 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, it, test } from "vitest";
 import type { UsageSnapshot } from "../types.ts";
 import {
   formatResetAt,
   formatTokens,
+  limitPace,
   planLimitsView,
   sessionUsageView,
   usageTone,
@@ -144,5 +145,89 @@ describe("planLimitsView", () => {
     expect(
       planLimitsView({ fiveHour: at(100), sevenDay: at(86) }, now).alert
     ).toEqual({ text: "5-hour limit reached", tone: "full" });
+  });
+});
+
+describe("limitPace", () => {
+  const MIN = 60_000;
+  const HOUR = 60 * MIN;
+  const now = 1_800_000_000_000;
+  const resetsIn = (ms: number) => Math.round((now + ms) / 1000);
+
+  it("projects when a window runs out at the recent rate, before it resets", () => {
+    // 10 points in the last 30 minutes, 40 left: about 2 hours.
+    const pace = limitPace(
+      [
+        { atMs: now - 30 * MIN, usedPercentage: 50 },
+        { atMs: now - 5 * MIN, usedPercentage: 60 },
+      ],
+      { resetsAt: resetsIn(3 * 24 * HOUR), usedPercentage: 60 },
+      now
+    );
+    expect(pace?.runsOutInMs).toBe(2 * HOUR);
+  });
+
+  it("stays quiet when the window resets before it would run out", () => {
+    const pace = limitPace(
+      [{ atMs: now - 30 * MIN, usedPercentage: 50 }],
+      { resetsAt: resetsIn(HOUR), usedPercentage: 60 },
+      now
+    );
+    expect(pace).toBeNull();
+  });
+
+  it("needs ten minutes of readings and a rise of a point before it guesses", () => {
+    const window = { resetsAt: resetsIn(24 * HOUR), usedPercentage: 60 };
+    expect(
+      limitPace([{ atMs: now - 5 * MIN, usedPercentage: 50 }], window, now)
+    ).toBeNull();
+    expect(
+      limitPace([{ atMs: now - 30 * MIN, usedPercentage: 59.5 }], window, now)
+    ).toBeNull();
+  });
+
+  it("reads the rate over the last hour only", () => {
+    const pace = limitPace(
+      [
+        { atMs: now - 5 * HOUR, usedPercentage: 0 },
+        { atMs: now - 60 * MIN, usedPercentage: 55 },
+      ],
+      { resetsAt: resetsIn(24 * HOUR), usedPercentage: 60 },
+      now
+    );
+    // 5 points an hour from the last hour's first reading, 40 left: 8 hours.
+    expect(pace?.runsOutInMs).toBe(8 * HOUR);
+  });
+});
+
+describe("planLimitsView pace", () => {
+  const now = 1_800_000_000_000;
+  it("warns how soon the weekly limit runs out at this rate", () => {
+    const view = planLimitsView(
+      {
+        fiveHour: null,
+        sevenDay: {
+          resetsAt: Math.round((now + 3 * 86_400_000) / 1000),
+          usedPercentage: 60,
+        },
+      },
+      now,
+      {
+        fiveHour: [],
+        sevenDay: [{ atMs: now - 30 * 60_000, usedPercentage: 50 }],
+      }
+    );
+    expect(view.pace).toEqual({
+      text: "Weekly limit runs out in about 2h at this rate",
+      tone: "high",
+    });
+  });
+
+  it("has no pace warning without readings over time", () => {
+    const view = planLimitsView(
+      { fiveHour: null, sevenDay: { resetsAt: 1, usedPercentage: 60 } },
+      now
+    );
+    expect(view.pace).toBeNull();
   });
 });

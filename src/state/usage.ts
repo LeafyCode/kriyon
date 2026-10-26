@@ -111,7 +111,62 @@ export interface LimitReading {
  */
 export interface PlanLimitsView {
   alert: { text: string; tone: Exclude<UsageTone, "normal"> } | null;
+  /** The [Limit pace] warning: a window on course to run out before it
+   *  resets, at the rate of the last hour. */
+  pace: { text: string; tone: "high" } | null;
   windows: LimitReading[];
+}
+
+/** One reading of a window's use, when it was seen. */
+export interface LimitSample {
+  atMs: number;
+  usedPercentage: number;
+}
+
+/** Readings of each window since it last reset, oldest first. */
+export interface LimitSamples {
+  fiveHour: LimitSample[];
+  sevenDay: LimitSample[];
+}
+
+/** The rate is read over this much of the recent past. */
+const PACE_LOOKBACK_MS = 60 * 60_000;
+/** Too short a span, or too small a rise, says nothing about a rate. */
+const PACE_MIN_SPAN_MS = 10 * 60_000;
+const PACE_MIN_RISE = 1;
+
+/**
+ * [Limit pace]: when a window runs out if use keeps rising as it has over the
+ * last hour, or `null` when it would reset first or the readings are too few
+ * to say. Measured from the hour's first reading to `now` at the window's
+ * current figure — an hour that went quiet slows the rate, as it should.
+ * Derived only from Claude's own figures (ADR-0050); never a count of tokens.
+ */
+export function limitPace(
+  samples: readonly LimitSample[],
+  window: LimitWindow,
+  nowMs: number
+): { runsOutInMs: number } | null {
+  const first = samples.find((s) => s.atMs >= nowMs - PACE_LOOKBACK_MS);
+  if (!first) {
+    return null;
+  }
+  const span = nowMs - first.atMs;
+  const rise = window.usedPercentage - first.usedPercentage;
+  if (span < PACE_MIN_SPAN_MS || rise < PACE_MIN_RISE) {
+    return null;
+  }
+  const left = Math.max(0, 100 - window.usedPercentage);
+  const runsOutInMs = Math.round((left / rise) * span);
+  return nowMs + runsOutInMs < window.resetsAt * 1000 ? { runsOutInMs } : null;
+}
+
+/** "about 2h", "about 40m". */
+function aboutDuration(ms: number): string {
+  const minutes = Math.max(1, Math.round(ms / 60_000));
+  return minutes < 90
+    ? `about ${minutes}m`
+    : `about ${Math.round(minutes / 60)}h`;
 }
 
 const WINDOWS: {
@@ -125,9 +180,12 @@ const WINDOWS: {
 
 export function planLimitsView(
   limits: PlanLimits,
-  nowMs: number
+  nowMs: number,
+  samples: LimitSamples = { fiveHour: [], sevenDay: [] }
 ): PlanLimitsView {
   const windows: LimitReading[] = [];
+  let pace: PlanLimitsView["pace"] = null;
+  let soonest = Number.POSITIVE_INFINITY;
   for (const { id, label, pick } of WINDOWS) {
     const window = pick(limits);
     if (window !== null) {
@@ -138,9 +196,21 @@ export function planLimitsView(
         resets: formatResetAt(window.resetsAt, nowMs),
         tone: usageTone(window.usedPercentage),
       });
+      const projected = limitPace(samples[sampleKey(id)], window, nowMs);
+      if (projected && projected.runsOutInMs < soonest) {
+        soonest = projected.runsOutInMs;
+        pace = {
+          text: `${label} runs out in ${aboutDuration(projected.runsOutInMs)} at this rate`,
+          tone: "high",
+        };
+      }
     }
   }
-  return { alert: limitsAlert(windows), windows };
+  return { alert: limitsAlert(windows), pace, windows };
+}
+
+function sampleKey(id: LimitReading["id"]): keyof LimitSamples {
+  return id === "five-hour" ? "fiveHour" : "sevenDay";
 }
 
 function limitsAlert(windows: LimitReading[]): PlanLimitsView["alert"] {

@@ -338,9 +338,25 @@ function UsageSection({ live }: { live: UsageSnapshot | undefined }) {
           title={LIMIT_NOTE}
         />
       ))}
+      {limits.pace ? (
+        <div
+          data-testid="usage-pace"
+          style={paceStyle}
+          title="From how fast Claude's own figure rose over the last hour"
+        >
+          {limits.pace.text}
+        </div>
+      ) : null}
     </>
   );
 }
+
+const paceStyle: CSSProperties = {
+  color: tokens.color.status.waitingInk,
+  fontSize: "11.5px",
+  lineHeight: 1.4,
+  marginTop: tokens.space.sm,
+};
 
 export function Inspector() {
   const activeSessionId = useSessions((state) => state.activeSessionId);

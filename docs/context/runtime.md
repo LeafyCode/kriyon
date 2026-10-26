@@ -186,3 +186,8 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
   (150 ms) while its pane isn't mounted, so a click only has `claude` left to start. Never
   launches `claude` and never reports a failure; the activation that follows retries.
   _Avoid_: preload, warm start (a [Warm pane] is a different thing).
+- **Limit pace** — a forecast of when one [Plan limits] window runs out if its use keeps
+  rising at the rate of the last hour, shown only when that comes before the window resets
+  ("Weekly limit runs out in about 9h at this rate"). Arithmetic on Claude's own figures, kept
+  in memory from the readings Kriyon saw; never a token count. ADR-0050. _Avoid_: burn rate,
+  usage forecast.
