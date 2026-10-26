@@ -26,6 +26,7 @@ import { UpdateDialog } from "../update/UpdateDialog.tsx";
 import { FocusRail } from "./FocusRail.tsx";
 import { PromptBar } from "./PromptBar.tsx";
 import { SessionHeader } from "./SessionHeader.tsx";
+import { TaskStrip } from "./TaskStrip.tsx";
 import { TerminalDock } from "./TerminalDock.tsx";
 
 export interface ShellProps {
@@ -155,6 +156,7 @@ function SessionBody({
     >
       <div style={centerStyle}>
         <SessionHeader />
+        <TaskStrip />
         <div
           style={
             contentHidden ? { ...contentStyle, display: "none" } : contentStyle

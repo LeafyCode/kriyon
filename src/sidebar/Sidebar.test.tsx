@@ -39,7 +39,7 @@ import { useUi } from "../state/ui.ts";
 import { statusMeta } from "../theme/status.ts";
 import { themeById } from "../theme/themes/index.ts";
 import { tokens } from "../theme/tokens.ts";
-import type { ProjectRow } from "../types.ts";
+import type { ProjectRow, TaskStatus } from "../types.ts";
 import { Toast } from "../ui/Toast.tsx";
 import { SessionRow } from "./SessionRow.tsx";
 import { Sidebar } from "./Sidebar.tsx";
@@ -2871,4 +2871,70 @@ test("a filtered rail drops the merged row entirely", () => {
     target: { value: "Session One" },
   });
   expect(screen.queryByTestId("older-summary-p1")).not.toBeInTheDocument();
+});
+
+function seedTasks(id: string, statuses: TaskStatus[]): void {
+  useSessions.setState((s) => ({
+    activity: {
+      ...s.activity,
+      [id]: {
+        main: { currentTool: null },
+        pendingAsk: null,
+        shells: [],
+        subagents: [],
+        tasks: statuses.map((status, i) => ({
+          activeForm: status === "in_progress" ? `Doing task ${i}` : null,
+          status,
+          text: `Task ${i}`,
+        })),
+      },
+    },
+  }));
+}
+
+test("a row shows its task progress, with the current item in the tooltip", () => {
+  seedSession("s1", { title: "Tasks" });
+  seedTasks("s1", ["completed", "in_progress", "pending"]);
+  renderRow("s1", false);
+  const chip = screen.getByTestId("task-progress-s1");
+  expect(chip).toHaveTextContent("1/3");
+  expect(chip).toHaveAttribute("title", "Tasks: 1 of 3 done · Doing task 1");
+});
+
+test("a row whose tasks are all done shows no task progress", () => {
+  seedSession("s1", { title: "Tasks" });
+  seedTasks("s1", ["completed", "completed"]);
+  renderRow("s1", false);
+  expect(screen.queryByTestId("task-progress-s1")).not.toBeInTheDocument();
+});
+
+test("a row shows how full its context window is, toned as it fills", () => {
+  seedSession("s1", { title: "Context" });
+  act(() => {
+    useSessions.setState({
+      usage: {
+        s1: {
+          contextWindowSize: 200_000,
+          inputTokens: 170_000,
+          model: null,
+          outputTokens: null,
+          sessionId: null,
+          usedPercentage: 85,
+        },
+      },
+    });
+  });
+  renderRow("s1", false);
+  const chip = screen.getByTestId("context-chip-s1");
+  expect(chip).toHaveTextContent("85% ctx");
+  expect(chip).toHaveStyle({ color: tokens.color.status.waiting });
+});
+
+test("a row without Claude's context reading shows no context chip", () => {
+  seedSession("s1", { title: "Context" });
+  act(() => {
+    useSessions.setState({ usage: {} });
+  });
+  renderRow("s1", false);
+  expect(screen.queryByTestId("context-chip-s1")).not.toBeInTheDocument();
 });

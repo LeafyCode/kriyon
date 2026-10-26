@@ -30,7 +30,9 @@ import {
   stopCostFor,
   unpackCommands,
 } from "../state/stopCost.ts";
+import { taskProgress } from "../state/taskProgress.ts";
 import { useUi } from "../state/ui.ts";
+import { sessionUsageView, type UsageTone, usageTone } from "../state/usage.ts";
 import {
   type DirtyStatus,
   useWorktreeDirty,
@@ -327,14 +329,37 @@ function SessionMetaLine({
   sessionId: string;
 }): ReactNode {
   const memoryChip = memoryChipView(memoryMb, budgetMb);
-  if (!(context || branchLabel || memoryChip)) {
+  const tasks = useSessions((state) => state.activity[sessionId]?.tasks);
+  const progress = taskProgressTitle(tasks);
+  const ctxPct = useSessions(
+    (state) => sessionUsageView(state.usage[sessionId]).ctxPct
+  );
+  if (!(context || branchLabel || memoryChip || progress || ctxPct !== null)) {
     return null;
   }
   return (
     <span style={metaLineStyle}>
+      {progress ? (
+        <span
+          data-testid={`task-progress-${sessionId}`}
+          style={taskProgressStyle}
+          title={progress.title}
+        >
+          {progress.label}
+        </span>
+      ) : null}
       {context ? (
         <span style={contextTextStyle(context.tone)}>{context.text}</span>
       ) : null}
+      {ctxPct === null ? null : (
+        <span
+          data-testid={`context-chip-${sessionId}`}
+          style={contextChipStyle(usageTone(ctxPct))}
+          title="How full this session's context window is, from Claude's last reply"
+        >
+          {ctxPct}% ctx
+        </span>
+      )}
       {memoryChip ? (
         <span
           data-testid={`memory-chip-${sessionId}`}
@@ -564,6 +589,45 @@ const MEMORY_TONE_INK: Record<MemoryTone, string> = {
 function memoryChipStyle(tone: MemoryTone): CSSProperties {
   return {
     color: MEMORY_TONE_INK[tone],
+    flex: "none",
+    fontFamily: tokens.font.mono,
+    fontSize: "10.5px",
+  };
+}
+
+/** The row's task chip while a list is still open: "3/7", with the current
+ *  item in the tooltip; `null` once the list is done. */
+function taskProgressTitle(
+  tasks: Parameters<typeof taskProgress>[0]
+): { label: string; title: string } | null {
+  const progress = taskProgress(tasks);
+  if (!progress || progress.finished) {
+    return null;
+  }
+  const head = `Tasks: ${progress.done} of ${progress.total} done`;
+  return {
+    label: progress.label,
+    title: progress.current ? `${head} · ${progress.current}` : head,
+  };
+}
+
+const taskProgressStyle: CSSProperties = {
+  color: tokens.color.ink.muted,
+  flex: "none",
+  fontFamily: tokens.font.mono,
+  fontSize: "10.5px",
+};
+
+/** Ink for the context chip: quiet until the window is 80% full. */
+const CONTEXT_TONE_INK: Record<UsageTone, string> = {
+  full: tokens.color.status.error,
+  high: tokens.color.status.waiting,
+  normal: tokens.color.ink.faint,
+};
+
+function contextChipStyle(tone: UsageTone): CSSProperties {
+  return {
+    color: CONTEXT_TONE_INK[tone],
     flex: "none",
     fontFamily: tokens.font.mono,
     fontSize: "10.5px",
