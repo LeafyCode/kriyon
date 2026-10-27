@@ -659,6 +659,40 @@ describe("resume lifecycle transitions", () => {
     expect(phaseOf("s1")).toBe("idle");
   });
 
+  it("a second launch of the same session joins the first instead of clearing it", async () => {
+    seedSession("s1");
+    vi.mocked(launchClaudeOnce).mockClear();
+    let finish: (result: LaunchResult) => void = () => undefined;
+    vi.mocked(launchClaudeOnce).mockReturnValueOnce(
+      new Promise((resolve) => {
+        finish = resolve;
+      })
+    );
+    // Opened in the background, then the user clicks the row mid-launch.
+    const first = launchActiveSession("s1");
+    const second = launchActiveSession("s1");
+    await Promise.resolve();
+    expect(phaseOf("s1")).toBe("launching");
+    finish({ kind: "launched", resuming: false });
+    await Promise.all([first, second]);
+    expect(launchClaudeOnce).toHaveBeenCalledTimes(1);
+    expect(phaseOf("s1")).toBe("booting");
+  });
+
+  it("a session can launch again once its last attempt settled", async () => {
+    seedSession("s1");
+    vi.mocked(launchClaudeOnce).mockClear();
+    vi.mocked(launchClaudeOnce).mockResolvedValueOnce({ kind: "writeFailed" });
+    await launchActiveSession("s1");
+    vi.mocked(launchClaudeOnce).mockResolvedValueOnce({
+      kind: "launched",
+      resuming: false,
+    });
+    await launchActiveSession("s1");
+    expect(launchClaudeOnce).toHaveBeenCalledTimes(2);
+    expect(phaseOf("s1")).toBe("booting");
+  });
+
   it("a launch whose pty fails to open returns to rest", async () => {
     seedSession("s1");
     vi.mocked(ensureSession).mockRejectedValueOnce(new Error("spawn timeout"));

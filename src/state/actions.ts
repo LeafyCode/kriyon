@@ -522,24 +522,44 @@ export async function prewarmSession(sessionId: string): Promise<void> {
   }
 }
 
+/** The launch attempt in flight for each session, so overlapping calls join
+ *  one attempt and only that attempt opens and settles the [Boot phase]. */
+const launchAttempts = new Map<string, Promise<void>>();
+
 /**
  * Launch (or resume) `claude` in a session's pty the first time it is viewed,
  * and track the boot lifecycle. Extracted from the App activation effect so the
  * boot state is armed unconditionally once a launch really happened — the
  * effect's cleanup must not be able to skip it (the user switching away
- * mid-launch is routine). Idempotent per session via `launchClaudeOnce`;
- * resolves false on reattach (claude already running — nothing to track).
+ * mid-launch is routine). Idempotent per session via `launchClaudeOnce`, and
+ * a call made while an attempt is in flight joins that attempt.
  */
-export async function launchActiveSession(sessionId: string): Promise<void> {
+export function launchActiveSession(sessionId: string): Promise<void> {
+  const inFlight = launchAttempts.get(sessionId);
+  if (inFlight) {
+    // A background start and the user's click, or a quick switch away and
+    // back: the same attempt, not a second one that could settle it early.
+    return inFlight;
+  }
+  const attempt = launchAttempt(sessionId).finally(() => {
+    launchAttempts.delete(sessionId);
+  });
+  launchAttempts.set(sessionId, attempt);
+  return attempt;
+}
+
+/**
+ * One launch attempt: `launching` from its start until it settles, so every
+ * reader of the [Boot phase] that asks `isStarting` (the cap, the quit
+ * warning, the row spinner) sees a session that is starting. A session
+ * already live or booting keeps its phase (`open` only moves one at rest).
+ */
+async function launchAttempt(sessionId: string): Promise<void> {
   const state = useSessions.getState();
   const session = state.sessions[sessionId];
   if (!session) {
     return;
   }
-  // `launching` from here until the attempt settles, so every reader of the
-  // [Boot phase] (the cap, the quit warning, the row, the overlay) sees a
-  // session that is starting. A session already live or booting keeps its
-  // phase (`open` only moves one at rest).
   state.applyBootEvent(sessionId, "open");
   try {
     await launchInPty(sessionId, session);
