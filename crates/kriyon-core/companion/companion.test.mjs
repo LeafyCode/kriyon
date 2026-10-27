@@ -333,6 +333,54 @@ test("the report is sent before the turn's hook returns, while its dispatch stil
   assert.equal(s.sent.length, 1);
 });
 
+/** A `next` for a `tool.check` hook: the engine's verdict, raised by `plugin`. */
+function checkNext(plugin, decision = "deny") {
+  const next = async () => ({ decision, reason: "auto mode gave no verdict" });
+  next.origin = { plugin, tier: "user" };
+  return next;
+}
+
+test("the report's own SendMessage is allowed, which auto mode would refuse", async () => {
+  const fresh = await freshHandlers("allow-own-report");
+  const s = nestedSession({
+    KRIYON_REPORT_FROM: "child-conv",
+    KRIYON_REPORT_TO: "parent-conv",
+  });
+  const check = fresh.get("tool.check");
+  const verdicts = [];
+  let reportText = "";
+  s.$.session.send = async (message) => {
+    reportText = message.text;
+    const call = { tool: "SendMessage", input: { message: message.text } };
+    verdicts.push(
+      (await check(s.$, call, checkNext("kriyon-companion"))).decision,
+      // The same text from the model, or from another plugin, keeps its verdict.
+      (await check(s.$, call, checkNext("engine"))).decision,
+      (await check(s.$, call, checkNext("someone-else"))).decision,
+      (
+        await check(
+          s.$,
+          { ...call, input: { message: "other" } },
+          checkNext("kriyon-companion")
+        )
+      ).decision
+    );
+  };
+  await fresh.get("turn.complete")(
+    s.$,
+    { reason: "answer", turnId: "t1" },
+    async () => ({ text: "All green." })
+  );
+  assert.deepEqual(verdicts, ["allow", "deny", "deny", "deny"]);
+  // Once sent, the same text is never allowed again.
+  const after = await check(
+    s.$,
+    { tool: "SendMessage", input: { message: reportText } },
+    checkNext("kriyon-companion")
+  );
+  assert.equal(after.decision, "deny");
+});
+
 test("a claude run inside the nested session, or a session nobody nested, never reports", async () => {
   for (const [tag, env] of [
     [

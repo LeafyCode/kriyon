@@ -58,6 +58,11 @@ subagent, or text in a file Claude read.
   When that conversation's first turn ends, its Companion sends the reply
   once to the lead session with `$.session.send`, Claude Code's own
   cross-session delivery. The lead session's inbound setting still applies.
+  The send runs inside the turn's hook and is awaited, since `$` works only
+  inside its dispatch. Auto mode's classifier judges only what the model
+  asked for and refuses a mod's own SendMessage, so the Companion's
+  `tool.check` hook allows exactly that one call: raised by this plugin,
+  carrying the report text being sent. Every other call keeps its verdict.
   A `claude` run inside the nested session inherits the env but has another
   conversation id, so it never reports.
 

@@ -272,6 +272,8 @@ function startSession($, e) {
  *  `KRIYON_REPORT_FROM`, the conversation Kriyon started); "" otherwise. */
 let reportTo = null;
 let reported = false;
+/** The report being sent right now, so `tool.check` can allow exactly it. */
+let sending = null;
 
 /** When this nested session's first turn ends, send its answer to the
  *  session that asked for it — once, and never from a subagent's loop. */
@@ -293,13 +295,25 @@ async function reportBack($, e, result) {
     const answer = cap(result?.text ?? "", 4000) || "(no reply text)";
     const ending =
       e.reason === "answer" ? "finished its task" : `stopped (${e.reason})`;
-    await $.session.send({
-      to: { sessionId: reportTo },
-      text: `The nested session you started ${ending}. Its reply:\n\n${answer}`,
-    });
+    sending = `The nested session you started ${ending}. Its reply:\n\n${answer}`;
+    await $.session.send({ to: { sessionId: reportTo }, text: sending });
   } catch {
     // A report that can't be sent never troubles this session.
+  } finally {
+    sending = null;
   }
+}
+
+/** This mod's own SendMessage carrying the report being sent: auto mode's
+ *  classifier judges only what the model asked for and refuses a mod's
+ *  send, so the report is allowed here. Nothing else is touched. */
+function isOwnReport(e, next) {
+  return (
+    sending !== null &&
+    e.tool === "SendMessage" &&
+    next.origin?.plugin === "kriyon-companion" &&
+    e.input?.message === sending
+  );
 }
 
 /** Conversations that take over a running process: no `session.start`
@@ -429,6 +443,12 @@ export function register(on) {
   });
 
   on("tool.check", async ($, e, next) => {
+    if (isOwnReport(e, next)) {
+      return {
+        decision: "allow",
+        reason: "Kriyon's report to the lead session",
+      };
+    }
     const result = await next(e);
     if (e.tool_use_id) {
       post($, {
