@@ -2222,6 +2222,15 @@ test("a booting row shows the same resume spinner", () => {
   expect(screen.queryByTestId("status-dot-s1")).not.toBeInTheDocument();
 });
 
+test("a row whose launch is still opening shows the same spinner", () => {
+  seedSession("s1", { title: "Launching" });
+  act(() => {
+    useSessions.setState({ bootPhase: { s1: "launching" } });
+  });
+  renderRow("s1", false);
+  expect(screen.getByTestId("booting-spinner-s1")).toBeInTheDocument();
+});
+
 test("an awake row wears no moon", () => {
   seedSession("s1", { title: "Awake" });
   act(() => {

@@ -6,9 +6,9 @@ import { showToast } from "../ui/Toast.tsx";
 import {
   createSession,
   createWorktreeSession,
-  isLaunching,
   type SpawnResult,
 } from "./actions.ts";
+import { isStarting } from "./bootPhase.ts";
 import { nestedCapCount, useLayout } from "./layout.ts";
 import { useSessions } from "./sessions.ts";
 
@@ -129,8 +129,7 @@ function busyCount(): number {
       s.archivedAt === null &&
       (s.status === "running" ||
         s.status === "waiting" ||
-        bootPhase[s.id] === "booting" ||
-        isLaunching(s.id))
+        isStarting(bootPhase[s.id]))
   ).length;
 }
 

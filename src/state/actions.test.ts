@@ -644,6 +644,46 @@ describe("resume lifecycle transitions", () => {
     expect(phaseOf("s1")).not.toBe("booting");
   });
 
+  it("a launch shows as launching until it settles, and a failed one returns to rest", async () => {
+    seedSession("s1");
+    let finish: (result: LaunchResult) => void = () => undefined;
+    vi.mocked(launchClaudeOnce).mockReturnValueOnce(
+      new Promise((resolve) => {
+        finish = resolve;
+      })
+    );
+    const pending = launchActiveSession("s1");
+    expect(phaseOf("s1")).toBe("launching");
+    finish({ kind: "writeFailed" });
+    await pending;
+    expect(phaseOf("s1")).toBe("idle");
+  });
+
+  it("a launch whose pty fails to open returns to rest", async () => {
+    seedSession("s1");
+    vi.mocked(ensureSession).mockRejectedValueOnce(new Error("spawn timeout"));
+    await launchActiveSession("s1");
+    expect(phaseOf("s1")).toBe("idle");
+  });
+
+  it("a launch that throws still returns to rest", async () => {
+    seedSession("s1");
+    vi.mocked(launchClaudeOnce).mockRejectedValueOnce(new Error("boom"));
+    await expect(launchActiveSession("s1")).rejects.toThrow("boom");
+    expect(phaseOf("s1")).toBe("idle");
+  });
+
+  it("activating a session claude already runs in leaves it as it was", async () => {
+    seedSession("s1");
+    vi.mocked(launchClaudeOnce).mockResolvedValueOnce({ kind: "reattached" });
+    await launchActiveSession("s1");
+    expect(phaseOf("s1")).toBe("idle");
+    useSessions.getState().applyBootEvent("s1", "started");
+    vi.mocked(launchClaudeOnce).mockResolvedValueOnce({ kind: "reattached" });
+    await launchActiveSession("s1");
+    expect(phaseOf("s1")).toBe("live");
+  });
+
   it("times a boot from launch to live", () => {
     vi.useFakeTimers();
     vi.setSystemTime(10_000);

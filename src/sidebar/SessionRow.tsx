@@ -19,6 +19,7 @@ import {
 } from "react";
 import type { SleepPhase } from "../ipc/bridge.ts";
 import { archiveSessionAndStop, prewarmSession } from "../state/actions.ts";
+import { isStarting } from "../state/bootPhase.ts";
 import { useChanges } from "../state/changes.ts";
 import { useDrafts } from "../state/drafts.ts";
 import { type SidebarMode, useLayout } from "../state/layout.ts";
@@ -1054,11 +1055,11 @@ export const SessionRow = memo(function SessionRow({
   const cpuPct = useSessions((state) => state.cpu[sessionId]);
   const budgetMb = useLayout((state) => state.layout.memoryBudgetMb);
   const sleeping = useSessions((state) => state.sleeping[sessionId]);
-  // Booting = claude is (re)launching for this row — a fresh spawn or a
-  // resume-from-history. Same "loading" situation as waking a [Sleeping
-  // session], so the row shows the same spinner.
-  const booting = useSessions(
-    (state) => (state.bootPhase[sessionId] ?? "idle") === "booting"
+  // Booting = claude is (re)launching for this row — its pty opening, a
+  // fresh spawn or a resume-from-history. Same "loading" situation as waking a
+  // [Sleeping session], so the row shows the same spinner.
+  const booting = useSessions((state) =>
+    isStarting(state.bootPhase[sessionId])
   );
   // Only Done rows consult unseen, so gate the subscription on the status: a
   // running row would otherwise re-render on every appended event (appendSeq

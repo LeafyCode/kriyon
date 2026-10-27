@@ -1,6 +1,6 @@
 import { formatMb } from "../sidebar/memoryChip.ts";
 import type { SessionActivity } from "../types.ts";
-import type { BootPhase } from "./bootPhase.ts";
+import { type BootPhase, isStarting } from "./bootPhase.ts";
 import type { UiSession } from "./sessions.ts";
 
 /**
@@ -94,7 +94,7 @@ function sessionEngagement(
   if (session.status === "running") {
     return "running";
   }
-  if (view.bootPhase[session.id] === "booting") {
+  if (isStarting(view.bootPhase[session.id])) {
     return "starting";
   }
   return "quiet";

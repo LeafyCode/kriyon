@@ -6,12 +6,24 @@
  * phase record, the coordinator's single safety-net timer) drives it.
  */
 
-/** Where a session is in the launch lifecycle. */
-export type BootPhase = "idle" | "booting" | "resumeFailed" | "live";
+/**
+ * Where a session is in the launch lifecycle. `launching` is the stretch
+ * before `claude` is typed: the pty is opening and the launch is being
+ * written. It always ends — in `booting` once `claude` is launched, or back
+ * in `idle` when nothing was (a reattach, a failed pty, a failed write).
+ */
+export type BootPhase =
+  | "idle"
+  | "launching"
+  | "booting"
+  | "resumeFailed"
+  | "live";
 
 /**
  * What can move a session's {@link BootPhase}:
- * - `launch` — a launch or in-place restart began.
+ * - `open` — a launch attempt began from rest (the pty is being opened).
+ * - `noLaunch` — that attempt ended without launching `claude`.
+ * - `launch` — `claude` was launched, or an in-place restart began.
  * - `started` — a real `SessionStart` fired; claude is up (clears any failure).
  * - `statusUpdate` — a live status arrived; clears a still-showing overlay but
  *   never a detected failure.
@@ -20,6 +32,8 @@ export type BootPhase = "idle" | "booting" | "resumeFailed" | "live";
  * - `dismissFailed` — the user dismissed the recovery prompt without restarting.
  */
 export type BootEvent =
+  | "open"
+  | "noLaunch"
   | "launch"
   | "started"
   | "statusUpdate"
@@ -34,6 +48,11 @@ export type BootEvent =
  */
 export function nextBootPhase(phase: BootPhase, event: BootEvent): BootPhase {
   switch (event) {
+    case "open":
+      // Only from rest: a live, booting or failed session keeps its phase.
+      return phase === "idle" ? "launching" : phase;
+    case "noLaunch":
+      return phase === "launching" ? "idle" : phase;
     case "launch":
       return "booting";
     case "started":
@@ -51,4 +70,10 @@ export function nextBootPhase(phase: BootPhase, event: BootEvent): BootPhase {
     default:
       return phase;
   }
+}
+
+/** A session on its way up: launching or booting. Every "is it starting?"
+ *  question reads this, so none of them miss the launching stretch. */
+export function isStarting(phase: BootPhase | undefined): boolean {
+  return phase === "launching" || phase === "booting";
 }

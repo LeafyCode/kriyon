@@ -172,6 +172,9 @@ const SessionPane = memo(function SessionPane({
         position: "relative",
       }}
     >
+      {/* Only once claude is typed: the brief `launching` stretch (the pty
+          opening, or reconnecting to a claude already running) would flash
+          the overlay over a terminal that is fine. The row's spinner covers it. */}
       {bootPhase === "booting" ? (
         <SessionLoadingOverlay resuming={session.claudeSessionId !== null} />
       ) : null}

@@ -4,8 +4,12 @@ Boot, the per-session runtime, memory and process limits, usage numbers, stoppin
 
 Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`](../../CONTEXT.md).
 
-- **Boot phase** (`BootPhase`) — where a [Session] is in launching `claude`: `idle | booting |
-  resumeFailed | live`. Distinct from [Status] (which describes a *live* session's turn). One pure
+- **Boot phase** (`BootPhase`) — where a [Session] is in launching `claude`: `idle | launching |
+  booting | resumeFailed | live`. `launching` covers the pty opening and the launch being
+  written; every launch enters it from rest (`open`) and always leaves it, to `booting` once
+  `claude` is typed or back to `idle` when nothing was launched (`noLaunch`). `isStarting`
+  (launching or booting) is the one "is it starting?" check the [Nested session cap], the quit
+  warning and the row spinner share. Distinct from [Status] (which describes a *live* session's turn). One pure
   reducer (`nextBootPhase`) owns every transition, and the coordinator owns the single boot-overlay
   safety-net timer, cancelled on each transition — so no stale timer can clear a later boot, and the
   `booting`/`resumeFailed` flags no longer drift across files. `booting` drives the loading overlay;

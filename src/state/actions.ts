@@ -198,11 +198,9 @@ export function createSession(
     // a shown session never runs for it.
     state.warmSession(id);
     persistThenWarm(project, row);
-    // Counted as launching until the launch settles: then it is booting, or
-    // nothing started. The [Nested session cap] counts both, so a second
-    // request in the same batch sees this one.
-    launching.add(id);
-    ignore(launchActiveSession(id).finally(() => launching.delete(id)));
+    // Its [Boot phase] reads `launching` from this call on, so a second
+    // request in the same batch counts it against the [Nested session cap].
+    ignore(launchActiveSession(id));
     captureBaselineFor(id, cwd);
     return id;
   }
@@ -243,15 +241,6 @@ function captureBaselineFor(id: string, cwd: string): void {
       )
     );
   }
-}
-
-/** Sessions created out of sight whose first launch hasn't settled yet. */
-const launching = new Set<string>();
-
-/** Whether a session opened in the background is still on its way to
- *  booting: its pty and `claude` launch haven't settled. */
-export function isLaunching(sessionId: string): boolean {
-  return launching.has(sessionId);
 }
 
 /**
@@ -547,6 +536,27 @@ export async function launchActiveSession(sessionId: string): Promise<void> {
   if (!session) {
     return;
   }
+  // `launching` from here until the attempt settles, so every reader of the
+  // [Boot phase] (the cap, the quit warning, the row, the overlay) sees a
+  // session that is starting. A session already live or booting keeps its
+  // phase (`open` only moves one at rest).
+  state.applyBootEvent(sessionId, "open");
+  try {
+    await launchInPty(sessionId, session);
+  } finally {
+    // Every way out that didn't launch claude — a pty that failed, a reattach,
+    // a failed write, a throw — puts the session back at rest. A launch that
+    // happened has already moved it to `booting`, which this leaves alone.
+    useSessions.getState().applyBootEvent(sessionId, "noLaunch");
+  }
+}
+
+/** Open the session's pty and launch (or resume) `claude` in it. */
+async function launchInPty(
+  sessionId: string,
+  session: UiSession
+): Promise<void> {
+  const state = useSessions.getState();
   // Idempotent for a live pty; for a session whose creation failed earlier
   // this is the retry — every activation gets one, so a transient failure
   // (daemon spawn timeout, stale socket) heals on the next visit instead of
