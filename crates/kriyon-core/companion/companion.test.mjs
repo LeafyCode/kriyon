@@ -317,6 +317,22 @@ async function freshHandlers(tag) {
   return fresh;
 }
 
+test("the report is sent before the turn's hook returns, while its dispatch still runs", async () => {
+  const fresh = await freshHandlers("in-dispatch");
+  const s = nestedSession({
+    KRIYON_REPORT_FROM: "child-conv",
+    KRIYON_REPORT_TO: "parent-conv",
+  });
+  await fresh.get("turn.complete")(
+    s.$,
+    { reason: "answer", turnId: "t1" },
+    async () => ({ text: "All green." })
+  );
+  // No settle: a send the hook left running after it returned is cut off
+  // with its dispatch, so it never reaches the lead.
+  assert.equal(s.sent.length, 1);
+});
+
 test("a claude run inside the nested session, or a session nobody nested, never reports", async () => {
   for (const [tag, env] of [
     [

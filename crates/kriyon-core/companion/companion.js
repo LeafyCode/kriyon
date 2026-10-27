@@ -399,7 +399,9 @@ export function register(on) {
 
   on("turn.complete", async ($, e, next) => {
     const result = await next(e);
-    reportBack($, e, result);
+    // Awaited: `$` works only inside this dispatch, so a send left running
+    // after the hook returns never arrives. It resolves once queued.
+    await reportBack($, e, result);
     return result;
   });
 
