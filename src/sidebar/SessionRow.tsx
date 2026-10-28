@@ -41,6 +41,7 @@ import {
   type DirtyStatus,
   useUnmergedCommits,
   useWorktreeDirty,
+  WORKTREE_RECHECK_MS,
 } from "../state/useActiveSession.ts";
 import { unseenCount } from "../state/viewedMarker.ts";
 import { row30 } from "../theme/recipes.ts";
@@ -1125,7 +1126,8 @@ export const SessionRow = memo(function SessionRow({
   // `FilesChangedBadge`, instead of each subscribing independently.
   const dirty = useWorktreeDirty(
     sessionWorkingDir(session),
-    session?.status ?? "idle"
+    session?.status ?? "idle",
+    session?.worktreePath ? WORKTREE_RECHECK_MS : undefined
   );
   const unmerged = useUnmergedCommits(
     session?.worktreePath ?? null,

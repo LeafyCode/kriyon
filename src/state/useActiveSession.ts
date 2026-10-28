@@ -120,7 +120,10 @@ function toDirtyStatus(value: RepoStatus | undefined): DirtyStatus {
  */
 export function useWorktreeDirty(
   path: string,
-  status: SessionStatus
+  status: SessionStatus,
+  /** Re-check this often while dirty: a worktree's changes are often
+   *  committed from another session, which this row's status never sees. */
+  recheckWhileDirtyMs?: number
 ): DirtyStatus {
   const [dirty, setDirty] = useState<DirtyStatus>(() =>
     toDirtyStatus(repoStatusResource.peek(path))
@@ -149,18 +152,28 @@ export function useWorktreeDirty(
       unsubscribe();
     };
   }, [path, status]);
+  useEffect(() => {
+    if (path === "" || dirty !== "dirty" || !recheckWhileDirtyMs) {
+      return;
+    }
+    const timer = setInterval(() => {
+      repoStatusResource.revalidate(path, () => repoStatus(path));
+    }, recheckWhileDirtyMs);
+    return () => clearInterval(timer);
+  }, [path, dirty, recheckWhileDirtyMs]);
   return dirty;
 }
 
-/** How often a worktree row with unmerged commits checks again, so the
- *  warning clears soon after the branch is merged from anywhere. */
-const UNMERGED_RECHECK_MS = 30_000;
+/** How often a worktree row with unmerged or uncommitted work checks again,
+ *  so its warning clears soon after the work is committed or merged from
+ *  anywhere. */
+export const WORKTREE_RECHECK_MS = 30_000;
 
 /**
  * Commits the worktree at `path` has that its default branch doesn't, for
  * the row's "Not merged" warning; 0 for no worktree (`null`) or when git
  * can't tell. Checks on each status transition, like
- * {@link useWorktreeDirty}, and every {@link UNMERGED_RECHECK_MS} while the
+ * {@link useWorktreeDirty}, and every {@link WORKTREE_RECHECK_MS} while the
  * count is above 0: the merge usually happens in another session.
  */
 export function useUnmergedCommits(
@@ -184,7 +197,7 @@ export function useUnmergedCommits(
           }
           setCount(n);
           if (n > 0) {
-            timer = setTimeout(check, UNMERGED_RECHECK_MS);
+            timer = setTimeout(check, WORKTREE_RECHECK_MS);
           }
         });
     };

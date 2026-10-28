@@ -2036,6 +2036,39 @@ test("a worktree row whose commits aren't merged says so", async () => {
   vi.mocked(unmergedCommits).mockResolvedValue(0);
 });
 
+test("a worktree's warning clears after another session commits its work", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  vi.mocked(repoStatus).mockResolvedValue({
+    ahead: 0,
+    behind: 0,
+    branch: "feat-x",
+    dirtyCount: 1,
+  });
+  seedWorktreeSession("done");
+  render(
+    <SessionRow
+      mode="calm"
+      onCloseSession={vi.fn()}
+      onSelect={vi.fn()}
+      sessionId="w1"
+      sortable={false}
+    />
+  );
+  await screen.findByTestId("worktree-dirty-w1");
+  // The lead commits it: this row's own status never changes.
+  vi.mocked(repoStatus).mockResolvedValue({
+    ahead: 0,
+    behind: 0,
+    branch: "feat-x",
+    dirtyCount: 0,
+  });
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(30_000);
+  });
+  expect(screen.queryByTestId("worktree-dirty-w1")).not.toBeInTheDocument();
+  vi.useRealTimers();
+});
+
 test("removing a clean worktree archives the session", async () => {
   vi.mocked(removeWorktree).mockResolvedValue();
   seedWorktreeSession("done");
