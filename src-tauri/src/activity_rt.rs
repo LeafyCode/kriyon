@@ -210,9 +210,33 @@ pub fn companion_facts(session_id: &str, conversation: Option<&str>) -> Option<C
 /// Read a session's [Bridge spool] now, ahead of the next pass, so the
 /// Structured view gets its newest rows while Claude works instead of up to
 /// [`INGEST_EVERY`] late. Best-effort; the pass reads whatever this missed.
-pub fn ingest_bridge_now(home: &Path, session_id: &str) {
+pub fn ingest_bridge_now<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    home: &Path,
+    session_id: &str,
+) {
     let path = kriyon_core::paths::bridge_spool(home, session_id);
-    let _ = with_store(|s| ingest_spool(s, Spool::Bridge, session_id, &path));
+    let _ = ingest_bridge(app, session_id, &path);
+}
+
+/// Read a [Bridge spool] into the store, and announce `companion-changed`
+/// when it took new lines. Every bridge read goes through here: a read that
+/// stays quiet leaves a session request it took unseen, since the next read
+/// finds nothing new to announce.
+fn ingest_bridge<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    session_id: &str,
+    path: &Path,
+) -> Result<(), String> {
+    if with_store(|s| ingest_spool(s, Spool::Bridge, session_id, path))? {
+        let _ = app.emit(
+            "companion-changed",
+            ActivityChanged {
+                session_id: session_id.to_string(),
+            },
+        );
+    }
+    Ok(())
 }
 
 /// The companion's rows for a session, in order, for the Structured view.
@@ -297,20 +321,9 @@ fn bridge_pass<R: tauri::Runtime>(app: &tauri::AppHandle<R>, home: &Path) {
     let is_live = liveness();
     for id in ingestible(&spools, &owned_sessions(app)) {
         let path = dir.join(format!("{id}.jsonl"));
-        match with_store(|s| ingest_spool(s, Spool::Bridge, &id, &path)) {
-            Ok(true) => {
-                let _ = app.emit(
-                    "companion-changed",
-                    ActivityChanged {
-                        session_id: id.clone(),
-                    },
-                );
-            }
-            Ok(false) => {}
-            Err(e) => {
-                eprintln!("kriyon: companion ingest failed for {id}: {e}");
-                continue;
-            }
+        if let Err(e) = ingest_bridge(app, &id, &path) {
+            eprintln!("kriyon: companion ingest failed for {id}: {e}");
+            continue;
         }
         let idle = idle_for(&path).unwrap_or_default();
         if fully_read(Spool::Bridge, &path, &id) && idle > SPOOL_IDLE_BEFORE_DELETE && !is_live(&id)
@@ -587,5 +600,36 @@ mod tests {
         );
 
         assert_eq!(gone, ["closed", "only-partial", "only-usage"]);
+    }
+
+    #[test]
+    fn reading_a_spool_ahead_of_the_pass_still_announces_new_rows() {
+        use tauri::Listener as _;
+        let data = tempfile::tempdir().expect("tempdir");
+        open(data.path());
+        let home = tempfile::tempdir().expect("tempdir");
+        let id = "ahead-of-the-pass";
+        let path = kriyon_core::paths::bridge_spool(home.path(), id);
+        std::fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
+        let line = serde_json::json!({"kind":"session_request","run":"r1","seq":1,
+            "requestId":"tu1","initiation":"own_initiative","prompt":"p","title":"t"});
+        std::fs::write(&path, format!("{line}\n")).expect("write");
+
+        let app = tauri::test::mock_app();
+        let heard = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let count = heard.clone();
+        app.listen("companion-changed", move |_| {
+            count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        });
+
+        // The Structured view's read takes the request before the pass does:
+        // the app must still hear of it, or the request is never handed out.
+        ingest_bridge_now(app.handle(), home.path(), id);
+        ingest_bridge_now(app.handle(), home.path(), id);
+        assert_eq!(
+            heard.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "announced once, for the read that took new lines"
+        );
     }
 }
