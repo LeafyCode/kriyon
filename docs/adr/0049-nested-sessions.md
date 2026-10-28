@@ -40,8 +40,11 @@ subagent, or text in a file Claude read.
 - **Kriyon starts only what the person asked for, under their cap.** The Rust
   core validates every field: prompt and title are trimmed and capped, and a
   branch name that isn't plainly safe is dropped. It then decides:
-  `user_asked` while fewer sessions are busy (working, waiting or starting)
-  than the [Nested session cap] (default 4) starts in the background. Anything else is a [Session
+  `user_asked` while fewer other sessions are busy (working, waiting or
+  starting) than the [Nested session cap] (default 4) starts in the
+  background. The session that asked is not counted: it is always mid-turn
+  when it asks, so counting it made the same prompt start a session or hold
+  it back depending only on how soon that turn ended. Anything else is a [Session
   proposal] card on the lead session, and nothing starts until the person
   presses Start.
 - **Requests are kept once.** Each is stored by its tool call's id in the

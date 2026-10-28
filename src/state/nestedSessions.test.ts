@@ -222,9 +222,26 @@ describe("handleSessionRequests", () => {
     ]);
   });
 
-  it("asks the core with the running count and the user's cap", async () => {
+  it("asks the core with the busy count and the user's cap, leaving out the session that asked", async () => {
+    // The lead is always mid-turn when it asks: counting it would make the
+    // same prompt start or hold back a session depending on timing alone.
     useSessions.getState().applyStatus("lead", "running", "", false);
-    useLayout.getState().setNestedSessionCap("2");
+    useSessions.getState().addSession(
+      idleSession({
+        archivedAt: null,
+        baselineOid: null,
+        claudeSessionId: null,
+        createdAt: 2,
+        cwd: "/repo",
+        id: "other",
+        projectId: "p1",
+        title: "Other",
+        titleLocked: false,
+        worktreePath: null,
+      })
+    );
+    useSessions.getState().applyStatus("other", "running", "", false);
+    useLayout.getState().setNestedSessionCap(2);
     await deliver([{ leadSessionId: "lead", request: REQUEST }]);
     expect(nestedOutcome).toHaveBeenCalledWith("user_asked", 1, 2);
   });
@@ -240,7 +257,7 @@ describe("handleSessionRequests", () => {
       kind: "launched",
       resuming: false,
     });
-    useLayout.getState().setNestedSessionCap("2");
+    useLayout.getState().setNestedSessionCap(2);
     await deliver([
       { leadSessionId: "lead", request: { ...REQUEST, requestId: "a" } },
       { leadSessionId: "lead", request: { ...REQUEST, requestId: "b" } },

@@ -22,14 +22,22 @@ export type HideOlderThan = "off" | "1h" | "6h" | "1d" | "3d" | "1w";
 /** How long a session must sit idle before it is slept. `off` never sleeps. */
 export type AutoSleepAfter = "off" | "1h" | "3h" | "6h";
 
-/** The [Nested session cap]: how many sessions may be busy (working,
+/** The [Nested session cap]: how many other sessions may be busy (working,
  *  waiting or starting) before one Claude asks to start is shown as a
- *  suggestion instead. */
-export type NestedSessionCap = "off" | "2" | "4" | "6";
+ *  suggestion instead; `null` for no cap. A whole number in
+ *  {@link NESTED_CAP_RANGE}. */
+export type NestedSessionCap = number | null;
 
-/** The cap as a number, or `null` when there is none. */
-export function nestedCapCount(cap: NestedSessionCap): number | null {
-  return cap === "off" ? null : Number(cap);
+/** The caps a person can set. */
+export const NESTED_CAP_RANGE = { max: 16, min: 1 } as const;
+
+/** Whether `value` is a cap a person could have set. */
+export function isNestedCap(value: unknown): value is number {
+  return (
+    Number.isInteger(value) &&
+    (value as number) >= NESTED_CAP_RANGE.min &&
+    (value as number) <= NESTED_CAP_RANGE.max
+  );
 }
 
 /** [Sleeping session] thresholds in seconds, keyed by the setting value. */
@@ -169,7 +177,7 @@ export const DEFAULT_LAYOUT: Layout = {
   memoryBudgetMb: 6144,
   memoryWarnEnabled: true,
   menuBarMode: "grouped",
-  nestedSessionCap: "4",
+  nestedSessionCap: 4,
   notifyPreference: "all",
   notifySound: "default",
   projectSortOverrides: {},

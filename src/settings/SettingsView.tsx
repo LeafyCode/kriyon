@@ -16,7 +16,7 @@ import {
 import { failureMessage } from "../ipc/failures.ts";
 import { ViewHeader } from "../layout/ViewHeader.tsx";
 import { useIntegration } from "../state/integration.ts";
-import { useLayout } from "../state/layout.ts";
+import { isNestedCap, NESTED_CAP_RANGE, useLayout } from "../state/layout.ts";
 import { useUpdates } from "../state/updates.ts";
 import { button, card, inputBox, sectionLabel } from "../theme/recipes.ts";
 import { THEMES } from "../theme/themes/index.ts";
@@ -37,7 +37,6 @@ import {
   MEMORY_BUDGET_OPTIONS,
   MEMORY_WARN_OPTIONS,
   MENU_BAR_OPTIONS,
-  NESTED_CAP_OPTIONS,
   NOTIFY_OPTIONS,
   NOTIFY_SOUND_OPTIONS,
   ON_OFF_OPTIONS,
@@ -145,6 +144,75 @@ const selectStyle: CSSProperties = {
 };
 
 const previewButtonStyle: CSSProperties = button("secondary");
+
+/** The [Nested session cap]: a typed number, or no limit. A number out of
+ *  range is put back on blur rather than saved; turning the limit back on
+ *  restores the last number. */
+function NestedCapControl({
+  onChange,
+  value,
+}: {
+  onChange: (cap: number | null) => void;
+  value: number | null;
+}) {
+  const [last, setLast] = useState(value ?? 4);
+  const [draft, setDraft] = useState(String(value ?? last));
+  const commit = () => {
+    const cap = Number(draft);
+    if (isNestedCap(cap)) {
+      setLast(cap);
+      onChange(cap);
+    } else {
+      setDraft(String(last));
+    }
+  };
+  return (
+    <div style={soundControlStyle}>
+      <input
+        aria-label="Most busy at once"
+        disabled={value === null}
+        max={NESTED_CAP_RANGE.max}
+        min={NESTED_CAP_RANGE.min}
+        onBlur={commit}
+        onChange={(event) => setDraft(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            commit();
+          }
+        }}
+        style={capInputStyle(value === null)}
+        type="number"
+        value={value === null ? "" : draft}
+      />
+      <label style={capNoneStyle}>
+        <input
+          checked={value === null}
+          onChange={(event) => onChange(event.target.checked ? null : last)}
+          type="checkbox"
+        />
+        No limit
+      </label>
+    </div>
+  );
+}
+
+function capInputStyle(off: boolean): CSSProperties {
+  return {
+    ...selectStyle,
+    opacity: off ? 0.5 : 1,
+    textAlign: "center",
+    width: "64px",
+  };
+}
+
+const capNoneStyle: CSSProperties = {
+  alignItems: "center",
+  color: tokens.color.ink.secondary,
+  cursor: "pointer",
+  display: "flex",
+  fontSize: "12.5px",
+  gap: tokens.space.xs,
+};
 
 /** One labelled preference row: a name (with optional hint) and its control. */
 function SettingRow({
@@ -656,14 +724,12 @@ export function SettingsView() {
         <SettingGroup label="Nested sessions">
           <SettingRow
             control={
-              <Segmented
-                ariaLabel="Sessions Claude may start"
+              <NestedCapControl
                 onChange={setNestedSessionCap}
-                options={NESTED_CAP_OPTIONS}
                 value={nestedSessionCap}
               />
             }
-            hint="When you ask Claude to start a session and this many sessions are already working, waiting on you or starting, Kriyon shows it as a suggestion you start yourself instead."
+            hint="When you ask Claude to start a session and this many other sessions are already working, waiting on you or starting, Kriyon shows it as a suggestion you start yourself instead."
             label="Most busy at once"
           />
         </SettingGroup>

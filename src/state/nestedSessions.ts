@@ -9,7 +9,7 @@ import {
   type SpawnResult,
 } from "./actions.ts";
 import { isStarting } from "./bootPhase.ts";
-import { nestedCapCount, useLayout } from "./layout.ts";
+import { useLayout } from "./layout.ts";
 import { useSessions } from "./sessions.ts";
 
 /**
@@ -129,12 +129,15 @@ export function startProblem(result: SpawnResult): string | null {
  * person mid-task, or still starting (launching or booting). A session
  * started a moment ago is idle until its first prompt lands, so starting
  * counts too: otherwise every request in one batch would see the same number
- * and all start.
+ * and all start. The session that asked is left out: it is always mid-turn
+ * when it asks, so counting it would make the same prompt start a session or
+ * hold it back depending only on how soon that turn ends.
  */
-function busyCount(): number {
+function busyCount(askingId: string): number {
   const { bootPhase, sessions } = useSessions.getState();
   return Object.values(sessions).filter(
     (s) =>
+      s.id !== askingId &&
       s.archivedAt === null &&
       (s.status === "running" ||
         s.status === "waiting" ||
@@ -150,8 +153,12 @@ async function handleOne({
   if (!useSessions.getState().sessions[leadSessionId]) {
     return;
   }
-  const cap = nestedCapCount(useLayout.getState().layout.nestedSessionCap);
-  const outcome = await nestedOutcome(request.initiation, busyCount(), cap);
+  const cap = useLayout.getState().layout.nestedSessionCap;
+  const outcome = await nestedOutcome(
+    request.initiation,
+    busyCount(leadSessionId),
+    cap
+  );
   if (outcome === "propose") {
     useSessionProposals.getState().add({ leadSessionId, request });
     return;

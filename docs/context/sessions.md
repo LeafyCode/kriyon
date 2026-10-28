@@ -121,13 +121,14 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
   no one else's words delivered since; otherwise `own_initiative`). Validated in the Rust core
   and kept once by its tool call id. _Avoid_: spawn request.
 - **Session proposal** — a [Session request] Kriyon did not start: Claude's own idea, or one
-  past the [Nested session cap]. Shown as a card under the lead session's header ("Claude
-  suggests a session", or "You asked for this session · held back by your limit on busy
-  sessions"), with Start session and Not now. In memory only. _Avoid_: suggestion
+  past the [Nested session cap]. Shown as a compact card under the lead session's header
+  ("Suggested by Claude", or "You asked · held back by your busy limit"), with the task folded
+  to one line, Start session and Not now. In memory only. _Avoid_: suggestion
   card, pending session.
-- **Nested session cap** — the most sessions that may be busy (working, waiting on the person,
-  or still starting) before a requested session becomes a [Session proposal] instead of
-  starting (Settings, default 4, or no cap). A session counts from the moment Kriyon starts it,
-  so requests arriving together count each other. _Avoid_: concurrency limit.
+- **Nested session cap** — the most other sessions that may be busy (working, waiting on the
+  person, or still starting) before a requested session becomes a [Session proposal] instead of
+  starting (Settings: a number from 1 to 16, default 4, or no limit). The session that asked is
+  not counted: it is always mid-turn when it asks. A session counts from the moment Kriyon
+  starts it, so requests arriving together count each other. _Avoid_: concurrency limit.
 - **Split off** — the sidebar menu action that starts a [Nested session] by hand from the
   [Spawn dialog], with an empty task. _Avoid_: fork, branch off.

@@ -773,9 +773,14 @@ test("parseLayout keeps the chosen mascot and hue, falling back to a cobalt Viso
 
 test("the nested session cap survives a save, defaults to 4 and drops a bad value", () => {
   const saved = (cap: unknown) => JSON.stringify({ nestedSessionCap: cap });
-  expect(parseLayoutForTest(saved("off"))?.nestedSessionCap).toBe("off");
-  expect(parseLayoutForTest(saved("6"))?.nestedSessionCap).toBe("6");
+  expect(parseLayoutForTest(saved(null))?.nestedSessionCap).toBeNull();
+  expect(parseLayoutForTest(saved(7))?.nestedSessionCap).toBe(7);
+  // Older builds saved a choice as text.
+  expect(parseLayoutForTest(saved("off"))?.nestedSessionCap).toBeNull();
+  expect(parseLayoutForTest(saved("6"))?.nestedSessionCap).toBe(6);
   // A layout saved before the setting existed, or a value no build wrote.
-  expect(parseLayoutForTest(JSON.stringify({}))?.nestedSessionCap).toBe("4");
-  expect(parseLayoutForTest(saved(9))?.nestedSessionCap).toBe("4");
+  expect(parseLayoutForTest(JSON.stringify({}))?.nestedSessionCap).toBe(4);
+  expect(parseLayoutForTest(saved(0))?.nestedSessionCap).toBe(4);
+  expect(parseLayoutForTest(saved(2.5))?.nestedSessionCap).toBe(4);
+  expect(parseLayoutForTest(saved(99))?.nestedSessionCap).toBe(4);
 });
