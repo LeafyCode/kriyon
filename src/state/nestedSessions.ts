@@ -20,7 +20,9 @@ import { useSessions } from "./sessions.ts";
  * (`nested_outcome`); this module carries it out.
  */
 
-/** A request Claude made that waits for the person: a [Session proposal]. */
+/** A request Claude made that waits: a [Session proposal]. One the person
+ *  asked for that only the cap held back starts by itself when a slot frees
+ *  ({@link installHeldBackStarts}); Claude's own idea waits for a click. */
 export type SessionProposal = NestedRequest;
 
 interface ProposalsState {
@@ -173,6 +175,92 @@ async function handleOne({
 
 let draining: Promise<void> = Promise.resolve();
 let sessionsLoaded = false;
+
+/** A held-back start is queued on {@link draining} and not yet run. */
+let releasing = false;
+
+/** The oldest session the person asked for that the cap held back. */
+function nextHeldBack(): SessionProposal | undefined {
+  return useSessionProposals
+    .getState()
+    .proposals.find((p) => p.request.initiation === "user_asked");
+}
+
+/** Whether one more session fits under the cap, for `leadId` asking. */
+function fitsUnderCap(leadId: string): boolean {
+  const cap = useLayout.getState().layout.nestedSessionCap;
+  return cap === null || busyCount(leadId) < cap;
+}
+
+/**
+ * Start held-back sessions the person asked for, oldest first, while the
+ * cap allows. Queued behind any requests being handled, so they count each
+ * other; the Rust core still makes each decision.
+ */
+function releaseHeldBack(): void {
+  const first = nextHeldBack();
+  if (releasing || !first || !fitsUnderCap(first.leadSessionId)) {
+    return;
+  }
+  releasing = true;
+  draining = draining.then(async () => {
+    try {
+      for (let next = nextHeldBack(); next; next = nextHeldBack()) {
+        const cap = useLayout.getState().layout.nestedSessionCap;
+        // biome-ignore lint/performance/noAwaitInLoops: in order, each counted.
+        const outcome = await nestedOutcome(
+          "user_asked",
+          busyCount(next.leadSessionId),
+          cap
+        );
+        if (outcome !== "start") {
+          return;
+        }
+        useSessionProposals.getState().dismiss(next.request.requestId);
+        const problem = startProblem(
+          await startNestedSession(next.leadSessionId, next.request, {
+            focus: false,
+          })
+        );
+        showToast(
+          problem
+            ? `“${next.request.title}”: ${problem}`
+            : `Started “${next.request.title}”`,
+          problem ? "error" : "success"
+        );
+      }
+    } catch {
+      // The decision couldn't be asked; the next change tries again.
+    } finally {
+      releasing = false;
+    }
+  });
+}
+
+/**
+ * Start a held-back session the moment a slot frees: when a session stops
+ * being busy, is archived, or the person raises the cap. Returns the
+ * unsubscribe.
+ */
+export function installHeldBackStarts(): () => void {
+  const stopSessions = useSessions.subscribe((state, prev) => {
+    if (
+      state.sessions !== prev.sessions ||
+      state.bootPhase !== prev.bootPhase
+    ) {
+      releaseHeldBack();
+    }
+  });
+  const stopLayout = useLayout.subscribe((state, prev) => {
+    if (state.layout.nestedSessionCap !== prev.layout.nestedSessionCap) {
+      releaseHeldBack();
+    }
+  });
+  return () => {
+    stopSessions();
+    stopLayout();
+  };
+}
 
 /**
  * The saved sessions are in the store: requests can find the session that

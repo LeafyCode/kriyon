@@ -79,7 +79,9 @@ test("a session you asked for that hit your limit says so, not that Claude sugge
   useSessions.setState({ activeSessionId: "lead" });
   render(<SessionProposals />);
   const card = screen.getByTestId("session-proposal-tu9");
-  expect(card).toHaveTextContent("You asked · held back by your busy limit");
+  expect(card).toHaveTextContent(
+    "You asked · starts when a busy session finishes"
+  );
   expect(card).not.toHaveTextContent("Suggested by Claude");
 });
 

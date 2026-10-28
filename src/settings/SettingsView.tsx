@@ -729,7 +729,7 @@ export function SettingsView() {
                 value={nestedSessionCap}
               />
             }
-            hint="When you ask Claude to start a session and this many other sessions are already working, waiting on you or starting, Kriyon shows it as a suggestion you start yourself instead."
+            hint="1 to 16. When you ask Claude to start a session and this many other sessions are already working, waiting on you or starting, it waits and starts by itself when one finishes."
             label="Most busy at once"
           />
         </SettingGroup>

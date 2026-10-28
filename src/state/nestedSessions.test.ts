@@ -44,6 +44,7 @@ import { DEFAULT_LAYOUT, useLayout } from "./layout.ts";
 import {
   branchForTitle,
   handleSessionRequests,
+  installHeldBackStarts,
   sessionRequestsReady,
   startNestedSession,
   useSessionProposals,
@@ -289,6 +290,46 @@ describe("handleSessionRequests", () => {
     ]);
     await deliver([{ leadSessionId: "lead", request: REQUEST }]);
     expect(child()).toBeDefined();
+  });
+
+  it("a session you asked for that hit the limit starts on its own once one finishes", async () => {
+    const stop = installHeldBackStarts();
+    useSessions.getState().addSession(
+      idleSession({
+        archivedAt: null,
+        baselineOid: null,
+        claudeSessionId: null,
+        createdAt: 2,
+        cwd: "/repo",
+        id: "other",
+        projectId: "p1",
+        title: "Other",
+        titleLocked: false,
+        worktreePath: null,
+      })
+    );
+    useSessions.getState().applyStatus("other", "running", "", false);
+    useLayout.getState().setNestedSessionCap(1);
+    await deliver([
+      { leadSessionId: "lead", request: REQUEST },
+      {
+        leadSessionId: "lead",
+        request: {
+          ...REQUEST,
+          initiation: "own_initiative",
+          requestId: "idea",
+        },
+      },
+    ]);
+    expect(child()).toBeUndefined();
+
+    useSessions.getState().applyStatus("other", "done", "", false);
+    await vi.waitFor(() => expect(child()).toBeDefined());
+    // Claude's own idea still waits for the person.
+    expect(
+      useSessionProposals.getState().proposals.map((p) => p.request.requestId)
+    ).toEqual(["idea"]);
+    stop();
   });
 
   it("a dismissed suggestion leaves the list", () => {

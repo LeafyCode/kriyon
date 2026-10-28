@@ -71,7 +71,7 @@ function ProposalCard({ proposal }: { proposal: SessionProposal }) {
             <span style={titleStyle}>{request.title}</span>
             <span style={reasonStyle}>
               {request.initiation === "user_asked"
-                ? "You asked · held back by your busy limit"
+                ? "You asked · starts when a busy session finishes"
                 : "Suggested by Claude"}
             </span>
           </div>

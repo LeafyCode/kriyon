@@ -45,8 +45,9 @@ subagent, or text in a file Claude read.
   background. The session that asked is not counted: it is always mid-turn
   when it asks, so counting it made the same prompt start a session or hold
   it back depending only on how soon that turn ended. Anything else is a [Session
-  proposal] card on the lead session, and nothing starts until the person
-  presses Start.
+  proposal] card on the lead session. Claude's own idea starts only when the
+  person presses Start; one the person asked for that only the cap held back
+  also starts by itself, oldest first, as soon as a slot frees.
 - **Requests are kept once.** Each is stored by its tool call's id in the
   activity store, so a re-read spool can't start it twice. The UI takes the
   requests only after the saved sessions have loaded, so a request posted
