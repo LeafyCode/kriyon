@@ -2,8 +2,10 @@ import { CircleCheck, MessageCircleQuestion, X } from "lucide-react";
 import { type CSSProperties, useMemo } from "react";
 import { create } from "zustand";
 import { basename } from "../state/actions.ts";
+import { useChanges } from "../state/changes.ts";
+import { changedFileCount } from "../state/changesView.ts";
 import { useLayout } from "../state/layout.ts";
-import { useSessions } from "../state/sessions.ts";
+import { sessionTouchedRelative, useSessions } from "../state/sessions.ts";
 import { recapHeadline, turnRecap } from "../state/turnRecap.ts";
 import { useUi } from "../state/ui.ts";
 import { button, iconButton } from "../theme/recipes.ts";
@@ -44,6 +46,14 @@ export function TurnRecapCard() {
     sessionId ? state.closed[sessionId] : undefined
   );
   const view = useLayout((state) => state.layout.transcriptView);
+  // The Changes tab's own count: it sees files Claude changed through the
+  // shell too, which the turn's edit events miss.
+  const touchedRelative = useSessions(() =>
+    sessionTouchedRelative(sessionId ?? "")
+  );
+  const changedFiles = useChanges((state) =>
+    changedFileCount(state, sessionId ?? "", touchedRelative)
+  );
   const recap = useMemo(
     () => (status ? turnRecap(events, activity, status) : null),
     [events, activity, status]
@@ -88,7 +98,7 @@ export function TurnRecapCard() {
         ) : null}
       </div>
       <div style={actionsStyle}>
-        {recap.files.length > 0 ? (
+        {recap.files.length > 0 || changedFiles > 0 ? (
           <button
             className="kr-hover-surface"
             onClick={() => useLayout.getState().setTranscriptView("changes")}

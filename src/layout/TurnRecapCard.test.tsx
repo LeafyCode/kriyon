@@ -6,6 +6,7 @@ import {
   screen,
 } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test } from "vitest";
+import { useChanges } from "../state/changes.ts";
 import { DEFAULT_LAYOUT, useLayout } from "../state/layout.ts";
 import { idleSession, type UiSession, useSessions } from "../state/sessions.ts";
 import { useUi } from "../state/ui.ts";
@@ -100,4 +101,40 @@ test("closing hides this turn's recap; none shows while Claude works", () => {
     }));
   });
   expect(screen.getByTestId("turn-recap")).toHaveTextContent("Ran 1 command");
+});
+
+test("Review changes shows when Claude changed files through the shell, not its edit tools", () => {
+  seed("done");
+  useSessions.setState({
+    events: {
+      s1: [
+        { id: "p-shell", kind: "prompt", text: "add square" },
+        {
+          cmd: "cat > src/math.js",
+          exit: 0,
+          id: "b1",
+          kind: "bash",
+          output: [],
+        },
+        { id: "a1", kind: "assistant", text: "Done." },
+      ],
+    },
+  });
+  render(<TurnRecapCard />);
+  expect(
+    screen.queryByRole("button", { name: "Review changes" })
+  ).not.toBeInTheDocument();
+
+  cleanup();
+  useChanges.setState((state) => ({
+    bySession: {
+      ...state.bySession,
+      s1: {
+        ...state.bySession.s1,
+        totals: { additions: 8, deletions: 0, files: 2 },
+      },
+    },
+  }));
+  render(<TurnRecapCard />);
+  expect(screen.getByRole("button", { name: "Review changes" })).toBeVisible();
 });
