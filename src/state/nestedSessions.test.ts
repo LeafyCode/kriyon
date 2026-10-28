@@ -51,6 +51,7 @@ import {
 import { idleSession, useSessions } from "./sessions.ts";
 
 const NESTED_BRANCH = /^nested\/flaky-test-[0-9a-f]{4}$/;
+const RETRY_BRANCH = /^fix-titlecase-[0-9a-f]{4}$/;
 
 const REQUEST: SessionRequest = {
   branch: null,
@@ -160,6 +161,23 @@ describe("startNestedSession", () => {
       { focus: false }
     );
     expect(vi.mocked(createWorktree).mock.calls[0]?.[1]).toMatch(NESTED_BRANCH);
+  });
+
+  it("takes a fresh branch when the one Claude named is taken", async () => {
+    vi.mocked(createWorktree).mockRejectedValueOnce(
+      new Error("fatal: a branch named 'fix-titlecase' already exists")
+    );
+    const result = await startNestedSession(
+      "lead",
+      { ...REQUEST, branch: "fix-titlecase", worktree: true },
+      { focus: false }
+    );
+    expect(result.ok).toBe(true);
+    const branches = vi.mocked(createWorktree).mock.calls.map((c) => c[1]);
+    expect(branches).toHaveLength(2);
+    expect(branches[0]).toBe("fix-titlecase");
+    expect(branches[1]).toMatch(RETRY_BRANCH);
+    expect(child()?.worktreePath).toBe(`/repo-worktrees/${branches[1]}`);
   });
 
   it("reports nothing when the lead session is gone", async () => {

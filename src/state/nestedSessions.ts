@@ -93,16 +93,25 @@ export function startNestedSession(
     createSession(project, lead.worktreePath ?? lead.cwd, request.title, opts);
     return Promise.resolve({ bootstrap: null, error: null, ok: true });
   }
+  const suffix = () => crypto.randomUUID().slice(0, 4);
+  const start = (branch: string) =>
+    createWorktreeSession(
+      project,
+      { branch, path: request.worktreePath },
+      request.title,
+      opts
+    );
   // Claude's name, when git would take it; otherwise one from the title.
-  const branch =
-    request.branch && validateBranchName(request.branch) === null
-      ? request.branch.trim()
-      : branchForTitle(request.title, crypto.randomUUID().slice(0, 4));
-  return createWorktreeSession(
-    project,
-    { branch, path: request.worktreePath },
-    request.title,
-    opts
+  const named = request.branch?.trim();
+  if (!(named && validateBranchName(named) === null)) {
+    return start(branchForTitle(request.title, suffix()));
+  }
+  // Claude's name is only a hint: nobody is told the branch, and the session
+  // runs wherever it starts. So when that name is taken (often by an earlier
+  // session on the same task), one retry with a fresh suffix starts it anyway.
+  // A failure with no setup report created nothing, so the retry is clean.
+  return start(named).then((first) =>
+    first.ok || first.bootstrap ? first : start(`${named}-${suffix()}`)
   );
 }
 
