@@ -2029,9 +2029,10 @@ test("a worktree row whose commits aren't merged says so", async () => {
       sortable={false}
     />
   );
-  expect(await screen.findByTestId("worktree-unmerged-w1")).toHaveTextContent(
-    "Not merged"
-  );
+  const chip = await screen.findByTestId("worktree-unmerged-w1");
+  expect(chip).toHaveTextContent("Not merged");
+  // First on the meta line, which clips at the row's edge.
+  expect(chip.parentElement?.firstElementChild).toBe(chip);
   vi.mocked(unmergedCommits).mockResolvedValue(0);
 });
 

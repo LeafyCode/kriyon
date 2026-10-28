@@ -386,6 +386,21 @@ function SessionMetaLine({
   }
   return (
     <span style={metaLineStyle}>
+      {/* First on the line: the meta line clips at the row's edge, and a
+          warning about unmerged work must never be the part cut off. */}
+      {branchLabel && work ? (
+        <span
+          data-testid={
+            dirty
+              ? `worktree-dirty-${sessionId}`
+              : `worktree-unmerged-${sessionId}`
+          }
+          style={workChipStyle}
+          title={work.title}
+        >
+          {work.label}
+        </span>
+      ) : null}
       {suggested > 0 ? (
         <span
           data-testid={`suggested-chip-${sessionId}`}
@@ -438,19 +453,6 @@ function SessionMetaLine({
         <span style={worktreeChipStyle} title="Runs in its own worktree">
           <GitBranch size={10} />
           {branchLabel}
-        </span>
-      ) : null}
-      {branchLabel && work ? (
-        <span
-          data-testid={
-            dirty
-              ? `worktree-dirty-${sessionId}`
-              : `worktree-unmerged-${sessionId}`
-          }
-          style={workChipStyle}
-          title={work.title}
-        >
-          {work.label}
         </span>
       ) : null}
     </span>
