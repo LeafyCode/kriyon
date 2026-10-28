@@ -23,6 +23,7 @@ vi.mock("../ipc/bridge.ts", async (importOriginal) => {
     repoStatus: vi.fn(() =>
       Promise.resolve({ ahead: 0, behind: 0, branch: "", dirtyCount: 0 })
     ),
+    unmergedCommits: vi.fn(() => Promise.resolve(0)),
   };
 });
 
@@ -36,6 +37,7 @@ import {
   activityDeleteSession,
   removeWorktree,
   repoStatus,
+  unmergedCommits,
 } from "../ipc/bridge.ts";
 import { prewarmSession } from "../state/actions.ts";
 import { useChanges } from "../state/changes.ts";
@@ -2007,6 +2009,30 @@ test("a worktree row shows its branch and a dot for uncommitted changes", async 
 
   expect(screen.getByText("feat-x")).toBeInTheDocument();
   expect(await screen.findByTestId("worktree-dirty-w1")).toBeInTheDocument();
+});
+
+test("a worktree row whose commits aren't merged says so", async () => {
+  vi.mocked(repoStatus).mockResolvedValue({
+    ahead: 0,
+    behind: 0,
+    branch: "feat-x",
+    dirtyCount: 0,
+  });
+  vi.mocked(unmergedCommits).mockResolvedValue(2);
+  seedWorktreeSession();
+  render(
+    <SessionRow
+      mode="calm"
+      onCloseSession={vi.fn()}
+      onSelect={vi.fn()}
+      sessionId="w1"
+      sortable={false}
+    />
+  );
+  expect(await screen.findByTestId("worktree-unmerged-w1")).toHaveTextContent(
+    "Not merged"
+  );
+  vi.mocked(unmergedCommits).mockResolvedValue(0);
 });
 
 test("removing a clean worktree archives the session", async () => {

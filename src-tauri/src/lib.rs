@@ -416,6 +416,7 @@ pub fn run() {
             git_cmd::create_worktree,
             git_cmd::remove_worktree,
             git_cmd::default_branch,
+            git_cmd::unmerged_commits,
             git_cmd::diff_worktree,
             git_cmd::diff_working_tree,
             git_cmd::merge_worktree,

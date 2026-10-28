@@ -39,6 +39,7 @@ import { useUi } from "../state/ui.ts";
 import { sessionUsageView, type UsageTone, usageTone } from "../state/usage.ts";
 import {
   type DirtyStatus,
+  useUnmergedCommits,
   useWorktreeDirty,
 } from "../state/useActiveSession.ts";
 import { unseenCount } from "../state/viewedMarker.ts";
@@ -62,6 +63,7 @@ import { closeConfirmFor, unsentWorkFor } from "./sessionClose.ts";
 import { type ContextTone, contextLine } from "./sessionContext.ts";
 import { sessionRowView } from "./sessionOrder.ts";
 import { useWorktreeRemoval } from "./useWorktreeRemoval.ts";
+import { worktreeWorkChip } from "./worktreeWorkChip.ts";
 
 /** How long the pointer rests on a row before its pty is opened early. Long
  *  enough that sweeping down the rail opens nothing. */
@@ -348,6 +350,7 @@ function SessionMetaLine({
   dirty,
   memoryMb,
   sessionId,
+  unmerged,
 }: {
   branchLabel: string | null;
   budgetMb: number;
@@ -356,8 +359,10 @@ function SessionMetaLine({
   dirty: boolean;
   memoryMb: number | undefined;
   sessionId: string;
+  unmerged: number;
 }): ReactNode {
   const memoryChip = memoryChipView(memoryMb, budgetMb);
+  const work = worktreeWorkChip(dirty, unmerged);
   const tasks = useSessions((state) => state.activity[sessionId]?.tasks);
   const progress = taskProgressTitle(tasks);
   const ctxPct = useSessions(
@@ -433,13 +438,19 @@ function SessionMetaLine({
         <span style={worktreeChipStyle} title="Runs in its own worktree">
           <GitBranch size={10} />
           {branchLabel}
-          {dirty ? (
-            <span
-              data-testid={`worktree-dirty-${sessionId}`}
-              style={worktreeDirtyDotStyle}
-              title="Uncommitted changes"
-            />
-          ) : null}
+        </span>
+      ) : null}
+      {branchLabel && work ? (
+        <span
+          data-testid={
+            dirty
+              ? `worktree-dirty-${sessionId}`
+              : `worktree-unmerged-${sessionId}`
+          }
+          style={workChipStyle}
+          title={work.title}
+        >
+          {work.label}
         </span>
       ) : null}
     </span>
@@ -708,13 +719,15 @@ const worktreeChipStyle: CSSProperties = {
   gap: "3px",
 };
 
-/** The uncommitted-changes dot beside a worktree row's branch name. */
-const worktreeDirtyDotStyle: CSSProperties = {
-  background: tokens.color.worktreeDirty,
-  borderRadius: "50%",
+/** The yellow warning while a worktree's work isn't in the base branch:
+ *  the "needs you" palette, since it is work waiting on the person. */
+const workChipStyle: CSSProperties = {
+  background: tokens.color.status.waitingSoft,
+  borderRadius: tokens.radius.sm,
+  color: tokens.color.status.waitingInk,
   flex: "none",
-  height: "5px",
-  width: "5px",
+  fontSize: "10.5px",
+  padding: "0 5px",
 };
 
 const confirmTextStyle: CSSProperties = {
@@ -1112,6 +1125,10 @@ export const SessionRow = memo(function SessionRow({
     sessionWorkingDir(session),
     session?.status ?? "idle"
   );
+  const unmerged = useUnmergedCommits(
+    session?.worktreePath ?? null,
+    session?.status ?? "idle"
+  );
   // Stable across renders (menu.anchorRef is a fixed ref object,
   // sortableRow.setNodeRef has stable identity from dnd-kit) so the row div
   // isn't detached/reattached from both refs on every render.
@@ -1206,6 +1223,7 @@ export const SessionRow = memo(function SessionRow({
             dirty={dirty === "dirty"}
             memoryMb={memoryMb}
             sessionId={sessionId}
+            unmerged={unmerged}
           />
           <HandoffLinkBadge
             onSelect={onSelect}

@@ -918,6 +918,12 @@ export function defaultBranch(repoPath: string): Promise<string> {
   return invoke("default_branch", { repoPath });
 }
 
+/** Commits the worktree at `worktreePath` has that its repo's default branch
+ *  doesn't. */
+export function unmergedCommits(worktreePath: string): Promise<number> {
+  return invoke("unmerged_commits", { worktreePath });
+}
+
 /** Diff a worktree's committed changes against `base` (`<base>...HEAD`). */
 export function diffWorktree(
   worktreePath: string,

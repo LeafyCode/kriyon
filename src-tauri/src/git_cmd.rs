@@ -114,6 +114,24 @@ pub fn default_branch(repo_path: &str) -> Result<String, String> {
     Err("could not determine a base branch".to_string())
 }
 
+/// How many commits the worktree at `worktree_path` has that its repo's
+/// default branch doesn't: work done there that hasn't been merged back.
+/// Backs the sidebar's "Not merged" chip.
+///
+/// # Errors
+/// Returns an error string if the path looks like a flag, no base branch can
+/// be found, or git fails.
+#[tauri::command(async)]
+pub fn unmerged_commits(worktree_path: &str) -> Result<u32, String> {
+    reject_flag_like("worktree_path", worktree_path)?;
+    let base = default_branch(worktree_path)?;
+    let range = format!("{base}..HEAD");
+    run_git(worktree_path, &["rev-list", "--count", &range, "--"])?
+        .trim()
+        .parse()
+        .map_err(|e| format!("unexpected rev-list output: {e}"))
+}
+
 /// Diff a worktree's committed changes against `base` (`<base>...HEAD`, the
 /// three-dot form = changes since the branch diverged). Backs the merge
 /// [Review panel].
@@ -1645,6 +1663,27 @@ mod tests {
         git_setup(repo, &["add", "."]);
         git_setup(repo, &["commit", "-m", "init"]);
         dir
+    }
+
+    #[test]
+    fn unmerged_commits_counts_a_worktree_branch_until_it_is_merged() {
+        if !git_available() {
+            return;
+        }
+        let dir = init_repo_with_commit();
+        let repo = dir.path().to_str().expect("utf8");
+        let wt = dir.path().join("wt");
+        let wt_path = wt.to_str().expect("utf8");
+        create_worktree(repo, "feat/x", wt_path).expect("worktree");
+        assert_eq!(unmerged_commits(wt_path).expect("counts"), 0);
+
+        std::fs::write(wt.join("g.txt"), "two\n").expect("write");
+        git_setup(wt_path, &["add", "."]);
+        git_setup(wt_path, &["commit", "-m", "two"]);
+        assert_eq!(unmerged_commits(wt_path).expect("counts"), 1);
+
+        git_setup(repo, &["merge", "--no-edit", "feat/x"]);
+        assert_eq!(unmerged_commits(wt_path).expect("counts"), 0);
     }
 
     #[test]

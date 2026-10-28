@@ -17,8 +17,9 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
 - **Project (Workspace)** — a git repository the user works in. Groups sessions in the sidebar.
 - **Worktree** — a git worktree (a checked-out branch at its own path). A session runs in a
   project root or one of its worktrees — always the user's explicit choice, never a default.
-  The sidebar marks a worktree session with its branch name and an uncommitted-changes dot,
-  and each project header counts its open worktree sessions (ADR-0011).
+  The sidebar marks a worktree session with its branch name and a yellow warning while its
+  work isn't in the base branch yet ("Not committed", then "Not merged"), and each project
+  header counts its open worktree sessions (ADR-0011).
 - **Session identity** (`SessionIdentity`) — a [Session]'s display fields, resolved by the single
   pure join of a `SessionRow` with its `ProjectRow`: the project's display name (or its id when the
   project row is orphaned), the [Session title], and the branch (the worktree path basename, or none

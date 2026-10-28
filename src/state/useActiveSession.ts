@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { repoStatus } from "../ipc/bridge.ts";
+import { repoStatus, unmergedCommits } from "../ipc/bridge.ts";
 import type { ProjectRow, RepoStatus, SessionStatus } from "../types.ts";
 import { sessionWorkingDir, type UiSession, useSessions } from "./sessions.ts";
 import { createSwrResource } from "./swrResource.ts";
@@ -150,6 +150,51 @@ export function useWorktreeDirty(
     };
   }, [path, status]);
   return dirty;
+}
+
+/** How often a worktree row with unmerged commits checks again, so the
+ *  warning clears soon after the branch is merged from anywhere. */
+const UNMERGED_RECHECK_MS = 30_000;
+
+/**
+ * Commits the worktree at `path` has that its default branch doesn't, for
+ * the row's "Not merged" warning; 0 for no worktree (`null`) or when git
+ * can't tell. Checks on each status transition, like
+ * {@link useWorktreeDirty}, and every {@link UNMERGED_RECHECK_MS} while the
+ * count is above 0: the merge usually happens in another session.
+ */
+export function useUnmergedCommits(
+  path: string | null,
+  status: SessionStatus
+): number {
+  const [count, setCount] = useState(0);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `status` is a deliberate extra dep — each session transition re-checks.
+  useEffect(() => {
+    if (!path) {
+      return;
+    }
+    let current = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const check = () => {
+      unmergedCommits(path)
+        .catch(() => 0)
+        .then((n) => {
+          if (!current) {
+            return;
+          }
+          setCount(n);
+          if (n > 0) {
+            timer = setTimeout(check, UNMERGED_RECHECK_MS);
+          }
+        });
+    };
+    check();
+    return () => {
+      current = false;
+      clearTimeout(timer);
+    };
+  }, [path, status]);
+  return path ? count : 0;
 }
 
 export interface ActiveSession {
