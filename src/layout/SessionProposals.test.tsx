@@ -39,7 +39,7 @@ afterEach(cleanup);
 test("shows the active session's suggestions with the task, and starts one on request", async () => {
   render(<SessionProposals />);
   const card = screen.getByTestId("session-proposal-tu9");
-  expect(card).toHaveTextContent("Claude suggests a session");
+  expect(card).toHaveTextContent("Suggested by Claude");
   expect(card).toHaveTextContent("Changelog");
   expect(card).toHaveTextContent("Update the changelog for the release");
   fireEvent.click(screen.getByLabelText("Own worktree"));
@@ -79,10 +79,8 @@ test("a session you asked for that hit your limit says so, not that Claude sugge
   useSessions.setState({ activeSessionId: "lead" });
   render(<SessionProposals />);
   const card = screen.getByTestId("session-proposal-tu9");
-  expect(card).toHaveTextContent(
-    "You asked for this session · held back by your limit on busy sessions"
-  );
-  expect(card).not.toHaveTextContent("Claude suggests");
+  expect(card).toHaveTextContent("You asked · held back by your busy limit");
+  expect(card).not.toHaveTextContent("Suggested by Claude");
 });
 
 test("a suggestion that starts but whose worktree setup fails says so", async () => {
@@ -100,4 +98,15 @@ test("a suggestion that starts but whose worktree setup fails says so", async ()
     )
   );
   expect(useSessionProposals.getState().proposals).toEqual([]);
+});
+
+test("a long task stays folded to one line until opened, then scrolls in a capped box", () => {
+  render(<SessionProposals />);
+  expect(screen.queryByTestId("proposal-task-tu9")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Show task" }));
+  const task = screen.getByTestId("proposal-task-tu9");
+  expect(task).toHaveTextContent("Update the changelog for the release");
+  expect(task).toHaveStyle({ overflowY: "auto" });
+  fireEvent.click(screen.getByRole("button", { name: "Hide task" }));
+  expect(screen.queryByTestId("proposal-task-tu9")).not.toBeInTheDocument();
 });
