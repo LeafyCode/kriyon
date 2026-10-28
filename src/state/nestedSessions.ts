@@ -68,7 +68,11 @@ export function startNestedSession(
     /** Where the worktree goes, when the person chose; else beside the repo. */
     worktreePath?: string;
   },
-  options: { focus: boolean }
+  options: {
+    focus: boolean;
+    /** The person started it with [Split off]; its report says so. */
+    splitOff?: boolean;
+  }
 ): Promise<SpawnResult> {
   const state = useSessions.getState();
   const lead = state.sessions[leadId];
@@ -83,7 +87,11 @@ export function startNestedSession(
     });
   }
   const report = lead.claudeSessionId
-    ? { from: crypto.randomUUID(), to: lead.claudeSessionId }
+    ? {
+        from: crypto.randomUUID(),
+        splitOff: options.splitOff,
+        to: lead.claudeSessionId,
+      }
     : undefined;
   const opts = {
     focus: options.focus,

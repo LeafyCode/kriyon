@@ -271,6 +271,12 @@ test("split off titles a nested session from its task's first words", () => {
 });
 
 test("split off starts an empty task and nests the new session under this one", async () => {
+  useSessions.setState((state) => ({
+    sessions: {
+      ...state.sessions,
+      pre: { ...state.sessions.pre, claudeSessionId: "lead-claude" },
+    },
+  }));
   useUi.getState().openSpawn({ predecessorId: "pre" }, { nest: true });
   render(<SpawnDialog />);
   expect(screen.getByTestId("spawn-dialog")).toHaveTextContent(
@@ -287,6 +293,10 @@ test("split off starts an empty task and nests the new session under this one", 
   expect(created?.nestedUnder).toBe("pre");
   expect(created?.parentSessionId ?? null).toBeNull();
   expect(created?.title).toBe("Write the release notes");
+  // Its report tells the lead the person split it off, not that it asked.
+  expect(
+    useSessions.getState().pendingReport[created?.id ?? ""]?.splitOff
+  ).toBe(true);
 });
 
 test("a split off whose worktree setup fails shows the failure instead of closing", async () => {

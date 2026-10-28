@@ -295,7 +295,15 @@ async function reportBack($, e, result) {
     const answer = cap(result?.text ?? "", 4000) || "(no reply text)";
     const ending =
       e.reason === "answer" ? "finished its task" : `stopped (${e.reason})`;
-    sending = `The nested session you started ${ending}. Its reply:\n\n${answer}`;
+    // Who started it and where it works, so the lead knows a session it
+    // didn't ask for (the person's Split off) and which folder holds it.
+    const pwd = cap((await $.env.get("PWD")) ?? "", 300);
+    const where = pwd ? ` (working in ${pwd})` : "";
+    const opening =
+      (await $.env.get("KRIYON_REPORT_BY")) === "person"
+        ? `The person split off a session from this one${where}. It ${ending}.`
+        : `The nested session you asked for${where} ${ending}.`;
+    sending = `${opening} Its reply:\n\n${answer}`;
     await $.session.send({ to: { sessionId: reportTo }, text: sending });
   } catch {
     // A report that can't be sent never troubles this session.

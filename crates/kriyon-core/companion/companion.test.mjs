@@ -333,6 +333,42 @@ test("the report is sent before the turn's hook returns, while its dispatch stil
   assert.equal(s.sent.length, 1);
 });
 
+test("the report says who started the session and where it works", async () => {
+  const asked = await freshHandlers("report-asked");
+  const s = nestedSession({
+    KRIYON_REPORT_FROM: "child-conv",
+    KRIYON_REPORT_TO: "parent-conv",
+    PWD: "/repo-worktrees/add-tests",
+  });
+  await asked.get("turn.complete")(
+    s.$,
+    { reason: "answer", turnId: "t1" },
+    async () => ({ text: "All green." })
+  );
+  assert.match(
+    s.sent[0].text,
+    /^The nested session you asked for \(working in \/repo-worktrees\/add-tests\) finished its task\./
+  );
+
+  // Split off by the person: the lead didn't ask, so it is told who did.
+  const split = await freshHandlers("report-split");
+  const p = nestedSession({
+    KRIYON_REPORT_BY: "person",
+    KRIYON_REPORT_FROM: "child-conv",
+    KRIYON_REPORT_TO: "parent-conv",
+    PWD: "/repo-worktrees/feat-split-test",
+  });
+  await split.get("turn.complete")(
+    p.$,
+    { reason: "answer", turnId: "t1" },
+    async () => ({ text: "All green." })
+  );
+  assert.match(
+    p.sent[0].text,
+    /^The person split off a session from this one \(working in \/repo-worktrees\/feat-split-test\)\. It finished its task\./
+  );
+});
+
 /** A `next` for a `tool.check` hook: the engine's verdict, raised by `plugin`. */
 function checkNext(plugin, decision = "deny") {
   const next = async () => ({ decision, reason: "auto mode gave no verdict" });

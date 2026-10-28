@@ -343,7 +343,7 @@ function splitOff(
       worktree: worktree.use,
       worktreePath: worktree.use ? worktree.path : undefined,
     },
-    { focus: true }
+    { focus: true, splitOff: true }
   );
 }
 

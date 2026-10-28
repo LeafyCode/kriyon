@@ -68,7 +68,10 @@ subagent, or text in a file Claude read.
   `tool.check` hook allows exactly that one call: raised by this plugin,
   carrying the report text being sent. Every other call keeps its verdict.
   A `claude` run inside the nested session inherits the env but has another
-  conversation id, so it never reports.
+  conversation id, so it never reports. The report opens with who started
+  the session and the folder it works in: a Split off session is launched
+  with `KRIYON_REPORT_BY=person`, so the lead is told the person split it
+  off rather than left to wonder who started it.
 
 ## Consequences
 

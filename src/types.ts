@@ -129,6 +129,8 @@ export interface PastSessionPage {
  */
 export interface NestedReport {
   from: string;
+  /** The person started it with [Split off], so the lead didn't ask for it. */
+  splitOff?: boolean;
   to: string;
 }
 

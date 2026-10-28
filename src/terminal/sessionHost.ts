@@ -359,12 +359,15 @@ function safeReport(report: NestedReport | undefined): NestedReport | null {
 }
 
 /** The env a [Nested session]'s `claude` starts with: where its companion
- *  sends its first answer, and which conversation may send it (ADR-0049). */
+ *  sends its first answer, which conversation may send it, and whether the
+ *  person split it off (ADR-0049). */
 function nestedLaunch(report: NestedReport | undefined): string {
   const safe = safeReport(report);
-  return safe
-    ? `KRIYON_REPORT_TO=${safe.to} KRIYON_REPORT_FROM=${safe.from} `
-    : "";
+  if (!safe) {
+    return "";
+  }
+  const by = safe.splitOff ? "KRIYON_REPORT_BY=person " : "";
+  return `KRIYON_REPORT_TO=${safe.to} KRIYON_REPORT_FROM=${safe.from} ${by}`;
 }
 
 /** Start a [Nested session]'s conversation under the id it reports from. */
