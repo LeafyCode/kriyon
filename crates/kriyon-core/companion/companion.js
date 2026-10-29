@@ -289,7 +289,11 @@ async function reportBack($, e, result) {
     // Only the conversation Kriyon started: a `claude -p` run inside the
     // nested session inherits the same env and must not speak for it.
     const from = (await $.env.get("KRIYON_REPORT_FROM")) ?? "";
-    if (!(reportTo && from) || from !== (await $.session.id())) {
+    if (!(reportTo && from)) {
+      return;
+    }
+    if (from !== (await $.session.id())) {
+      post($, { kind: "report", outcome: "skipped: another conversation" });
       return;
     }
     const answer = cap(result?.text ?? "", 4000) || "(no reply text)";
@@ -305,8 +309,14 @@ async function reportBack($, e, result) {
         : `The nested session you asked for${where} ${ending}.`;
     sending = `${opening} Its reply:\n\n${answer}`;
     await $.session.send({ to: { sessionId: reportTo }, text: sending });
-  } catch {
-    // A report that can't be sent never troubles this session.
+    post($, { kind: "report", outcome: "sent" });
+  } catch (err) {
+    // A report that can't be sent never troubles this session. The outcome
+    // goes to the bridge spool, so a lost report can be traced there.
+    post($, {
+      kind: "report",
+      outcome: `failed: ${cap(String(err?.message ?? err), 200)}`,
+    });
   } finally {
     sending = null;
   }

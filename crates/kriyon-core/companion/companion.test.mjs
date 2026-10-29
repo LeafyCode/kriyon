@@ -369,6 +369,40 @@ test("the report says who started the session and where it works", async () => {
   );
 });
 
+test("each report attempt tells Kriyon how it went, so a lost report can be traced", async () => {
+  const sentOne = await freshHandlers("trace-sent");
+  const s = nestedSession({
+    KRIYON_REPORT_FROM: "child-conv",
+    KRIYON_REPORT_TO: "parent-conv",
+  });
+  await sentOne.get("turn.complete")(
+    s.$,
+    { reason: "answer", turnId: "t1" },
+    async () => ({ text: "All green." })
+  );
+  await s.settle();
+  assert.deepEqual(
+    s.posted.filter((p) => p.kind === "report").map((p) => p.outcome),
+    ["sent"]
+  );
+
+  const other = await freshHandlers("trace-other");
+  const o = nestedSession({
+    KRIYON_REPORT_FROM: "someone-else",
+    KRIYON_REPORT_TO: "parent-conv",
+  });
+  await other.get("turn.complete")(
+    o.$,
+    { reason: "answer", turnId: "t1" },
+    async () => ({ text: "All green." })
+  );
+  await o.settle();
+  assert.deepEqual(
+    o.posted.filter((p) => p.kind === "report").map((p) => p.outcome),
+    ["skipped: another conversation"]
+  );
+});
+
 /** A `next` for a `tool.check` hook: the engine's verdict, raised by `plugin`. */
 function checkNext(plugin, decision = "deny") {
   const next = async () => ({ decision, reason: "auto mode gave no verdict" });
