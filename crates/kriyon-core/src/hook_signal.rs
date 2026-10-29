@@ -133,8 +133,9 @@ impl InFlight<'_> {
     }
 }
 
-/// Claude Code's id for a tool call a mod made with `$.tool.call`, not the
-/// model: such as the Companion's report, sent after its turn's `Stop`.
+/// Claude Code's id for a tool call a mod made, not the model: such as the
+/// `SendMessage` behind the Companion's report (`$.session.send`), sent after
+/// its turn's `Stop`.
 const MOD_CALL_PREFIX: &str = "toolu_plugin_";
 
 /// A tool call a mod made says nothing about whether Claude is working, so no
