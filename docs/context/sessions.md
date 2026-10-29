@@ -18,8 +18,9 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
 - **Worktree** — a git worktree (a checked-out branch at its own path). A session runs in a
   project root or one of its worktrees — always the user's explicit choice, never a default.
   The sidebar marks a worktree session with its branch name and a yellow warning while its
-  work isn't in the base branch yet ("Not committed", then "Not merged"), and each project
-  header counts its open worktree sessions (ADR-0011).
+  work isn't in the base branch yet ("Not committed", then "Not merged"; work counts as merged
+  once merging it into the base or its remote copy would change nothing, so a squash merge
+  clears it), and each project header counts its open worktree sessions (ADR-0011).
 - **Session identity** (`SessionIdentity`) — a [Session]'s display fields, resolved by the single
   pure join of a `SessionRow` with its `ProjectRow`: the project's display name (or its id when the
   project row is orphaned), the [Session title], and the branch (the worktree path basename, or none
@@ -125,8 +126,9 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
   past the [Nested session cap]. Shown as a compact card under the lead session's header
   ("Suggested by Claude", or "You asked · starts when a busy session finishes"), with the task
   folded to one line, Start session and Not now. One the person asked for starts by itself
-  when a slot frees; Claude's own idea waits for a click. In memory only. _Avoid_: suggestion
-  card, pending session.
+  when a slot frees, unless its lead session is archived; Claude's own idea waits for a click.
+  Closing the lead session drops its proposals. In memory only. _Avoid_: suggestion card,
+  pending session.
 - **Nested session cap** — the most other sessions that may be busy (working, waiting on the
   person, or still starting) before a requested session becomes a [Session proposal] instead of
   starting (Settings: a number from 1 to 16, default 4, or no limit). The session that asked is
