@@ -256,6 +256,38 @@ function askFor(proposal: SessionProposal) {
 }
 
 /**
+ * Ask the core about one held-back session and start it if it fits.
+ * `false` when the core says it doesn't, which ends the run.
+ */
+async function releaseOne(next: SessionProposal): Promise<boolean> {
+  const ask = askFor(next);
+  lastAsked = ask.key;
+  const outcome = await nestedOutcome("user_asked", ask.running, ask.cap);
+  if (outcome !== "start") {
+    return false;
+  }
+  // The answer took a moment: the request may have been started, dismissed
+  // or had its lead archived since. Then the run asks about the next one.
+  if (nextHeldBack()?.request.requestId !== next.request.requestId) {
+    return true;
+  }
+  const result = await startProposal(next, next.request.worktree);
+  if (result === null) {
+    return true;
+  }
+  // Not kept for another try: a freed slot would try it again unasked.
+  useSessionProposals.getState().dismiss(next.request.requestId);
+  const problem = startProblem(result);
+  showToast(
+    problem
+      ? `“${next.request.title}”: ${problem}`
+      : `Started “${next.request.title}”`,
+    problem ? "error" : "success"
+  );
+  return true;
+}
+
+/**
  * Start held-back sessions the person asked for, oldest first, while the
  * Rust core says they fit. Queued behind any requests being handled, so
  * they count each other.
@@ -273,26 +305,10 @@ function releaseHeldBack(): void {
   draining = draining.then(async () => {
     try {
       for (let next = nextHeldBack(); next; next = nextHeldBack()) {
-        const ask = askFor(next);
-        lastAsked = ask.key;
         // biome-ignore lint/performance/noAwaitInLoops: in order, each counted.
-        const outcome = await nestedOutcome("user_asked", ask.running, ask.cap);
-        if (outcome !== "start") {
+        if (!(await releaseOne(next))) {
           return;
         }
-        const result = await startProposal(next, next.request.worktree);
-        if (result === null) {
-          continue;
-        }
-        // Not kept for another try: a freed slot would try it again unasked.
-        useSessionProposals.getState().dismiss(next.request.requestId);
-        const problem = startProblem(result);
-        showToast(
-          problem
-            ? `“${next.request.title}”: ${problem}`
-            : `Started “${next.request.title}”`,
-          problem ? "error" : "success"
-        );
       }
     } catch {
       // The decision couldn't be asked; the next change tries again.

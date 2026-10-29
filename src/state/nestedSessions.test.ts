@@ -489,6 +489,37 @@ describe("handleSessionRequests", () => {
     stop();
   });
 
+  it.each([
+    [
+      "the person says Not now",
+      (id: string) => useSessionProposals.getState().dismiss(id),
+    ],
+    [
+      "its lead is archived",
+      () => useSessions.getState().archiveSession("lead"),
+    ],
+  ])(
+    "a held-back session doesn't start when, while the core answers, %s",
+    async (_, change) => {
+      const stop = await holdBack();
+      const [{ request }] = useSessionProposals.getState().proposals;
+      let answer: (outcome: "start") => void = () => undefined;
+      vi.mocked(nestedOutcome).mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            answer = resolve;
+          })
+      );
+      useSessions.getState().applyStatus("other", "done", "", false);
+      await vi.waitFor(() => expect(nestedOutcome).toHaveBeenCalledTimes(2));
+      change(request.requestId);
+      answer("start");
+      await handleSessionRequests();
+      expect(child()).toBeUndefined();
+      stop();
+    }
+  );
+
   it("the core, not this module, decides when a held-back session fits", async () => {
     const stop = await holdBack();
     // A core rule that lets user-asked sessions through at any count.
