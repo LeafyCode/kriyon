@@ -30,6 +30,7 @@ beforeEach(() => {
   useSessions.setState({ activeSessionId: "lead" });
   useSessionProposals.setState({
     proposals: [{ leadSessionId: "lead", request: REQUEST }],
+    starting: [],
   });
 });
 afterEach(cleanup);
@@ -58,6 +59,13 @@ test("a card whose request a freed slot is already starting says nothing", async
   await vi.waitFor(() => expect(startProposal).toHaveBeenCalled());
   await Promise.resolve();
   expect(showToast).not.toHaveBeenCalled();
+});
+
+test("a card whose request a freed slot is starting can't be started or put off", () => {
+  useSessionProposals.setState({ starting: ["tu9"] });
+  render(<SessionProposals />);
+  expect(screen.getByRole("button", { name: "Starting…" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Not now" })).toBeDisabled();
 });
 
 test("not now drops the suggestion without starting anything", () => {

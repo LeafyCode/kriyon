@@ -36,13 +36,14 @@ function ProposalCard({ proposal }: { proposal: SessionProposal }) {
   const { request } = proposal;
   const [worktree, setWorktree] = useState(request.worktree);
   const [showTask, setShowTask] = useState(false);
-  const [busy, setBusy] = useState(false);
+  // Starting from this card or from a freed slot: the store knows either way.
+  const busy = useSessionProposals((s) =>
+    s.starting.includes(request.requestId)
+  );
   const dismiss = () =>
     useSessionProposals.getState().dismiss(request.requestId);
   const start = async () => {
-    setBusy(true);
     const result = await startProposal(proposal, worktree);
-    setBusy(false);
     if (result === null) {
       // A freed slot is starting it already; that run reports.
       return;
