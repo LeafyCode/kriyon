@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { NestedRequest, SessionRequest } from "../types.ts";
 
 vi.mock("../ipc/bridge.ts", () => ({
@@ -17,6 +17,7 @@ vi.mock("../ipc/bridge.ts", () => ({
       )
   ),
   takeSessionRequests: vi.fn(() => Promise.resolve([])),
+  unwatchWorkingTree: vi.fn(() => Promise.resolve()),
   upsertProject: vi.fn(() => Promise.resolve()),
   upsertSession: vi.fn(() => Promise.resolve()),
   worktreePathFor: vi.fn((_r: string, b: string) =>
@@ -40,6 +41,7 @@ import {
   takeSessionRequests,
 } from "../ipc/bridge.ts";
 import { launchClaudeOnce } from "../terminal/sessionHost.ts";
+import { showToast } from "../ui/Toast.tsx";
 import { DEFAULT_LAYOUT, useLayout } from "./layout.ts";
 import {
   branchForTitle,
@@ -47,6 +49,7 @@ import {
   installHeldBackStarts,
   sessionRequestsReady,
   startNestedSession,
+  startProposal,
   useSessionProposals,
 } from "./nestedSessions.ts";
 import { idleSession, useSessions } from "./sessions.ts";
@@ -96,6 +99,38 @@ function seedLead(): void {
   );
 }
 
+/** The core's rule as of this writing, which the bridge mock answers with. */
+function coreRule(
+  initiation: string,
+  running: number,
+  cap: number | null
+): Promise<"propose" | "start"> {
+  return Promise.resolve(
+    initiation === "user_asked" && (cap === null || running < cap)
+      ? "start"
+      : "propose"
+  );
+}
+
+/** Another session, busy, so the busy count goes up by one. */
+function addBusySession(id: string): void {
+  useSessions.getState().addSession(
+    idleSession({
+      archivedAt: null,
+      baselineOid: null,
+      claudeSessionId: null,
+      createdAt: 3,
+      cwd: "/repo",
+      id,
+      projectId: "p1",
+      title: id,
+      titleLocked: false,
+      worktreePath: null,
+    })
+  );
+  useSessions.getState().applyStatus(id, "running", "", false);
+}
+
 function child() {
   return Object.values(useSessions.getState().sessions).find(
     (s) => s.nestedUnder === "lead"
@@ -105,9 +140,10 @@ function child() {
 beforeEach(() => {
   seedLead();
   useLayout.setState({ layout: DEFAULT_LAYOUT });
-  useSessionProposals.setState({ proposals: [] });
-  vi.mocked(createWorktree).mockClear();
-  vi.mocked(nestedOutcome).mockClear();
+  useSessionProposals.setState({ proposals: [], starting: [] });
+  vi.mocked(createWorktree).mockReset();
+  vi.mocked(nestedOutcome).mockReset().mockImplementation(coreRule);
+  vi.mocked(showToast).mockClear();
 });
 
 describe("startNestedSession", () => {
@@ -329,6 +365,116 @@ describe("handleSessionRequests", () => {
     expect(
       useSessionProposals.getState().proposals.map((p) => p.request.requestId)
     ).toEqual(["idea"]);
+    stop();
+  });
+
+  let stopWatching: () => void = () => undefined;
+  afterEach(() => {
+    stopWatching();
+    stopWatching = () => undefined;
+  });
+
+  /** One busy session and a cap of 1, so `REQUEST` is held back; returns
+   *  the hold-back watcher's unsubscribe. */
+  async function holdBack(): Promise<() => void> {
+    stopWatching = installHeldBackStarts();
+    const stop = stopWatching;
+    useSessions.getState().addSession(
+      idleSession({
+        archivedAt: null,
+        baselineOid: null,
+        claudeSessionId: null,
+        createdAt: 2,
+        cwd: "/repo",
+        id: "other",
+        projectId: "p1",
+        title: "Other",
+        titleLocked: false,
+        worktreePath: null,
+      })
+    );
+    useSessions.getState().applyStatus("other", "running", "", false);
+    useLayout.getState().setNestedSessionCap(1);
+    // Its own id: the module remembers what it last asked the core about.
+    const request = { ...REQUEST, requestId: crypto.randomUUID() };
+    await deliver([{ leadSessionId: "lead", request }]);
+    expect(useSessionProposals.getState().proposals).toHaveLength(1);
+    return stop;
+  }
+
+  it("a held-back session whose lead was archived does not start", async () => {
+    const stop = await holdBack();
+    useSessions.getState().archiveSession("lead");
+    useSessions.getState().applyStatus("other", "done", "", false);
+    await handleSessionRequests();
+    expect(child()).toBeUndefined();
+    stop();
+  });
+
+  it("a held-back request leaves with its lead when the lead is closed", async () => {
+    const stop = await holdBack();
+    useSessions.getState().removeSession("lead");
+    useSessions.getState().applyStatus("other", "done", "", false);
+    await handleSessionRequests();
+    expect(useSessionProposals.getState().proposals).toEqual([]);
+    expect(showToast).not.toHaveBeenCalled();
+    stop();
+  });
+
+  it("a slot freeing while the card starts the request doesn't start it twice", async () => {
+    const stop = await holdBack();
+    let finish: () => void = () => undefined;
+    vi.mocked(createWorktree).mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        })
+    );
+    const [proposal] = useSessionProposals.getState().proposals;
+    if (!proposal) {
+      throw new Error("expected a held-back request");
+    }
+    const fromCard = startProposal(proposal, true);
+    useSessions.getState().applyStatus("other", "done", "", false);
+    await handleSessionRequests();
+    finish();
+    await fromCard;
+    await handleSessionRequests();
+    expect(createWorktree).toHaveBeenCalledTimes(1);
+    expect(
+      Object.values(useSessions.getState().sessions).filter(
+        (s) => s.nestedUnder === "lead"
+      )
+    ).toHaveLength(1);
+    stop();
+  });
+
+  it("a slot that frees while the core is being asked still starts the held-back session", async () => {
+    const stop = await holdBack();
+    // Something else changes first, so the core is asked while still full.
+    let answer: (outcome: "propose") => void = () => undefined;
+    vi.mocked(nestedOutcome).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          answer = resolve;
+        })
+    );
+    addBusySession("third");
+    await vi.waitFor(() => expect(nestedOutcome).toHaveBeenCalledTimes(2));
+    // While it answers (from the old count), both busy sessions finish.
+    useSessions.getState().applyStatus("other", "done", "", false);
+    useSessions.getState().applyStatus("third", "done", "", false);
+    answer("propose");
+    await vi.waitFor(() => expect(child()).toBeDefined());
+    stop();
+  });
+
+  it("the core, not this module, decides when a held-back session fits", async () => {
+    const stop = await holdBack();
+    // A core rule that lets user-asked sessions through at any count.
+    vi.mocked(nestedOutcome).mockResolvedValue("start");
+    addBusySession("third");
+    await vi.waitFor(() => expect(child()).toBeDefined());
     stop();
   });
 

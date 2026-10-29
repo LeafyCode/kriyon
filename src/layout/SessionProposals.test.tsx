@@ -3,16 +3,13 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 vi.mock("../state/nestedSessions.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../state/nestedSessions.ts")>()),
-  startNestedSession: vi.fn(() =>
+  startProposal: vi.fn(() =>
     Promise.resolve({ bootstrap: null, error: null, ok: true })
   ),
 }));
 vi.mock("../ui/Toast.tsx", () => ({ showToast: vi.fn() }));
 
-import {
-  startNestedSession,
-  useSessionProposals,
-} from "../state/nestedSessions.ts";
+import { startProposal, useSessionProposals } from "../state/nestedSessions.ts";
 import { useSessions } from "../state/sessions.ts";
 import type { SessionRequest } from "../types.ts";
 import { showToast } from "../ui/Toast.tsx";
@@ -28,7 +25,8 @@ const REQUEST: SessionRequest = {
 };
 
 beforeEach(() => {
-  vi.mocked(startNestedSession).mockClear();
+  vi.mocked(startProposal).mockClear();
+  vi.mocked(showToast).mockClear();
   useSessions.setState({ activeSessionId: "lead" });
   useSessionProposals.setState({
     proposals: [{ leadSessionId: "lead", request: REQUEST }],
@@ -45,20 +43,28 @@ test("shows the active session's suggestions with the task, and starts one on re
   fireEvent.click(screen.getByLabelText("Own worktree"));
   fireEvent.click(screen.getByRole("button", { name: "Start session" }));
   await vi.waitFor(() =>
-    expect(useSessionProposals.getState().proposals).toEqual([])
+    expect(showToast).toHaveBeenCalledWith("Started “Changelog”", "success")
   );
-  expect(startNestedSession).toHaveBeenCalledWith(
-    "lead",
-    expect.objectContaining({ title: "Changelog", worktree: true }),
-    { focus: false }
+  expect(startProposal).toHaveBeenCalledWith(
+    { leadSessionId: "lead", request: REQUEST },
+    true
   );
+});
+
+test("a card whose request a freed slot is already starting says nothing", async () => {
+  vi.mocked(startProposal).mockResolvedValueOnce(null);
+  render(<SessionProposals />);
+  fireEvent.click(screen.getByRole("button", { name: "Start session" }));
+  await vi.waitFor(() => expect(startProposal).toHaveBeenCalled());
+  await Promise.resolve();
+  expect(showToast).not.toHaveBeenCalled();
 });
 
 test("not now drops the suggestion without starting anything", () => {
   render(<SessionProposals />);
   fireEvent.click(screen.getByRole("button", { name: "Not now" }));
   expect(useSessionProposals.getState().proposals).toEqual([]);
-  expect(startNestedSession).not.toHaveBeenCalled();
+  expect(startProposal).not.toHaveBeenCalled();
 });
 
 test("another session's suggestions stay off this one", () => {
@@ -86,7 +92,7 @@ test("a session you asked for that hit your limit says so, not that Claude sugge
 });
 
 test("a suggestion that starts but whose worktree setup fails says so", async () => {
-  vi.mocked(startNestedSession).mockResolvedValueOnce({
+  vi.mocked(startProposal).mockResolvedValueOnce({
     bootstrap: { ok: false, output: "boom", steps: [] },
     error: null,
     ok: false,
@@ -99,7 +105,6 @@ test("a suggestion that starts but whose worktree setup fails says so", async ()
       "error"
     )
   );
-  expect(useSessionProposals.getState().proposals).toEqual([]);
 });
 
 test("a long task stays folded to one line until opened, then scrolls in a capped box", () => {

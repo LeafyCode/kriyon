@@ -1,8 +1,8 @@
 import { type CSSProperties, useState } from "react";
 import {
   type SessionProposal,
-  startNestedSession,
   startProblem,
+  startProposal,
   useSessionProposals,
 } from "../state/nestedSessions.ts";
 import { useSessions } from "../state/sessions.ts";
@@ -33,7 +33,7 @@ export function SessionProposals() {
 }
 
 function ProposalCard({ proposal }: { proposal: SessionProposal }) {
-  const { leadSessionId, request } = proposal;
+  const { request } = proposal;
   const [worktree, setWorktree] = useState(request.worktree);
   const [showTask, setShowTask] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -41,19 +41,18 @@ function ProposalCard({ proposal }: { proposal: SessionProposal }) {
     useSessionProposals.getState().dismiss(request.requestId);
   const start = async () => {
     setBusy(true);
-    const result = await startNestedSession(
-      leadSessionId,
-      { ...request, worktree },
-      { focus: false }
-    );
+    const result = await startProposal(proposal, worktree);
     setBusy(false);
+    if (result === null) {
+      // A freed slot is starting it already; that run reports.
+      return;
+    }
     const problem = startProblem(result);
     if (!result.ok && result.bootstrap === null) {
-      // Nothing was created: keep the card so they can try again.
+      // Nothing was created: the card stays so they can try again.
       showToast(`“${request.title}”: ${problem}`, "error");
       return;
     }
-    dismiss();
     showToast(
       problem ? `“${request.title}”: ${problem}` : `Started “${request.title}”`,
       problem ? "error" : "success"

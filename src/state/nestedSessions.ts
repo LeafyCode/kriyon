@@ -30,6 +30,8 @@ interface ProposalsState {
   dismiss: (requestId: string) => void;
   /** Oldest first. In memory only: a restart forgets an unanswered one. */
   proposals: SessionProposal[];
+  /** Request ids {@link startProposal} is starting right now. */
+  starting: string[];
 }
 
 export const useSessionProposals = create<ProposalsState>((set) => ({
@@ -48,7 +50,40 @@ export const useSessionProposals = create<ProposalsState>((set) => ({
       ),
     })),
   proposals: [],
+  starting: [],
 }));
+
+/**
+ * Start a [Session proposal] from its card or from a freed slot, once: `null`
+ * when it is already being started, so the two can't start it twice. It
+ * leaves the list once something was created; when nothing was, it stays so
+ * the person can try again.
+ */
+export async function startProposal(
+  { leadSessionId, request }: SessionProposal,
+  worktree: boolean
+): Promise<SpawnResult | null> {
+  const id = request.requestId;
+  if (useSessionProposals.getState().starting.includes(id)) {
+    return null;
+  }
+  useSessionProposals.setState((s) => ({ starting: [...s.starting, id] }));
+  try {
+    const result = await startNestedSession(
+      leadSessionId,
+      { ...request, worktree },
+      { focus: false }
+    );
+    if (result.ok || result.bootstrap !== null) {
+      useSessionProposals.getState().dismiss(id);
+    }
+    return result;
+  } finally {
+    useSessionProposals.setState((s) => ({
+      starting: s.starting.filter((x) => x !== id),
+    }));
+  }
+}
 
 /** A branch for a nested worktree when Claude named none:
  *  `nested/<title-slug>-<suffix>`. */
@@ -186,50 +221,68 @@ let sessionsLoaded = false;
 
 /** A held-back start is queued on {@link draining} and not yet run. */
 let releasing = false;
+/** Something changed while {@link releasing}: look again once it ends. */
+let releaseAgain = false;
+/** What the core was last asked about a held-back session, so a store change
+ *  that moves none of it doesn't ask again. */
+let lastAsked = "";
 
-/** The oldest session the person asked for that the cap held back. */
+/** The oldest session the person asked for that the cap held back, whose
+ *  lead is still open and that nothing is starting already. */
 function nextHeldBack(): SessionProposal | undefined {
-  return useSessionProposals
-    .getState()
-    .proposals.find((p) => p.request.initiation === "user_asked");
+  const { proposals, starting } = useSessionProposals.getState();
+  const { sessions } = useSessions.getState();
+  return proposals.find(
+    (p) =>
+      p.request.initiation === "user_asked" &&
+      sessions[p.leadSessionId]?.archivedAt === null &&
+      !starting.includes(p.request.requestId)
+  );
 }
 
-/** Whether one more session fits under the cap, for `leadId` asking. */
-function fitsUnderCap(leadId: string): boolean {
+/** The core's inputs for starting `proposal` now. */
+function askFor(proposal: SessionProposal) {
+  const running = busyCount(proposal.leadSessionId);
   const cap = useLayout.getState().layout.nestedSessionCap;
-  return cap === null || busyCount(leadId) < cap;
+  return {
+    cap,
+    key: `${proposal.request.requestId}:${running}:${cap}`,
+    running,
+  };
 }
 
 /**
  * Start held-back sessions the person asked for, oldest first, while the
- * cap allows. Queued behind any requests being handled, so they count each
- * other; the Rust core still makes each decision.
+ * Rust core says they fit. Queued behind any requests being handled, so
+ * they count each other.
  */
 function releaseHeldBack(): void {
+  if (releasing) {
+    releaseAgain = true;
+    return;
+  }
   const first = nextHeldBack();
-  if (releasing || !first || !fitsUnderCap(first.leadSessionId)) {
+  if (!first || askFor(first).key === lastAsked) {
     return;
   }
   releasing = true;
   draining = draining.then(async () => {
     try {
       for (let next = nextHeldBack(); next; next = nextHeldBack()) {
-        const cap = useLayout.getState().layout.nestedSessionCap;
+        const ask = askFor(next);
+        lastAsked = ask.key;
         // biome-ignore lint/performance/noAwaitInLoops: in order, each counted.
-        const outcome = await nestedOutcome(
-          "user_asked",
-          busyCount(next.leadSessionId),
-          cap
-        );
+        const outcome = await nestedOutcome("user_asked", ask.running, ask.cap);
         if (outcome !== "start") {
           return;
         }
+        const result = await startProposal(next, next.request.worktree);
+        if (result === null) {
+          continue;
+        }
+        // Not kept for another try: a freed slot would try it again unasked.
         useSessionProposals.getState().dismiss(next.request.requestId);
-        const problem = startProblem(
-          await startNestedSession(next.leadSessionId, next.request, {
-            focus: false,
-          })
-        );
+        const problem = startProblem(result);
         showToast(
           problem
             ? `“${next.request.title}”: ${problem}`
@@ -239,10 +292,26 @@ function releaseHeldBack(): void {
       }
     } catch {
       // The decision couldn't be asked; the next change tries again.
+      lastAsked = "";
     } finally {
       releasing = false;
+      if (releaseAgain) {
+        releaseAgain = false;
+        releaseHeldBack();
+      }
     }
   });
+}
+
+/** Drop the proposals of a lead that was closed: nobody can see them. */
+function dropOrphanedProposals(): void {
+  const { sessions } = useSessions.getState();
+  const { dismiss, proposals } = useSessionProposals.getState();
+  for (const p of proposals) {
+    if (!sessions[p.leadSessionId]) {
+      dismiss(p.request.requestId);
+    }
+  }
 }
 
 /**
@@ -252,6 +321,9 @@ function releaseHeldBack(): void {
  */
 export function installHeldBackStarts(): () => void {
   const stopSessions = useSessions.subscribe((state, prev) => {
+    if (state.sessions !== prev.sessions) {
+      dropOrphanedProposals();
+    }
     if (
       state.sessions !== prev.sessions ||
       state.bootPhase !== prev.bootPhase
