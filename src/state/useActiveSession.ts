@@ -106,10 +106,11 @@ function toDirtyStatus(value: RepoStatus | undefined): DirtyStatus {
 /**
  * Whether the working tree at `path` has uncommitted changes — drives the
  * sidebar row's worktree dirty dot and its files-touched badge. Shares
- * {@link useRepoStatus}'s cache, but revalidates on the session's status
- * transitions instead of a polling loop: the check refreshes exactly when
- * the session stops/starts/waits (the moments the user looks at it), so a
- * busy sidebar never generates a git-status storm. `path` is "" for an
+ * {@link useRepoStatus}'s cache, and revalidates on the session's status
+ * transitions: the check refreshes when the session stops/starts/waits (the
+ * moments the user looks at it). The only timed check is
+ * `recheckWhileDirtyMs`, and only while the tree is dirty, so a busy sidebar
+ * of clean rows never generates a git-status storm. `path` is "" for an
  * unresolved location — the hook is then inert.
  *
  * `repoStatusResource.subscribe` only fires on a *successful* revalidation
@@ -173,15 +174,18 @@ export const WORKTREE_RECHECK_MS = 30_000;
  * Commits the worktree at `path` has that its default branch doesn't, for
  * the row's "Not merged" warning; 0 for no worktree (`null`) or when git
  * can't tell. Checks on each status transition, like
- * {@link useWorktreeDirty}, and every {@link WORKTREE_RECHECK_MS} while the
- * count is above 0: the merge usually happens in another session.
+ * {@link useWorktreeDirty}, whenever the tree's `dirty` state changes (work
+ * committed from another session turns into commits to count), and every
+ * {@link WORKTREE_RECHECK_MS} while the count is above 0: the merge usually
+ * happens in another session.
  */
 export function useUnmergedCommits(
   path: string | null,
-  status: SessionStatus
+  status: SessionStatus,
+  dirty: DirtyStatus
 ): number {
   const [count, setCount] = useState(0);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: `status` is a deliberate extra dep — each session transition re-checks.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `status` and `dirty` are deliberate extra deps — each transition re-checks.
   useEffect(() => {
     if (!path) {
       return;
@@ -206,7 +210,7 @@ export function useUnmergedCommits(
       current = false;
       clearTimeout(timer);
     };
-  }, [path, status]);
+  }, [path, status, dirty]);
   return path ? count : 0;
 }
 

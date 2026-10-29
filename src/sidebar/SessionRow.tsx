@@ -1131,7 +1131,8 @@ export const SessionRow = memo(function SessionRow({
   );
   const unmerged = useUnmergedCommits(
     session?.worktreePath ?? null,
-    session?.status ?? "idle"
+    session?.status ?? "idle",
+    dirty
   );
   // Stable across renders (menu.anchorRef is a fixed ref object,
   // sortableRow.setNodeRef has stable identity from dnd-kit) so the row div

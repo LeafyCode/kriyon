@@ -68,6 +68,8 @@ function makeProject(id: string): ProjectRow {
 }
 
 beforeEach(() => {
+  vi.useRealTimers();
+  vi.mocked(unmergedCommits).mockResolvedValue(0);
   useSessions.setState({
     activeSessionId: null,
     activity: {},
@@ -2033,7 +2035,6 @@ test("a worktree row whose commits aren't merged says so", async () => {
   expect(chip).toHaveTextContent("Not merged");
   // First on the meta line, which clips at the row's edge.
   expect(chip.parentElement?.firstElementChild).toBe(chip);
-  vi.mocked(unmergedCommits).mockResolvedValue(0);
 });
 
 test("a worktree's warning clears after another session commits its work", async () => {
@@ -2062,11 +2063,15 @@ test("a worktree's warning clears after another session commits its work", async
     branch: "feat-x",
     dirtyCount: 0,
   });
+  vi.mocked(unmergedCommits).mockResolvedValue(1);
   await act(async () => {
     await vi.advanceTimersByTimeAsync(30_000);
   });
   expect(screen.queryByTestId("worktree-dirty-w1")).not.toBeInTheDocument();
-  vi.useRealTimers();
+  // Committed is not merged: the row now warns about that instead.
+  expect(await screen.findByTestId("worktree-unmerged-w1")).toHaveTextContent(
+    "Not merged"
+  );
 });
 
 test("removing a clean worktree archives the session", async () => {
