@@ -184,6 +184,10 @@ const MATCH_2 = /suggestion/;
 const MATCH_3 = /Not started/;
 const MATCH_4 = /finished its task/;
 const MATCH_5 = /All green\./;
+const ASKED_REPORT_OPENING =
+  /^The nested session you asked for \(working in \/repo-worktrees\/add-tests\) finished its task\./;
+const SPLIT_REPORT_OPENING =
+  /^The person split off a session from this one \(working in \/repo-worktrees\/feat-split-test\)\. It finished its task\./;
 
 const pass = async (e) => e;
 
@@ -345,10 +349,7 @@ test("the report says who started the session and where it works", async () => {
     { reason: "answer", turnId: "t1" },
     async () => ({ text: "All green." })
   );
-  assert.match(
-    s.sent[0].text,
-    /^The nested session you asked for \(working in \/repo-worktrees\/add-tests\) finished its task\./
-  );
+  assert.match(s.sent[0].text, ASKED_REPORT_OPENING);
 
   // Split off by the person: the lead didn't ask, so it is told who did.
   const split = await freshHandlers("report-split");
@@ -363,10 +364,7 @@ test("the report says who started the session and where it works", async () => {
     { reason: "answer", turnId: "t1" },
     async () => ({ text: "All green." })
   );
-  assert.match(
-    p.sent[0].text,
-    /^The person split off a session from this one \(working in \/repo-worktrees\/feat-split-test\)\. It finished its task\./
-  );
+  assert.match(p.sent[0].text, SPLIT_REPORT_OPENING);
 });
 
 test("each report attempt tells Kriyon how it went, so a lost report can be traced", async () => {
