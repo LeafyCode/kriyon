@@ -71,7 +71,12 @@ subagent, or text in a file Claude read.
   conversation id, so it never reports. The report opens with who started
   the session and the folder it works in: a Split off session is launched
   with `KRIYON_REPORT_BY=person`, so the lead is told the person split it
-  off rather than left to wonder who started it.
+  off rather than left to wonder who started it. Each attempt's outcome
+  (sent, skipped and why, or failed) goes to the bridge spool for tracing.
+  A known limit of Claude Code's delivery: when the person interrupts the
+  lead session's turn, Claude Code holds messages that arrive afterwards
+  until the lead's next turn ends, then delivers them. Nothing is lost, but
+  the report waits for the person's next prompt there.
 
 ## Consequences
 
