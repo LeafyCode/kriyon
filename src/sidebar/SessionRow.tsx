@@ -730,7 +730,7 @@ const workChipStyle: CSSProperties = {
   color: tokens.color.status.waitingInk,
   flex: "none",
   fontSize: "10.5px",
-  padding: "0 5px",
+  padding: `0 ${tokens.space.xs}`,
 };
 
 const confirmTextStyle: CSSProperties = {
