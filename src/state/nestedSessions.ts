@@ -151,6 +151,10 @@ export function startNestedSession(
   if (!(named && validateBranchName(named) === null)) {
     return start(branchForTitle(request.title, suffix()));
   }
+  // The person typed this one in Split off: start on it or say why not.
+  if (options.splitOff) {
+    return start(named);
+  }
   // Claude's name is only a hint: nobody is told the branch, and the session
   // runs wherever it starts. So when that name is taken (often by an earlier
   // session on the same task), one retry with a fresh suffix starts it anyway.

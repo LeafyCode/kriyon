@@ -217,6 +217,26 @@ describe("startNestedSession", () => {
     expect(child()?.worktreePath).toBe(`/repo-worktrees/${branches[1]}`);
   });
 
+  it("keeps the branch the person typed for Split off, even when it is taken", async () => {
+    vi.mocked(createWorktree).mockRejectedValueOnce(
+      new Error("fatal: a branch named 'fix-titlecase' already exists")
+    );
+    const result = await startNestedSession(
+      "lead",
+      {
+        ...REQUEST,
+        branch: "fix-titlecase",
+        worktree: true,
+        worktreePath: "/repo-worktrees/fix-titlecase",
+      },
+      { focus: true, splitOff: true }
+    );
+    expect(result.ok).toBe(false);
+    expect(vi.mocked(createWorktree).mock.calls.map((c) => c[1])).toEqual([
+      "fix-titlecase",
+    ]);
+  });
+
   it("reports nothing when the lead session is gone", async () => {
     const result = await startNestedSession("missing", REQUEST, {
       focus: false,
