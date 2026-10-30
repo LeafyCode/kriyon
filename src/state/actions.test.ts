@@ -49,6 +49,7 @@ import {
   focusSessionFromNotification,
   launchActiveSession,
   noteResumeFailed,
+  prewarmSession,
   restartSessionFresh,
   resumePastSession,
   sessionBecameLive,
@@ -56,6 +57,7 @@ import {
   sleepIdleSessionsNow,
   spawnFollowUpSession,
 } from "./actions.ts";
+import { useBootTimes } from "./bootTiming.ts";
 import { DEFAULT_LAYOUT, useLayout } from "./layout.ts";
 import {
   idleSession,
@@ -640,6 +642,132 @@ describe("resume lifecycle transitions", () => {
     await launchActiveSession("s1");
     expect(launchClaudeOnce).not.toHaveBeenCalled();
     expect(phaseOf("s1")).not.toBe("booting");
+  });
+
+  it("a launch shows as launching until it settles, and a failed one returns to rest", async () => {
+    seedSession("s1");
+    let finish: (result: LaunchResult) => void = () => undefined;
+    vi.mocked(launchClaudeOnce).mockReturnValueOnce(
+      new Promise((resolve) => {
+        finish = resolve;
+      })
+    );
+    const pending = launchActiveSession("s1");
+    expect(phaseOf("s1")).toBe("launching");
+    finish({ kind: "writeFailed" });
+    await pending;
+    expect(phaseOf("s1")).toBe("idle");
+  });
+
+  it("a second launch of the same session joins the first instead of clearing it", async () => {
+    seedSession("s1");
+    vi.mocked(launchClaudeOnce).mockClear();
+    let finish: (result: LaunchResult) => void = () => undefined;
+    vi.mocked(launchClaudeOnce).mockReturnValueOnce(
+      new Promise((resolve) => {
+        finish = resolve;
+      })
+    );
+    // Opened in the background, then the user clicks the row mid-launch.
+    const first = launchActiveSession("s1");
+    const second = launchActiveSession("s1");
+    await Promise.resolve();
+    expect(phaseOf("s1")).toBe("launching");
+    finish({ kind: "launched", resuming: false });
+    await Promise.all([first, second]);
+    expect(launchClaudeOnce).toHaveBeenCalledTimes(1);
+    expect(phaseOf("s1")).toBe("booting");
+  });
+
+  it("a session can launch again once its last attempt settled", async () => {
+    seedSession("s1");
+    vi.mocked(launchClaudeOnce).mockClear();
+    vi.mocked(launchClaudeOnce).mockResolvedValueOnce({ kind: "writeFailed" });
+    await launchActiveSession("s1");
+    vi.mocked(launchClaudeOnce).mockResolvedValueOnce({
+      kind: "launched",
+      resuming: false,
+    });
+    await launchActiveSession("s1");
+    expect(launchClaudeOnce).toHaveBeenCalledTimes(2);
+    expect(phaseOf("s1")).toBe("booting");
+  });
+
+  it("a launch whose pty fails to open returns to rest", async () => {
+    seedSession("s1");
+    vi.mocked(ensureSession).mockRejectedValueOnce(new Error("spawn timeout"));
+    await launchActiveSession("s1");
+    expect(phaseOf("s1")).toBe("idle");
+  });
+
+  it("a launch that throws still returns to rest", async () => {
+    seedSession("s1");
+    vi.mocked(launchClaudeOnce).mockRejectedValueOnce(new Error("boom"));
+    await expect(launchActiveSession("s1")).rejects.toThrow("boom");
+    expect(phaseOf("s1")).toBe("idle");
+  });
+
+  it("activating a session claude already runs in leaves it as it was", async () => {
+    seedSession("s1");
+    vi.mocked(launchClaudeOnce).mockResolvedValueOnce({ kind: "reattached" });
+    await launchActiveSession("s1");
+    expect(phaseOf("s1")).toBe("idle");
+    useSessions.getState().applyBootEvent("s1", "started");
+    vi.mocked(launchClaudeOnce).mockResolvedValueOnce({ kind: "reattached" });
+    await launchActiveSession("s1");
+    expect(phaseOf("s1")).toBe("live");
+  });
+
+  it("times a boot from launch to live", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    seedSession("s1");
+    beginBoot("s1");
+    vi.setSystemTime(11_300);
+    sessionBecameLive("s1");
+    expect(useBootTimes.getState().ms.s1).toBe(1300);
+    vi.useRealTimers();
+  });
+
+  it("a live signal with no boot underway records no time", () => {
+    seedSession("s1");
+    useBootTimes.setState({ ms: {}, started: {} });
+    sessionBecameLive("s1");
+    expect(useBootTimes.getState().ms.s1).toBeUndefined();
+  });
+
+  it("prewarmSession opens the pty early without launching claude", async () => {
+    // The first session added becomes the active one; s2 is not mounted.
+    seedSession("s1");
+    seedSession("s2");
+    vi.mocked(ensureSession).mockClear();
+    vi.mocked(launchClaudeOnce).mockClear();
+    await prewarmSession("s2");
+    expect(ensureSession).toHaveBeenCalledWith(
+      "s2",
+      "/tmp",
+      expect.any(Function)
+    );
+    expect(launchClaudeOnce).not.toHaveBeenCalled();
+  });
+
+  it("prewarmSession leaves a pane that is already mounted alone", async () => {
+    seedSession("s1");
+    useSessions.getState().setActiveSession("s1");
+    vi.mocked(ensureSession).mockClear();
+    await prewarmSession("s1");
+    expect(ensureSession).not.toHaveBeenCalled();
+  });
+
+  it("prewarmSession swallows a pty that fails to open", async () => {
+    seedSession("s1");
+    seedSession("s2");
+    vi.mocked(ensureSession).mockRejectedValueOnce(new Error("spawn timeout"));
+    await expect(prewarmSession("s2")).resolves.toBeUndefined();
+    expect(showToast).not.toHaveBeenCalledWith(
+      "Could not start the session",
+      "error"
+    );
   });
 });
 

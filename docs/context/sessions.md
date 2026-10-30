@@ -17,8 +17,10 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
 - **Project (Workspace)** — a git repository the user works in. Groups sessions in the sidebar.
 - **Worktree** — a git worktree (a checked-out branch at its own path). A session runs in a
   project root or one of its worktrees — always the user's explicit choice, never a default.
-  The sidebar marks a worktree session with its branch name and an uncommitted-changes dot,
-  and each project header counts its open worktree sessions (ADR-0011).
+  The sidebar marks a worktree session with its branch name and a yellow warning while its
+  work isn't in the base branch yet ("Not committed", then "Not merged"; work counts as merged
+  once merging it into the base or its remote copy would change nothing, so a squash merge
+  clears it), and each project header counts its open worktree sessions (ADR-0011).
 - **Session identity** (`SessionIdentity`) — a [Session]'s display fields, resolved by the single
   pure join of a `SessionRow` with its `ProjectRow`: the project's display name (or its id when the
   project row is orphaned), the [Session title], and the branch (the worktree path basename, or none
@@ -107,3 +109,30 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
   its [Worktree] is **not** removed unless the user explicitly asks. Reversible
   (un-archive). Shown in a collapsed "Archived" sidebar group. _Avoid_: deleted session,
   closed session.
+- **Nested session** — a [Session] started from another one to do one piece of its work in
+  parallel, and listed under it in the sidebar (`nested_under`). Claude starts one through the
+  Companion's `start_session` tool. The person starts one with [Split off]. It is a real
+  session with its own terminal, in its [Lead session]'s folder or on a new [Worktree], and its
+  first answer is sent back to the lead session once. ADR-0049. _Avoid_: child session (that's
+  a [Subagent]), sub-session, spawned session.
+- **Lead session** — the [Session] a [Nested session] was started from, and the one it reports
+  to. _Avoid_: parent session, owner.
+- **Session request** — one `start_session` call as Kriyon receives it: the task prompt, a
+  title, whether to use a worktree (and its branch), and who wanted it (`user_asked` only when
+  the person's own typed or Remote Control prompt started the turn and names a session, with
+  no one else's words delivered since; otherwise `own_initiative`). Validated in the Rust core
+  and kept once by its tool call id. _Avoid_: spawn request.
+- **Session proposal** — a [Session request] Kriyon did not start: Claude's own idea, or one
+  past the [Nested session cap]. Shown as a compact card under the lead session's header
+  ("Suggested by Claude", or "You asked · starts when a busy session finishes"), with the task
+  folded to one line, Start session and Not now. One the person asked for starts by itself
+  when a slot frees, unless its lead session is archived; Claude's own idea waits for a click.
+  Closing the lead session drops its proposals. In memory only. _Avoid_: suggestion card,
+  pending session.
+- **Nested session cap** — the most other sessions that may be busy (working, waiting on the
+  person, or still starting) before a requested session becomes a [Session proposal] instead of
+  starting (Settings: a number from 1 to 16, default 4, or no limit). The session that asked is
+  not counted: it is always mid-turn when it asks. A session counts from the moment Kriyon
+  starts it, so requests arriving together count each other. _Avoid_: concurrency limit.
+- **Split off** — the sidebar menu action that starts a [Nested session] by hand from the
+  [Spawn dialog], with an empty task. _Avoid_: fork, branch off.

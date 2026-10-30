@@ -192,6 +192,29 @@ test("shows the 5-hour and weekly limit bars only when Claude reports them", asy
   );
 });
 
+test("warns when a limit is on course to run out before it resets", async () => {
+  seedActive();
+  const now = Date.now();
+  const resetsAt = (now + 3 * 86_400_000) / 1000;
+  usePlanLimits.setState({
+    limits: { fiveHour: null, sevenDay: null },
+    samples: { fiveHour: [], sevenDay: [] },
+  });
+  render(<Inspector />);
+  expect((await screen.findAllByText("dev")).length).toBeGreaterThan(0);
+  act(() => {
+    const { apply } = usePlanLimits.getState();
+    apply(
+      { fiveHour: null, sevenDay: { resetsAt, usedPercentage: 50 } },
+      now - 30 * 60_000
+    );
+    apply({ fiveHour: null, sevenDay: { resetsAt, usedPercentage: 60 } }, now);
+  });
+  expect(screen.getByTestId("usage-pace")).toHaveTextContent(
+    "Weekly limit runs out in about 2h at this rate"
+  );
+});
+
 test("shows an empty state when there is no active session", () => {
   render(<Inspector />);
 

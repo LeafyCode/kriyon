@@ -1,42 +1,9 @@
+import { digestEvents } from "../state/eventDigest.ts";
 import { completedTasks } from "../state/viewedMarker.ts";
 import type { SessionActivity, StudioEvent } from "../types.ts";
 
 /** Names shown before collapsing into a total. */
 const MAX_FILE_NAMES = 5;
-
-/** First non-empty line of a text, trimmed. */
-function firstLine(text: string): string | null {
-  const line = text.split("\n", 1)[0]?.trim() ?? "";
-  return line || null;
-}
-
-/** Analyze events and extract summary metrics. */
-function analyzeEvents(events: StudioEvent[]): {
-  files: string[];
-  commandsRun: number;
-  subagentsRan: number;
-  lastAssistant: string | null;
-} {
-  const files: string[] = [];
-  let commandsRun = 0;
-  let subagentsRan = 0;
-  let lastAssistant: string | null = null;
-  for (const event of events) {
-    if (event.kind === "diff" && !files.includes(event.file)) {
-      files.push(event.file);
-    } else if (event.kind === "bash") {
-      commandsRun += 1;
-    } else if (
-      event.kind === "tool" &&
-      (event.name === "Agent" || event.name === "Task")
-    ) {
-      subagentsRan += 1;
-    } else if (event.kind === "assistant") {
-      lastAssistant = firstLine(event.text) ?? lastAssistant;
-    }
-  }
-  return { files, commandsRun, subagentsRan, lastAssistant };
-}
 
 /**
  * Compose an editable [Handoff prompt] seeding a [Follow-up session] from what
@@ -49,9 +16,12 @@ export function buildHandoffPrompt(args: {
   events: StudioEvent[];
   title: string;
 }): string {
-  const { files, commandsRun, subagentsRan, lastAssistant } = analyzeEvents(
-    args.events
-  );
+  const {
+    commands: commandsRun,
+    files,
+    lastLine: lastAssistant,
+    subagents: subagentsRan,
+  } = digestEvents(args.events);
 
   const lines: string[] = [
     `Continuing from a previous session: ${args.title}`,

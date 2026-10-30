@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { repoStatus } from "../ipc/bridge.ts";
+import { repoStatus, unmergedCommits } from "../ipc/bridge.ts";
 import type { ProjectRow, RepoStatus, SessionStatus } from "../types.ts";
 import { sessionWorkingDir, type UiSession, useSessions } from "./sessions.ts";
 import { createSwrResource } from "./swrResource.ts";
@@ -106,10 +106,11 @@ function toDirtyStatus(value: RepoStatus | undefined): DirtyStatus {
 /**
  * Whether the working tree at `path` has uncommitted changes — drives the
  * sidebar row's worktree dirty dot and its files-touched badge. Shares
- * {@link useRepoStatus}'s cache, but revalidates on the session's status
- * transitions instead of a polling loop: the check refreshes exactly when
- * the session stops/starts/waits (the moments the user looks at it), so a
- * busy sidebar never generates a git-status storm. `path` is "" for an
+ * {@link useRepoStatus}'s cache, and revalidates on the session's status
+ * transitions: the check refreshes when the session stops/starts/waits (the
+ * moments the user looks at it). The only timed check is
+ * `recheckWhileDirtyMs`, and only while the tree is dirty, so a busy sidebar
+ * of clean rows never generates a git-status storm. `path` is "" for an
  * unresolved location — the hook is then inert.
  *
  * `repoStatusResource.subscribe` only fires on a *successful* revalidation
@@ -120,7 +121,10 @@ function toDirtyStatus(value: RepoStatus | undefined): DirtyStatus {
  */
 export function useWorktreeDirty(
   path: string,
-  status: SessionStatus
+  status: SessionStatus,
+  /** Re-check this often while dirty: a worktree's changes are often
+   *  committed from another session, which this row's status never sees. */
+  recheckWhileDirtyMs?: number
 ): DirtyStatus {
   const [dirty, setDirty] = useState<DirtyStatus>(() =>
     toDirtyStatus(repoStatusResource.peek(path))
@@ -149,7 +153,65 @@ export function useWorktreeDirty(
       unsubscribe();
     };
   }, [path, status]);
+  useEffect(() => {
+    if (path === "" || dirty !== "dirty" || !recheckWhileDirtyMs) {
+      return;
+    }
+    const timer = setInterval(() => {
+      repoStatusResource.revalidate(path, () => repoStatus(path));
+    }, recheckWhileDirtyMs);
+    return () => clearInterval(timer);
+  }, [path, dirty, recheckWhileDirtyMs]);
   return dirty;
+}
+
+/** How often a worktree row with unmerged or uncommitted work checks again,
+ *  so its warning clears soon after the work is committed or merged from
+ *  anywhere. */
+export const WORKTREE_RECHECK_MS = 30_000;
+
+/**
+ * Commits the worktree at `path` has that its default branch doesn't, for
+ * the row's "Not merged" warning; 0 for no worktree (`null`) or when git
+ * can't tell. Checks on each status transition, like
+ * {@link useWorktreeDirty}, whenever the tree's `dirty` state changes (work
+ * committed from another session turns into commits to count), and every
+ * {@link WORKTREE_RECHECK_MS} while the count is above 0: the merge usually
+ * happens in another session.
+ */
+export function useUnmergedCommits(
+  path: string | null,
+  status: SessionStatus,
+  dirty: DirtyStatus
+): number {
+  const [count, setCount] = useState(0);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `status` and `dirty` are deliberate extra deps — each transition re-checks.
+  useEffect(() => {
+    if (!path) {
+      return;
+    }
+    let current = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const check = () => {
+      unmergedCommits(path)
+        .catch(() => 0)
+        .then((n) => {
+          if (!current) {
+            return;
+          }
+          setCount(n);
+          if (n > 0) {
+            timer = setTimeout(check, WORKTREE_RECHECK_MS);
+          }
+        });
+    };
+    check();
+    return () => {
+      current = false;
+      clearTimeout(timer);
+    };
+  }, [path, status, dirty]);
+  return path ? count : 0;
 }
 
 export interface ActiveSession {

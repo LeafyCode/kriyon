@@ -17,12 +17,19 @@ import {
   noteSessionStarted,
   startFreshClaude,
 } from "../terminal/sessionHost.ts";
-import type { PastSession, ProjectRow, SessionRow } from "../types.ts";
+import type {
+  NestedReport,
+  PastSession,
+  ProjectRow,
+  SessionRow,
+} from "../types.ts";
 import { showToast } from "../ui/Toast.tsx";
+import { markBootLive, markBootStart } from "./bootTiming.ts";
 import { useCompletions } from "./completions.ts";
 import { useLayout } from "./layout.ts";
 import { idleSession, type UiSession, useSessions } from "./sessions.ts";
 import { freedMemoryNote } from "./stopCost.ts";
+import { sessionPaneMounts } from "./warmPanes.ts";
 
 /**
  * Archive a session: tidy it out of sight **and stop its processes**. The row,
@@ -100,7 +107,7 @@ export function setDefaultCwd(path: string): void {
 }
 
 /** Last path segment of an absolute path, e.g. `/a/b/c` → `c`. */
-function basename(path: string): string {
+export function basename(path: string): string {
   return path.split("/").filter(Boolean).pop() ?? path;
 }
 
@@ -145,12 +152,18 @@ function persistThenWarm(project: ProjectRow, session: SessionRow): void {
  * Making it active is what launches `claude` (the active-session effect in `App`
  * launches/resumes a session the first time it is viewed).
  */
-function createSession(
+export function createSession(
   project: ProjectRow,
   cwd: string,
   title: string,
   opts?: {
+    /** Show it at once (the default). A [Nested session] Claude started is
+     *  opened in the background instead, as a [Warm pane]. */
+    focus?: boolean;
+    nestedUnder?: string;
     parentSessionId?: string;
+    /** Where a [Nested session] sends its first answer. */
+    report?: NestedReport;
     seedPrompt?: string;
     worktreePath?: string | null;
   }
@@ -166,6 +179,7 @@ function createSession(
     createdAt: Date.now(),
     cwd,
     id,
+    nestedUnder: opts?.nestedUnder ?? null,
     parentSessionId: opts?.parentSessionId ?? null,
     projectId: project.id,
     title,
@@ -175,6 +189,20 @@ function createSession(
   state.addSession(idleSession(row));
   if (opts?.seedPrompt) {
     state.setPendingSeedPrompt(id, opts.seedPrompt);
+  }
+  if (opts?.report) {
+    state.setPendingReport(id, opts.report);
+  }
+  if (opts?.focus === false) {
+    // Mounted out of sight, then launched: the activation effect that starts
+    // a shown session never runs for it.
+    state.warmSession(id);
+    persistThenWarm(project, row);
+    // Its [Boot phase] reads `launching` from this call on, so a second
+    // request in the same batch counts it against the [Nested session cap].
+    ignore(launchActiveSession(id));
+    captureBaselineFor(id, cwd);
+    return id;
   }
   // `addSession` only activates the *first* session, so switch explicitly —
   // otherwise a new session opened while another is active is created hidden.
@@ -199,6 +227,13 @@ function createSession(
   // blocking a pool thread for minutes and permanently growing
   // `~/.git/objects` — once per Home session. There is no real "project" to
   // baseline for a Home session anyway.
+  captureBaselineFor(id, cwd);
+  return id;
+}
+
+/** Capture the session's git baseline, except for the Home cwd (see
+ *  {@link createSession}). Never blocks and never throws. */
+function captureBaselineFor(id: string, cwd: string): void {
   if (cwd !== defaultCwd) {
     ignore(
       captureBaseline(cwd).then((oid) =>
@@ -206,7 +241,6 @@ function createSession(
       )
     );
   }
-  return id;
 }
 
 /**
@@ -319,18 +353,13 @@ export async function startNewSession(): Promise<void> {
  * directory (or the project root when there is none). Returns the bootstrap
  * report (if any) so the UI can surface a failed setup.
  */
-export async function spawnFollowUpSession(args: {
+export function spawnFollowUpSession(args: {
   predecessor?: UiSession;
   project: ProjectRow;
   promptText: string;
   worktree: { branch: string; path?: string } | null;
-}): Promise<{
-  bootstrap: BootstrapReport | null;
-  error: string | null;
-  ok: boolean;
-}> {
+}): Promise<SpawnResult> {
   const { predecessor, project, promptText, worktree } = args;
-  const repoRoot = project.path;
   let title = project.name;
   if (worktree) {
     title = worktree.branch;
@@ -343,9 +372,37 @@ export async function spawnFollowUpSession(args: {
       parentSessionId: predecessor?.id,
       seedPrompt: promptText,
     });
-    return { bootstrap: null, error: null, ok: true };
+    return Promise.resolve({ bootstrap: null, error: null, ok: true });
   }
 
+  return createWorktreeSession(project, worktree, title, {
+    parentSessionId: predecessor?.id,
+    seedPrompt: promptText,
+  });
+}
+
+/** What starting a session reports: a failed setup step still made the
+ *  worktree and the session (`ok: false` with the `bootstrap` report), while
+ *  `error` without a report means nothing was created. */
+export interface SpawnResult {
+  bootstrap: BootstrapReport | null;
+  error: string | null;
+  ok: boolean;
+}
+
+/**
+ * Make a fresh [Worktree] of `project` on `worktree.branch` (at the chosen
+ * path, or the sibling one the Rust core picks), run its [Worktree
+ * bootstrap], then start a session in it. The one worktree intake, shared by
+ * follow-ups and [Nested session]s.
+ */
+export async function createWorktreeSession(
+  project: ProjectRow,
+  worktree: { branch: string; path?: string },
+  title: string,
+  opts: Omit<NonNullable<Parameters<typeof createSession>[3]>, "worktreePath">
+): Promise<SpawnResult> {
+  const repoRoot = project.path;
   try {
     // Use the caller's chosen location when given; otherwise the default
     // sibling path (`<repo>-worktrees/<branch>`) resolved by the Rust core.
@@ -357,11 +414,7 @@ export async function spawnFollowUpSession(args: {
       path,
       project.setupCommand
     );
-    createSession(project, path, title, {
-      parentSessionId: predecessor?.id,
-      seedPrompt: promptText,
-      worktreePath: path,
-    });
+    createSession(project, path, title, { ...opts, worktreePath: path });
     return { bootstrap, error: null, ok: bootstrap.ok };
   } catch (e) {
     return {
@@ -410,6 +463,7 @@ function armBootTimeout(sessionId: string): void {
  */
 export function sessionBecameLive(sessionId: string): void {
   noteSessionStarted(sessionId);
+  markBootLive(sessionId, Date.now());
   clearBootTimeout(sessionId);
   useSessions.getState().applyBootEvent(sessionId, "started");
 }
@@ -441,22 +495,88 @@ export function beginBoot(sessionId: string): void {
   const state = useSessions.getState();
   state.applyBootEvent(sessionId, "launch");
   armBootTimeout(sessionId);
+  markBootStart(sessionId, Date.now());
 }
+
+/**
+ * Open a session's pty (its shell) ahead of the click, when the pointer rests
+ * on a sidebar row whose pane isn't mounted yet: the user's zsh startup then
+ * runs while they move to click, and opening the session only has `claude`
+ * left to start. Never launches `claude` — a hover must not spend the user's
+ * plan or memory on a session they may not open — and never complains: the
+ * activation that follows retries and reports its own failure.
+ */
+export async function prewarmSession(sessionId: string): Promise<void> {
+  const state = useSessions.getState();
+  const session = state.sessions[sessionId];
+  if (
+    !session ||
+    sessionPaneMounts(state.activeSessionId, state.warmPanes, sessionId)
+  ) {
+    return;
+  }
+  try {
+    await ensureSession(sessionId, session.cwd, () => undefined);
+  } catch {
+    // The click's own activation retries and says so.
+  }
+}
+
+/** The launch attempt in flight for each session, so overlapping calls join
+ *  one attempt and only that attempt opens and settles the [Boot phase]. */
+const launchAttempts = new Map<string, Promise<void>>();
 
 /**
  * Launch (or resume) `claude` in a session's pty the first time it is viewed,
  * and track the boot lifecycle. Extracted from the App activation effect so the
  * boot state is armed unconditionally once a launch really happened — the
  * effect's cleanup must not be able to skip it (the user switching away
- * mid-launch is routine). Idempotent per session via `launchClaudeOnce`;
- * resolves false on reattach (claude already running — nothing to track).
+ * mid-launch is routine). Idempotent per session via `launchClaudeOnce`, and
+ * a call made while an attempt is in flight joins that attempt.
  */
-export async function launchActiveSession(sessionId: string): Promise<void> {
+export function launchActiveSession(sessionId: string): Promise<void> {
+  const inFlight = launchAttempts.get(sessionId);
+  if (inFlight) {
+    // A background start and the user's click, or a quick switch away and
+    // back: the same attempt, not a second one that could settle it early.
+    return inFlight;
+  }
+  const attempt = launchAttempt(sessionId).finally(() => {
+    launchAttempts.delete(sessionId);
+  });
+  launchAttempts.set(sessionId, attempt);
+  return attempt;
+}
+
+/**
+ * One launch attempt: `launching` from its start until it settles, so every
+ * reader of the [Boot phase] that asks `isStarting` (the cap, the quit
+ * warning, the row spinner) sees a session that is starting. A session
+ * already live or booting keeps its phase (`open` only moves one at rest).
+ */
+async function launchAttempt(sessionId: string): Promise<void> {
   const state = useSessions.getState();
   const session = state.sessions[sessionId];
   if (!session) {
     return;
   }
+  state.applyBootEvent(sessionId, "open");
+  try {
+    await launchInPty(sessionId, session);
+  } finally {
+    // Every way out that didn't launch claude — a pty that failed, a reattach,
+    // a failed write, a throw — puts the session back at rest. A launch that
+    // happened has already moved it to `booting`, which this leaves alone.
+    useSessions.getState().applyBootEvent(sessionId, "noLaunch");
+  }
+}
+
+/** Open the session's pty and launch (or resume) `claude` in it. */
+async function launchInPty(
+  sessionId: string,
+  session: UiSession
+): Promise<void> {
+  const state = useSessions.getState();
   // Idempotent for a live pty; for a session whose creation failed earlier
   // this is the retry — every activation gets one, so a transient failure
   // (daemon spawn timeout, stale socket) heals on the next visit instead of
@@ -471,7 +591,8 @@ export async function launchActiveSession(sessionId: string): Promise<void> {
   const result = await launchClaudeOnce(
     sessionId,
     session.claudeSessionId,
-    state.consumePendingSeedPrompt(sessionId)
+    state.consumePendingSeedPrompt(sessionId),
+    state.consumePendingReport(sessionId)
   );
   switch (result.kind) {
     case "launched":

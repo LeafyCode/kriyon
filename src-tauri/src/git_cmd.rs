@@ -114,6 +114,66 @@ pub fn default_branch(repo_path: &str) -> Result<String, String> {
     Err("could not determine a base branch".to_string())
 }
 
+/// How many commits the worktree at `worktree_path` has that its repo's
+/// default branch doesn't: work done there that hasn't been merged back.
+/// Backs the sidebar's "Not merged" chip.
+///
+/// # Errors
+/// Returns an error string if `worktree_path` is not a known session/project
+/// root, no base branch can be found, or git fails.
+#[tauri::command(async)]
+#[allow(clippy::needless_pass_by_value)]
+pub fn unmerged_commits(
+    store: tauri::State<'_, StoreState>,
+    worktree_path: String,
+) -> Result<u32, String> {
+    unmerged_commits_for(store.inner(), &worktree_path)
+}
+
+/// [`unmerged_commits`] over a plain `&StoreState`, so its tests run the real
+/// validation (see [`diff_worktree_for`]).
+///
+/// # Errors
+/// See [`unmerged_commits`].
+fn unmerged_commits_for(store: &StoreState, worktree_path: &str) -> Result<u32, String> {
+    let worktree = SandboxRoot::validate(store, worktree_path)?;
+    let worktree = worktree.as_str();
+    let base = default_branch(worktree)?;
+    // A squash or rebase merge never makes the branch's commits part of the
+    // base, and a merge on the hosting site reaches only `origin/<base>` until
+    // someone pulls. So the work counts as merged once merging it into either
+    // would change nothing; only then is the commit count wrong.
+    if [base.clone(), format!("origin/{base}")]
+        .iter()
+        .any(|base_ref| merge_adds_nothing(worktree, base_ref))
+    {
+        return Ok(0);
+    }
+    let range = format!("{base}..HEAD");
+    run_git(worktree, &["rev-list", "--count", &range, "--"])?
+        .trim()
+        .parse()
+        .map_err(|e| format!("unexpected rev-list output: {e}"))
+}
+
+/// Whether merging `HEAD` into `base_ref` would leave `base_ref`'s files as
+/// they are. `false` when `base_ref` doesn't exist or the merge conflicts.
+fn merge_adds_nothing(repo: &str, base_ref: &str) -> bool {
+    let Ok(base_tree) = run_git(
+        repo,
+        &[
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            &format!("{base_ref}^{{tree}}"),
+        ],
+    ) else {
+        return false;
+    };
+    run_git(repo, &["merge-tree", "--write-tree", base_ref, "HEAD"])
+        .is_ok_and(|merged| merged.lines().next() == Some(base_tree.trim()))
+}
+
 /// Diff a worktree's committed changes against `base` (`<base>...HEAD`, the
 /// three-dot form = changes since the branch diverged). Backs the merge
 /// [Review panel].
@@ -1645,6 +1705,93 @@ mod tests {
         git_setup(repo, &["add", "."]);
         git_setup(repo, &["commit", "-m", "init"]);
         dir
+    }
+
+    #[test]
+    fn unmerged_commits_counts_a_worktree_branch_until_it_is_merged() {
+        if !git_available() {
+            return;
+        }
+        let dir = init_repo_with_commit();
+        let repo = dir.path().to_str().expect("utf8");
+        let wt = dir.path().join("wt");
+        let wt_path = wt.to_str().expect("utf8");
+        create_worktree(repo, "feat/x", wt_path).expect("worktree");
+        let store = store_with_project_root(&canonical(dir.path()));
+        assert_eq!(unmerged_commits_for(&store, wt_path).expect("counts"), 0);
+
+        commit_file(&wt, "g.txt", "two");
+        assert_eq!(unmerged_commits_for(&store, wt_path).expect("counts"), 1);
+
+        git_setup(repo, &["merge", "--no-edit", "feat/x"]);
+        assert_eq!(unmerged_commits_for(&store, wt_path).expect("counts"), 0);
+    }
+
+    #[test]
+    fn unmerged_commits_refuses_a_path_outside_every_known_root() {
+        if !git_available() {
+            return;
+        }
+        let dir = init_repo_with_commit();
+        let other = tempfile::tempdir().expect("other dir");
+        let store = store_with_project_root(&canonical(other.path()));
+        let repo = dir.path().to_str().expect("utf8");
+        assert!(unmerged_commits_for(&store, repo).is_err());
+    }
+
+    #[test]
+    fn unmerged_commits_counts_squash_merged_work_as_merged() {
+        if !git_available() {
+            return;
+        }
+        let dir = init_repo_with_commit();
+        let repo = dir.path().to_str().expect("utf8");
+        let wt = dir.path().join("wt");
+        let wt_path = wt.to_str().expect("utf8");
+        create_worktree(repo, "feat/x", wt_path).expect("worktree");
+        commit_file(&wt, "g.txt", "two");
+        commit_file(&wt, "h.txt", "three");
+        let store = store_with_project_root(&canonical(dir.path()));
+        assert_eq!(unmerged_commits_for(&store, wt_path).expect("counts"), 2);
+
+        // A squash merge: the work lands on main, the branch's commits never do.
+        git_setup(repo, &["merge", "--squash", "feat/x"]);
+        git_setup(repo, &["commit", "-m", "feat x (squashed)"]);
+        assert_eq!(unmerged_commits_for(&store, wt_path).expect("counts"), 0);
+    }
+
+    #[test]
+    fn unmerged_commits_counts_work_merged_on_the_remote_as_merged() {
+        if !git_available() {
+            return;
+        }
+        let dir = init_repo_with_commit();
+        let repo = dir.path().to_str().expect("utf8");
+        let wt = dir.path().join("wt");
+        let wt_path = wt.to_str().expect("utf8");
+        create_worktree(repo, "feat/x", wt_path).expect("worktree");
+        commit_file(&wt, "g.txt", "two");
+        let store = store_with_project_root(&canonical(dir.path()));
+
+        // Merged on the hosting site and fetched: `origin/main` has it, the
+        // local `main` hasn't been pulled.
+        git_setup(repo, &["update-ref", "refs/remotes/origin/main", "feat/x"]);
+        assert_eq!(unmerged_commits_for(&store, wt_path).expect("counts"), 0);
+    }
+
+    fn canonical(path: &std::path::Path) -> String {
+        path.canonicalize()
+            .expect("canonical")
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    /// Commit a new file `name` with `body` in the checkout at `dir`.
+    fn commit_file(dir: &std::path::Path, name: &str, body: &str) {
+        let path = dir.to_str().expect("utf8");
+        std::fs::write(dir.join(name), format!("{body}\n")).expect("write");
+        git_setup(path, &["add", "."]);
+        git_setup(path, &["commit", "-m", body]);
     }
 
     #[test]

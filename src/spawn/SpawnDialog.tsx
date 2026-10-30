@@ -5,14 +5,19 @@ import {
   pickDirectory,
   worktreePathFor,
 } from "../ipc/bridge.ts";
-import { spawnFollowUpSession } from "../state/actions.ts";
+import { type SpawnResult, spawnFollowUpSession } from "../state/actions.ts";
 import { detectCollision } from "../state/collision.ts";
-import { sessionWorkingDir, useSessions } from "../state/sessions.ts";
+import { startNestedSession } from "../state/nestedSessions.ts";
+import {
+  sessionWorkingDir,
+  type UiSession,
+  useSessions,
+} from "../state/sessions.ts";
 import { useUi } from "../state/ui.ts";
 import { button, card, inputBox, overlayPanel } from "../theme/recipes.ts";
 import { accentAlpha, tokens } from "../theme/tokens.ts";
 import { Overlay } from "../ui/Overlay.tsx";
-import { validateBranchName } from "./branchName.ts";
+import { branchSlug, validateBranchName } from "./branchName.ts";
 import { buildHandoffPrompt } from "./handoffPrompt.ts";
 
 /** Last path segment of an absolute path, e.g. `/a/b/c` → `c`. */
@@ -187,12 +192,7 @@ const primaryStyle: CSSProperties = button("primary");
 
 /** `"My Session Title"` → `wt/my-session-title`, falling back to `wt/followup`. */
 function branchFor(title: string): string {
-  const slug = title
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-|-$/g, "")
-    .slice(0, 32);
-  return `wt/${slug || "followup"}`;
+  return `wt/${branchSlug(title) || "followup"}`;
 }
 
 /**
@@ -302,12 +302,58 @@ function WorktreeFields({
  * globally; opened via {@link useUi}'s `openSpawn`. Mutually exclusive with
  * the command palette and the Needs-you overlay (see `ui.ts`).
  */
+/** The dialog's heading for what it is about to start. */
+function spawnHeading(
+  nest: boolean,
+  predecessorTitle: string | undefined,
+  projectName: string
+): string {
+  if (predecessorTitle === undefined) {
+    return `New session in ${projectName}`;
+  }
+  return nest
+    ? `Split off from “${predecessorTitle}”`
+    : `Follow-up from “${predecessorTitle}”`;
+}
+
+const WHITESPACE = /\s+/;
+
+/** A split-off session's sidebar title: its task's first words. */
+export function nestedTitle(prompt: string, parentTitle: string): string {
+  const words = prompt.trim().split(WHITESPACE).filter(Boolean).slice(0, 6);
+  if (words.length === 0) {
+    return `${parentTitle} (split)`;
+  }
+  const title = words.join(" ");
+  return title.length > 60 ? `${title.slice(0, 59)}…` : title;
+}
+
+/** Start the [Split off] session the dialog describes, shown at once. */
+function splitOff(
+  lead: UiSession,
+  prompt: string,
+  worktree: { branch: string; path: string | undefined; use: boolean }
+): Promise<SpawnResult> {
+  return startNestedSession(
+    lead.id,
+    {
+      branch: worktree.use ? worktree.branch : null,
+      prompt,
+      title: nestedTitle(prompt, lead.title),
+      worktree: worktree.use,
+      worktreePath: worktree.use ? worktree.path : undefined,
+    },
+    { focus: true, splitOff: true }
+  );
+}
+
 export function SpawnDialog() {
   const open = useUi((s) => s.spawnOpen);
   const predecessorId = useUi((s) => s.spawnPredecessorId);
   const spawnProjectId = useUi((s) => s.spawnProjectId);
   const spawnSeed = useUi((s) => s.spawnSeed);
   const spawnWorktreeDefault = useUi((s) => s.spawnWorktreeDefault);
+  const nest = useUi((s) => s.spawnNest);
   const closeSpawn = useUi((s) => s.closeSpawn);
 
   const predecessor = useSessions((s) =>
@@ -440,6 +486,16 @@ export function SpawnDialog() {
         ),
       }));
     }
+    if (nest && predecessor) {
+      const nested = await splitOff(predecessor, prompt, {
+        branch: branch.trim(),
+        path: worktreePath ?? undefined,
+        use: useWorktree,
+      });
+      setBusy(false);
+      applyResult(nested);
+      return;
+    }
     const result = await spawnFollowUpSession({
       predecessor,
       project: { ...project, setupCommand: setupCmd || null },
@@ -510,9 +566,7 @@ export function SpawnDialog() {
     <Overlay label="Close spawn dialog" onClose={closeSpawn}>
       <div data-testid="spawn-dialog" style={panelStyle}>
         <span style={headerStyle}>
-          {predecessor
-            ? `Follow-up from “${predecessor.title}”`
-            : `New session in ${project.name}`}
+          {spawnHeading(nest, predecessor?.title, project.name)}
         </span>
         <span style={sectionLabelStyle}>Where should it work?</span>
         <button

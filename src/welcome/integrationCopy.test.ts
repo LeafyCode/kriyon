@@ -52,6 +52,12 @@ test("the refusal toast says what changed and what to do", () => {
 test("the companion hint says what it sees and what it never does", () => {
   const hint = companionHint(true);
   expect(hint).toContain("only to Kriyon on this Mac");
-  expect(hint).toContain("never uses your plan");
+  expect(hint).toContain("never approves, blocks or changes anything");
+  // Nested sessions spend plan use, so the hint says when one starts.
+  expect(hint).toContain("only when you asked for one in your own words");
+  // It also sends something to another session, so it says so.
+  expect(hint).toContain(
+    "sends its first reply to the session that started it"
+  );
   expect(companionHint(false)).toContain("per-session plugin");
 });

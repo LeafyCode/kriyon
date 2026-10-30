@@ -133,6 +133,20 @@ impl InFlight<'_> {
     }
 }
 
+/// Claude Code's id for a tool call a mod made, not the model: such as the
+/// `SendMessage` behind the Companion's report (`$.session.send`), sent after
+/// its turn's `Stop`.
+const MOD_CALL_PREFIX: &str = "toolu_plugin_";
+
+/// A tool call a mod made says nothing about whether Claude is working, so no
+/// fold reads it. Should Claude Code change the spelling, a mod's call counts
+/// as Claude's again: a session can look busy, nothing breaks.
+fn is_mod_call(ev: &HookEvent) -> bool {
+    ev.tool_use_id
+        .as_deref()
+        .is_some_and(|id| id.starts_with(MOD_CALL_PREFIX))
+}
+
 /// Classify one hook event. Total and tolerant: anything unrecognized is
 /// [`HookSignal::Unrecognized`], never an error.
 #[must_use]
@@ -142,6 +156,9 @@ pub fn classify(ev: &HookEvent) -> HookSignal<'_> {
         _ => Actor::Main,
     };
     let tool = |phase| {
+        if is_mod_call(ev) {
+            return HookSignal::Unrecognized;
+        }
         HookSignal::Tool(ToolCall {
             phase,
             actor,
@@ -331,5 +348,20 @@ mod tests {
             name: "Bash",
         }
         .spawns_agent());
+    }
+
+    #[test]
+    fn a_mods_own_tool_call_is_not_claude_working() {
+        // The Companion sends a nested session's report after its turn's Stop
+        // (ADR-0049); read as a tool start, it left the session working forever.
+        for event in ["PreToolUse", "PostToolUse", "PostToolUseFailure"] {
+            let line = format!(
+                r#"{{"event":"{event}","tool_name":"SendMessage","tool_use_id":"toolu_plugin_ff7b"}}"#
+            );
+            assert_eq!(classify(&ev(&line)), HookSignal::Unrecognized, "{event}");
+        }
+        let model =
+            ev(r#"{"event":"PreToolUse","tool_name":"SendMessage","tool_use_id":"toolu_01RA"}"#);
+        assert!(matches!(classify(&model), HookSignal::Tool(_)));
     }
 }

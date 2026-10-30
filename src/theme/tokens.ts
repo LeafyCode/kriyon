@@ -101,8 +101,6 @@ export const tokens = {
     mod: themed("mod"),
     addSoft: themed("addSoft"),
     delSoft: themed("delSoft"),
-    /** Uncommitted-changes dot on a worktree session row. */
-    worktreeDirty: themed("worktreeDirty"),
     /**
      * The syntax palette both highlighters read — shiki for the read-only
      * diff/file views, CodeMirror for the same file once it's open for

@@ -33,7 +33,7 @@ export function Hero() {
           <figure className="diff-card">
             <figcaption className="diff-card-head">
               <span>$ diff terminal-tabs kriyon</span>
-              <span>5 LINES</span>
+              <span>6 LINES</span>
             </figcaption>
             <div className="diff-card-lines">
               <p className="diff-line diff-out">
@@ -50,7 +50,12 @@ export function Hero() {
               </p>
               <p className="diff-line">
                 <span className="diff-sign">+</span>a diff and a record of what
-                each one did <span className="tag-new">NEW</span>
+                each one did
+              </p>
+              <p className="diff-line">
+                <span className="diff-sign">+</span>sessions that start
+                sessions, nested under the one that asked{" "}
+                <span className="tag-new">NEW</span>
               </p>
               <p className="diff-line">
                 <span className="diff-sign">+</span>your own <b>claude</b> CLI,

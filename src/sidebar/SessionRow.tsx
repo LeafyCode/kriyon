@@ -13,13 +13,17 @@ import {
   memo,
   type ReactNode,
   useCallback,
+  useEffect,
+  useRef,
   useState,
 } from "react";
 import type { SleepPhase } from "../ipc/bridge.ts";
-import { archiveSessionAndStop } from "../state/actions.ts";
+import { archiveSessionAndStop, prewarmSession } from "../state/actions.ts";
+import { isStarting } from "../state/bootPhase.ts";
 import { useChanges } from "../state/changes.ts";
 import { useDrafts } from "../state/drafts.ts";
 import { type SidebarMode, useLayout } from "../state/layout.ts";
+import { useSessionProposals } from "../state/nestedSessions.ts";
 import {
   sessionWorkingDir,
   useSessions,
@@ -30,10 +34,14 @@ import {
   stopCostFor,
   unpackCommands,
 } from "../state/stopCost.ts";
+import { taskProgress } from "../state/taskProgress.ts";
 import { useUi } from "../state/ui.ts";
+import { sessionUsageView, type UsageTone, usageTone } from "../state/usage.ts";
 import {
   type DirtyStatus,
+  useUnmergedCommits,
   useWorktreeDirty,
+  WORKTREE_RECHECK_MS,
 } from "../state/useActiveSession.ts";
 import { unseenCount } from "../state/viewedMarker.ts";
 import { row30 } from "../theme/recipes.ts";
@@ -56,6 +64,32 @@ import { closeConfirmFor, unsentWorkFor } from "./sessionClose.ts";
 import { type ContextTone, contextLine } from "./sessionContext.ts";
 import { sessionRowView } from "./sessionOrder.ts";
 import { useWorktreeRemoval } from "./useWorktreeRemoval.ts";
+import { worktreeWorkChip } from "./worktreeWorkChip.ts";
+
+/** How long the pointer rests on a row before its pty is opened early. Long
+ *  enough that sweeping down the rail opens nothing. */
+export const PREWARM_DWELL_MS = 150;
+
+/** Open a row's pty once the pointer has rested on it ({@link prewarmSession}). */
+function useHoverPrewarm(sessionId: string): {
+  onPointerEnter: () => void;
+  onPointerLeave: () => void;
+} {
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const cancel = useCallback(() => {
+    clearTimeout(timer.current);
+    timer.current = undefined;
+  }, []);
+  useEffect(() => cancel, [cancel]);
+  const onPointerEnter = useCallback(() => {
+    cancel();
+    timer.current = setTimeout(() => {
+      timer.current = undefined;
+      prewarmSession(sessionId);
+    }, PREWARM_DWELL_MS);
+  }, [cancel, sessionId]);
+  return { onPointerEnter, onPointerLeave: cancel };
+}
 
 /** The `--kr-row-bg` / `--kr-row-hover` pair `.kr-row` paints from. */
 function rowFillVars(
@@ -317,6 +351,7 @@ function SessionMetaLine({
   dirty,
   memoryMb,
   sessionId,
+  unmerged,
 }: {
   branchLabel: string | null;
   budgetMb: number;
@@ -325,16 +360,78 @@ function SessionMetaLine({
   dirty: boolean;
   memoryMb: number | undefined;
   sessionId: string;
+  unmerged: number;
 }): ReactNode {
   const memoryChip = memoryChipView(memoryMb, budgetMb);
-  if (!(context || branchLabel || memoryChip)) {
+  const work = worktreeWorkChip(dirty, unmerged);
+  const tasks = useSessions((state) => state.activity[sessionId]?.tasks);
+  const progress = taskProgressTitle(tasks);
+  const ctxPct = useSessions(
+    (state) => sessionUsageView(state.usage[sessionId]).ctxPct
+  );
+  const suggested = useSessionProposals(
+    (state) =>
+      state.proposals.filter((p) => p.leadSessionId === sessionId).length
+  );
+  if (
+    !(
+      context ||
+      branchLabel ||
+      memoryChip ||
+      progress ||
+      ctxPct !== null ||
+      suggested > 0
+    )
+  ) {
     return null;
   }
   return (
     <span style={metaLineStyle}>
+      {/* First on the line: the meta line clips at the row's edge, and a
+          warning about unmerged work must never be the part cut off. */}
+      {branchLabel && work ? (
+        <span
+          data-testid={
+            dirty
+              ? `worktree-dirty-${sessionId}`
+              : `worktree-unmerged-${sessionId}`
+          }
+          style={workChipStyle}
+          title={work.title}
+        >
+          {work.label}
+        </span>
+      ) : null}
+      {suggested > 0 ? (
+        <span
+          data-testid={`suggested-chip-${sessionId}`}
+          style={suggestedChipStyle}
+          title="Claude suggested starting a session from this one; open it to decide"
+        >
+          {suggested} suggested
+        </span>
+      ) : null}
+      {progress ? (
+        <span
+          data-testid={`task-progress-${sessionId}`}
+          style={taskProgressStyle}
+          title={progress.title}
+        >
+          {progress.label}
+        </span>
+      ) : null}
       {context ? (
         <span style={contextTextStyle(context.tone)}>{context.text}</span>
       ) : null}
+      {ctxPct === null ? null : (
+        <span
+          data-testid={`context-chip-${sessionId}`}
+          style={contextChipStyle(usageTone(ctxPct))}
+          title="How full this session's context window is, from Claude's last reply"
+        >
+          {ctxPct}% ctx
+        </span>
+      )}
       {memoryChip ? (
         <span
           data-testid={`memory-chip-${sessionId}`}
@@ -357,13 +454,6 @@ function SessionMetaLine({
         <span style={worktreeChipStyle} title="Runs in its own worktree">
           <GitBranch size={10} />
           {branchLabel}
-          {dirty ? (
-            <span
-              data-testid={`worktree-dirty-${sessionId}`}
-              style={worktreeDirtyDotStyle}
-              title="Uncommitted changes"
-            />
-          ) : null}
         </span>
       ) : null}
     </span>
@@ -570,6 +660,51 @@ function memoryChipStyle(tone: MemoryTone): CSSProperties {
   };
 }
 
+/** The row's task chip while a list is still open: "3/7", with the current
+ *  item in the tooltip; `null` once the list is done. */
+function taskProgressTitle(
+  tasks: Parameters<typeof taskProgress>[0]
+): { label: string; title: string } | null {
+  const progress = taskProgress(tasks);
+  if (!progress || progress.finished) {
+    return null;
+  }
+  const head = `Tasks: ${progress.done} of ${progress.total} done`;
+  return {
+    label: progress.label,
+    title: progress.current ? `${head} · ${progress.current}` : head,
+  };
+}
+
+const suggestedChipStyle: CSSProperties = {
+  color: tokens.color.accentBright,
+  flex: "none",
+  fontSize: "10.5px",
+};
+
+const taskProgressStyle: CSSProperties = {
+  color: tokens.color.ink.muted,
+  flex: "none",
+  fontFamily: tokens.font.mono,
+  fontSize: "10.5px",
+};
+
+/** Ink for the context chip: quiet until the window is 80% full. */
+const CONTEXT_TONE_INK: Record<UsageTone, string> = {
+  full: tokens.color.status.error,
+  high: tokens.color.status.waiting,
+  normal: tokens.color.ink.faint,
+};
+
+function contextChipStyle(tone: UsageTone): CSSProperties {
+  return {
+    color: CONTEXT_TONE_INK[tone],
+    flex: "none",
+    fontFamily: tokens.font.mono,
+    fontSize: "10.5px",
+  };
+}
+
 const cpuChipStyle: CSSProperties = {
   color: tokens.color.ink.faint,
   flex: "none",
@@ -587,13 +722,15 @@ const worktreeChipStyle: CSSProperties = {
   gap: "3px",
 };
 
-/** The uncommitted-changes dot beside a worktree row's branch name. */
-const worktreeDirtyDotStyle: CSSProperties = {
-  background: tokens.color.worktreeDirty,
-  borderRadius: "50%",
+/** The yellow warning while a worktree's work isn't in the base branch:
+ *  the "needs you" palette, since it is work waiting on the person. */
+const workChipStyle: CSSProperties = {
+  background: tokens.color.status.waitingSoft,
+  borderRadius: tokens.radius.sm,
+  color: tokens.color.status.waitingInk,
   flex: "none",
-  height: "5px",
-  width: "5px",
+  fontSize: "10.5px",
+  padding: `0 ${tokens.space.xs}`,
 };
 
 const confirmTextStyle: CSSProperties = {
@@ -763,6 +900,23 @@ const rowContentStyle: CSSProperties = {
   textAlign: "left",
 };
 
+/** How far each level of [Nested session] steps in. */
+const NEST_INDENT_PX = 14;
+
+/** A nested row steps in under the session it came from, with a hairline
+ *  down its left edge so the group reads as one. */
+function nestedContentStyle(depth: number): CSSProperties {
+  if (depth === 0) {
+    return rowContentStyle;
+  }
+  return {
+    ...rowContentStyle,
+    borderLeft: `1px solid ${tokens.color.line.base}`,
+    marginLeft: `${depth * NEST_INDENT_PX - 7}px`,
+    paddingLeft: "7px",
+  };
+}
+
 /**
  * The row's hover-revealed "⋯" overflow menu: rename, spawn a follow-up,
  * archive, and (for a worktree session) remove the worktree. Extracted from
@@ -812,6 +966,23 @@ function SessionActionsMenu({
         type="button"
       >
         Spawn follow-up
+      </button>
+      <button
+        className="kr-hover-surface"
+        data-testid={`split-off-${sessionId}`}
+        onClick={(event) => {
+          event.stopPropagation();
+          close();
+          useUi
+            .getState()
+            .openSpawn({ predecessorId: sessionId }, { nest: true });
+        }}
+        role="menuitem"
+        style={menuItemStyle}
+        title="Start a session for one piece of this work, nested under this one"
+        type="button"
+      >
+        Split off a session…
       </button>
       <button
         className="kr-hover-surface"
@@ -866,6 +1037,9 @@ function SessionActionsMenu({
 interface SessionRowProps {
   /** The sidebar's calm/triage mode; drives the unread-finish "new" badge. */
   mode: SidebarMode;
+  /** How deep it sits under its lead session in this list (the ordering's
+   *  `nestDepth`); 0, the default, is top level. */
+  nestDepth?: number;
   onCloseSession: (id: string) => void;
   onSelect: (id: string) => void;
   sessionId: string;
@@ -882,6 +1056,7 @@ interface SessionRowProps {
  */
 export const SessionRow = memo(function SessionRow({
   mode,
+  nestDepth = 0,
   onCloseSession,
   onSelect,
   sessionId,
@@ -896,11 +1071,11 @@ export const SessionRow = memo(function SessionRow({
   const cpuPct = useSessions((state) => state.cpu[sessionId]);
   const budgetMb = useLayout((state) => state.layout.memoryBudgetMb);
   const sleeping = useSessions((state) => state.sleeping[sessionId]);
-  // Booting = claude is (re)launching for this row — a fresh spawn or a
-  // resume-from-history. Same "loading" situation as waking a [Sleeping
-  // session], so the row shows the same spinner.
-  const booting = useSessions(
-    (state) => (state.bootPhase[sessionId] ?? "idle") === "booting"
+  // Booting = claude is (re)launching for this row — its pty opening, a
+  // fresh spawn or a resume-from-history. Same "loading" situation as waking a
+  // [Sleeping session], so the row shows the same spinner.
+  const booting = useSessions((state) =>
+    isStarting(state.bootPhase[sessionId])
   );
   // Only Done rows consult unseen, so gate the subscription on the status: a
   // running row would otherwise re-render on every appended event (appendSeq
@@ -920,6 +1095,7 @@ export const SessionRow = memo(function SessionRow({
     [sessionId]
   );
   const removal = useWorktreeRemoval(sessionId);
+  const prewarm = useHoverPrewarm(sessionId);
   // The two "would this close silently discard something?" signals — see
   // {@link unsentWorkFor}. A blank composer draft or an empty stashed-drafts
   // record both read as "nothing here", same as never having touched them.
@@ -950,7 +1126,13 @@ export const SessionRow = memo(function SessionRow({
   // `FilesChangedBadge`, instead of each subscribing independently.
   const dirty = useWorktreeDirty(
     sessionWorkingDir(session),
-    session?.status ?? "idle"
+    session?.status ?? "idle",
+    session?.worktreePath ? WORKTREE_RECHECK_MS : undefined
+  );
+  const unmerged = useUnmergedCommits(
+    session?.worktreePath ?? null,
+    session?.status ?? "idle",
+    dirty
   );
   // Stable across renders (menu.anchorRef is a fixed ref object,
   // sortableRow.setNodeRef has stable identity from dnd-kit) so the row div
@@ -983,6 +1165,8 @@ export const SessionRow = memo(function SessionRow({
       data-active={active ? "true" : "false"}
       data-status={session.status}
       data-testid="session-row"
+      onPointerEnter={prewarm.onPointerEnter}
+      onPointerLeave={prewarm.onPointerLeave}
       ref={setRowRef}
       style={sortableSessionRowStyle(active, session.status, sortableRow)}
       tabIndex={-1}
@@ -1000,7 +1184,7 @@ export const SessionRow = memo(function SessionRow({
           type="button"
         />
       )}
-      <div style={rowContentStyle}>
+      <div data-nest-depth={nestDepth} style={nestedContentStyle(nestDepth)}>
         <DragHandle
           sessionId={sessionId}
           sortable={sortable}
@@ -1044,6 +1228,7 @@ export const SessionRow = memo(function SessionRow({
             dirty={dirty === "dirty"}
             memoryMb={memoryMb}
             sessionId={sessionId}
+            unmerged={unmerged}
           />
           <HandoffLinkBadge
             onSelect={onSelect}

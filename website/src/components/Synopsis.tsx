@@ -40,6 +40,10 @@ export function Synopsis() {
           <dd>claude CLI, signed in</dd>
           <dt>COST</dt>
           <dd className="tone-green">Free · your own plan</dd>
+          <dt>WORKTREES</dt>
+          <dd>Optional, per session</dd>
+          <dt>DATA</dt>
+          <dd>Stays on this Mac</dd>
           <dt>ALSO</dt>
           <dd>
             <a href="#install">Signed .dmg</a>

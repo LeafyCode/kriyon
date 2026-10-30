@@ -11,7 +11,7 @@ file and its name in the list below. `[Term]` in an entry refers to another glos
 
 What a session is, where it runs, and how it is resumed, handed off and archived.
 
-Session, Claude session id, Session title, Project (Workspace), Worktree, Session identity, Merge outcome, Preferred session view, Clear project, Inactive project, Past session, Follow-up session, Handoff link, Handoff file, Handoff card, Handoff prompt, Worktree bootstrap, Install command, Setup command, Branch collision, Archived session.
+Session, Claude session id, Session title, Project (Workspace), Worktree, Session identity, Merge outcome, Preferred session view, Clear project, Inactive project, Past session, Follow-up session, Handoff link, Handoff file, Handoff card, Handoff prompt, Worktree bootstrap, Install command, Setup command, Branch collision, Archived session, Nested session, Lead session, Session request, Session proposal, Nested session cap, Split off.
 
 ## [Terminals and the PTY daemon](docs/context/terminal.md)
 
@@ -29,7 +29,7 @@ Session diff, File diff, File change, Diff hunk, File kind, Visible files, Diff 
 
 How Kriyon reads what Claude writes: the transcript file, structured events and the screen.
 
-Studio event, Structured view, Work report, Partial reply, Spinner tip, CLI dialog, Structured event, Transcript schema, Drift report, Drift guard, Transcript, Clean copy, Task.
+Studio event, Structured view, Work report, Partial reply, Spinner tip, CLI dialog, Structured event, Transcript schema, Drift report, Drift guard, Transcript, Clean copy, Task, Event digest.
 
 ## [Composer and prompts](docs/context/composer.md)
 
@@ -47,13 +47,13 @@ Status, Hooks off, Integration, Integration prefs, Hook route, Companion folder,
 
 What a session is doing right now, when it needs the user, and how Kriyon tells them.
 
-Session engagement, Subagent, Background shell, Main turn, Waiting for, In-flight work, Background agent, Session activity, Session activity projection, Main agent, Tool activity, Current tool, Agent id / Agent type, Settle, Command center, Session standing, Standing state, Needs-you rail, Pending ask, Viewed marker, Needs-you section, Needs-you overlay, Standing staleness, Session heartbeat, Notify preference, Notify sound, Notification kind, Notification content, Notification plan, Settle window, Pty-quiet confirm.
+Session engagement, Subagent, Background shell, Main turn, Waiting for, In-flight work, Background agent, Session activity, Session activity projection, Main agent, Tool activity, Current tool, Agent id / Agent type, Settle, Command center, Session standing, Standing state, Needs-you rail, Pending ask, Viewed marker, Needs-you section, Needs-you overlay, Standing staleness, Session heartbeat, Notify preference, Notify sound, Notification kind, Notification content, Notification plan, Settle window, Pty-quiet confirm, Task progress, Task strip, Turn recap.
 
 ## [App runtime, resources and usage](docs/context/runtime.md)
 
 Boot, the per-session runtime, memory and process limits, usage numbers, stopping processes, and updates.
 
-Boot phase, Main session lock, Session runtime, Watch route, Event subscription helper, Status-line, Usage snapshot, Plan limits, Limit reading, Session footprint, Memory budget, Session resources, Resource sweep, Process tree, Sleeping session, Sleep ledger, Usage card, Plan limits view, Session usage view, Tree stop, Surveyor, Process survey, Stop target, Signal gate, Handover, Quit intent, Daemon adoption, Orphan daemon, Detached lease, Stop cost, SWR resource, AppKit exception guard, Update channel, Update feed, Channel step-down, Skipped version.
+Boot phase, Main session lock, Session runtime, Watch route, Event subscription helper, Status-line, Usage snapshot, Plan limits, Limit reading, Session footprint, Memory budget, Session resources, Resource sweep, Process tree, Sleeping session, Sleep ledger, Usage card, Plan limits view, Session usage view, Tree stop, Surveyor, Process survey, Stop target, Signal gate, Handover, Quit intent, Daemon adoption, Orphan daemon, Detached lease, Stop cost, SWR resource, AppKit exception guard, Update channel, Update feed, Channel step-down, Skipped version, Boot time, Pty prewarm, Limit pace.
 
 ## [App shell and look](docs/context/ui.md)
 

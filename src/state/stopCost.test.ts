@@ -57,6 +57,14 @@ describe("stopCostFor", () => {
     expect(hasStopCost(cost)).toBe(true);
   });
 
+  it("costs something while its pty is still opening, before claude is typed", () => {
+    const cost = stopCostFor(session("s"), {
+      ...NOTHING,
+      bootPhase: { s: "launching" },
+    });
+    expect(cost.engagement).toBe("starting");
+  });
+
   it("a booted session is not still starting", () => {
     for (const phase of ["idle", "live", "resumeFailed"] as const) {
       const cost = stopCostFor(session("s"), {

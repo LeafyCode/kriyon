@@ -27,6 +27,10 @@ import { useIntegration } from "./state/integration.ts";
 import { useLayout } from "./state/layout.ts";
 import { installMainWindowActions } from "./state/mainWindowActions.ts";
 import { installMenuBarModeSync } from "./state/menuBarModeSync.ts";
+import {
+  installHeldBackStarts,
+  sessionRequestsReady,
+} from "./state/nestedSessions.ts";
 import { hydrate, installPersistence } from "./state/persistence.ts";
 import { useSessions } from "./state/sessions.ts";
 import { freedMemoryNote } from "./state/stopCost.ts";
@@ -171,6 +175,9 @@ const SessionPane = memo(function SessionPane({
         position: "relative",
       }}
     >
+      {/* Only once claude is typed: the brief `launching` stretch (the pty
+          opening, or reconnecting to a claude already running) would flash
+          the overlay over a terminal that is fine. The row's spinner covers it. */}
       {bootPhase === "booting" ? (
         <SessionLoadingOverlay resuming={session.claudeSessionId !== null} />
       ) : null}
@@ -287,9 +294,10 @@ function App() {
     const stopUpdateAnswered = onEvent(onUpdateChannelAnswered, (snapshot) =>
       useUpdates.getState().answerMove(snapshot)
     );
-    ignore(hydrate());
+    ignore(hydrate().then(sessionRequestsReady));
     const stopPersistence = installPersistence();
     const stopListeners = installSessionListeners();
+    const stopHeldBack = installHeldBackStarts();
     const stopCommandCenter = installCommandCenterListeners();
     const stopBridgeMirrors = installBridgeMirrors();
     const stopCloseOnQuit = installCloseOnQuit();
@@ -312,6 +320,7 @@ function App() {
       stopUpdateAnswered();
       stopPersistence();
       stopListeners();
+      stopHeldBack();
       stopCommandCenter();
       stopBridgeMirrors();
       stopCloseOnQuit();

@@ -546,6 +546,7 @@ mod tests {
             baseline_oid: None,
             title_locked: false,
             parent_session_id: None,
+            nested_under: None,
         }
     }
 

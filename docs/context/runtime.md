@@ -4,8 +4,15 @@ Boot, the per-session runtime, memory and process limits, usage numbers, stoppin
 
 Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`](../../CONTEXT.md).
 
-- **Boot phase** (`BootPhase`) — where a [Session] is in launching `claude`: `idle | booting |
-  resumeFailed | live`. Distinct from [Status] (which describes a *live* session's turn). One pure
+- **Boot phase** (`BootPhase`) — where a [Session] is in launching `claude`: `idle | launching |
+  booting | resumeFailed | live`. `launching` covers the pty opening and the launch being
+  written. A launch from rest enters it (`open`) and always leaves it, to `booting` once
+  `claude` is typed or back to `idle` when nothing was launched (`noLaunch`); one attempt runs
+  per session at a time, and a second call joins it. Two launches skip it: a restart after a
+  failed resume goes straight to `booting`, and a `live` session whose shell is revived stays
+  `live` while its pty reopens, then goes to `booting` when `claude` is relaunched. `isStarting` (launching or booting) is the one "is it starting?" check the [Nested
+  session cap], the quit warning and the row spinner share; the loading overlay waits for
+  `booting`. Distinct from [Status] (which describes a *live* session's turn). One pure
   reducer (`nextBootPhase`) owns every transition, and the coordinator owns the single boot-overlay
   safety-net timer, cancelled on each transition — so no stale timer can clear a later boot, and the
   `booting`/`resumeFailed` flags no longer drift across files. `booting` drives the loading overlay;
@@ -178,3 +185,16 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
   (too broad: the feed can never downgrade within a channel), rollback.
 - **Skipped version** — the one version "Skip this version" hides from quiet update checks. "Check
   now" still shows it, and any newer version is offered as usual. Kept in Rust's `UpdatePrefs`.
+- **Boot time** — how long one session took from Kriyon launching or resuming `claude` (the
+  [Boot phase] entering `booting`) to the session going live (its `SessionStart` hook). Kept
+  per session for this run only and shown in the Inspector as "Start time". A reading, not a
+  record. _Avoid_: startup latency, TTFT.
+- **Pty prewarm** — opening a session's pty and shell when the pointer rests on its sidebar row
+  (150 ms) while its pane isn't mounted, so a click only has `claude` left to start. Never
+  launches `claude` and never reports a failure; the activation that follows retries.
+  _Avoid_: preload, warm start (a [Warm pane] is a different thing).
+- **Limit pace** — a forecast of when one [Plan limits] window runs out if its use keeps
+  rising at the rate of the last hour, shown only when that comes before the window resets
+  ("Weekly limit runs out in about 9h at this rate"). Arithmetic on Claude's own figures, kept
+  in memory from the readings Kriyon saw; never a token count. ADR-0050. _Avoid_: burn rate,
+  usage forecast.

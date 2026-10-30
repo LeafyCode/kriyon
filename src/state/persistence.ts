@@ -14,6 +14,7 @@ import {
   clampTerminalDockHeight,
   DEFAULT_LAYOUT,
   type HideOlderThan,
+  isNestedCap,
   type Layout,
   type SessionSort,
   SIDEBAR_WIDTH_DEFAULT,
@@ -206,6 +207,16 @@ const parseManualOrders = recordOf<string[]>((value) =>
     : undefined
 );
 
+/** The [Nested session cap]: `null` for none, else a whole number in range.
+ *  Older builds saved the choice as text ("off", "2", "4", "6"). */
+function parseNestedSessionCap(value: unknown): Layout["nestedSessionCap"] {
+  if (value === null || value === "off") {
+    return null;
+  }
+  const cap = typeof value === "string" ? Number(value) : value;
+  return isNestedCap(cap) ? cap : DEFAULT_LAYOUT.nestedSessionCap;
+}
+
 /** The global manual project order: an array of project-id strings, else []. */
 function parseManualProjectOrder(value: unknown): string[] {
   return Array.isArray(value) && value.every((id) => typeof id === "string")
@@ -290,6 +301,7 @@ export function parseLayout(json: string | null): Layout | undefined {
     manualProjectOrder: parseManualProjectOrder(parsed.manualProjectOrder),
     manualSessionOrder: parseManualOrders(parsed.manualSessionOrder),
     menuBarMode: parseMenuBarMode(parsed.menuBarMode),
+    nestedSessionCap: parseNestedSessionCap(parsed.nestedSessionCap),
     autoSleepAfter:
       parsed.autoSleepAfter === "off" ||
       parsed.autoSleepAfter === "1h" ||
