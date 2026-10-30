@@ -46,7 +46,7 @@ export const HELP_WANTED_URL = `${GITHUB_URL}/labels/help%20wanted`;
 export const BREW_COMMAND = "brew install leafycode/tap/kriyon";
 
 /* Set by `pnpm release` (rendered in the nav, rating plate and footer). */
-export const APP_VERSION = "v0.13.0";
+export const APP_VERSION = "v0.14.0";
 
 /** The studio address as one line, the way leafycode.com/contact writes it. */
 export function postalAddressLine(a: typeof LEAFYCODE.address): string {

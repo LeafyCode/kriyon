@@ -2,6 +2,55 @@
 
 All notable changes to Kriyon are listed here. Dates are YYYY-MM-DD.
 
+## 0.14.0 — 2026-10-30
+
+Parallel sessions are here. Earlier this month Claude Code's desktop app got
+nested sessions, a live task list and turn recaps. Kriyon now has all three,
+running on your own `claude` in a real terminal. Ask Claude to split a job up,
+and each part runs as its own session, side by side, listed under the one that
+asked. When a part is done, its answer comes back on its own. You stay in
+charge: only your own words start a session, worktrees are your choice, and
+nothing a nested session did gets lost before it's merged.
+
+### Added
+
+- **Nested sessions.** Say "start a session for the tests and another for
+  the docs", and Kriyon opens a real session for each, with its own terminal,
+  in the same folder or on its own worktree. They run in parallel, sit under
+  the session that asked, and report back to it when they finish. When Claude
+  has the idea itself, a compact "Claude suggests a session" card waits for
+  you to press Start.
+- **Split off a session.** "Split off a session…" in a session's menu hands
+  part of the work to a new session. Its answer comes back to the session you
+  split it from.
+- **You set the pace.** Settings decides how many sessions can be busy at
+  once: 4 by default, anything from 1 to 16, or no limit. A session you asked
+  for that had to wait starts by itself the moment one finishes. Your plan
+  limit won't drain in an afternoon by accident.
+- **Nothing gets forgotten.** A worktree session's row shows "Not committed"
+  or "Not merged" until its work reaches your main branch.
+- **Live task progress.** Every row shows Claude's task list as "3/7". A
+  strip above the terminal shows the current step and unfolds to the whole
+  plan.
+- **Context use on every row,** such as "85% ctx", amber from 80%, so you
+  know which session is filling up before it slows down.
+- **Turn recap.** When Claude stops, a card says what the turn did: files
+  changed, commands run, tasks done, and what it needs from you. Review
+  changes and Follow up are one click away.
+- **Limit pace.** If a plan limit is on course to run out before it resets,
+  the Inspector warns you early: "Weekly limit runs out in about 9h at this
+  rate".
+
+### Changed
+
+- **Sessions open almost at once.** Rest the pointer on a row and Kriyon gets
+  that session ready before you click. The Inspector shows how long the last
+  start took.
+
+### Security
+
+- Updated rustls-webpki to fix RUSTSEC-2026-0382.
+
 ## 0.13.0 — 2026-10-20
 
 Kriyon is now open source, and it can update itself.
