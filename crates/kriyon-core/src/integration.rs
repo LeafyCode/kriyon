@@ -243,7 +243,8 @@ pub fn restore_statusline(
 }
 
 /// The companion mod's module file, written into the [Companion folder] when
-/// the user turns it on. Read-only; see its header.
+/// the user turns it on. It observes, plus one tool and one report for nested
+/// sessions (ADR-0049); see its header.
 pub const COMPANION_MODULE: &str = include_str!("../companion/companion.js");
 
 /// Where the companion module sits, relative to `hooks/hooks.json`.

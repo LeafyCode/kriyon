@@ -39,7 +39,7 @@ const subLabelStyle: CSSProperties = {
   marginTop: "2px",
 };
 
-function TaskRow({ task }: { task: Task }) {
+export function TaskRow({ task }: { task: Task }) {
   const ink = INK[task.status];
   const showActiveForm =
     task.status === "in_progress" && task.activeForm !== null;

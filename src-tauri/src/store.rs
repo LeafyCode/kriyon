@@ -60,6 +60,10 @@ pub struct SessionRow {
     /// from, or `None` for an ordinary session. Display only.
     #[serde(default)]
     pub parent_session_id: Option<String>,
+    /// The session this [Nested session] was started from (ADR-0049), or
+    /// `None` for a top-level one. Nests the row under it in the sidebar.
+    #[serde(default)]
+    pub nested_under: Option<String>,
 }
 
 /// A [Session]'s display identity: the fields a notification, sidebar row, or
@@ -183,6 +187,7 @@ impl Store {
                  baseline_oid      TEXT,
                  title_locked      INTEGER NOT NULL DEFAULT 0,
                  parent_session_id TEXT,
+                 nested_under TEXT,
                  FOREIGN KEY(project_id) REFERENCES projects(id)
              );
              CREATE TABLE IF NOT EXISTS app_state (
@@ -210,6 +215,7 @@ impl Store {
         self.migrate_column("sessions", "sleep_state", "TEXT")?;
         self.migrate_column("sessions", "title_locked", "INTEGER NOT NULL DEFAULT 0")?;
         self.migrate_column("sessions", "parent_session_id", "TEXT")?;
+        self.migrate_column("sessions", "nested_under", "TEXT")?;
         Ok(())
     }
 
@@ -281,15 +287,16 @@ impl Store {
     pub fn upsert_session(&self, s: &SessionRow) -> Result<(), StoreError> {
         self.conn.execute(
             "INSERT INTO sessions
-                 (id, project_id, title, cwd, worktree_path, created_at, claude_session_id, archived_at, baseline_oid, title_locked, parent_session_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+                 (id, project_id, title, cwd, worktree_path, created_at, claude_session_id, archived_at, baseline_oid, title_locked, parent_session_id, nested_under)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
              ON CONFLICT(id) DO UPDATE SET
                  project_id = excluded.project_id, title = excluded.title,
                  cwd = excluded.cwd, worktree_path = excluded.worktree_path,
                  created_at = excluded.created_at, claude_session_id = excluded.claude_session_id,
                  archived_at = excluded.archived_at, baseline_oid = excluded.baseline_oid,
                  title_locked = excluded.title_locked,
-                 parent_session_id = excluded.parent_session_id",
+                 parent_session_id = excluded.parent_session_id,
+                 nested_under = excluded.nested_under",
             rusqlite::params![
                 s.id,
                 s.project_id,
@@ -301,7 +308,8 @@ impl Store {
                 s.archived_at,
                 s.baseline_oid,
                 s.title_locked,
-                s.parent_session_id
+                s.parent_session_id,
+                s.nested_under
             ],
         )?;
         Ok(())
@@ -313,7 +321,7 @@ impl Store {
     /// Returns [`StoreError::Sqlite`] if the query fails.
     pub fn list_sessions(&self) -> Result<Vec<SessionRow>, StoreError> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, project_id, title, cwd, worktree_path, created_at, claude_session_id, archived_at, baseline_oid, title_locked, parent_session_id
+            "SELECT id, project_id, title, cwd, worktree_path, created_at, claude_session_id, archived_at, baseline_oid, title_locked, parent_session_id, nested_under
              FROM sessions ORDER BY created_at",
         )?;
         let rows = stmt.query_map([], |row| {
@@ -329,6 +337,7 @@ impl Store {
                 baseline_oid: row.get(8)?,
                 title_locked: row.get::<_, Option<i64>>(9)?.unwrap_or(0) != 0,
                 parent_session_id: row.get(10)?,
+                nested_under: row.get(11)?,
             })
         })?;
         let sessions = rows.collect::<Result<Vec<_>, _>>()?;
@@ -504,7 +513,7 @@ impl Store {
         let row = self
             .conn
             .query_row(
-                "SELECT id, project_id, title, cwd, worktree_path, created_at, claude_session_id, archived_at, baseline_oid, title_locked, parent_session_id
+                "SELECT id, project_id, title, cwd, worktree_path, created_at, claude_session_id, archived_at, baseline_oid, title_locked, parent_session_id, nested_under
                  FROM sessions WHERE id = ?1",
                 rusqlite::params![id],
                 |row| {
@@ -520,6 +529,7 @@ impl Store {
                         baseline_oid: row.get(8)?,
                         title_locked: row.get::<_, Option<i64>>(9)?.unwrap_or(0) != 0,
                 parent_session_id: row.get(10)?,
+                        nested_under: row.get(11)?,
                     })
                 },
             )
@@ -597,6 +607,7 @@ mod tests {
             baseline_oid: None,
             title_locked: false,
             parent_session_id: None,
+            nested_under: None,
         }
     }
 
@@ -776,6 +787,7 @@ mod tests {
             baseline_oid: None,
             title_locked: false,
             parent_session_id: None,
+            nested_under: None,
         };
         store.upsert_session(&updated).expect("update session");
 
@@ -885,6 +897,7 @@ mod tests {
             store.list_sessions().expect("list")[0].parent_session_id,
             None
         );
+        assert_eq!(store.list_sessions().expect("list")[0].nested_under, None);
         assert!(
             !store.list_sessions().expect("list")[0].title_locked,
             "a legacy row must default to unlocked so auto-titles still apply"
@@ -914,6 +927,19 @@ mod tests {
         store.upsert_session(&session).expect("upsert");
         assert_eq!(store.session_row("s2").expect("row"), Some(session.clone()));
         assert_eq!(store.list_sessions().expect("list"), vec![session]);
+    }
+
+    #[test]
+    fn session_round_trips_its_nesting() {
+        let store = Store::open_in_memory().expect("open");
+        store.upsert_project(&sample_project()).expect("project");
+        let session = SessionRow {
+            id: "s2".to_string(),
+            nested_under: Some("s1".to_string()),
+            ..sample_session()
+        };
+        store.upsert_session(&session).expect("upsert");
+        assert_eq!(store.session_row("s2").expect("row"), Some(session));
     }
 
     #[test]

@@ -1,58 +1,50 @@
 {
-  "01-changes-review": {
+  "activity": {
     "widths": [
       640,
       960,
       1280,
-      1920,
-      2560,
-      3600
+      1920
     ],
-    "intrinsicWidth": 3600,
-    "intrinsicHeight": 2168
+    "intrinsicWidth": 3390,
+    "intrinsicHeight": 2064
   },
-  "02-live-session": {
+  "changes": {
     "widths": [
       640,
       960,
       1280,
-      1920,
-      2560,
-      3600
+      1920
     ],
-    "intrinsicWidth": 3600,
-    "intrinsicHeight": 2168
+    "intrinsicWidth": 3390,
+    "intrinsicHeight": 2064
   },
-  "03-command-palette": {
-    "widths": [
-      640,
-      960,
-      1280,
-      1920,
-      2560,
-      3600
-    ],
-    "intrinsicWidth": 3600,
-    "intrinsicHeight": 2168
-  },
-  "04-prompt-library": {
-    "widths": [
-      640,
-      960,
-      1280,
-      1920,
-      2560,
-      3600
-    ],
-    "intrinsicWidth": 3600,
-    "intrinsicHeight": 2168
-  },
-  "05-menu-bar-triage-portrait": {
+  "menu-bar": {
     "widths": [
       640,
       800
     ],
     "intrinsicWidth": 800,
     "intrinsicHeight": 1080
+  },
+  "session": {
+    "widths": [
+      640,
+      960,
+      1280,
+      1920
+    ],
+    "intrinsicWidth": 3390,
+    "intrinsicHeight": 2064
+  },
+  "structured": {
+    "widths": [
+      640,
+      960,
+      1280,
+      1920
+    ],
+    "intrinsicWidth": 3390,
+    "intrinsicHeight": 2064
   }
 }

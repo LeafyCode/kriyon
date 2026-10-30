@@ -777,17 +777,18 @@ const ProjectGroup = memo(function ProjectGroup({
   // returns the same OrderedSessions identity while its inputs are unchanged,
   // so plain equality suffices — no useShallow, and no second selector asking
   // the same question for the other half of the answer.
-  const { collapsedDone, collapsedOld, rows } = useSessions((state) =>
-    orderMatched(
-      orderInputs(state),
-      project,
-      filter,
-      nameMatch,
-      listMode,
-      sort,
-      manual,
-      { ...hide, activeSessionId: state.activeSessionId }
-    )
+  const { collapsedDone, collapsedOld, nestDepth, rows } = useSessions(
+    (state) =>
+      orderMatched(
+        orderInputs(state),
+        project,
+        filter,
+        nameMatch,
+        listMode,
+        sort,
+        manual,
+        { ...hide, activeSessionId: state.activeSessionId }
+      )
   );
   const [showDone, setShowDone] = useState(false);
   // The sessions the pending clear was asked about; null when no confirm is
@@ -904,6 +905,7 @@ const ProjectGroup = memo(function ProjectGroup({
                 <SessionRow
                   key={sessionId}
                   mode={mode}
+                  nestDepth={nestDepth[sessionId] ?? 0}
                   onCloseSession={onCloseSession}
                   onSelect={onSelect}
                   sessionId={sessionId}

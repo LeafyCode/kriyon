@@ -22,6 +22,24 @@ export type HideOlderThan = "off" | "1h" | "6h" | "1d" | "3d" | "1w";
 /** How long a session must sit idle before it is slept. `off` never sleeps. */
 export type AutoSleepAfter = "off" | "1h" | "3h" | "6h";
 
+/** The [Nested session cap]: how many other sessions may be busy (working,
+ *  waiting or starting) before one Claude asks to start is shown as a
+ *  suggestion instead; `null` for no cap. A whole number in
+ *  {@link NESTED_CAP_RANGE}. */
+export type NestedSessionCap = number | null;
+
+/** The caps a person can set. */
+export const NESTED_CAP_RANGE = { max: 16, min: 1 } as const;
+
+/** Whether `value` is a cap a person could have set. */
+export function isNestedCap(value: unknown): value is number {
+  return (
+    Number.isInteger(value) &&
+    (value as number) >= NESTED_CAP_RANGE.min &&
+    (value as number) <= NESTED_CAP_RANGE.max
+  );
+}
+
 /** [Sleeping session] thresholds in seconds, keyed by the setting value. */
 export const AUTO_SLEEP_SECS: Record<Exclude<AutoSleepAfter, "off">, number> = {
   "1h": 3600,
@@ -66,6 +84,8 @@ export interface Layout {
   memoryWarnEnabled: boolean;
   /** Menu-bar popover layout: sectioned groups vs one dense list. */
   menuBarMode: MenuBarMode;
+  /** The [Nested session cap]. */
+  nestedSessionCap: NestedSessionCap;
   /** Cross-project OS-notification policy, pushed to the backend on change. */
   notifyPreference: NotifyPreference;
   /** Chosen OS-notification sound, pushed to the backend on change. */
@@ -157,6 +177,7 @@ export const DEFAULT_LAYOUT: Layout = {
   memoryBudgetMb: 6144,
   memoryWarnEnabled: true,
   menuBarMode: "grouped",
+  nestedSessionCap: 4,
   notifyPreference: "all",
   notifySound: "default",
   projectSortOverrides: {},
@@ -209,6 +230,7 @@ interface LayoutState {
   setMemoryBudgetMb: (budgetMb: number) => void;
   setMemoryWarnEnabled: (enabled: boolean) => void;
   setMenuBarMode: (mode: Layout["menuBarMode"]) => void;
+  setNestedSessionCap: (cap: NestedSessionCap) => void;
   setNotifyPreference: (pref: NotifyPreference) => void;
   setNotifySound: (sound: NotifySound) => void;
   setProjectSort: (projectId: string, mode: SessionSort | null) => void;
@@ -332,6 +354,8 @@ export const useLayout = create<LayoutState>((set, get) => ({
   setInspectorTab: (inspectorTab) => set({ inspectorTab }),
   setMemoryBudgetMb: (memoryBudgetMb) =>
     set((state) => ({ layout: { ...state.layout, memoryBudgetMb } })),
+  setNestedSessionCap: (nestedSessionCap) =>
+    set((state) => ({ layout: { ...state.layout, nestedSessionCap } })),
   setMemoryWarnEnabled: (memoryWarnEnabled) =>
     set((state) => ({ layout: { ...state.layout, memoryWarnEnabled } })),
   setMenuBarMode: (menuBarMode) =>

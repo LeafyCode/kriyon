@@ -246,3 +246,25 @@ test("a refused plugin can be tried again", () => {
     sideloadRefused: false,
   });
 });
+
+test("the busy limit takes a typed number, or no limit", () => {
+  render(<SettingsView />);
+  const field = screen.getByRole("spinbutton", { name: "Most busy at once" });
+  fireEvent.change(field, { target: { value: "3" } });
+  fireEvent.blur(field);
+  expect(useLayout.getState().layout.nestedSessionCap).toBe(3);
+
+  // A number out of range is put back, not saved.
+  fireEvent.change(field, { target: { value: "40" } });
+  fireEvent.blur(field);
+  expect(useLayout.getState().layout.nestedSessionCap).toBe(3);
+  expect(field).toHaveValue(3);
+
+  const none = screen.getByRole("checkbox", { name: "No limit" });
+  fireEvent.click(none);
+  expect(useLayout.getState().layout.nestedSessionCap).toBeNull();
+  expect(field).toBeDisabled();
+  // Turning the limit back on brings back the number they had.
+  fireEvent.click(none);
+  expect(useLayout.getState().layout.nestedSessionCap).toBe(3);
+});

@@ -18,6 +18,7 @@ pub mod lease;
 pub mod links;
 pub mod main_session;
 pub mod memory;
+pub mod nested;
 pub mod notification;
 pub mod orphan;
 pub mod osc;

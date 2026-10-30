@@ -261,15 +261,26 @@ jobs:
           fi
           scripts/check-mac-bundle.sh "$BUNDLE/macos/Kriyon.app" "$DMG" "$VERSION"
 
+      # Kriyon.dmg is the same file under a name that never changes, so
+      # releases/latest/download/Kriyon.dmg (the website's download button)
+      # always fetches the newest stable DMG. The versioned one stays for the
+      # Homebrew cask and anyone who wants a specific version.
       - name: Replace the draft's DMG with the notarized one
         env:
           TAG: ${{ steps.version.outputs.tag }}
           DMG: ${{ steps.dmg.outputs.path }}
         run: |
           gh release upload "$TAG" "$DMG" --clobber
-          count="$(gh release view "$TAG" --json assets --jq '[.assets[].name | select(endswith(".dmg"))] | length')"
+          cp "$DMG" "$RUNNER_TEMP/Kriyon.dmg"
+          gh release upload "$TAG" "$RUNNER_TEMP/Kriyon.dmg" --clobber
+          names="$(gh release view "$TAG" --json assets --jq '.assets[].name')"
+          count="$(grep -c '^Kriyon_.*\.dmg$' <<<"$names" || true)"
           if [[ "$count" != 1 ]]; then
-            echo "::error::The draft has $count DMGs; the notarized one went up under another name."
+            echo "::error::The draft has $count versioned DMGs; the notarized one went up under another name."
+            exit 1
+          fi
+          if ! grep -qx 'Kriyon.dmg' <<<"$names"; then
+            echo "::error::The draft has no Kriyon.dmg, so the website's download link would 404."
             exit 1
           fi
 

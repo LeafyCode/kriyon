@@ -162,9 +162,6 @@ export interface ThemeColors {
   /** Variables, properties, parameters — the most common token in any file,
    *  so this is the near-neutral one. */
   syntaxVariable: string;
-  /** The uncommitted-changes dot on a worktree session row — a warm hue
-   *  deliberately distinct from the needs-you amber. */
-  worktreeDirty: string;
 }
 
 export interface Theme {

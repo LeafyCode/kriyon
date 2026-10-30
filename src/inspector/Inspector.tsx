@@ -1,6 +1,7 @@
 import { PanelRight } from "lucide-react";
 import { type CSSProperties, type ReactNode, useMemo } from "react";
 import { topBandRow } from "../layout/topBand.ts";
+import { formatBootTime, useBootTimes } from "../state/bootTiming.ts";
 import {
   computeTotalsFromFiles,
   useChanges,
@@ -337,9 +338,25 @@ function UsageSection({ live }: { live: UsageSnapshot | undefined }) {
           title={LIMIT_NOTE}
         />
       ))}
+      {limits.pace ? (
+        <div
+          data-testid="usage-pace"
+          style={paceStyle}
+          title="From how fast Claude's own figure rose over the last hour"
+        >
+          {limits.pace.text}
+        </div>
+      ) : null}
     </>
   );
 }
+
+const paceStyle: CSSProperties = {
+  color: tokens.color.status.waitingInk,
+  fontSize: "11.5px",
+  lineHeight: 1.4,
+  marginTop: tokens.space.sm,
+};
 
 export function Inspector() {
   const activeSessionId = useSessions((state) => state.activeSessionId);
@@ -351,6 +368,9 @@ export function Inspector() {
   );
   const activity = useSessions((state) =>
     activeSessionId ? state.activity[activeSessionId] : undefined
+  );
+  const bootMs = useBootTimes((state) =>
+    activeSessionId ? state.ms[activeSessionId] : undefined
   );
   const projectPath = useSessions((state) =>
     session
@@ -454,6 +474,12 @@ export function Inspector() {
           <Kv label="Status" value={<StatusValue status={session.status} />} />
           <Kv label="Branch" mono value={repo ? repo.branch : "—"} />
           <Kv label="Started" value={startedLabel(session.createdAt)} />
+          <Kv
+            label="Start time"
+            mono
+            title="How long claude took to start or resume in this session, last time"
+            value={formatBootTime(bootMs)}
+          />
           <Kv
             label="Directory"
             last

@@ -1,7 +1,7 @@
 # ADR 0034 — Kriyon Companion: an opt-in, read-only mod over a local socket
 
 **Date:** 2026-10-03
-**Status:** Accepted
+**Status:** Accepted; amended by [ADR-0049](0049-nested-sessions.md) (one tool, one report)
 **Relates to:** [ADR-0022](0022-session-processes-end-on-intent-survive-accidents.md), [ADR-0030](0030-never-touch-credentials-or-bundle-the-cli.md), [ADR-0033](0033-hooks-per-session-after-consent.md)
 
 ## Context

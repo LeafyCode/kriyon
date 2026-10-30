@@ -97,7 +97,6 @@ export const darkChrome: Omit<
   mod: "#58a6ff",
   addSoft: "rgba(63, 185, 80, 0.12)",
   delSoft: "rgba(240, 113, 111, 0.12)",
-  worktreeDirty: "#c9713f",
   // Solid, not a translucent wash: the syntax palette below is tuned for an
   // opaque near-black well, and a see-through black over a tinted surface
   // reads washed-out next to it.

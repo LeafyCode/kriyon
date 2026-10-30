@@ -1,11 +1,11 @@
 /**
  * Regenerates every derived image under `public/shots/` from the 4K originals
- * in `shots-src/`, plus the social card at `public/og.jpg`.
+ * in `shots-src/`. The social card is separate: `build-og.mjs`.
  *
- * The originals are 2x retina captures of the app (3600x2168). Nothing on the
- * page ever renders one at full width — the hero peaks around 1300 device px
- * and the scene shots around 800 — so shipping the original as the only source
- * costs roughly 200KB and a 20ms decode per image for pixels no one sees.
+ * The originals are 2x retina window captures (3390x2064, cut by
+ * `crop-shots.mjs`). Nothing on the page renders one wider than about 1400
+ * device px — the /views card peaks near 680 CSS px — so the ladder stops at
+ * 1920 and the 4K original never ships.
  *
  * Run after replacing any capture:  node scripts/build-shots.mjs
  */
@@ -19,12 +19,8 @@ const SRC_DIR = path.join(ROOT, "shots-src");
 const OUT_DIR = path.join(ROOT, "public", "shots");
 
 /** Widths emitted for each app capture, in device pixels. */
-const WIDTHS = [640, 960, 1280, 1920, 2560];
+const WIDTHS = [640, 960, 1280, 1920];
 const WEBP = { quality: 82, effort: 6 };
-
-/** The capture the social card is cropped from, and the card's fixed size. */
-const OG_SOURCE = "02-live-session.webp";
-const OG = { width: 1200, height: 630 };
 
 const CAPTURE_RE = /\.(webp|png)$/;
 
@@ -32,7 +28,10 @@ async function emitLadder(file) {
   const src = path.join(SRC_DIR, file);
   const base = path.basename(file, path.extname(file));
   const { width: srcWidth, height: srcHeight } = await sharp(src).metadata();
-  const widths = WIDTHS.filter((w) => w < srcWidth).concat(srcWidth);
+  const below = WIDTHS.filter((w) => w < srcWidth);
+  // A small capture (the menu bar) ships at its own width as the top rung.
+  const widths =
+    below.length === WIDTHS.length ? below : below.concat(srcWidth);
 
   for (const width of widths) {
     const out = path.join(OUT_DIR, `${base}-${width}.webp`);
@@ -40,16 +39,6 @@ async function emitLadder(file) {
     await sharp(src).resize({ width }).webp(WEBP).toFile(out);
   }
   return { base, widths, srcWidth, srcHeight };
-}
-
-async function emitSocialCard() {
-  const src = path.join(SRC_DIR, OG_SOURCE);
-  // `cover` rather than `contain`: a letterboxed card reads as a broken image
-  // in a feed. Anchored north so the window chrome and sidebar survive the crop.
-  await sharp(src)
-    .resize({ ...OG, fit: "cover", position: "north" })
-    .jpeg({ quality: 82, mozjpeg: true })
-    .toFile(path.join(ROOT, "public", "og.jpg"));
 }
 
 async function main() {
@@ -70,9 +59,6 @@ async function main() {
     };
     process.stdout.write(`${base}: ${widths.join(", ")}\n`);
   }
-
-  await emitSocialCard();
-  process.stdout.write("og.jpg: 1200x630\n");
 
   // Consumed by src/lib/shots.ts so the srcset strings can never drift from
   // what is actually on disk.

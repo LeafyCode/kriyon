@@ -23,25 +23,35 @@ vi.mock("../ipc/bridge.ts", async (importOriginal) => {
     repoStatus: vi.fn(() =>
       Promise.resolve({ ahead: 0, behind: 0, branch: "", dirtyCount: 0 })
     ),
+    unmergedCommits: vi.fn(() => Promise.resolve(0)),
   };
 });
+
+// Only the hover prewarm is stubbed: it would open a real pty.
+vi.mock("../state/actions.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../state/actions.ts")>()),
+  prewarmSession: vi.fn(() => Promise.resolve()),
+}));
 
 import {
   activityDeleteSession,
   removeWorktree,
   repoStatus,
+  unmergedCommits,
 } from "../ipc/bridge.ts";
+import { prewarmSession } from "../state/actions.ts";
 import { useChanges } from "../state/changes.ts";
 import { useDrafts } from "../state/drafts.ts";
 import { DEFAULT_LAYOUT, useLayout } from "../state/layout.ts";
+import { useSessionProposals } from "../state/nestedSessions.ts";
 import { type UiSession, useSessions } from "../state/sessions.ts";
 import { useUi } from "../state/ui.ts";
 import { statusMeta } from "../theme/status.ts";
 import { themeById } from "../theme/themes/index.ts";
 import { tokens } from "../theme/tokens.ts";
-import type { ProjectRow } from "../types.ts";
+import type { ProjectRow, TaskStatus } from "../types.ts";
 import { Toast } from "../ui/Toast.tsx";
-import { SessionRow } from "./SessionRow.tsx";
+import { PREWARM_DWELL_MS, SessionRow } from "./SessionRow.tsx";
 import { Sidebar } from "./Sidebar.tsx";
 
 /** The rail's empty-state copy, as one top-level matcher. */
@@ -58,6 +68,8 @@ function makeProject(id: string): ProjectRow {
 }
 
 beforeEach(() => {
+  vi.useRealTimers();
+  vi.mocked(unmergedCommits).mockResolvedValue(0);
   useSessions.setState({
     activeSessionId: null,
     activity: {},
@@ -2001,6 +2013,67 @@ test("a worktree row shows its branch and a dot for uncommitted changes", async 
   expect(await screen.findByTestId("worktree-dirty-w1")).toBeInTheDocument();
 });
 
+test("a worktree row whose commits aren't merged says so", async () => {
+  vi.mocked(repoStatus).mockResolvedValue({
+    ahead: 0,
+    behind: 0,
+    branch: "feat-x",
+    dirtyCount: 0,
+  });
+  vi.mocked(unmergedCommits).mockResolvedValue(2);
+  seedWorktreeSession();
+  render(
+    <SessionRow
+      mode="calm"
+      onCloseSession={vi.fn()}
+      onSelect={vi.fn()}
+      sessionId="w1"
+      sortable={false}
+    />
+  );
+  const chip = await screen.findByTestId("worktree-unmerged-w1");
+  expect(chip).toHaveTextContent("Not merged");
+  // First on the meta line, which clips at the row's edge.
+  expect(chip.parentElement?.firstElementChild).toBe(chip);
+});
+
+test("a worktree's warning clears after another session commits its work", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  vi.mocked(repoStatus).mockResolvedValue({
+    ahead: 0,
+    behind: 0,
+    branch: "feat-x",
+    dirtyCount: 1,
+  });
+  seedWorktreeSession("done");
+  render(
+    <SessionRow
+      mode="calm"
+      onCloseSession={vi.fn()}
+      onSelect={vi.fn()}
+      sessionId="w1"
+      sortable={false}
+    />
+  );
+  await screen.findByTestId("worktree-dirty-w1");
+  // The lead commits it: this row's own status never changes.
+  vi.mocked(repoStatus).mockResolvedValue({
+    ahead: 0,
+    behind: 0,
+    branch: "feat-x",
+    dirtyCount: 0,
+  });
+  vi.mocked(unmergedCommits).mockResolvedValue(1);
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(30_000);
+  });
+  expect(screen.queryByTestId("worktree-dirty-w1")).not.toBeInTheDocument();
+  // Committed is not merged: the row now warns about that instead.
+  expect(await screen.findByTestId("worktree-unmerged-w1")).toHaveTextContent(
+    "Not merged"
+  );
+});
+
 test("removing a clean worktree archives the session", async () => {
   vi.mocked(removeWorktree).mockResolvedValue();
   seedWorktreeSession("done");
@@ -2212,6 +2285,15 @@ test("a booting row shows the same resume spinner", () => {
   renderRow("s1", false);
   expect(screen.getByTestId("booting-spinner-s1")).toBeInTheDocument();
   expect(screen.queryByTestId("status-dot-s1")).not.toBeInTheDocument();
+});
+
+test("a row whose launch is still opening shows the same spinner", () => {
+  seedSession("s1", { title: "Launching" });
+  act(() => {
+    useSessions.setState({ bootPhase: { s1: "launching" } });
+  });
+  renderRow("s1", false);
+  expect(screen.getByTestId("booting-spinner-s1")).toBeInTheDocument();
 });
 
 test("an awake row wears no moon", () => {
@@ -2871,4 +2953,180 @@ test("a filtered rail drops the merged row entirely", () => {
     target: { value: "Session One" },
   });
   expect(screen.queryByTestId("older-summary-p1")).not.toBeInTheDocument();
+});
+
+function seedTasks(id: string, statuses: TaskStatus[]): void {
+  useSessions.setState((s) => ({
+    activity: {
+      ...s.activity,
+      [id]: {
+        main: { currentTool: null },
+        pendingAsk: null,
+        shells: [],
+        subagents: [],
+        tasks: statuses.map((status, i) => ({
+          activeForm: status === "in_progress" ? `Doing task ${i}` : null,
+          status,
+          text: `Task ${i}`,
+        })),
+      },
+    },
+  }));
+}
+
+test("a row shows its task progress, with the current item in the tooltip", () => {
+  seedSession("s1", { title: "Tasks" });
+  seedTasks("s1", ["completed", "in_progress", "pending"]);
+  renderRow("s1", false);
+  const chip = screen.getByTestId("task-progress-s1");
+  expect(chip).toHaveTextContent("1/3");
+  expect(chip).toHaveAttribute("title", "Tasks: 1 of 3 done · Doing task 1");
+});
+
+test("a row whose tasks are all done shows no task progress", () => {
+  seedSession("s1", { title: "Tasks" });
+  seedTasks("s1", ["completed", "completed"]);
+  renderRow("s1", false);
+  expect(screen.queryByTestId("task-progress-s1")).not.toBeInTheDocument();
+});
+
+test("a row shows how full its context window is, toned as it fills", () => {
+  seedSession("s1", { title: "Context" });
+  act(() => {
+    useSessions.setState({
+      usage: {
+        s1: {
+          contextWindowSize: 200_000,
+          inputTokens: 170_000,
+          model: null,
+          outputTokens: null,
+          sessionId: null,
+          usedPercentage: 85,
+        },
+      },
+    });
+  });
+  renderRow("s1", false);
+  const chip = screen.getByTestId("context-chip-s1");
+  expect(chip).toHaveTextContent("85% ctx");
+  expect(chip).toHaveStyle({ color: tokens.color.status.waiting });
+});
+
+test("a row without Claude's context reading shows no context chip", () => {
+  seedSession("s1", { title: "Context" });
+  act(() => {
+    useSessions.setState({ usage: {} });
+  });
+  renderRow("s1", false);
+  expect(screen.queryByTestId("context-chip-s1")).not.toBeInTheDocument();
+});
+
+test("resting the pointer on a row opens its pty early; sweeping past does not", () => {
+  vi.useFakeTimers();
+  seedSession("s1", { title: "Hover me" });
+  const prewarm = vi.mocked(prewarmSession);
+  prewarm.mockClear();
+  renderRow("s1", false);
+  const row = screen.getByTestId("session-row");
+  fireEvent.pointerEnter(row);
+  vi.advanceTimersByTime(PREWARM_DWELL_MS - 1);
+  fireEvent.pointerLeave(row);
+  vi.advanceTimersByTime(PREWARM_DWELL_MS);
+  expect(prewarm).not.toHaveBeenCalled();
+  fireEvent.pointerEnter(row);
+  vi.advanceTimersByTime(PREWARM_DWELL_MS);
+  expect(prewarm).toHaveBeenCalledWith("s1");
+  vi.useRealTimers();
+});
+
+test("a nested session steps in under the session it was started from", () => {
+  seed();
+  useSessions.getState().addSession({
+    archivedAt: null,
+    baselineOid: null,
+    claudeSessionId: null,
+    createdAt: 4,
+    cwd: "",
+    id: "s4",
+    nestedUnder: "s1",
+    projectId: "p1",
+    status: "running",
+    summary: "",
+    title: "Nested One",
+    titleLocked: false,
+    worktreePath: null,
+  });
+  render(
+    <Sidebar
+      onCloseSession={vi.fn()}
+      onNewSession={vi.fn()}
+      onShowAbout={vi.fn()}
+    />
+  );
+  const titles = screen
+    .getAllByTestId("session-row")
+    .map((row) => row.getAttribute("data-status") && row.textContent);
+  const parentAt = titles.findIndex((t) => t?.includes("Session One"));
+  expect(titles[parentAt + 1]).toContain("Nested One");
+  const nestedRow = screen
+    .getAllByTestId("session-row")
+    .find((row) => row.textContent?.includes("Nested One"));
+  expect(nestedRow?.querySelector("[data-nest-depth='1']")).not.toBeNull();
+});
+
+test("a row says when Claude suggested a session from it", () => {
+  seedSession("s1", { title: "Lead" });
+  useSessionProposals.setState({
+    proposals: [
+      {
+        leadSessionId: "s1",
+        request: {
+          branch: null,
+          initiation: "own_initiative",
+          prompt: "p",
+          requestId: "r1",
+          title: "T",
+          worktree: false,
+        },
+      },
+    ],
+  });
+  renderRow("s1", false);
+  expect(screen.getByTestId("suggested-chip-s1")).toHaveTextContent(
+    "1 suggested"
+  );
+  useSessionProposals.setState({ proposals: [] });
+});
+
+test("a nested session whose lead is filtered out isn't drawn indented", () => {
+  seed();
+  useSessions.getState().addSession({
+    archivedAt: null,
+    baselineOid: null,
+    claudeSessionId: null,
+    createdAt: 4,
+    cwd: "",
+    id: "s4",
+    nestedUnder: "s1",
+    projectId: "p1",
+    status: "running",
+    summary: "",
+    title: "Nested One",
+    titleLocked: false,
+    worktreePath: null,
+  });
+  render(
+    <Sidebar
+      onCloseSession={vi.fn()}
+      onNewSession={vi.fn()}
+      onShowAbout={vi.fn()}
+    />
+  );
+  fireEvent.change(screen.getByLabelText("Filter sessions"), {
+    target: { value: "Nested" },
+  });
+  const nestedRow = screen
+    .getAllByTestId("session-row")
+    .find((row) => row.textContent?.includes("Nested One"));
+  expect(nestedRow?.querySelector("[data-nest-depth='0']")).not.toBeNull();
 });

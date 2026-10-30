@@ -55,7 +55,7 @@ pub async fn structured_turns(
         .session_row(&session_id)
         .map_err(|e| e.to_string())?;
     tauri::async_runtime::spawn_blocking(move || {
-        crate::activity_rt::ingest_bridge_now(&home, &session_id);
+        crate::activity_rt::ingest_bridge_now(&app, &home, &session_id);
         let bridge_lines = crate::activity_rt::bridge_rows(&session_id);
         let b: Vec<&str> = bridge_lines.iter().map(String::as_str).collect();
         // The conversation the view is for, as Kriyon recorded it.

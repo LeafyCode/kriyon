@@ -7,6 +7,9 @@ import type {
   FileWriteResult,
   HooksOffScope,
   MergeOutcome,
+  NestedInitiation,
+  NestedOutcome,
+  NestedRequest,
   NotifyPreference,
   NotifySound,
   PastSessionPage,
@@ -386,6 +389,26 @@ export function companionStatus(sessionId: string): Promise<CompanionStatus> {
 export const onCompanionChanged = subscribe<{ sessionId: string }>(
   "companion-changed"
 );
+
+/** Every [Nested session] request posted since the last call, each once. */
+export function takeSessionRequests(): Promise<NestedRequest[]> {
+  if (!hasTauri()) {
+    return Promise.resolve([]);
+  }
+  return invoke("take_session_requests");
+}
+
+/** Start now or suggest: the Rust core's rule for a [Nested session]. */
+export function nestedOutcome(
+  initiation: NestedInitiation,
+  running: number,
+  cap: number | null
+): Promise<NestedOutcome> {
+  if (!hasTauri()) {
+    return Promise.resolve("propose");
+  }
+  return invoke("nested_outcome", { cap, initiation, running });
+}
 
 /** One thing Claude did in a turn (mirrors Rust `TurnItem`). */
 export type TurnItem =
@@ -893,6 +916,12 @@ export function removeWorktree(
 /** Resolve the repo's default branch — the base a session diff compares against. */
 export function defaultBranch(repoPath: string): Promise<string> {
   return invoke("default_branch", { repoPath });
+}
+
+/** Commits the worktree at `worktreePath` has that its repo's default branch
+ *  doesn't. */
+export function unmergedCommits(worktreePath: string): Promise<number> {
+  return invoke("unmerged_commits", { worktreePath });
 }
 
 /** Diff a worktree's committed changes against `base` (`<base>...HEAD`). */

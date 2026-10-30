@@ -11,7 +11,7 @@ interface ShotSource {
   width: number;
 }
 
-/** Rung used as the `src` fallback, and as the film's fixed-stage source. */
+/** Rung used as the `src` fallback for browsers that ignore `srcSet`. */
 const FALLBACK_WIDTH = 1280;
 
 function nearest(widths: readonly number[], target: number): number {
@@ -33,12 +33,4 @@ export function shot(name: ShotName): ShotSource {
     width: intrinsicWidth,
     height: intrinsicHeight,
   };
-}
-
-/**
- * A single fixed-width rung, for the film — its 1920x1080 stage is a coordinate
- * system scaled by CSS, so the browser cannot pick a rung from a `sizes` hint.
- */
-export function shotAt(name: ShotName, width: number): string {
-  return `/shots/${name}-${nearest(manifest[name].widths, width)}.webp`;
 }

@@ -42,6 +42,7 @@ vi.mock("../ipc/bridge", () => ({
   onSessionHooksOff: vi.fn(() => Promise.resolve(noop)),
   onWorkingTreeChanged: vi.fn(() => Promise.resolve(noop)),
   onPlanLimits: vi.fn(() => Promise.resolve(noop)),
+  onCompanionChanged: vi.fn(() => Promise.resolve(noop)),
 }));
 
 const stops: Array<() => void> = [];

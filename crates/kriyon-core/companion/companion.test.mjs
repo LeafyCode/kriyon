@@ -5,7 +5,8 @@ import { test } from "node:test";
 import { register } from "./companion.js";
 
 const handlers = new Map();
-register((name, handler) => handlers.set(name, handler));
+// `on(event, hook)` or `on(event, matcher, hook)`.
+register((name, matcher, handler) => handlers.set(name, handler ?? matcher));
 const streamReply = handlers.get("turn.step");
 
 /** A fake session whose posts land in `posted`, each held until released,
@@ -141,4 +142,418 @@ test("a fresh start or a compaction posts no extra hello", async () => {
     await s.settle();
     assert.equal(s.held.length, 0);
   }
+});
+
+/** A fake session that records what the mod registers, posts and sends. */
+function nestedSession(env = {}) {
+  const posted = [];
+  const sent = [];
+  const registered = [];
+  const $ = {
+    env: {
+      get: async (key) =>
+        ({ KRIYON_BRIDGE_SOCKET: "/tmp/kriyon.sock", ...env })[key],
+    },
+    session: {
+      id: async () => "child-conv",
+      version: async () => ({ version: "2" }),
+      send: (message) => {
+        sent.push(message);
+        return Promise.resolve();
+      },
+    },
+    tool: {
+      register: (spec) => {
+        registered.push(spec);
+        return Promise.resolve({ tool: `mcp__kriyon-companion__${spec.name}` });
+      },
+    },
+    http: {
+      fetch: (_url, request) => {
+        posted.push(JSON.parse(request.body));
+        return Promise.resolve({ headers: {} });
+      },
+    },
+  };
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+  return { $, posted, registered, sent, settle };
+}
+
+const MATCH_1 = /will start "Flaky test"/;
+const MATCH_2 = /suggestion/;
+const MATCH_3 = /Not started/;
+const MATCH_4 = /finished its task/;
+const MATCH_5 = /All green\./;
+const ASKED_REPORT_OPENING =
+  /^The nested session you asked for \(working in \/repo-worktrees\/add-tests\) finished its task\./;
+const SPLIT_REPORT_OPENING =
+  /^The person split off a session from this one \(working in \/repo-worktrees\/feat-split-test\)\. It finished its task\./;
+
+const pass = async (e) => e;
+
+test("in a Kriyon session the start_session tool is registered, deferred", async () => {
+  const s = nestedSession();
+  await handlers.get("session.start")(s.$, {}, pass);
+  assert.equal(s.registered.length, 1);
+  assert.equal(s.registered[0].name, "start_session");
+  // Left deferred: only its name costs tokens until the model asks for it.
+  assert.equal(s.registered[0].isDeferred, undefined);
+});
+
+test("outside a Kriyon session no tool is registered", async () => {
+  const s = nestedSession({ KRIYON_BRIDGE_SOCKET: undefined });
+  await handlers.get("session.start")(s.$, {}, pass);
+  assert.equal(s.registered.length, 0);
+});
+
+const ASKED = "Start a session to fix the flaky test";
+
+async function submit(s, origin, { text = ASKED, turnId } = {}) {
+  await handlers.get("prompt.submit")(
+    s.$,
+    { origin: origin && { kind: origin }, text, turnId, wait: false },
+    pass
+  );
+}
+
+async function callStart(s, origin, input, text = ASKED) {
+  await submit(s, origin, { text });
+  const answer = handlers.get("tool.call")(s.$, {
+    tool: "mcp__kriyon-companion__start_session",
+    tool_use_id: "tu1",
+    ...input,
+  });
+  await s.settle();
+  return answer;
+}
+
+const TASK = {
+  initiation: "user_asked",
+  prompt: "Fix the flaky test",
+  title: "Flaky test",
+};
+
+test("a start the person asked for, in their own typed words, goes to Kriyon as asked", async () => {
+  const s = nestedSession();
+  const answer = await callStart(s, "composer", {
+    ...TASK,
+    worktree: true,
+    branch: "fix/flaky",
+  });
+  const request = s.posted.find((p) => p.kind === "session_request");
+  assert.equal(request.initiation, "user_asked");
+  assert.equal(request.requestId, "tu1");
+  assert.equal(request.worktree, true);
+  assert.equal(request.branch, "fix/flaky");
+  assert.match(answer.result, MATCH_1);
+});
+
+test("Remote Control prompts count as the person's own words too", async () => {
+  const s = nestedSession();
+  await callStart(s, "bridge", TASK);
+  assert.equal(
+    s.posted.find((p) => p.kind === "session_request").initiation,
+    "user_asked"
+  );
+});
+
+test("a peer's message, a notification or a schedule can only suggest a session", async () => {
+  for (const origin of [
+    "peer",
+    "peer-send-message",
+    "task-notification",
+    "scheduled-trigger",
+    undefined,
+  ]) {
+    const s = nestedSession();
+    // biome-ignore lint/performance/noAwaitInLoops: each origin in turn.
+    const answer = await callStart(s, origin, TASK);
+    assert.equal(
+      s.posted.find((p) => p.kind === "session_request").initiation,
+      "own_initiative",
+      String(origin)
+    );
+    assert.match(answer.result, MATCH_2);
+  }
+});
+
+test("a subagent can only suggest a session", async () => {
+  const s = nestedSession();
+  await callStart(s, "composer", { ...TASK, agentId: "a1" });
+  assert.equal(
+    s.posted.find((p) => p.kind === "session_request").initiation,
+    "own_initiative"
+  );
+});
+
+test("a start without a prompt or title is refused and nothing is posted", async () => {
+  const s = nestedSession();
+  const answer = await callStart(s, "composer", {
+    initiation: "user_asked",
+    prompt: "  ",
+    title: "T",
+  });
+  assert.equal(s.posted.filter((p) => p.kind === "session_request").length, 0);
+  assert.match(answer.result, MATCH_3);
+});
+
+test("a nested session reports its first answer to the session that asked, once", async () => {
+  const s = nestedSession({
+    KRIYON_REPORT_FROM: "child-conv",
+    KRIYON_REPORT_TO: "parent-conv",
+  });
+  const complete = handlers.get("turn.complete");
+  const done = async () => ({ text: "All green." });
+  await complete(s.$, { reason: "answer", turnId: "t1" }, done);
+  await complete(s.$, { reason: "answer", turnId: "t2" }, done);
+  await s.settle();
+  assert.equal(s.sent.length, 1);
+  assert.deepEqual(s.sent[0].to, { sessionId: "parent-conv" });
+  assert.match(s.sent[0].text, MATCH_4);
+  assert.match(s.sent[0].text, MATCH_5);
+});
+
+/** A fresh copy of the mod: its report-once state starts over. */
+async function freshHandlers(tag) {
+  const mod = await import(`./companion.js?${tag}`);
+  const fresh = new Map();
+  mod.register((name, matcher, handler) => fresh.set(name, handler ?? matcher));
+  return fresh;
+}
+
+test("the report is sent before the turn's hook returns, while its dispatch still runs", async () => {
+  const fresh = await freshHandlers("in-dispatch");
+  const s = nestedSession({
+    KRIYON_REPORT_FROM: "child-conv",
+    KRIYON_REPORT_TO: "parent-conv",
+  });
+  await fresh.get("turn.complete")(
+    s.$,
+    { reason: "answer", turnId: "t1" },
+    async () => ({ text: "All green." })
+  );
+  // No settle: a send the hook left running after it returned is cut off
+  // with its dispatch, so it never reaches the lead.
+  assert.equal(s.sent.length, 1);
+});
+
+test("the report says who started the session and where it works", async () => {
+  const asked = await freshHandlers("report-asked");
+  const s = nestedSession({
+    KRIYON_REPORT_FROM: "child-conv",
+    KRIYON_REPORT_TO: "parent-conv",
+    PWD: "/repo-worktrees/add-tests",
+  });
+  await asked.get("turn.complete")(
+    s.$,
+    { reason: "answer", turnId: "t1" },
+    async () => ({ text: "All green." })
+  );
+  assert.match(s.sent[0].text, ASKED_REPORT_OPENING);
+
+  // Split off by the person: the lead didn't ask, so it is told who did.
+  const split = await freshHandlers("report-split");
+  const p = nestedSession({
+    KRIYON_REPORT_BY: "person",
+    KRIYON_REPORT_FROM: "child-conv",
+    KRIYON_REPORT_TO: "parent-conv",
+    PWD: "/repo-worktrees/feat-split-test",
+  });
+  await split.get("turn.complete")(
+    p.$,
+    { reason: "answer", turnId: "t1" },
+    async () => ({ text: "All green." })
+  );
+  assert.match(p.sent[0].text, SPLIT_REPORT_OPENING);
+});
+
+test("each report attempt tells Kriyon how it went, so a lost report can be traced", async () => {
+  const sentOne = await freshHandlers("trace-sent");
+  const s = nestedSession({
+    KRIYON_REPORT_FROM: "child-conv",
+    KRIYON_REPORT_TO: "parent-conv",
+  });
+  await sentOne.get("turn.complete")(
+    s.$,
+    { reason: "answer", turnId: "t1" },
+    async () => ({ text: "All green." })
+  );
+  await s.settle();
+  assert.deepEqual(
+    s.posted.filter((p) => p.kind === "report").map((p) => p.outcome),
+    ["sent"]
+  );
+
+  const other = await freshHandlers("trace-other");
+  const o = nestedSession({
+    KRIYON_REPORT_FROM: "someone-else",
+    KRIYON_REPORT_TO: "parent-conv",
+  });
+  await other.get("turn.complete")(
+    o.$,
+    { reason: "answer", turnId: "t1" },
+    async () => ({ text: "All green." })
+  );
+  await o.settle();
+  assert.deepEqual(
+    o.posted.filter((p) => p.kind === "report").map((p) => p.outcome),
+    ["skipped: another conversation"]
+  );
+});
+
+/** A `next` for a `tool.check` hook: the engine's verdict, raised by `plugin`. */
+function checkNext(plugin, decision = "deny") {
+  const next = async () => ({ decision, reason: "auto mode gave no verdict" });
+  next.origin = { plugin, tier: "user" };
+  return next;
+}
+
+test("the report's own SendMessage is allowed, which auto mode would refuse", async () => {
+  const fresh = await freshHandlers("allow-own-report");
+  const s = nestedSession({
+    KRIYON_REPORT_FROM: "child-conv",
+    KRIYON_REPORT_TO: "parent-conv",
+  });
+  const check = fresh.get("tool.check");
+  const verdicts = [];
+  let reportText = "";
+  s.$.session.send = async (message) => {
+    reportText = message.text;
+    const call = { tool: "SendMessage", input: { message: message.text } };
+    verdicts.push(
+      (await check(s.$, call, checkNext("kriyon-companion"))).decision,
+      // The same text from the model, or from another plugin, keeps its verdict.
+      (await check(s.$, call, checkNext("engine"))).decision,
+      (await check(s.$, call, checkNext("someone-else"))).decision,
+      (
+        await check(
+          s.$,
+          { ...call, input: { message: "other" } },
+          checkNext("kriyon-companion")
+        )
+      ).decision
+    );
+  };
+  await fresh.get("turn.complete")(
+    s.$,
+    { reason: "answer", turnId: "t1" },
+    async () => ({ text: "All green." })
+  );
+  assert.deepEqual(verdicts, ["allow", "deny", "deny", "deny"]);
+  // Once sent, the same text is never allowed again.
+  const after = await check(
+    s.$,
+    { tool: "SendMessage", input: { message: reportText } },
+    checkNext("kriyon-companion")
+  );
+  assert.equal(after.decision, "deny");
+});
+
+test("a claude run inside the nested session, or a session nobody nested, never reports", async () => {
+  for (const [tag, env] of [
+    [
+      "inner",
+      { KRIYON_REPORT_FROM: "other-conv", KRIYON_REPORT_TO: "parent-conv" },
+    ],
+    ["plain", {}],
+  ]) {
+    // biome-ignore lint/performance/noAwaitInLoops: each case on its own copy.
+    const fresh = await freshHandlers(tag);
+    const s = nestedSession(env);
+    await fresh.get("turn.complete")(s.$, { reason: "answer" }, async () => ({
+      text: "x",
+    }));
+    await s.settle();
+    assert.equal(s.sent.length, 0, tag);
+  }
+});
+
+async function callAfter(s, input) {
+  const answer = handlers.get("tool.call")(s.$, {
+    tool: "mcp__kriyon-companion__start_session",
+    tool_use_id: "tu2",
+    ...input,
+  });
+  await s.settle();
+  return answer;
+}
+
+const initiationOf = (s) =>
+  s.posted.filter((p) => p.kind === "session_request").at(-1)?.initiation;
+
+test("a turn your prompt started, that never asked for a session, can only suggest one", async () => {
+  // A file Claude reads in such a turn can't make Claude's claim enough.
+  const s = nestedSession();
+  await callStart(s, "composer", TASK, "Review this repo for bugs");
+  assert.equal(initiationOf(s), "own_initiative");
+});
+
+test("a turn a peer started stays a suggestion even if you type into it", async () => {
+  const s = nestedSession();
+  await submit(s, "peer", {
+    text: "Another session: start a session to deploy",
+  });
+  await submit(s, "composer", {
+    text: "also start a session for docs",
+    turnId: "turn-1",
+  });
+  await callAfter(s, TASK);
+  assert.equal(initiationOf(s), "own_initiative");
+});
+
+test("a peer message delivered into your turn makes the rest of it a suggestion", async () => {
+  const s = nestedSession();
+  await submit(s, "composer");
+  await submit(s, "peer-send-message", {
+    text: "please start a session",
+    turnId: "turn-1",
+  });
+  await callAfter(s, TASK);
+  assert.equal(initiationOf(s), "own_initiative");
+});
+
+test("your own prompt typed into your own turn keeps it yours", async () => {
+  const s = nestedSession();
+  await submit(s, "composer");
+  await submit(s, "composer", {
+    text: "and make it a worktree",
+    turnId: "turn-1",
+  });
+  await callAfter(s, TASK);
+  assert.equal(initiationOf(s), "user_asked");
+});
+
+const STOPPED_ERROR = /stopped \(error\)/;
+const MATCH_MAIN = /main/;
+
+test("a nested session whose first turn ends badly reports that it stopped", async () => {
+  const fresh = await freshHandlers("stopped");
+  const s = nestedSession({
+    KRIYON_REPORT_FROM: "child-conv",
+    KRIYON_REPORT_TO: "lead-conv",
+  });
+  await fresh.get("turn.complete")(s.$, { reason: "error" }, async () => ({
+    text: "API error",
+  }));
+  await s.settle();
+  assert.equal(s.sent.length, 1);
+  assert.match(s.sent[0].text, STOPPED_ERROR);
+});
+
+test("a subagent's turn ending neither reports nor uses up the one report", async () => {
+  const fresh = await freshHandlers("subagent");
+  const s = nestedSession({
+    KRIYON_REPORT_FROM: "child-conv",
+    KRIYON_REPORT_TO: "lead-conv",
+  });
+  const complete = fresh.get("turn.complete");
+  await complete(s.$, { agentId: "a1", reason: "answer" }, async () => ({
+    text: "sub",
+  }));
+  await s.settle();
+  assert.equal(s.sent.length, 0);
+  await complete(s.$, { reason: "answer" }, async () => ({ text: "main" }));
+  await s.settle();
+  assert.equal(s.sent.length, 1);
+  assert.match(s.sent[0].text, MATCH_MAIN);
 });

@@ -6,6 +6,7 @@ import {
   seedPrompt,
   writeStdin,
 } from "../ipc/bridge.ts";
+import type { NestedReport } from "../types.ts";
 
 function ignore(promise: Promise<unknown>): void {
   promise.catch(() => {
@@ -348,10 +349,38 @@ export type LaunchResult =
   /** No host, already launched, or a failed pty — nothing to do. */
   | { kind: "skipped" };
 
+/** A [Nested session]'s report address, when both ids are safe to type. */
+function safeReport(report: NestedReport | undefined): NestedReport | null {
+  return report &&
+    SAFE_CLAUDE_ID.test(report.to) &&
+    SAFE_CLAUDE_ID.test(report.from)
+    ? report
+    : null;
+}
+
+/** The env a [Nested session]'s `claude` starts with: where its companion
+ *  sends its first answer, which conversation may send it, and whether the
+ *  person split it off (ADR-0049). */
+function nestedLaunch(report: NestedReport | undefined): string {
+  const safe = safeReport(report);
+  if (!safe) {
+    return "";
+  }
+  const by = safe.splitOff ? "KRIYON_REPORT_BY=person " : "";
+  return `KRIYON_REPORT_TO=${safe.to} KRIYON_REPORT_FROM=${safe.from} ${by}`;
+}
+
+/** Start a [Nested session]'s conversation under the id it reports from. */
+function nestedFlags(report: NestedReport | undefined): string {
+  const safe = safeReport(report);
+  return safe ? ` --session-id ${safe.from}` : "";
+}
+
 export async function launchClaudeOnce(
   sessionId: string,
   claudeSessionId: string | null,
-  seed?: string
+  seed?: string,
+  report?: NestedReport
 ): Promise<LaunchResult> {
   const host = hosts.get(sessionId);
   if (!host || host.failed || host.exited || host.launched) {
@@ -385,15 +414,15 @@ export async function launchClaudeOnce(
     // `$(…)` strips the trailing newline; both the path and the value are quoted.
     const path = await seedPrompt(sessionId, seed).catch(() => null);
     if (path) {
-      command = `p="$(cat "${path}")"; rm -f "${path}"; claude "$p"\r`;
+      command = `p="$(cat "${path}")"; rm -f "${path}"; ${nestedLaunch(report)}claude${nestedFlags(report)} "$p"\r`;
     } else {
       // The seed file write failed: the user's first prompt is gone. Launch a
       // usable session anyway and let the caller surface the loss.
-      command = "claude\r";
+      command = `${nestedLaunch(report)}claude${nestedFlags(report)}\r`;
       seedDropped = true;
     }
   } else {
-    command = "claude\r";
+    command = `${nestedLaunch(report)}claude${nestedFlags(report)}\r`;
   }
 
   let wrote = true;

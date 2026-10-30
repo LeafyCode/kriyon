@@ -50,13 +50,16 @@ interface UiState {
    */
   openSpawn: (
     anchor: { predecessorId: string } | { projectId: string },
-    opts?: { seed?: string; worktree?: boolean }
+    opts?: { nest?: boolean; seed?: string; worktree?: boolean }
   ) => void;
   paletteOpen: boolean;
   /** Prefill data for the prompt editor when open; null = editor closed. */
   promptEditorSeed: PromptEditorSeed | null;
   /** Whether the prompt picker overlay is open. */
   promptPickerOpen: boolean;
+  /** The dialog splits off a [Nested session] under the predecessor
+   *  instead of a follow-up: the prompt starts empty, the row nests. */
+  spawnNest: boolean;
   /** The [Spawn dialog] composing a follow-up/worktree session. */
   spawnOpen: boolean;
   /** The session the spawn dialog is following up from, if any. */
@@ -111,6 +114,7 @@ export const useUi = create<UiState>((set) => ({
   spawnOpen: false,
   spawnPredecessorId: null,
   spawnProjectId: null,
+  spawnNest: false,
   spawnSeed: null,
   spawnWorktreeDefault: false,
   openPalette: () => set(showOnly("palette")),
@@ -132,7 +136,8 @@ export const useUi = create<UiState>((set) => ({
       spawnPredecessorId:
         "predecessorId" in anchor ? anchor.predecessorId : null,
       spawnProjectId: "projectId" in anchor ? anchor.projectId : null,
-      spawnSeed: opts?.seed ?? null,
+      spawnNest: opts?.nest === true && "predecessorId" in anchor,
+      spawnSeed: opts?.seed ?? (opts?.nest ? "" : null),
       spawnWorktreeDefault: opts?.worktree ?? false,
     }),
   closeSpawn: () => set({ spawnOpen: false }),

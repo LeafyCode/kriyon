@@ -98,7 +98,9 @@ jobs:
             exit 0
           fi
           work="$(mktemp -d)"
-          gh release download "$TAG" --pattern '*.dmg' --dir "$work"
+          # The versioned DMG only: the release also carries Kriyon.dmg, the same
+          # file under the fixed name the website links to.
+          gh release download "$TAG" --pattern 'Kriyon_*.dmg' --dir "$work"
           dmg="$(basename "$work"/*.dmg)"
           url="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/$dmg"
           git clone --quiet --depth 1 \

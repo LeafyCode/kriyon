@@ -32,8 +32,11 @@ Read the root `AGENTS.md` first. Two crates live here:
 
 These **observe and never steer**. Every path exits cleanly, passes the event on unchanged, and
 never blocks, approves or rewrites anything, because a bug here breaks the user's Claude, not
-just Kriyon. They do nothing outside a Kriyon session: the hook scripts check
-`KRIYON_SESSION`, the companion `KRIYON_BRIDGE_SOCKET`.
+just Kriyon. The one exception is nested sessions (ADR-0049): the companion registers one
+deferred tool, `start_session`, and a nested session sends one report to its lead session,
+allowing only that one SendMessage of its own in `tool.check`.
+Kriyon, not the mod, decides whether a requested session starts. They do nothing outside a
+Kriyon session: the hook scripts check `KRIYON_SESSION`, the companion `KRIYON_BRIDGE_SOCKET`.
 
 - The hook scripts are tested from Rust (`hooks.rs`), and the redaction cases are shared with
   `redact.rs` through `scripts/redaction-cases.json`; change both sides together.

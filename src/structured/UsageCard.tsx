@@ -269,7 +269,8 @@ export function UsageCard({ sessionId }: { sessionId: string }) {
   const blocked = useFullPanelBlocked(sessionId);
   const titleId = useId();
   const view = sessionUsageView(live);
-  const { alert } = limits;
+  // A limit already at 80% says more than a forecast; otherwise the pace.
+  const alert = limits.alert ?? limits.pace;
   return (
     <section aria-labelledby={titleId} style={cardStyle}>
       <div style={headerStyle}>

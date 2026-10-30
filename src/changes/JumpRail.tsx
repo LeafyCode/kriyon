@@ -10,7 +10,7 @@ export const JUMP_RAIL_WIDTH = 26;
 
 /** Each dot's diameter, plus the vertical gap between dots — small literal
  * pixel values, matching the sidebar's own status-dot sizing convention
- * (`idleDotStyle`, `worktreeDirtyDotStyle` in `sidebar/SessionRow.tsx`)
+ * (`idleDotStyle` in `sidebar/SessionRow.tsx`)
  * rather than the coarser spacing token ramp. */
 const DOT_SIZE = 6;
 const DOT_GAP = 6;

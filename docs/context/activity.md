@@ -166,3 +166,17 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
   `NOTIFY_MAX_DEFER`, so a forever-repainting TUI makes a notification late, never lost.
   A session whose pty output was never observed is never vetoed. _Avoid_: pty gate,
   output debounce.
+- **Task progress** — how far a Session's [Task] list has got: done and total ("3/7"), the
+  current item (the in-progress task's active form, else the next pending task) and whether
+  every task is done. One derivation (`taskProgress`) that the sidebar row, the [Task strip]
+  and the [Turn recap] share. Shown only while the list is open. _Avoid_: todo count.
+- **Task strip** — the one-line [Task progress] bar pinned between the session header and
+  the terminal: count, a thin bar and the current item, unfolding to the whole list. Gone
+  while there is no list and once every task is done. _Avoid_: todo bar, checklist header.
+- **Turn recap** — the card under the session header when the active session's Claude stops
+  (Done or waiting): what that turn did (files changed, commands run and how many failed,
+  where the [Task] list stands), Claude's last line or what it needs, with Review changes and
+  Follow up (the [Spawn dialog] with the [Handoff prompt]). Read from the session's own
+  events, zero-token; a turn that changed no files and ran no commands has none. Closing it
+  hides that turn's recap only. _Avoid_: summary card, turn report (a [Work report] is
+  different).

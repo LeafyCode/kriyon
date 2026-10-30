@@ -114,6 +114,8 @@ pub enum BridgeEvent {
         tool_use_id: String,
         check: ToolCheck,
     },
+    /// A [Nested session] the session asked Kriyon to start (ADR-0049).
+    SessionRequest(crate::nested::SessionRequest),
     /// The `claude` process ended cleanly.
     End {
         run: String,
@@ -169,6 +171,7 @@ pub fn classify(line: &str) -> Option<BridgeEvent> {
                 rule: text(&value, "rule"),
             },
         }),
+        "session_request" => crate::nested::parse(&value).map(BridgeEvent::SessionRequest),
         "end" => Some(BridgeEvent::End {
             run,
             seq,
@@ -287,6 +290,12 @@ mod tests {
             })
         );
         assert_eq!(classify(r#"{"kind":"turn.start"}"#), None);
+        assert!(matches!(
+            classify(
+                r#"{"kind":"session_request","requestId":"t","initiation":"user_asked","prompt":"P","title":"T"}"#
+            ),
+            Some(BridgeEvent::SessionRequest(_))
+        ));
         assert_eq!(classify("garbage"), None);
     }
 }
