@@ -457,6 +457,7 @@ pub fn run() {
             prompt_cmd::import_commands,
             completion_cmd::list_slash_commands,
             completion_cmd::list_files,
+            completion_cmd::find_files,
             completion_cmd::prompt_history,
             file_cmd::read_file,
             file_cmd::list_dir,

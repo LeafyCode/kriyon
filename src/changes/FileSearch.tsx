@@ -7,17 +7,13 @@ import {
   useRef,
   useState,
 } from "react";
-import { type FileEntry, listFiles } from "../ipc/bridge.ts";
+import { type FileEntry, findFiles } from "../ipc/bridge.ts";
 import { failureMessage } from "../ipc/failures.ts";
 import type { TreeDecorations } from "../state/changesView.ts";
-import { matchRange, rankFileMatches } from "../state/fileSearch.ts";
+import { matchRange } from "../state/fileSearch.ts";
 import { iconButton, inputBox, treeRow } from "../theme/recipes.ts";
 import { tokens } from "../theme/tokens.ts";
 import { DirIcon, FileIcon } from "./fileIcon.tsx";
-
-/** The most matches `listFiles` returns (Rust `FILE_CAP` in
- * `completion_cmd.rs`). Reaching it means there may be more. */
-export const SEARCH_RESULT_CAP = 50;
 
 /** How long typing must pause before the project is searched. Each search
  * walks the tree on the Rust side, so not one per keystroke. */
@@ -108,7 +104,13 @@ type SearchState =
   | { status: "idle" }
   | { status: "loading" }
   | { message: string; status: "error" }
-  | { entries: FileEntry[]; status: "done" };
+  | {
+      entries: FileEntry[];
+      /** The query these entries answer — the box may have moved on. */
+      query: string;
+      status: "done";
+      truncated: boolean;
+    };
 
 function splitPath(path: string): { dir: string; name: string } {
   const slash = path.lastIndexOf("/");
@@ -160,9 +162,9 @@ function moveInResults(
  * folders it lives in first.
  *
  * The tree only knows the folders it has opened, so filtering it would miss
- * most of the project. This asks the backend's `listFiles` walk instead —
- * the same .gitignore-respecting walk the `@`-mention picker uses — and
- * ranks what comes back by name (see `state/fileSearch.ts`).
+ * most of the project. This asks the backend's `findFiles` instead — the same
+ * .gitignore-respecting walk the `@`-mention picker uses, ranked by name over
+ * every match before the result cut.
  *
  * While a query is typed the results take the tree's place (`children` is
  * the tree); opening a result clears the search and hands the entry to
@@ -186,6 +188,9 @@ export function FileSearch({
   // dropped rather than painted over the newer one.
   const requestRef = useRef(0);
   const trimmed = query.trim();
+  // Enter pressed while the answer for what is typed hasn't landed yet:
+  // open that answer's top match when it does, never the previous query's.
+  const openOnArrivalRef = useRef(false);
 
   // A search belongs to the folder it was typed in.
   // biome-ignore lint/correctness/useExhaustiveDependencies: `cwd` is the reset trigger, not a value the body reads.
@@ -202,14 +207,25 @@ export function FileSearch({
     }
     setState((prev) => (prev.status === "done" ? prev : { status: "loading" }));
     const timer = setTimeout(() => {
-      listFiles(cwd, trimmed)
-        .then((entries) => {
-          if (requestRef.current === request) {
-            setState({
-              entries: rankFileMatches(entries, trimmed),
-              status: "done",
-            });
+      findFiles(cwd, trimmed)
+        .then((found) => {
+          if (requestRef.current !== request) {
+            return;
           }
+          const [first] = found.entries;
+          if (openOnArrivalRef.current && first) {
+            openOnArrivalRef.current = false;
+            setQuery("");
+            onOpenRef.current(first);
+            return;
+          }
+          openOnArrivalRef.current = false;
+          setState({
+            entries: found.entries,
+            query: trimmed,
+            status: "done",
+            truncated: found.truncated,
+          });
         })
         .catch((error: unknown) => {
           if (requestRef.current === request) {
@@ -219,6 +235,10 @@ export function FileSearch({
     }, SEARCH_DEBOUNCE_MS);
     return () => clearTimeout(timer);
   }, [cwd, trimmed]);
+
+  // The latest `onOpen`, read by the fetch's late callback.
+  const onOpenRef = useRef(onOpen);
+  onOpenRef.current = onOpen;
 
   function open(entry: FileEntry): void {
     setQuery("");
@@ -231,11 +251,15 @@ export function FileSearch({
         event.currentTarget.blur();
       }
       setQuery("");
+      openOnArrivalRef.current = false;
       event.preventDefault();
-    } else if (event.key === "Enter" && state.status === "done") {
-      const [first] = state.entries;
+    } else if (event.key === "Enter" && trimmed !== "") {
+      const current = state.status === "done" && state.query === trimmed;
+      const [first] = current ? state.entries : [];
       if (first) {
         open(first);
+      } else if (!current) {
+        openOnArrivalRef.current = true;
       }
       event.preventDefault();
     } else if (event.key === "ArrowDown") {
@@ -299,7 +323,6 @@ export function FileSearch({
           <SearchResults
             decorations={decorations}
             onOpen={open}
-            query={trimmed}
             state={state}
           />
         </div>
@@ -311,12 +334,10 @@ export function FileSearch({
 function SearchResults({
   decorations,
   onOpen,
-  query,
   state,
 }: {
   decorations: TreeDecorations;
   onOpen: (entry: FileEntry) => void;
-  query: string;
   state: SearchState;
 }) {
   if (state.status === "error") {
@@ -353,16 +374,15 @@ function SearchResults({
               )}
             </span>
             <span style={nameStyle}>
-              <HighlightedName name={name} query={query} />
+              <HighlightedName name={name} query={state.query} />
             </span>
             {dir ? <span style={dirStyle}>{dir}</span> : null}
           </button>
         );
       })}
-      {state.entries.length >= SEARCH_RESULT_CAP ? (
+      {state.truncated ? (
         <div style={noteStyle}>
-          Showing the first {SEARCH_RESULT_CAP} matches. Keep typing to narrow
-          it down.
+          More files match. Keep typing to narrow it down.
         </div>
       ) : null}
     </>

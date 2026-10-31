@@ -429,6 +429,28 @@ mod tests {
     }
 
     #[test]
+    fn find_matches_ranks_every_match_before_cutting_and_says_it_cut() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        // 55 paths that only contain the query, all sorting before the one
+        // file whose name *is* the query.
+        for i in 0..55 {
+            std::fs::create_dir(root.join(format!("a{i:02}"))).unwrap();
+            std::fs::write(root.join(format!("a{i:02}/big_button_panel.ts")), "").unwrap();
+        }
+        std::fs::create_dir(root.join("zz")).unwrap();
+        std::fs::write(root.join("zz/button.ts"), "").unwrap();
+
+        let found = find_matches(root, "button");
+        assert_eq!(found.entries[0].path, "zz/button.ts");
+        assert_eq!(found.entries.len(), FILE_CAP);
+        assert!(found.truncated);
+
+        let few = find_matches(root, "zz");
+        assert!(!few.truncated);
+    }
+
+    #[test]
     fn walk_files_sorts_dirs_before_files_and_matches_case_insensitively() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
@@ -554,8 +576,23 @@ const WALK_VISIT_CAP: usize = 20_000;
 /// relative path contains `query` (case-insensitive). Directories sort before
 /// files, then lexicographically; capped at `FILE_CAP`.
 fn walk_files(root: &Path, query: &str) -> Vec<FileEntry> {
+    let mut out = walk_matches(root, query);
+    out.sort_by(|a, b| match (a.is_dir, b.is_dir) {
+        (true, false) => std::cmp::Ordering::Less,
+        (false, true) => std::cmp::Ordering::Greater,
+        _ => a.path.cmp(&b.path),
+    });
+    out.truncate(FILE_CAP);
+    out
+}
+
+/// Every entry under `root` whose relative path contains `query`
+/// (case-insensitive), unordered and uncapped — within the walk's own
+/// [`WALK_VISIT_CAP`]. Shared by `@`-mention completion and the Files search,
+/// which order and cut it differently.
+fn walk_matches(root: &Path, query: &str) -> Vec<FileEntry> {
     let needle = query.to_lowercase();
-    let mut out: Vec<FileEntry> = ignore::WalkBuilder::new(root)
+    ignore::WalkBuilder::new(root)
         .hidden(false) // show dotfiles; .gitignore still hides ignored ones
         .git_ignore(true)
         .git_global(true)
@@ -587,15 +624,45 @@ fn walk_files(root: &Path, query: &str) -> Vec<FileEntry> {
             let is_dir = entry.file_type().is_some_and(|t| t.is_dir());
             Some(FileEntry { path, is_dir })
         })
-        .collect();
+        .collect()
+}
 
-    out.sort_by(|a, b| match (a.is_dir, b.is_dir) {
-        (true, false) => std::cmp::Ordering::Less,
-        (false, true) => std::cmp::Ordering::Greater,
-        _ => a.path.cmp(&b.path),
-    });
-    out.truncate(FILE_CAP);
-    out
+/// The Files search's answer: the best [`FILE_CAP`] matches by name, and
+/// whether more matched than that.
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FoundFiles {
+    pub entries: Vec<FileEntry>,
+    pub truncated: bool,
+}
+
+/// Rank every match by name ([`kriyon_core::file_search::compare_matches`])
+/// and only then cut — ranking after the cut loses the file whose name is
+/// the query whenever alphabetically earlier paths filled it.
+fn find_matches(root: &Path, query: &str) -> FoundFiles {
+    let mut entries = walk_matches(root, query);
+    entries.sort_by(|a, b| kriyon_core::file_search::compare_matches(&a.path, &b.path, query));
+    let truncated = entries.len() > FILE_CAP;
+    entries.truncate(FILE_CAP);
+    FoundFiles { entries, truncated }
+}
+
+/// Find files anywhere under a session's `cwd` by name, for the Files view's
+/// search box. Same walk and trust-boundary check as [`list_files`]; ranked
+/// for finding one file rather than completing a path.
+///
+/// # Errors
+/// Returns an error string if `cwd` is not a known session/project directory.
+#[allow(clippy::needless_pass_by_value)]
+// `(async)` for the same reason as `list_files`: it walks a whole tree.
+#[tauri::command(async)]
+pub fn find_files(
+    store: tauri::State<'_, StoreState>,
+    cwd: String,
+    query: String,
+) -> Result<FoundFiles, String> {
+    let root = validate_cwd(store.inner(), Path::new(&cwd))?;
+    Ok(find_matches(&root, &query))
 }
 
 /// Filesystem completions for `@` mentions, relative to a session's `cwd`.

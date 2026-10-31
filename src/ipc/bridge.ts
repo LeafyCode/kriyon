@@ -1410,6 +1410,19 @@ export function listSlashCommands(cwd: string): Promise<CommandCatalog> {
   return invoke("list_slash_commands", { cwd });
 }
 
+/** The Files search's answer (Rust `completion_cmd::FoundFiles`): the best
+ * matches by name, ranked over every match, and whether more matched. */
+export interface FoundFiles {
+  entries: FileEntry[];
+  truncated: boolean;
+}
+
+/** Find files anywhere under `cwd` by name, for the Files view's search box
+ * (Rust `completion_cmd::find_files`). */
+export function findFiles(cwd: string, query: string): Promise<FoundFiles> {
+  return invoke("find_files", { cwd, query });
+}
+
 /** Filesystem completions for `@` mentions under `cwd`, filtered by `query`. */
 export function listFiles(cwd: string, query: string): Promise<FileEntry[]> {
   return invoke("list_files", { cwd, query });
