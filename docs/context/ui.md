@@ -68,13 +68,17 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
   Adapters: the terminal's close-over-live-work warning and the [Clear project] confirm.
   A destructive decision is never asked from an [Anchored menu] — a confirm hanging off
   its trigger lands over whatever is beneath it. _Avoid_: alert, modal (generic).
-- **Theme** (`Theme`) — one complete named palette (id, label, colors) defined as a file in
-  `src/theme/themes/` and selected by the persisted `layout.themeId`. `applyTheme` publishes
-  the palette as `--kr-*` CSS custom properties; every design token resolves through them, so
-  switching restyles the app without re-rendering. _Avoid_: skin, color scheme.
-- **Theme registry** (`THEMES`) — the ordered list of shipped [Theme]s ([Steel] — the default —
-  indigo, cool blue, teal, graphite) plus `themeById`, which maps unknown or stale persisted ids
-  back to the default so startup can never break on a theme id. _Avoid_: theme list.
+- **Theme** (`Theme`) — one complete named palette (id, label, `appearance` light or dark,
+  colors, and an optional terminal ANSI palette) defined as a file in `src/theme/themes/` and
+  selected by the persisted `layout.themeId`. `applyTheme` publishes the palette as `--kr-*` CSS
+  custom properties; every design token resolves through them, so switching restyles the app
+  without re-rendering. A full theme is written as a short spec through `definePalette`
+  (ADR-0051). _Avoid_: skin, color scheme.
+- **Theme registry** (`THEMES`) — the ordered list of shipped [Theme]s: the Steel family ([Steel]
+  — the default — indigo, cool blue, teal, graphite), Steel Light, and the community palettes
+  (Catppuccin Mocha and Latte, Dracula, Gruvbox Dark, Nord, One Dark, Rosé Pine, Solarized
+  Light, Tokyo Night), plus `themeById`, which maps unknown or stale persisted ids back to the
+  default so startup can never break on a theme id. _Avoid_: theme list.
 - **Steel** — the default [Theme]: the steel-blue accent of the BisBig direction (ADR-0023),
   converted from the canvas's `oklch(… 225)` to hex because `applyTheme` derives
   `--kr-accent-rgb` from a 6-digit hex. The one [Accent] tuned for the cool chrome rather than
@@ -85,6 +89,6 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
   component library: the ADR-0007 seam wants module-level style objects, so the shared thing is
   the object, not a component. Spread it and override — a recipe never renders anything.
   _Avoid_: variant, style preset, component (it is not one).
-- **Accent** — the one brand hue a [Theme] layers over the shared dark chrome (primary buttons,
+- **Accent** — the one brand hue a [Theme] layers over its chrome (primary buttons,
   logo mark, selection). Session status colors are deliberately not accent-driven: running stays
   green in every theme. _Avoid_: primary color, highlight.

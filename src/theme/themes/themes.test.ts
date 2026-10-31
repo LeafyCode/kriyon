@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { DEFAULT_THEME_ID, THEMES, themeById } from "./index.ts";
 
 const HEX_COLOR = /^#[0-9a-f]{6}$/i;
+const CSS_COLOR =
+  /^(#[0-9a-f]{6}([0-9a-f]{2})?|rgba\(\d{1,3}, \d{1,3}, \d{1,3}, (0|1|0?\.\d+)\))$/i;
 
 /** Relative luminance per WCAG 2.1, for a 6-digit hex. */
 function luminance(hex: string): number {
@@ -29,6 +31,69 @@ describe("theme registry", () => {
     expect(ids).toEqual(
       expect.arrayContaining(["steel", "indigo", "blue", "teal", "graphite"])
     );
+  });
+
+  it("ships a light theme and the community palettes", () => {
+    const ids = THEMES.map((t) => t.id);
+    expect(ids).toEqual(
+      expect.arrayContaining([
+        "steel-light",
+        "catppuccin-mocha",
+        "catppuccin-latte",
+        "dracula",
+        "gruvbox-dark",
+        "nord",
+        "one-dark",
+        "rose-pine",
+        "solarized-light",
+        "tokyo-night",
+      ])
+    );
+  });
+
+  it("says whether each theme is light or dark", () => {
+    expect(themeById("steel").appearance).toBe("dark");
+    expect(themeById("steel-light").appearance).toBe("light");
+    expect(themeById("solarized-light").appearance).toBe("light");
+    expect(themeById("dracula").appearance).toBe("dark");
+  });
+
+  it("puts dark ink on a light theme's plane and light ink on a dark one", () => {
+    for (const theme of THEMES) {
+      const plane = luminance(theme.colors.chromeWindow);
+      const ink = luminance(theme.colors.inkPrimary);
+      if (theme.appearance === "light") {
+        expect(ink, theme.id).toBeLessThan(plane);
+      } else {
+        expect(ink, theme.id).toBeGreaterThan(plane);
+      }
+    }
+  });
+
+  it("writes every colour as hex or rgba, so each one is valid CSS", () => {
+    for (const theme of THEMES) {
+      for (const [key, value] of Object.entries(theme.colors)) {
+        expect(value, `${theme.id}.${key}`).toMatch(CSS_COLOR);
+      }
+    }
+  });
+
+  it("keeps the label on an accent fill readable", () => {
+    for (const theme of THEMES) {
+      expect(
+        contrast(theme.colors.onAccent, theme.colors.accent),
+        theme.id
+      ).toBeGreaterThanOrEqual(3);
+    }
+  });
+
+  it("keeps plain code readable on its well", () => {
+    for (const theme of THEMES) {
+      expect(
+        contrast(theme.colors.editorInk.slice(0, 7), theme.colors.codeWell),
+        theme.id
+      ).toBeGreaterThanOrEqual(4.5);
+    }
   });
 
   it("has unique ids and human labels", () => {
@@ -90,16 +155,17 @@ describe("the chrome is one flat cool plane", () => {
   it("keeps every stop of the ink ramp a distinct value", () => {
     // Two stops at the same hex are two states that render identically — the
     // JumpRail's viewed and unseen dots are the case that caught this.
-    const { colors } = themeById(DEFAULT_THEME_ID);
-    const ramp = [
-      colors.inkBright,
-      colors.inkPrimary,
-      colors.inkSecondary,
-      colors.inkMuted,
-      colors.inkDim,
-      colors.inkFaint,
-    ];
-    expect(new Set(ramp).size).toBe(ramp.length);
+    for (const { colors, id } of THEMES) {
+      const ramp = [
+        colors.inkBright,
+        colors.inkPrimary,
+        colors.inkSecondary,
+        colors.inkMuted,
+        colors.inkDim,
+        colors.inkFaint,
+      ];
+      expect(new Set(ramp).size, id).toBe(ramp.length);
+    }
   });
 
   /**
@@ -108,17 +174,22 @@ describe("the chrome is one flat cool plane", () => {
    * rather than a preference — and this is where it is written down.
    */
   it("keeps inkMuted at or above the 4.5:1 AA floor for text", () => {
-    const { colors } = themeById(DEFAULT_THEME_ID);
-    expect(
-      contrast(colors.inkMuted, colors.chromeWindow)
-    ).toBeGreaterThanOrEqual(4.5);
+    for (const { colors, id } of THEMES) {
+      for (const plane of [colors.chromeWindow, colors.chromeSidebar]) {
+        expect(contrast(colors.inkMuted, plane), id).toBeGreaterThanOrEqual(
+          4.5
+        );
+      }
+    }
   });
 
   it("keeps inkDim above the 3:1 floor a non-text indicator owes", () => {
-    const { colors } = themeById(DEFAULT_THEME_ID);
-    expect(contrast(colors.inkDim, colors.chromeWindow)).toBeGreaterThanOrEqual(
-      3
-    );
+    for (const { colors, id } of THEMES) {
+      expect(
+        contrast(colors.inkDim, colors.chromeWindow),
+        id
+      ).toBeGreaterThanOrEqual(3);
+    }
   });
 });
 
@@ -194,8 +265,9 @@ describe("the code palette is pinned", () => {
     });
   });
 
-  it("uses one code palette for every accent, so switching themes never recolours code", () => {
-    for (const theme of THEMES) {
+  it("uses one code palette for every Steel-family accent, so switching accents never recolours code", () => {
+    const accents = ["steel", "indigo", "blue", "teal", "graphite"];
+    for (const theme of THEMES.filter((t) => accents.includes(t.id))) {
       expect(theme.colors.codeWell).toBe(colors.codeWell);
       expect(theme.colors.syntaxKeyword).toBe(colors.syntaxKeyword);
       expect(theme.colors.syntaxProperty).toBe(colors.syntaxProperty);

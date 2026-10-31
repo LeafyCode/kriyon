@@ -17,8 +17,9 @@ import type { ThemeColors } from "./types.ts";
  * - `#10141d` — a card (composer, diff file, settings group, stat tile) with a
  *   `#1f2531` border. `#161b26` is the overlay/chip step above it.
  *
- * The five shipped themes differ only in the accent block they layer on top;
- * a future light theme would replace this wholesale.
+ * The five Steel-family themes differ only in the accent block they layer on
+ * top. Full themes (Steel Light, Dracula, Nord…) don't use this at all — they
+ * are written as a spec through `definePalette` in `define.ts` (ADR-0051).
  */
 export const darkChrome: Omit<
   ThemeColors,

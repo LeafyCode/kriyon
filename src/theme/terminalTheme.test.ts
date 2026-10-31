@@ -32,4 +32,24 @@ describe("terminalTheme", () => {
       }
     }
   });
+
+  it("leaves the ANSI colours at xterm's defaults for the Steel family", () => {
+    expect(terminalTheme(themeById("steel")).red).toBeUndefined();
+  });
+
+  it("paints a community theme's own ANSI palette", () => {
+    const dracula = terminalTheme(themeById("dracula"));
+    expect(dracula.red).toBe("#ff5555");
+    expect(dracula.brightWhite).toBe("#ffffff");
+  });
+
+  it("gives a light theme dark terminal text on a light plane", () => {
+    const light = themeById("steel-light");
+    const xterm = terminalTheme(light);
+    expect(xterm.background).toBe(light.colors.chromeWindow);
+    expect(xterm.foreground).toBe(light.colors.inkPrimary);
+    // xterm's default black is #000000 and its default white #e5e5e5 —
+    // invisible on white; a light theme must ship its own palette.
+    expect(xterm.white).toBeDefined();
+  });
 });

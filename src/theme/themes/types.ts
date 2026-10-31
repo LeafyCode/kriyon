@@ -126,10 +126,12 @@ export interface ThemeColors {
    * only ever offered a handful of hues, which is why highlighting used to
    * collapse a dozen distinct token kinds into five colours.
    *
-   * Theme-independent on purpose: it lives in `darkChrome`, so switching the
-   * accent restyles the app without recolouring code. Highlighting is not
-   * branding — a keyword changing hue because the user picked a different
-   * accent would be noise, not theming. */
+   * Accent-independent on purpose: the Steel family shares it through
+   * `darkChrome`, so switching the accent restyles the app without
+   * recolouring code. Highlighting is not branding — a keyword changing hue
+   * because the user picked a different accent would be noise. A full theme
+   * (light, Dracula, Nord…) does bring its own, because there the code
+   * colours are half of what the theme is. */
   syntaxAttribute: string;
   syntaxComment: string;
   /** Booleans, `null`, enum members — constants that are not numbers.
@@ -164,10 +166,39 @@ export interface ThemeColors {
   syntaxVariable: string;
 }
 
+/**
+ * The sixteen ANSI colours a theme paints the terminal with. Named as xterm's
+ * `ITheme` names them, so `terminalTheme` can spread it straight in.
+ */
+export interface TerminalPalette {
+  black: string;
+  blue: string;
+  brightBlack: string;
+  brightBlue: string;
+  brightCyan: string;
+  brightGreen: string;
+  brightMagenta: string;
+  brightRed: string;
+  brightWhite: string;
+  brightYellow: string;
+  cyan: string;
+  green: string;
+  magenta: string;
+  red: string;
+  white: string;
+  yellow: string;
+}
+
 export interface Theme {
+  /** Whether the plane is light or dark. Drives the webview's
+   *  `color-scheme`, the ink-side wash colour, and the code editor's mode. */
+  appearance: "dark" | "light";
   colors: ThemeColors;
   /** Stable identifier, persisted in the layout. */
   id: string;
   /** Human label shown in the theme switcher. */
   label: string;
+  /** The terminal's ANSI palette. Absent → xterm's defaults, which only
+   *  suit a dark plane. */
+  terminal?: TerminalPalette;
 }
