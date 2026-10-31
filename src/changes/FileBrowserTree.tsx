@@ -1,5 +1,7 @@
+import { ChevronsDownUp, FilePlus, FolderPlus, RotateCw } from "lucide-react";
 import {
   type CSSProperties,
+  type KeyboardEvent,
   type MouseEvent,
   useCallback,
   useEffect,
@@ -10,6 +12,7 @@ import {
   createDir,
   createFile,
   deleteEntry,
+  type FileEntry,
   listDir,
   openInEditor,
   renameEntry,
@@ -18,21 +21,23 @@ import {
 import { failureMessage } from "../ipc/failures.ts";
 import { EMPTY_EXPANDED_DIRS, useChanges } from "../state/changes.ts";
 import { requestRefresh, useRevalidateOn } from "../state/changesRefresh.ts";
+import type { TreeDecorations } from "../state/changesView.ts";
 import { sessionWorkingDir, useSessions } from "../state/sessions.ts";
-import { inputBox } from "../theme/recipes.ts";
+import { iconButton, inputBox, treeRow } from "../theme/recipes.ts";
 import { tokens } from "../theme/tokens.ts";
-import type { DirEntry } from "../types.ts";
+import type { DirEntry, FileChange } from "../types.ts";
 import { ConfirmDialog } from "../ui/ConfirmDialog.tsx";
 import { ContextMenu, type ContextMenuItem } from "../ui/ContextMenu.tsx";
 import { showToast } from "../ui/Toast.tsx";
 import { banner } from "./banner.ts";
 import { copyPath } from "./copyPath.ts";
+import { FileSearch } from "./FileSearch.tsx";
 import { DirChevron, DirIcon, FileIcon } from "./fileIcon.tsx";
+import { GIT_INK, GIT_LABEL, GIT_LETTER } from "./gitStatus.ts";
 
-/** How much a row shifts per tree depth — nested under a token spacing step
- * rather than a bespoke pixel figure, matching `FileTreePane`'s convention
- * of only reaching for a literal when nothing in the ramp fits. */
-const INDENT_STEP = tokens.space.md;
+/** How far one level of nesting shifts a row: one chevron slot plus the
+ * small gap after it, so a child's chevron sits just right of its parent's. */
+const INDENT_PX = 14;
 
 /** A directory's fetched children, or the message from a failed `listDir`
  * call — kept apart from "not fetched yet" (absent from the record) so a
@@ -108,76 +113,89 @@ interface PendingDelete {
   path: string;
 }
 
-// `display: flex, flexDirection: column` (added for Task 5) rather than
-// plain block flow: it lets the trailing empty-area row (`emptyAreaStyle`,
-// `flex: 1`) actually absorb whatever vertical space the tree's own rows
-// don't fill, instead of collapsing to its own `minHeight`. Visually a
-// no-op for the rows themselves — they're already `width: "100%"`, and a
-// flex container's default `align-items: normal` stretches block-sized
-// children across the cross axis exactly like block flow already did.
+/** The whole tab: a fixed toolbar over a scrolling list. Not a scroller
+ * itself — see {@link scrollStyle}. */
 const rootStyle: CSSProperties = {
   display: "flex",
   flex: 1,
   flexDirection: "column",
   fontFamily: tokens.font.sans,
-  overflowY: "auto",
-  padding: `${tokens.space.sm} 0`,
+  minHeight: 0,
+};
+
+/** The explorer's title strip: the folder's name, and the four actions an
+ * editor's explorer keeps there. */
+const toolbarStyle: CSSProperties = {
+  alignItems: "center",
+  display: "flex",
+  flex: "none",
+  gap: "2px",
+  height: "30px",
+  padding: "0 6px 0 12px",
+};
+
+const toolbarTitleStyle: CSSProperties = {
+  color: tokens.color.ink.muted,
+  flex: 1,
+  fontSize: "11px",
+  fontWeight: 500,
+  letterSpacing: "0.06em",
+  minWidth: 0,
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  textTransform: "uppercase",
+  whiteSpace: "nowrap",
+};
+
+const toolbarButtonStyle: CSSProperties = {
+  ...iconButton(),
+  height: "22px",
+  width: "22px",
 };
 
 /**
- * A tree row.
- *
- * Sans, not mono: at 236px a proportional face fits noticeably more of a
- * filename before ellipsis, and this column is a list of names rather than
- * code. 30px is the app-wide list rhythm (`row30` in `theme/recipes.ts`) —
- * spelled out rather than spread, because a row here is a `<button>` with
- * its own reset and the recipe would only be half of it. It must stay
- * identical to `FileTreePane`'s `fileRowStyle`: the two tabs swap in the
- * same 236px column, and a row that changed height on a tab flip made the
- * whole column jump.
+ * The scrolling list. A flex column only so the trailing empty area
+ * (`emptyAreaStyle`) can take the leftover height as a right-click target;
+ * the rows themselves sit in a plain block (`listStyle`), so they can never
+ * be squeezed to fit — the bug that once drew a long tree's file rows on top
+ * of each other.
  */
-const rowStyle: CSSProperties = {
-  alignItems: "center",
-  background: "transparent",
-  border: "none",
-  borderRadius: tokens.radius.md,
-  color: tokens.color.ink.secondary,
-  cursor: "pointer",
+const scrollStyle: CSSProperties = {
   display: "flex",
-  fontFamily: tokens.font.sans,
-  fontSize: "12.5px",
-  gap: "6px",
-  height: "30px",
-  lineHeight: 1,
-  padding: `0 ${tokens.space.sm}`,
-  textAlign: "left",
-  width: "100%",
+  flex: 1,
+  flexDirection: "column",
+  minHeight: 0,
+  overflowY: "auto",
+  padding: "0 4px 6px",
 };
 
-/** A gitignored entry, dimmed — still listed (the browser shows the real
- * directory), just clearly not part of the tracked tree. */
-const ignoredRowStyle: CSSProperties = {
-  ...rowStyle,
-  // One ink stop, not a stop plus an opacity: `faint` at 0.65 put a filename
-  // the user may well want to open below anything legible. `dim` is still
-  // unmistakably quieter than the tracked rows around it.
-  color: tokens.color.ink.muted,
-};
+const listStyle: CSSProperties = { flex: "none" };
 
-/** The vertical rule marking one level of nesting, so a deep row's parent is
- * traceable up the column instead of inferred from indentation alone —
- * the same structure the editor's indent guides give code. */
+/** The vertical rule marking one level of nesting, drawn under the centre of
+ * the parent's chevron so a deep row's folder is traceable up the column. */
 const guideStyle: CSSProperties = {
   alignSelf: "stretch",
   borderLeft: `1px solid ${tokens.color.line.soft}`,
   flex: "none",
-  marginLeft: "6px",
-  width: "9px",
+  marginLeft: `${INDENT_PX / 2}px`,
+  width: `${INDENT_PX / 2}px`,
 };
 
-/** A leaf row's chevron slot, keeping its name aligned with the sibling
- * directories' names rather than shifted left by the missing chevron. */
-const chevronSpacerStyle: CSSProperties = { flex: "none", width: "12px" };
+/** The chevron's slot. A file gets the same empty slot, so names in one
+ * folder line up whether they are files or folders. */
+const chevronSlotStyle: CSSProperties = {
+  alignItems: "center",
+  display: "flex",
+  flex: "none",
+  justifyContent: "center",
+  width: `${INDENT_PX}px`,
+};
+
+const iconSlotStyle: CSSProperties = {
+  display: "flex",
+  flex: "none",
+  margin: "0 6px 0 2px",
+};
 
 const nameStyle: CSSProperties = {
   flex: 1,
@@ -187,40 +205,65 @@ const nameStyle: CSSProperties = {
   whiteSpace: "nowrap",
 };
 
-/** The file tree's unsaved-changes dot — mirrors the dot `FileViewer`'s
- * header already shows, so a dirty file is spottable without opening it. */
+/** A gitignored entry: one ink stop quieter, still legible. */
+const ignoredInk = tokens.color.ink.muted;
+
+function gitLetterStyle(change: FileChange): CSSProperties {
+  return {
+    color: GIT_INK[change],
+    flex: "none",
+    fontFamily: tokens.font.mono,
+    fontSize: "10.5px",
+    fontWeight: 600,
+    marginLeft: "6px",
+    textAlign: "center",
+    width: "12px",
+  };
+}
+
+/** A folder holding a change somewhere below it. */
+const changedDirDotStyle: CSSProperties = {
+  background: tokens.color.mod,
+  borderRadius: "50%",
+  flex: "none",
+  height: "5px",
+  marginLeft: "6px",
+  marginRight: "4px",
+  opacity: 0.8,
+  width: "5px",
+};
+
+/** The unsaved-changes dot — the same dot `FileViewer`'s header shows. */
 const treeDirtyDotStyle: CSSProperties = {
   background: tokens.color.status.waiting,
   borderRadius: "50%",
   flex: "none",
   height: "6px",
-  marginLeft: "auto",
+  marginLeft: "6px",
   width: "6px",
 };
 
-const errorRowStyle: CSSProperties = {
-  color: tokens.color.status.error,
-  fontFamily: tokens.font.mono,
-  fontSize: "11px",
-  padding: `4px ${tokens.space.sm}`,
+const noteRowStyle: CSSProperties = {
+  color: tokens.color.ink.muted,
+  fontFamily: tokens.font.sans,
+  fontSize: "12px",
+  lineHeight: "22px",
+  padding: "0 8px",
 };
 
-const loadingRowStyle: CSSProperties = {
-  color: tokens.color.ink.muted,
-  fontFamily: tokens.font.mono,
-  fontSize: "11px",
-  padding: `4px ${tokens.space.sm}`,
+const errorRowStyle: CSSProperties = {
+  ...noteRowStyle,
+  color: tokens.color.status.error,
 };
 
 /**
  * The inline naming row's `<input>` — the shared `inputBox` well, shrunk to
- * sit flush inside a 30px tree row and wearing an accent border, which is the
+ * sit flush inside a tree row and wearing an accent border, which is the
  * only thing that tells it apart from the plain rows above and below it.
  *
- * `display: "block"` because `inputBox` deliberately sets none (a form
- * control has no business being a flex container), and without it this one
- * would collapse to the `<input>`'s intrinsic size instead of taking the
- * `flex: 1` the row hands it.
+ * `display: "block"` because `inputBox` deliberately sets none, and without
+ * it this one would collapse to the `<input>`'s intrinsic size instead of
+ * taking the `flex: 1` the row hands it.
  */
 const draftInputStyle: CSSProperties = {
   ...inputBox(),
@@ -229,11 +272,11 @@ const draftInputStyle: CSSProperties = {
   display: "block",
   flex: 1,
   fontFamily: tokens.font.sans,
-  fontSize: "12px",
-  height: "22px",
+  fontSize: "12.5px",
+  height: "20px",
   minWidth: 0,
   outline: "none",
-  padding: "0 6px",
+  padding: "0 5px",
 };
 
 const draftErrorStyle: CSSProperties = {
@@ -250,6 +293,7 @@ const draftErrorStyle: CSSProperties = {
 const refusalStyle: CSSProperties = {
   ...banner("error"),
   cursor: "pointer",
+  flex: "none",
   textAlign: "left",
 };
 
@@ -258,14 +302,10 @@ const refusalStyle: CSSProperties = {
  * comfortably once the tree itself is short. */
 const emptyAreaStyle: CSSProperties = { flex: 1, minHeight: "24px" };
 
-/** One row's indent, keyed off tree depth (root children sit at depth 0).
- * Only used for the loading/error rows, which have no children to draw
- * guides for; real rows indent by rendering {@link Guides} instead, so the
- * nesting is visible rather than just implied by whitespace. */
+/** A note row's indent (loading, error, a draft's error) — level with the
+ * names of the rows around it. */
 function indentStyle(depth: number): CSSProperties {
-  return {
-    paddingLeft: `calc(${INDENT_STEP} * ${depth} + ${tokens.space.sm})`,
-  };
+  return { paddingLeft: `${8 + INDENT_PX * (depth + 1)}px` };
 }
 
 /** One vertical rule per ancestor level. */
@@ -276,6 +316,88 @@ function Guides({ depth }: { depth: number }) {
     // biome-ignore lint/suspicious/noArrayIndexKey: positional nesting level.
     <span key={level} style={guideStyle} />
   ));
+}
+
+/** The repo-relative folder a path sits in (`""` for the root). */
+function parentDir(path: string): string {
+  const slash = path.lastIndexOf("/");
+  return slash === -1 ? "" : path.slice(0, slash);
+}
+
+/**
+ * Arrow-key movement through the tree's rows, the way every editor's
+ * explorer does it: up/down walk the visible rows, right opens a folder (or
+ * steps into an open one), left closes an open folder (or steps out to the
+ * one above). Reads the rows off the DOM, which is exactly the visible order
+ * — nothing to keep in sync with the render.
+ *
+ * Returns whether the key was handled, so the caller can stop the page
+ * scrolling under it.
+ */
+function moveInTree(
+  event: KeyboardEvent<HTMLElement>,
+  isExpanded: (path: string) => boolean,
+  toggle: (path: string) => void
+): boolean {
+  const row = event.target as HTMLElement;
+  const path = row.dataset.rowPath;
+  if (path === undefined) {
+    return false;
+  }
+  const rows = Array.from(
+    event.currentTarget.querySelectorAll<HTMLElement>("[data-row-path]")
+  );
+  const at = rows.indexOf(row);
+  const isDir = row.dataset.rowDir === "true";
+  const focusPath = (target: string) =>
+    rows.find((r) => r.dataset.rowPath === target)?.focus();
+  switch (event.key) {
+    case "ArrowDown":
+      rows[at + 1]?.focus();
+      return true;
+    case "ArrowUp":
+      rows[at - 1]?.focus();
+      return true;
+    case "Home":
+      rows[0]?.focus();
+      return true;
+    case "End": {
+      // A reverse lookup rather than `.at(-1)`: the TS lib is ES2020.
+      const [last] = [...rows].reverse();
+      last?.focus();
+      return true;
+    }
+    case "ArrowRight":
+      if (isDir && !isExpanded(path)) {
+        toggle(path);
+      } else if (
+        isDir &&
+        rows[at + 1]?.dataset.rowPath?.startsWith(`${path}/`)
+      ) {
+        rows[at + 1].focus();
+      }
+      return true;
+    case "ArrowLeft":
+      if (isDir && isExpanded(path)) {
+        toggle(path);
+      } else if (parentDir(path) !== "") {
+        focusPath(parentDir(path));
+      }
+      return true;
+    default:
+      return false;
+  }
+}
+
+/** No changes to mark — the default for a caller with no diff to hand. */
+const NO_DECORATIONS: TreeDecorations = { dirs: new Set(), files: new Map() };
+
+/** The last segment of the session folder: the explorer's title. */
+const TRAILING_SLASHES = /\/+$/;
+
+function folderName(cwd: string): string {
+  const trimmed = cwd.replace(TRAILING_SLASHES, "");
+  return trimmed.slice(trimmed.lastIndexOf("/") + 1) || trimmed;
 }
 
 /**
@@ -292,9 +414,13 @@ function Guides({ depth }: { depth: number }) {
  */
 export function FileBrowserTree({
   cwd,
+  decorations = NO_DECORATIONS,
   sessionId,
 }: {
   cwd: string;
+  /** Git marks for changed files and the folders above them, keyed
+   * cwd-relative — see {@link TreeDecorations}. */
+  decorations?: TreeDecorations;
   sessionId: string;
 }) {
   const expandedDirs = useChanges(
@@ -303,6 +429,14 @@ export function FileBrowserTree({
   const toggleDir = useChanges((s) => s.toggleDir);
   const selectFile = useChanges((s) => s.selectFile);
   const pruneExpandedDirsUnder = useChanges((s) => s.pruneExpandedDirsUnder);
+  const collapseAllDirs = useChanges((s) => s.collapseAllDirs);
+  const expandToPath = useChanges((s) => s.expandToPath);
+  // The file open in the viewer — the tree's one selected row.
+  const selectedFile = useChanges((s) => s.ui[sessionId]?.selectedFile);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  // A selection whose row should be scrolled into view once it is rendered —
+  // its folders may still be loading when the selection lands.
+  const pendingScrollRef = useRef<string | undefined>(undefined);
   // Narrow selectors — each only re-renders the tree when *this session's*
   // live dirty path or stashed drafts actually change, not on every other
   // session's edit. See `ChangesState.dirtyFiles`/`fileDrafts`.
@@ -404,6 +538,20 @@ export function FileBrowserTree({
     setConfirming(undefined);
     setRefusal(undefined);
   }, [cwd, sessionId]);
+
+  // A file opened from anywhere (a click in the changes list, the
+  // Inspector, the toolbar's New file) is shown in the tree the way an
+  // editor's explorer follows the open file: its folders open and its row
+  // scrolls into view. Only on a *change* of selection, so a folder the user
+  // closes afterwards stays closed. A path outside the session folder
+  // (`../…`) has no row here.
+  useEffect(() => {
+    if (selectedFile === undefined || selectedFile.startsWith("../")) {
+      return;
+    }
+    expandToPath(sessionId, selectedFile);
+    pendingScrollRef.current = selectedFile;
+  }, [expandToPath, selectedFile, sessionId]);
 
   // Guards every `listDir` callback below against a genuinely stale `cwd`
   // (component unmounted, or the caller passed a new `cwd`). A generation
@@ -654,7 +802,10 @@ export function FileBrowserTree({
         if (genRef.current !== gen) {
           return;
         }
-        setDraft(undefined);
+        // Only the row this create came from: a rename opened while the
+        // create was in flight is a newer row, and clearing it here threw
+        // away what the user had just asked for.
+        setDraft((d) => (d === draft ? undefined : d));
         fetchDir(draft.parentDir, gen);
         requestRefresh(sessionId, "manual");
         if (draft.kind === "file") {
@@ -665,7 +816,9 @@ export function FileBrowserTree({
       })
       .catch((error: unknown) => {
         committingRef.current = false;
-        setDraft((d) => (d ? { ...d, error: errorMessage(error) } : d));
+        setDraft((d) =>
+          d === draft ? { ...d, error: errorMessage(error) } : d
+        );
       });
   }
 
@@ -835,7 +988,8 @@ export function FileBrowserTree({
         // session's viewer open on a path a *later* switch's rename had
         // already moved. If you're tempted to restore this guard: don't —
         // that regression is exactly what removing it fixed.
-        setDraft(undefined);
+        // Only the row this rename came from — see `commitDraft`.
+        setDraft((d) => (d === draft ? undefined : d));
         fetchDir(parentDir, gen);
         requestRefresh(sessionId, "manual");
         // MINOR 2: the old path is gone under its old name — drop whatever
@@ -859,7 +1013,9 @@ export function FileBrowserTree({
       })
       .catch((error: unknown) => {
         committingRef.current = false;
-        setDraft((d) => (d ? { ...d, error: errorMessage(error) } : d));
+        setDraft((d) =>
+          d === draft ? { ...d, error: errorMessage(error) } : d
+        );
       });
   }
 
@@ -1047,13 +1203,16 @@ export function FileBrowserTree({
       // and Enter would then rename the file to a name typed for something
       // else entirely. `error` is not in the key: a rejected commit must keep
       // the typed name on screen, which is the whole point of the stable node.
-      <div
-        key={`${dir}:draft:${draft.renaming ?? ""}`}
-        style={{ ...rowStyle, ...indentStyle(depth) }}
-      >
+      <div key={`${dir}:draft:${draft.renaming ?? ""}`} style={treeRow()}>
         <Guides depth={depth} />
-        <span style={chevronSpacerStyle} />
-        {draft.kind === "dir" ? <DirIcon open={false} /> : <FileIcon path="" />}
+        <span style={chevronSlotStyle} />
+        <span style={iconSlotStyle}>
+          {draft.kind === "dir" ? (
+            <DirIcon open={false} />
+          ) : (
+            <FileIcon path="" />
+          )}
+        </span>
         <input
           data-testid="file-browser-draft"
           defaultValue={draft.renaming ?? ""}
@@ -1104,6 +1263,159 @@ export function FileBrowserTree({
     ];
   }
 
+  // Scroll a pending selection's row into view once it exists. `nearest`, so
+  // a row already on screen never moves.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `listings` and `expandedDirs` are the re-run triggers — a landed or reopened folder may be the one holding the row.
+  useEffect(() => {
+    const target = pendingScrollRef.current;
+    if (target === undefined) {
+      return;
+    }
+    const row = Array.from(
+      scrollRef.current?.querySelectorAll<HTMLElement>("[data-row-path]") ?? []
+    ).find((r) => r.dataset.rowPath === target);
+    if (row) {
+      pendingScrollRef.current = undefined;
+      row.scrollIntoView?.({ block: "nearest" });
+    }
+  }, [expandedDirs, listings, selectedFile]);
+
+  // The toolbar's New file / New folder land where an editor's do: beside
+  // the open file, or at the root when nothing is open.
+  function toolbarTargetDir(): string {
+    if (selectedFile === undefined || selectedFile.startsWith("../")) {
+      return "";
+    }
+    return parentDir(selectedFile);
+  }
+
+  // A search result: a file opens in the viewer (the selection effect above
+  // then reveals it in the tree); a folder opens in the tree and scrolls
+  // into view.
+  function openFromSearch(entry: FileEntry): void {
+    if (!entry.isDir) {
+      selectFile(sessionId, entry.path);
+      return;
+    }
+    expandToPath(sessionId, entry.path);
+    if (useChanges.getState().expandedDirs[sessionId]?.[entry.path] !== true) {
+      toggleDir(sessionId, entry.path);
+    }
+    pendingScrollRef.current = entry.path;
+  }
+
+  // Collapsing everything hides any open naming row below the root too —
+  // the same dismissal `toggleDirRow` applies to one folder.
+  function collapseAll(): void {
+    if (draft !== undefined && draft.parentDir !== "") {
+      setDraft(undefined);
+    }
+    collapseAllDirs(sessionId);
+  }
+
+  // One folder row and its open subtree. Plain functions returning host
+  // elements, not components, for the reason `draftRow` gives.
+  function renderDirRow(entry: DirEntry, dir: string, depth: number) {
+    const path = childPath(dir, entry.name);
+    const expanded = expandedDirs[path] === true;
+    const holdsChange = decorations.dirs.has(path);
+    return (
+      <div key={path}>
+        <button
+          aria-expanded={expanded}
+          className="kr-hover-surface kr-tree-row"
+          data-git={holdsChange ? "contains" : undefined}
+          data-ignored={entry.ignored}
+          data-row-dir="true"
+          data-row-path={path}
+          data-testid="file-browser-row"
+          onClick={() => toggleDirRow(path)}
+          onContextMenu={(e) => openMenu(e, dir, { isDir: true, path })}
+          style={{
+            ...treeRow(),
+            ...(entry.ignored ? { color: ignoredInk } : {}),
+          }}
+          title={path}
+          type="button"
+        >
+          <Guides depth={depth} />
+          <span style={chevronSlotStyle}>
+            <DirChevron open={expanded} />
+          </span>
+          <span style={iconSlotStyle}>
+            <DirIcon open={expanded} />
+          </span>
+          <span style={nameStyle}>{entry.name}</span>
+          {holdsChange ? (
+            <span
+              aria-label="Contains changes"
+              role="img"
+              style={changedDirDotStyle}
+            />
+          ) : null}
+        </button>
+        {expanded ? renderDir(path, depth + 1) : null}
+      </div>
+    );
+  }
+
+  function renderFileRow(entry: DirEntry, dir: string, depth: number) {
+    const path = childPath(dir, entry.name);
+    const isDirty = hasUnsavedEdits(path);
+    const change = decorations.files.get(path);
+    const selected = path === selectedFile;
+    let ink: string | undefined;
+    if (change) {
+      ink = GIT_INK[change];
+    } else if (entry.ignored) {
+      ink = ignoredInk;
+    }
+    return (
+      <button
+        aria-current={selected ? "true" : undefined}
+        className="kr-hover-surface kr-tree-row"
+        data-git={change}
+        data-ignored={entry.ignored}
+        data-row-path={path}
+        data-testid="file-browser-row"
+        key={path}
+        onClick={() => selectFile(sessionId, path)}
+        onContextMenu={(e) => openMenu(e, dir, { isDir: false, path })}
+        style={{ ...treeRow(selected), ...(ink ? { color: ink } : {}) }}
+        title={change ? `${path} · ${GIT_LABEL[change]}` : path}
+        type="button"
+      >
+        <Guides depth={depth} />
+        {/* Files have no chevron, but keep its slot so names in one folder
+            line up whether they are files or folders. */}
+        <span style={chevronSlotStyle} />
+        <span style={iconSlotStyle}>
+          <FileIcon path={path} />
+        </span>
+        <span style={nameStyle}>{entry.name}</span>
+        {/* An image, not a `role="status"` live region. One live region per
+            row means expanding a directory announces "Unsaved changes"
+            once per dirty file it reveals — the dot is a label on a row
+            here, not a state change worth interrupting for. FileViewer's
+            header keeps its single `role="status"` dot, which announces
+            exactly one thing: the open file just became dirty. */}
+        {isDirty ? (
+          <span
+            aria-label="Unsaved changes"
+            data-testid="tree-dirty-dot"
+            role="img"
+            style={treeDirtyDotStyle}
+          />
+        ) : null}
+        {change ? (
+          <span aria-hidden style={gitLetterStyle(change)}>
+            {GIT_LETTER[change]}
+          </span>
+        ) : null}
+      </button>
+    );
+  }
+
   function renderDir(dir: string, depth: number) {
     const listing = listings[dir];
     // The open draft's row, appended after every one of this function's
@@ -1115,7 +1427,7 @@ export function FileBrowserTree({
       return [
         <div
           key={`${dir}:loading`}
-          style={{ ...loadingRowStyle, ...indentStyle(depth) }}
+          style={{ ...noteRowStyle, ...indentStyle(depth) }}
         >
           Loading…
         </div>,
@@ -1144,86 +1456,90 @@ export function FileBrowserTree({
       }
       return a.name.localeCompare(b.name);
     });
-    const rows = sorted.map((entry) => {
-      const path = childPath(dir, entry.name);
-      const style = {
-        ...(entry.ignored ? ignoredRowStyle : rowStyle),
-      };
-      if (entry.isDir) {
-        const expanded = expandedDirs[path] === true;
-        return (
-          <div key={path}>
-            <button
-              data-ignored={entry.ignored}
-              data-testid="file-browser-row"
-              onClick={() => toggleDirRow(path)}
-              onContextMenu={(e) => openMenu(e, dir, { isDir: true, path })}
-              style={style}
-              title={path}
-              type="button"
-            >
-              <Guides depth={depth} />
-              <DirChevron open={expanded} />
-              <DirIcon open={expanded} />
-              <span style={nameStyle}>{entry.name}</span>
-            </button>
-            {expanded ? renderDir(path, depth + 1) : null}
-          </div>
-        );
-      }
-      const isDirty = hasUnsavedEdits(path);
-      return (
-        <button
-          data-ignored={entry.ignored}
-          data-testid="file-browser-row"
-          key={path}
-          onClick={() => selectFile(sessionId, path)}
-          onContextMenu={(e) => openMenu(e, dir, { isDir: false, path })}
-          style={style}
-          title={path}
-          type="button"
-        >
-          <Guides depth={depth} />
-          {/* Files have no chevron, but must still line up with the sibling
-              directories' names rather than sliding left into the gap. */}
-          <span style={chevronSpacerStyle} />
-          <FileIcon path={path} />
-          <span style={nameStyle}>{entry.name}</span>
-          {/* An image, not a `role="status"` live region. One live region per
-              row means expanding a directory announces "Unsaved changes"
-              once per dirty file it reveals — the dot is a label on a row
-              here, not a state change worth interrupting for. FileViewer's
-              header keeps its single `role="status"` dot, which announces
-              exactly one thing: the open file just became dirty. */}
-          {isDirty ? (
-            <span
-              aria-label="Unsaved changes"
-              data-testid="tree-dirty-dot"
-              role="img"
-              style={treeDirtyDotStyle}
-            />
-          ) : null}
-        </button>
-      );
-    });
+    const rows = sorted.map((entry) =>
+      entry.isDir
+        ? renderDirRow(entry, dir, depth)
+        : renderFileRow(entry, dir, depth)
+    );
     return [...rows, ...draftRow(dir, depth)];
   }
 
   return (
     <div data-testid="file-browser-tree" style={rootStyle}>
-      {renderDir("", 0)}
-      {/* A drop target for the tree-wide "New File"/"New Folder" menu once
-          the tree itself runs out of rows to right-click. Mouse-only by
-          design, like a file explorer's blank pane: every row above already
-          carries its own reachable, keyboard-operable button, so this area
-          is never the only way to reach New File/New Folder. */}
-      {/* biome-ignore lint/a11y/noStaticElementInteractions: passive right-click surface, not a control — see the comment above. */}
-      {/* biome-ignore lint/a11y/noNoninteractiveElementInteractions: same — nothing here is reachable (or needs to be) by keyboard alone. */}
-      <div
-        data-testid="file-browser-empty-area"
-        onContextMenu={(e) => openMenu(e, "")}
-        style={emptyAreaStyle}
-      />
+      <div style={toolbarStyle}>
+        <span style={toolbarTitleStyle} title={cwd}>
+          {folderName(cwd)}
+        </span>
+        <button
+          aria-label="New file"
+          className="kr-hover-surface"
+          onClick={() => openDraft("file", toolbarTargetDir())}
+          style={toolbarButtonStyle}
+          title="New file"
+          type="button"
+        >
+          <FilePlus size={14} strokeWidth={1.75} />
+        </button>
+        <button
+          aria-label="New folder"
+          className="kr-hover-surface"
+          onClick={() => openDraft("dir", toolbarTargetDir())}
+          style={toolbarButtonStyle}
+          title="New folder"
+          type="button"
+        >
+          <FolderPlus size={14} strokeWidth={1.75} />
+        </button>
+        <button
+          aria-label="Refresh"
+          className="kr-hover-surface"
+          onClick={() => requestRefresh(sessionId, "manual")}
+          style={toolbarButtonStyle}
+          title="Refresh"
+          type="button"
+        >
+          <RotateCw size={13} strokeWidth={1.75} />
+        </button>
+        <button
+          aria-label="Collapse folders"
+          className="kr-hover-surface"
+          onClick={collapseAll}
+          style={toolbarButtonStyle}
+          title="Collapse folders"
+          type="button"
+        >
+          <ChevronsDownUp size={14} strokeWidth={1.75} />
+        </button>
+      </div>
+      <FileSearch cwd={cwd} decorations={decorations} onOpen={openFromSearch}>
+        {/* biome-ignore lint/a11y/noStaticElementInteractions: the arrow keys bubble up from the row buttons; this list is not a control of its own. */}
+        {/* biome-ignore lint/a11y/noNoninteractiveElementInteractions: same — the rows are the controls. */}
+        <div
+          onKeyDown={(e) => {
+            if (
+              moveInTree(e, (path) => expandedDirs[path] === true, toggleDirRow)
+            ) {
+              e.preventDefault();
+            }
+          }}
+          ref={scrollRef}
+          style={scrollStyle}
+        >
+          <div style={listStyle}>{renderDir("", 0)}</div>
+          {/* A drop target for the tree-wide "New File"/"New Folder" menu once
+              the tree itself runs out of rows to right-click. Mouse-only by
+              design, like a file explorer's blank pane: every row above already
+              carries its own reachable, keyboard-operable button, and the
+              toolbar carries both creates. */}
+          {/* biome-ignore lint/a11y/noStaticElementInteractions: passive right-click surface, not a control — see the comment above. */}
+          {/* biome-ignore lint/a11y/noNoninteractiveElementInteractions: same — nothing here is reachable (or needs to be) by keyboard alone. */}
+          <div
+            data-testid="file-browser-empty-area"
+            onContextMenu={(e) => openMenu(e, "")}
+            style={emptyAreaStyle}
+          />
+        </div>
+      </FileSearch>
       {refusal === undefined ? null : (
         <button
           data-testid="file-browser-refusal"

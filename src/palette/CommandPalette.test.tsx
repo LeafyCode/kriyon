@@ -236,18 +236,18 @@ test("the transcript-view command reaches the Changes view and back", () => {
   render(<CommandPalette />);
   fireEvent.keyDown(window, { key: "k", metaKey: true });
   fireEvent.change(screen.getByPlaceholderText(PLACEHOLDER), {
-    target: { value: "Toggle Changes" },
+    target: { value: "Toggle Files" },
   });
 
-  fireEvent.click(screen.getByText("Toggle Changes / Session view"));
+  fireEvent.click(screen.getByText("Toggle Files / Session view"));
   expect(useLayout.getState().layout.transcriptView).toBe("changes");
 
   // Palette closes on run; reopen to run it again.
   fireEvent.keyDown(window, { key: "k", metaKey: true });
   fireEvent.change(screen.getByPlaceholderText(PLACEHOLDER), {
-    target: { value: "Toggle Changes" },
+    target: { value: "Toggle Files" },
   });
-  fireEvent.click(screen.getByText("Toggle Changes / Session view"));
+  fireEvent.click(screen.getByText("Toggle Files / Session view"));
   expect(useLayout.getState().layout.transcriptView).toBe("raw");
 });
 

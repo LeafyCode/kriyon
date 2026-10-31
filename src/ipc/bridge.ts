@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type {
   DirEntry,
+  FileBlame,
   FileContent,
   FileWriteResult,
   HooksOffScope,
@@ -987,6 +988,32 @@ export function readBaseline(
 }
 
 /**
+ * One file as it was when the session started — its [Session baseline]
+ * snapshot — for the editor's session-change highlight (Rust
+ * `git_cmd::read_session_baseline`). Same sandbox and outcomes as
+ * {@link readBaseline}; `untracked` means the session created the file.
+ */
+export function readSessionBaseline(
+  cwd: string,
+  baselineOid: string,
+  path: string
+): Promise<BaselineContent> {
+  return invoke("read_session_baseline", { baselineOid, cwd, path });
+}
+
+/**
+ * Who last touched each line of one file, as it is on disk (Rust
+ * `git_cmd::blame_file`). `null` when there is nothing to blame: not a repo,
+ * never committed, or too large to open.
+ */
+export function blameFile(
+  cwd: string,
+  path: string
+): Promise<FileBlame | null> {
+  return invoke("blame_file", { cwd, path });
+}
+
+/**
  * Restore the sandboxed file at `path` (relative to `cwd`) to its HEAD
  * version, discarding every uncommitted change to it — Rust
  * `git_cmd::discard_file_changes`, `git checkout HEAD -- ./<path>` behind the
@@ -1383,12 +1410,36 @@ export function listSlashCommands(cwd: string): Promise<CommandCatalog> {
   return invoke("list_slash_commands", { cwd });
 }
 
+/** The Files search's answer (Rust `completion_cmd::FoundFiles`): the best
+ * matches by name, ranked over every match. */
+export interface FoundFiles {
+  entries: FileEntry[];
+  /** More matched than were returned: a longer query narrows it down. */
+  truncated: boolean;
+  /** The walk stopped before seeing the whole folder, so a file that exists
+   * may be missing whatever the query. */
+  walkStopped: boolean;
+}
+
+/** Find files anywhere under `cwd` by name, for the Files view's search box
+ * (Rust `completion_cmd::find_files`). */
+export function findFiles(cwd: string, query: string): Promise<FoundFiles> {
+  return invoke("find_files", { cwd, query });
+}
+
 /** Filesystem completions for `@` mentions under `cwd`, filtered by `query`. */
 export function listFiles(cwd: string, query: string): Promise<FileEntry[]> {
   return invoke("list_files", { cwd, query });
 }
 
 // --- Activity log (mirrors Rust `activity_store`) ---
+
+/** Every file Claude changed in a session — its edits, writes and the files
+ * its commands changed, subagents included — as absolute paths (Rust
+ * `activity_rt::activity_changed_paths`). */
+export function activityChangedPaths(sessionId: string): Promise<string[]> {
+  return invoke("activity_changed_paths", { sessionId });
+}
 
 /** What kind of tool an [Activity step] ran (Rust `StepKind`). */
 export type StepKind =

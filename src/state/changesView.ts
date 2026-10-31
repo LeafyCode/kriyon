@@ -1,13 +1,20 @@
-import type { DiffTotals, FileDiff, SessionDiff } from "../types.ts";
+import type {
+  DiffTotals,
+  FileChange,
+  FileDiff,
+  SessionDiff,
+} from "../types.ts";
 import {
   type ChangesState,
   computeTotalsFromFiles,
   type EditState,
   type FileTreeTab,
+  myEditsOnlyOf,
   type SessionChanges,
   type SessionChangesUi,
   visibleFiles,
 } from "./changes.ts";
+import { canonicalDir } from "./paths.ts";
 
 /**
  * The [Changes view model]: the single resolved answer for "what should the
@@ -71,13 +78,24 @@ export interface ChangesViewInput {
   repoToplevel: string;
   selectedFile: string | undefined;
   tab: FileTreeTab;
-  /** This session's [Touched files], relativized — see
-   * `sessionTouchedRelative` in `state/sessions.ts`. */
-  touchedRelative: Set<string>;
+  /** The files Claude changed, relativized — or `null` while that can't be
+   * known (see `sessionClaudeFiles` in `state/sessions.ts`), in which case
+   * the AI changes filter stands down rather than hiding everything. */
+  touchedRelative: Set<string> | null;
 }
 
 /** One session's resolved Code Changes View — see the module doc. */
 export interface ChangesViewModel {
+  /** What the [Summary bar] says the active scope is measured against —
+   * the session start for AI changes, HEAD (or the base branch) for All
+   * changes. */
+  baselineLabel: string;
+  /** The same comparison in plain words (`since session start`, `vs last
+   * commit`) — what the summary bar shows; `baselineLabel` is its tooltip. */
+  comparedTo: string;
+  /** The All-files tree's git marks — see {@link TreeDecorations}. Built
+   * from the unfiltered `files`: that tab ignores the filter. */
+  decorations: TreeDecorations;
   /** `BudgetNotice`'s input: the raw diff, budget fields and all. */
   diff: SessionDiff | null;
   /** The toplevel-relative paths of `displayFiles` rows carrying unsaved
@@ -142,29 +160,6 @@ export interface ChangesViewModel {
   totals: DiffTotals | null;
 }
 
-/** `path` without a trailing slash, so `/repo` and `/repo/` compare equal
- * and joining never produces a doubled separator. */
-function withoutTrailingSlash(path: string): string {
-  return path.endsWith("/") ? path.slice(0, -1) : path;
-}
-
-/** macOS firmlinks `/tmp`, `/var` and `/etc` into `/private`, so one
- * directory has two equally-real spellings — and the two operands below
- * reliably disagree about which to use: `repo_toplevel` is git's
- * `rev-parse --show-toplevel`, which canonicalizes, while the session cwd is
- * whatever raw path the project row carries. Anchored, and with the boundary
- * asserted, so `/private/variables` and `/private/mine` (ordinary
- * directories, not firmlink twins) are left alone. */
-const MACOS_FIRMLINK_PREFIX = /^\/private(?=\/(?:etc|tmp|var)(?:\/|$))/;
-
-/** One spelling per directory, so the prefix arithmetic in
- * {@link cwdRelativePath} compares like with like. Collapses toward the short
- * form, which makes it direction-agnostic: either operand may be the
- * canonicalized one. */
-function canonicalDir(path: string): string {
-  return withoutTrailingSlash(path).replace(MACOS_FIRMLINK_PREFIX, "");
-}
-
 /**
  * One diff/tree path (repo-**toplevel**-relative, because it is git's own
  * output) expressed relative to `cwd` — which is what `FileViewer`'s
@@ -213,6 +208,61 @@ export function cwdRelativePath(
     return `${"../".repeat(depth)}${path}`;
   }
   return path;
+}
+
+/**
+ * The All-files tree's git marks: how each changed file changed, and which
+ * folders hold a change somewhere below them — the colouring every code
+ * editor's explorer gives a working tree.
+ *
+ * Keyed in the tree's own vocabulary (cwd-relative), not the diff's
+ * (toplevel-relative). A change outside the session's folder has no row in
+ * that tree, so it is dropped rather than keyed by a `../` path nothing
+ * looks up.
+ */
+export interface TreeDecorations {
+  dirs: ReadonlySet<string>;
+  files: ReadonlyMap<string, FileChange>;
+}
+
+const treeDecorationsCache = new WeakMap<
+  FileDiff[],
+  { cwd: string; result: TreeDecorations; toplevel: string }
+>();
+
+/** {@link TreeDecorations} for `files`, memoized on the array and the two
+ * paths it is translated between, so the tree re-renders only when a refresh
+ * actually lands. */
+export function treeDecorations(
+  files: FileDiff[],
+  toplevel: string,
+  cwd: string
+): TreeDecorations {
+  const hit = treeDecorationsCache.get(files);
+  if (hit && hit.cwd === cwd && hit.toplevel === toplevel) {
+    return hit.result;
+  }
+  const marks = new Map<string, FileChange>();
+  const dirs = new Set<string>();
+  for (const f of files) {
+    const path = cwdRelativePath(f.path, toplevel, cwd);
+    if (path.startsWith("../")) {
+      continue;
+    }
+    marks.set(path, f.status);
+    let slash = path.lastIndexOf("/");
+    while (slash > 0) {
+      const dir = path.slice(0, slash);
+      if (dirs.has(dir)) {
+        break;
+      }
+      dirs.add(dir);
+      slash = dir.lastIndexOf("/");
+    }
+  }
+  const result: TreeDecorations = { dirs, files: marks };
+  treeDecorationsCache.set(files, { cwd, result, toplevel });
+  return result;
 }
 
 /** Stable empty list for a session with no diff yet, so "no files" is one
@@ -322,52 +372,170 @@ function computePane(params: {
  * decision surface, with no store and no React in it. {@link changesView} is
  * the memoized store-reading wrapper every consumer actually calls. */
 export function computeChangesView(input: ChangesViewInput): ChangesViewModel {
-  const { entry, myEditsOnly, selectedFile, tab, touchedRelative } = input;
-  const showViewer = tab === "all" && Boolean(selectedFile);
-  const editsFilterActive = myEditsOnly && tab === "changes";
+  const { entry, myEditsOnly, selectedFile, tab } = input;
+  // A file open in the editor covers the diff column on every tab: the list
+  // on the left stays, as an editor's git panel does.
+  const showViewer = Boolean(selectedFile);
+  const editsFilterActive = aiFilterApplies(
+    myEditsOnly,
+    tab,
+    input.touchedRelative
+  );
   // Both memoized on their inputs' identity rather than rebuilt per call —
   // `DiffFeed` reads a new `files` array as "a refresh landed". See
   // {@link visibleFilesCache}.
   const files = memoVisibleFiles(entry?.diff);
-  const displayFiles = editsFilterActive
-    ? memoFilteredFiles(files, touchedRelative)
-    : files;
+  const uncommitted = entry?.uncommitted;
+  const uncommittedFiles = uncommitted?.diff
+    ? memoVisibleFiles(uncommitted.diff)
+    : undefined;
+  const scope = scopeOf(input, files, uncommittedFiles, editsFilterActive);
+  const { displayFiles, scopeLoaded } = scope;
   const loadedOnce = entry !== undefined && entry.diff !== null;
-  const isEmpty = loadedOnce && displayFiles.length === 0;
-  const overBudget = Boolean(entry?.diff?.budgetExceeded);
-  const hasError = entry?.status === "error" && Boolean(entry.error);
-  // "Changes exist, the filter hid every one of them" must not read as
-  // "nothing changed" — the baseline-scoped message would be a lie.
-  const hiddenByMyEditsFilter =
-    editsFilterActive && files.length > 0 && isEmpty;
+  const isEmpty = scopeLoaded && displayFiles.length === 0;
   return {
-    diff: entry?.diff ?? null,
+    baselineLabel: scope.label,
+    comparedTo: scope.comparedTo,
+    decorations: treeDecorations(
+      uncommittedFiles ?? files,
+      input.repoToplevel,
+      input.cwd
+    ),
+    diff: scope.diff,
     displayFiles,
     dirtyPaths: computeDirtyPaths(displayFiles, input),
     editsFilterActive,
-    emptyMessage: hiddenByMyEditsFilter
-      ? "No files touched by this session."
-      : `No changes vs ${entry?.baselineLabel}.`,
-    error: hasError ? entry?.error : undefined,
-    feedMounted: loadedOnce && !isEmpty,
+    emptyMessage: scope.emptyMessage(files.length > 0 && isEmpty),
+    error: scope.error,
+    feedMounted: scopeLoaded && !isEmpty,
     files,
     loadedOnce,
     myEditsOnly,
     pane: computePane({
-      hasError,
+      hasError: Boolean(scope.error),
       isEmpty,
-      loadedOnce,
-      overBudget,
+      loadedOnce: scopeLoaded,
+      overBudget: Boolean(scope.diff?.budgetExceeded),
       showViewer,
     }),
     pendingJump: input.pendingJump,
     selectedFile,
     selectedFileDiff: selectedFile
-      ? files.find((f) => f.path === selectedFile)
+      ? findSelectedDiff(
+          selectedFile,
+          [files, uncommittedFiles ?? NO_FILES],
+          input
+        )
       : undefined,
-    showEditsToggle: tab === "changes" && loadedOnce,
+    showEditsToggle:
+      tab === "changes" && loadedOnce && input.touchedRelative !== null,
     showViewer,
     tab,
+    totals: scope.totals,
+  };
+}
+
+/** "No changes since session start." — in the plain words the bar uses,
+ * falling back to the exact label for an entry from before they existed. */
+function emptySessionMessage(entry: SessionChanges | undefined): string {
+  return entry?.comparedTo
+    ? `No changes ${entry.comparedTo}.`
+    : `No changes vs ${entry?.baselineLabel}.`;
+}
+
+/**
+ * Whether "Only Claude's edits" narrows what is listed: switched on, on the
+ * AI changes tab, and with Claude's files actually known (`null` is "can't
+ * tell yet", and the filter stands down rather than hide everything). The
+ * one statement of the rule — the view model and the header's file count
+ * both ask it, so they cannot drift apart.
+ */
+export function aiFilterApplies(
+  on: boolean,
+  tab: FileTreeTab,
+  claudeFiles: Set<string> | null
+): claudeFiles is Set<string> {
+  return on && tab === "changes" && claudeFiles !== null;
+}
+
+/** The diff behind the open file. The open file is cwd-relative (what the
+ * viewer reads); diff paths are toplevel-relative (git's), so each is put in
+ * the viewer's spelling before comparing — the two differ in a session rooted
+ * in a repo subfolder. */
+function findSelectedDiff(
+  selectedFile: string,
+  lists: FileDiff[][],
+  input: ChangesViewInput
+): FileDiff | undefined {
+  for (const list of lists) {
+    const hit = list.find(
+      (f) =>
+        cwdRelativePath(f.path, input.repoToplevel, input.cwd) === selectedFile
+    );
+    if (hit) {
+      return hit;
+    }
+  }
+}
+
+/** What the diff column lists for the active scope — see {@link scopeOf}. */
+interface Scope {
+  comparedTo: string;
+  diff: SessionDiff | null;
+  displayFiles: FileDiff[];
+  emptyMessage: (hiddenByFilter: boolean) => string;
+  error: string | undefined;
+  label: string;
+  scopeLoaded: boolean;
+  totals: DiffTotals | null;
+}
+
+/**
+ * The diff the active scope lists. All changes reads the uncommitted diff;
+ * AI changes and Files read the session diff (Files only shows it once the
+ * user goes back to a diff tab, but its pane rules are the session's). Kept
+ * apart from {@link computeChangesView} so each scope's rules read on their
+ * own, and the view stays within the complexity budget.
+ */
+function scopeOf(
+  input: ChangesViewInput,
+  files: FileDiff[],
+  uncommittedFiles: FileDiff[] | undefined,
+  editsFilterActive: boolean
+): Scope {
+  const { entry } = input;
+  if (input.tab === "uncommitted") {
+    const uncommitted = entry?.uncommitted;
+    const shown = uncommittedFiles ?? NO_FILES;
+    return {
+      comparedTo: uncommitted?.comparedTo ?? "",
+      diff: uncommitted?.diff ?? null,
+      displayFiles: shown,
+      emptyMessage: () => "No uncommitted changes.",
+      error: uncommitted?.error,
+      label: uncommitted?.label ?? "",
+      scopeLoaded: uncommittedFiles !== undefined,
+      totals: uncommittedFiles ? computeTotalsFromFiles(shown) : null,
+    };
+  }
+  const displayFiles =
+    editsFilterActive && input.touchedRelative
+      ? memoFilteredFiles(files, input.touchedRelative)
+      : files;
+  const hasError = entry?.status === "error" && Boolean(entry.error);
+  return {
+    comparedTo: entry?.comparedTo ?? "",
+    diff: entry?.diff ?? null,
+    displayFiles,
+    // "Changes exist, the filter hid every one of them" must not read as
+    // "nothing changed" — the baseline-scoped message would be a lie.
+    emptyMessage: (hiddenByFilter) =>
+      editsFilterActive && hiddenByFilter
+        ? "Claude hasn't changed any files in this session. Your own edits are under All changes."
+        : emptySessionMessage(entry),
+    error: hasError ? entry?.error : undefined,
+    label: entry?.baselineLabel ?? "",
+    scopeLoaded: entry !== undefined && entry.diff !== null,
     totals: editsFilterActive
       ? computeTotalsFromFiles(displayFiles)
       : (entry?.totals ?? null),
@@ -391,7 +559,7 @@ export type ChangesViewState = Pick<
 export interface ChangesViewDeps {
   cwd: string;
   repoToplevel: string;
-  touchedRelative: Set<string>;
+  touchedRelative: Set<string> | null;
 }
 
 /**
@@ -404,6 +572,7 @@ export interface ChangesViewDeps {
  */
 interface ChangesViewKey {
   baselineLabel: string | undefined;
+  comparedTo: string | undefined;
   cwd: string;
   diff: SessionDiff | null | undefined;
   dirtyPath: string | null | undefined;
@@ -412,17 +581,19 @@ interface ChangesViewKey {
   repoToplevel: string;
   status: SessionChanges["status"] | undefined;
   totals: DiffTotals | null | undefined;
-  touchedRelative: Set<string>;
+  touchedRelative: Set<string> | null;
   /** One reference for the tab, the selection, the filter and the pending
    * jump: every field of `SessionChangesUi` is an input to this view, so the
    * store keeps them in one object that changes exactly when this view has to
    * be recomputed. */
   ui: SessionChangesUi | undefined;
+  uncommitted: SessionChanges["uncommitted"];
 }
 
 function sameKey(a: ChangesViewKey, b: ChangesViewKey): boolean {
   return (
     a.baselineLabel === b.baselineLabel &&
+    a.comparedTo === b.comparedTo &&
     a.cwd === b.cwd &&
     a.diff === b.diff &&
     a.dirtyPath === b.dirtyPath &&
@@ -432,7 +603,8 @@ function sameKey(a: ChangesViewKey, b: ChangesViewKey): boolean {
     a.status === b.status &&
     a.totals === b.totals &&
     a.touchedRelative === b.touchedRelative &&
-    a.ui === b.ui
+    a.ui === b.ui &&
+    a.uncommitted === b.uncommitted
   );
 }
 
@@ -489,13 +661,13 @@ export function forgetChangesView(sessionId: string): void {
 export function changedFileCount(
   state: ChangesViewState,
   sessionId: string,
-  touchedRelative: Set<string>
+  touchedRelative: Set<string> | null
 ): number {
   const entry = state.bySession[sessionId];
   const ui = state.ui[sessionId];
-  const editsFilterActive =
-    (ui?.myEditsOnly ?? false) && (ui?.tab ?? "changes") === "changes";
-  if (!editsFilterActive) {
+  if (
+    !aiFilterApplies(myEditsOnlyOf(ui), ui?.tab ?? "changes", touchedRelative)
+  ) {
     return entry?.totals?.files ?? 0;
   }
   const files = memoFilteredFiles(
@@ -522,7 +694,7 @@ export function changesView(
     dirtyPath: state.dirtyFiles[sessionId],
     drafts: state.fileDrafts[sessionId],
     entry,
-    myEditsOnly: ui?.myEditsOnly ?? false,
+    myEditsOnly: myEditsOnlyOf(ui),
     pendingJump: ui?.pendingJump,
     repoToplevel: deps.repoToplevel,
     selectedFile: ui?.selectedFile,
@@ -531,6 +703,7 @@ export function changesView(
   };
   const key: ChangesViewKey = {
     baselineLabel: entry?.baselineLabel,
+    comparedTo: entry?.comparedTo,
     cwd: input.cwd,
     diff: entry?.diff,
     dirtyPath: input.dirtyPath,
@@ -541,6 +714,7 @@ export function changesView(
     totals: entry?.totals,
     touchedRelative: input.touchedRelative,
     ui,
+    uncommitted: entry?.uncommitted,
   };
   const cached = memo.get(sessionId);
   if (cached && sameKey(cached.key, key)) {

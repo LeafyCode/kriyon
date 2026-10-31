@@ -1,6 +1,7 @@
+import { ChevronsDownUp, ChevronsUpDown, RotateCw } from "lucide-react";
 import { type CSSProperties, useEffect, useState } from "react";
 import { useChanges } from "../state/changes.ts";
-import { button } from "../theme/recipes.ts";
+import { iconButton } from "../theme/recipes.ts";
 import { accentAlpha, tokens } from "../theme/tokens.ts";
 import type { DiffTotals } from "../types.ts";
 
@@ -40,52 +41,125 @@ function rootStyle(pulsing: boolean): CSSProperties {
     display: "flex",
     flex: "none",
     fontFamily: tokens.font.sans,
-    gap: tokens.space.md,
-    height: "46px",
+    gap: tokens.space.sm,
+    height: "40px",
     padding: `0 ${tokens.space.md}`,
     transition: `background-color ${tokens.motion.hover}`,
   };
 }
 
+/** Nothing in the bar wraps: a narrow column clips the comparison label
+ * (it has a tooltip) and keeps every other piece whole on one line. */
+const oneLine: CSSProperties = { flex: "none", whiteSpace: "nowrap" };
+
 const totalsStyle: CSSProperties = {
+  ...oneLine,
+  alignItems: "baseline",
   color: tokens.color.ink.primary,
+  display: "flex",
   fontSize: "12.5px",
+  fontWeight: 500,
+  gap: "8px",
 };
 
-const addStyle: CSSProperties = {
-  color: tokens.color.add,
+const countsStyle: CSSProperties = {
+  display: "flex",
   fontFamily: tokens.font.mono,
+  fontSize: "11.5px",
+  fontWeight: 400,
+  gap: "6px",
 };
 
-const delStyle: CSSProperties = {
-  color: tokens.color.del,
-  fontFamily: tokens.font.mono,
-};
+const addStyle: CSSProperties = { color: tokens.color.add };
+const delStyle: CSSProperties = { color: tokens.color.del };
 
-/** The baseline and staleness labels are read, not decoration, so they sit at
- * `muted` — `faint` is below AA on this plane (ADR-0023). */
+/** "since session start" — read, not decoration, so `muted`, not `faint`
+ * (ADR-0023). The only piece that gives way when space runs out. */
 const baselineStyle: CSSProperties = {
   color: tokens.color.ink.muted,
-  fontFamily: tokens.font.mono,
+  cursor: "default",
+  fontSize: "12px",
+  minWidth: 0,
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+};
+
+const spacerStyle: CSSProperties = { flex: 1, minWidth: tokens.space.sm };
+
+const staleStyle: CSSProperties = {
+  ...oneLine,
+  color: tokens.color.ink.muted,
   fontSize: "11.5px",
 };
 
-const spacerStyle: CSSProperties = { flex: 1 };
-
-const staleStyle: CSSProperties = {
-  color: tokens.color.ink.muted,
-  fontFamily: tokens.font.mono,
-  fontSize: "11px",
+const iconButtonStyle: CSSProperties = {
+  ...iconButton(),
+  height: "26px",
+  width: "26px",
 };
 
-const refreshButtonStyle: CSSProperties = button("secondary", "sm");
+const dividerStyle: CSSProperties = {
+  alignSelf: "center",
+  background: tokens.color.line.soft,
+  flex: "none",
+  height: "16px",
+  width: "1px",
+};
 
-/** The outline-mode controls: quieter than the refresh button (ghost, no
- * border) since they're a secondary affordance next to it. */
-const collapseButtonStyle: CSSProperties = button("ghost", "sm");
+const toggleLabelStyle: CSSProperties = {
+  ...oneLine,
+  alignItems: "center",
+  color: tokens.color.ink.muted,
+  cursor: "pointer",
+  display: "flex",
+  fontSize: "12px",
+  gap: "8px",
+};
+
+/** The switch's track — accent-filled when on, and off the same sunken well
+ * every other input sits in, so "off" reads as an empty groove. */
+function switchTrackStyle(checked: boolean): CSSProperties {
+  return {
+    background: checked ? tokens.color.accent : tokens.color.inputWell,
+    border: `1px solid ${tokens.color.line.base}`,
+    borderRadius: tokens.radius.pill,
+    cursor: "pointer",
+    display: "inline-flex",
+    flex: "none",
+    height: "16px",
+    padding: "1px",
+    transition: `background-color ${tokens.motion.hover}`,
+    width: "28px",
+  };
+}
+
+function switchThumbStyle(checked: boolean): CSSProperties {
+  return {
+    background: tokens.color.onAccent,
+    borderRadius: "50%",
+    height: "12px",
+    transform: checked ? "translateX(12px)" : "translateX(0)",
+    transition: `transform ${tokens.motion.hover}`,
+    width: "12px",
+  };
+}
 
 function filesChangedLabel(files: number): string {
   return `${files} file${files === 1 ? "" : "s"} changed`;
+}
+
+/** The tooltip on the comparison label: the exact point, and how fresh. */
+function baselineTitle(
+  label: string | undefined,
+  fetchedAt: number | undefined,
+  now: number
+): string {
+  const lines = label ? [`Compared with ${label}`] : [];
+  if (fetchedAt) {
+    lines.push(formatAgo(Math.max(0, now - fetchedAt)));
+  }
+  return lines.join("\n");
 }
 
 /**
@@ -127,14 +201,34 @@ function filesChangedLabel(files: number): string {
  * filter still gets the honest whole-diff totals (mirroring `isVisible`).
  */
 export function SummaryBar({
+  baselineLabel,
+  comparedTo,
+  diffControls = true,
+  editsToggle,
   isVisible = true,
   onRefresh,
+  paths,
   pulsing = false,
   sessionId,
   totals: displayTotals,
 }: {
+  /** What the diff on screen is measured against, from the active scope;
+   * falls back to the session diff's own label. */
+  baselineLabel?: string;
+  /** The same comparison in plain words, shown in the bar; falls back to the
+   * session diff's own. */
+  comparedTo?: string;
+  /** The AI changes tab's "Only Claude's edits" switch, when it applies. */
+  editsToggle?: { checked: boolean; onToggle: () => void };
+  /** Whether the diff feed is what's below — its Collapse all / Expand all
+   * only mean something then. With a file open in the editor they are left
+   * out rather than offered to do nothing. */
+  diffControls?: boolean;
   isVisible?: boolean;
   onRefresh: () => void;
+  /** The files the scope on screen lists — what Collapse all and Expand all
+   * act on. Without it they act on the whole session diff. */
+  paths?: readonly string[];
   pulsing?: boolean;
   sessionId: string;
   totals?: DiffTotals | null;
@@ -144,7 +238,9 @@ export function SummaryBar({
   const totals = displayTotals ?? entry?.totals;
   const loading = entry?.status === "loading";
   const fetchedAt = entry?.fetchedAt;
-  const hasFiles = Boolean(entry?.diff?.files.length);
+  const hasFiles = paths
+    ? paths.length > 0
+    : Boolean(entry?.diff?.files.length);
 
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -162,6 +258,9 @@ export function SummaryBar({
   const elapsed = entry?.fetchedAt ? now - entry.fetchedAt : 0;
   const showStale = Boolean(entry?.fetchedAt) && elapsed > STALE_THRESHOLD_MS;
 
+  const label = baselineLabel ?? entry?.baselineLabel;
+  const files = totals?.files ?? 0;
+
   return (
     <div
       data-pulsing={pulsing}
@@ -169,17 +268,20 @@ export function SummaryBar({
       style={rootStyle(pulsing)}
     >
       <span data-testid="summary-totals" style={totalsStyle}>
-        {filesChangedLabel(totals?.files ?? 0)}
-        {totals ? (
-          <>
-            {"  "}
-            <span style={addStyle}>+{totals.additions}</span>{" "}
+        {totals && files === 0 ? "No changes" : filesChangedLabel(files)}
+        {totals && files > 0 ? (
+          <span style={countsStyle}>
+            <span style={addStyle}>+{totals.additions}</span>
             <span style={delStyle}>−{totals.deletions}</span>
-          </>
+          </span>
         ) : null}
       </span>
-      <span data-testid="summary-baseline" style={baselineStyle}>
-        {entry?.baselineLabel}
+      <span
+        data-testid="summary-baseline"
+        style={baselineStyle}
+        title={baselineTitle(label, fetchedAt, now)}
+      >
+        {comparedTo || entry?.comparedTo || label}
       </span>
       <span style={spacerStyle} />
       {showStale && entry ? (
@@ -187,35 +289,63 @@ export function SummaryBar({
           {formatAgo(elapsed)}
         </span>
       ) : null}
+      {editsToggle ? (
+        // A `<label>`, so the visible text is the switch's accessible name
+        // and clicking it toggles too — a bigger target than the track.
+        <label style={toggleLabelStyle}>
+          <button
+            aria-checked={editsToggle.checked}
+            data-testid="my-edits-only-toggle"
+            onClick={editsToggle.onToggle}
+            role="switch"
+            style={switchTrackStyle(editsToggle.checked)}
+            type="button"
+          >
+            <span style={switchThumbStyle(editsToggle.checked)} />
+          </button>
+          <span>Only Claude's edits</span>
+        </label>
+      ) : null}
+      {editsToggle ? <span aria-hidden style={dividerStyle} /> : null}
+      {diffControls ? (
+        <>
+          <button
+            aria-label="Collapse all"
+            className="kr-hover-surface"
+            data-testid="summary-collapse-all"
+            disabled={!hasFiles}
+            onClick={() => setAllCollapsed(sessionId, true, paths)}
+            style={iconButtonStyle}
+            title="Collapse all"
+            type="button"
+          >
+            <ChevronsDownUp size={15} strokeWidth={1.75} />
+          </button>
+          <button
+            aria-label="Expand all"
+            className="kr-hover-surface"
+            data-testid="summary-expand-all"
+            disabled={!hasFiles}
+            onClick={() => setAllCollapsed(sessionId, false, paths)}
+            style={iconButtonStyle}
+            title="Expand all"
+            type="button"
+          >
+            <ChevronsUpDown size={15} strokeWidth={1.75} />
+          </button>
+        </>
+      ) : null}
       <button
-        className="kr-hover-surface"
-        data-testid="summary-collapse-all"
-        disabled={!hasFiles}
-        onClick={() => setAllCollapsed(sessionId, true)}
-        style={collapseButtonStyle}
-        type="button"
-      >
-        Collapse all
-      </button>
-      <button
-        className="kr-hover-surface"
-        data-testid="summary-expand-all"
-        disabled={!hasFiles}
-        onClick={() => setAllCollapsed(sessionId, false)}
-        style={collapseButtonStyle}
-        type="button"
-      >
-        Expand all
-      </button>
-      <button
+        aria-label="Refresh"
         className="kr-hover-surface"
         data-testid="summary-refresh"
         disabled={loading}
         onClick={onRefresh}
-        style={refreshButtonStyle}
+        style={iconButtonStyle}
+        title={loading ? "Refreshing…" : "Refresh"}
         type="button"
       >
-        {loading ? "Refreshing…" : "Refresh"}
+        <RotateCw size={14} strokeWidth={1.75} />
       </button>
     </div>
   );

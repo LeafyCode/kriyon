@@ -2,6 +2,7 @@ import { act, renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
 vi.mock("../ipc/bridge.ts", () => ({
+  activityChangedPaths: vi.fn(),
   defaultBranch: vi.fn(),
   diffSessionChanges: vi.fn(),
   diffWorkingTree: vi.fn(),
@@ -12,6 +13,7 @@ vi.mock("../ipc/bridge.ts", () => ({
 }));
 
 import {
+  activityChangedPaths,
   defaultBranch,
   diffSessionChanges,
   diffWorkingTree,
@@ -34,6 +36,7 @@ import { DEFAULT_LAYOUT, useLayout } from "./layout.ts";
 import { type UiSession, useSessions } from "./sessions.ts";
 
 const mockedDefaultBranch = vi.mocked(defaultBranch);
+const mockedActivityChangedPaths = vi.mocked(activityChangedPaths);
 const mockedDiffWorkingTree = vi.mocked(diffWorkingTree);
 const mockedDiffSessionChanges = vi.mocked(diffSessionChanges);
 const mockedRepoToplevel = vi.mocked(repoToplevel);
@@ -59,6 +62,7 @@ const IMMEDIATE_REASONS: RefreshReason[] = [
   "fs-change",
   "manual",
   "saved",
+  "scope",
 ];
 
 /** The reasons the [Working-tree budget] refusal suppresses — the two the
@@ -160,8 +164,9 @@ beforeEach(() => {
     warmPanes: [],
   });
   useLayout.setState({ layout: DEFAULT_LAYOUT });
-  useChanges.setState({ bySession: {}, refresh: REAL_REFRESH });
+  useChanges.setState({ bySession: {}, refresh: REAL_REFRESH, ui: {} });
   mockedDefaultBranch.mockReset().mockResolvedValue("main");
+  mockedActivityChangedPaths.mockReset().mockResolvedValue([]);
   mockedDiffSessionChanges.mockReset().mockResolvedValue(emptyDiff());
   mockedDiffWorkingTree.mockReset().mockResolvedValue(emptyDiff());
   mockedRepoToplevel.mockReset().mockResolvedValue("/repo");
@@ -1477,4 +1482,203 @@ describe("useRevalidateOn", () => {
     expect(first).not.toHaveBeenCalled();
     expect(latest).toHaveBeenCalledTimes(1);
   });
+});
+
+describe("the All changes scope (uncommitted work)", () => {
+  const sessionDiff: SessionDiff = {
+    base: "HEAD",
+    files: [
+      {
+        binary: false,
+        hunks: [],
+        oldPath: null,
+        path: "session.ts",
+        status: "added",
+      },
+    ],
+  };
+  const workingDiff: SessionDiff = {
+    base: "HEAD",
+    files: [
+      {
+        binary: false,
+        hunks: [],
+        oldPath: null,
+        path: "older.ts",
+        status: "modified",
+      },
+    ],
+  };
+
+  test("with a session snapshot, it fetches the uncommitted diff too while All changes is showing", async () => {
+    useSessions
+      .getState()
+      .addSession(locatedSession("s1", { baselineOid: "cafe" }));
+    useSessions.getState().setActiveSession("s1");
+    useChanges.getState().setTab("s1", "uncommitted");
+    mockedDiffSessionChanges.mockResolvedValue(sessionDiff);
+    mockedDiffWorkingTree.mockResolvedValue(workingDiff);
+
+    await refreshSessionChanges("s1");
+
+    const entry = useChanges.getState().bySession.s1;
+    expect(entry?.diff).toBe(sessionDiff);
+    expect(entry?.uncommitted?.diff).toBe(workingDiff);
+    expect(entry?.uncommitted?.label).toBe("HEAD · uncommitted");
+    expect(mockedDiffWorkingTree).toHaveBeenCalledWith("/repo", undefined);
+  });
+
+  test("the Files tab wants it too, for the tree's git colours", async () => {
+    useSessions
+      .getState()
+      .addSession(locatedSession("s1", { baselineOid: "cafe" }));
+    useSessions.getState().setActiveSession("s1");
+    useChanges.getState().setTab("s1", "all");
+    mockedDiffWorkingTree.mockResolvedValue(workingDiff);
+
+    await refreshSessionChanges("s1");
+
+    expect(useChanges.getState().bySession.s1?.uncommitted?.diff).toBe(
+      workingDiff
+    );
+  });
+
+  test("on the AI changes tab it costs nothing extra", async () => {
+    useSessions
+      .getState()
+      .addSession(locatedSession("s1", { baselineOid: "cafe" }));
+    useSessions.getState().setActiveSession("s1");
+
+    await refreshSessionChanges("s1");
+
+    expect(mockedDiffWorkingTree).not.toHaveBeenCalled();
+    expect(useChanges.getState().bySession.s1?.uncommitted).toBeUndefined();
+  });
+
+  test("without a snapshot the one diff already is the uncommitted one, fetched once", async () => {
+    seedActiveSession();
+    useChanges.getState().setTab("s1", "uncommitted");
+    mockedDiffWorkingTree.mockResolvedValue(workingDiff);
+
+    await refreshSessionChanges("s1");
+
+    expect(mockedDiffWorkingTree).toHaveBeenCalledTimes(1);
+    expect(useChanges.getState().bySession.s1?.uncommitted?.diff).toBe(
+      workingDiff
+    );
+  });
+
+  test("a failed uncommitted fetch is reported on its own and leaves the session diff alone", async () => {
+    useSessions
+      .getState()
+      .addSession(locatedSession("s1", { baselineOid: "cafe" }));
+    useSessions.getState().setActiveSession("s1");
+    useChanges.getState().setTab("s1", "uncommitted");
+    mockedDiffSessionChanges.mockResolvedValue(sessionDiff);
+    mockedDiffWorkingTree.mockRejectedValue(new Error("git broke"));
+
+    await refreshSessionChanges("s1");
+
+    const entry = useChanges.getState().bySession.s1;
+    expect(entry?.status).toBe("ready");
+    expect(entry?.diff).toBe(sessionDiff);
+    expect(entry?.uncommitted?.error).toBe("git broke");
+  });
+});
+
+test("a refresh learns from the Activity log which files Claude changed, Bash and subagents included", async () => {
+  seedActiveSession();
+  mockedActivityChangedPaths.mockResolvedValue(["/repo/gen.ts"]);
+
+  await refreshSessionChanges("s1");
+
+  await vi.waitFor(() =>
+    expect(useSessions.getState().touchedFiles.s1).toEqual(["/repo/gen.ts"])
+  );
+  expect(useSessions.getState().touchedSynced.s1).toBe(true);
+  expect(mockedActivityChangedPaths).toHaveBeenCalledWith("s1");
+});
+
+test("an unavailable Activity log never fails the refresh", async () => {
+  seedActiveSession();
+  mockedActivityChangedPaths.mockRejectedValue(new Error("no store"));
+
+  await refreshSessionChanges("s1");
+
+  expect(useChanges.getState().bySession.s1?.status).toBe("ready");
+});
+
+describe("what the diff is compared with, in plain words", () => {
+  test("a session with a start snapshot: since session start", async () => {
+    useSessions
+      .getState()
+      .addSession(locatedSession("s1", { baselineOid: "cafe" }));
+    useSessions.getState().setActiveSession("s1");
+    await refreshSessionChanges("s1");
+    expect(useChanges.getState().bySession.s1?.comparedTo).toBe(
+      "since session start"
+    );
+  });
+
+  test("a plain session without one: vs last commit, and All changes says the same", async () => {
+    seedActiveSession();
+    useChanges.getState().setTab("s1", "uncommitted");
+    await refreshSessionChanges("s1");
+    const entry = useChanges.getState().bySession.s1;
+    expect(entry?.comparedTo).toBe("vs last commit");
+    expect(entry?.uncommitted?.comparedTo).toBe("vs last commit");
+  });
+
+  test("a worktree session: vs its base branch", async () => {
+    const s = useSessions.getState();
+    s.addProject({
+      color: null,
+      id: "p1",
+      name: "p1",
+      path: "/repo",
+      setupCommand: null,
+    });
+    s.addSession(
+      locatedSession("s1", { projectId: "p1", worktreePath: "/repo-wt/x" })
+    );
+    s.setActiveSession("s1");
+    await refreshSessionChanges("s1");
+    expect(useChanges.getState().bySession.s1?.comparedTo).toBe("vs main");
+  });
+});
+
+test("a collapse made while the uncommitted diff is fetched is kept", async () => {
+  useSessions
+    .getState()
+    .addSession(locatedSession("s1", { baselineOid: "cafe" }));
+  useSessions.getState().setActiveSession("s1");
+  useChanges.getState().setTab("s1", "uncommitted");
+  mockedDiffSessionChanges.mockResolvedValue({
+    base: "HEAD",
+    files: [
+      {
+        binary: false,
+        hunks: [{ header: "@@", lines: [{ kind: "added", text: "x" }] }],
+        oldPath: null,
+        path: "a.ts",
+        status: "modified",
+      },
+    ],
+  });
+  let finish: (d: SessionDiff) => void = () => undefined;
+  mockedDiffWorkingTree.mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      })
+  );
+
+  const run = refreshSessionChanges("s1");
+  await vi.waitFor(() => expect(mockedDiffWorkingTree).toHaveBeenCalled());
+  // The user collapses a card while the second diff is still running.
+  useChanges.getState().toggleCollapsed("s1", "a.ts");
+  finish(emptyDiff());
+  await run;
+
+  expect(useChanges.getState().bySession.s1?.collapsed["a.ts"]).toBe(true);
 });

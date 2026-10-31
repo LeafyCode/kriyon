@@ -12,6 +12,7 @@ vi.mock("../ipc/bridge.ts", () => ({
   createFile: vi.fn().mockResolvedValue(undefined),
   deleteEntry: vi.fn().mockResolvedValue(undefined),
   listDir: vi.fn(),
+  findFiles: vi.fn(),
   openInEditor: vi.fn().mockResolvedValue(undefined),
   renameEntry: vi.fn().mockResolvedValue(undefined),
   revealPath: vi.fn().mockResolvedValue(undefined),
@@ -28,6 +29,8 @@ import {
   createDir,
   createFile,
   deleteEntry,
+  type FoundFiles,
+  findFiles,
   listDir,
   openInEditor,
   renameEntry,
@@ -41,6 +44,7 @@ import { Toast } from "../ui/Toast.tsx";
 import { FileBrowserTree } from "./FileBrowserTree.tsx";
 
 const mockedListDir = vi.mocked(listDir);
+const mockedFindFiles = vi.mocked(findFiles);
 const mockedCreateFile = vi.mocked(createFile);
 const mockedCreateDir = vi.mocked(createDir);
 const mockedOpenInEditor = vi.mocked(openInEditor);
@@ -65,6 +69,8 @@ const CANCEL_RE = /^cancel$/i;
 const UNSAVED_RE = /unsaved/i;
 const ANOTHER_SESSION_RE = /another session/i;
 const PATH_SEPARATOR_RE = /must not contain a path separator/i;
+const MORE_MATCHES_RE = /more files match/i;
+const NOT_ALL_SEARCHED_RE = /too large to search completely/i;
 
 /** A `bySession` entry whose only interesting field is `fetchedAt` — the
  * "a diff refresh just landed" signal the tree revalidates off. */
@@ -110,6 +116,7 @@ describe("FileBrowserTree", () => {
     // over.
     useSessions.setState({ sessions: {} });
     mockedListDir.mockReset();
+    mockedFindFiles.mockReset();
     // `.mockClear()`, not `.mockReset()`: these three keep their default
     // resolved-`undefined` implementation (set once, in the `vi.mock` factory
     // above) across tests — only each test's own call history needs to start
@@ -1118,6 +1125,58 @@ describe("FileBrowserTree", () => {
    * the same `parentDir`. With one shared `key`, React would keep the very
    * same (uncontrolled) `<input>` and its stale typed name, and Enter would
    * rename the file to a name typed for a different purpose entirely. */
+  it("a create that fails late keeps its error off a rename opened meanwhile", async () => {
+    mockedListDir.mockResolvedValue(oneFile);
+    let failCreate: (e: Error) => void = () => undefined;
+    mockedCreateFile.mockImplementationOnce(
+      () =>
+        new Promise((_resolve, reject) => {
+          failCreate = reject;
+        })
+    );
+    render(<FileBrowserTree cwd="/repo" sessionId="s1" />);
+    fireEvent.contextMenu(await screen.findByTestId("file-browser-empty-area"));
+    fireEvent.click(screen.getByRole("menuitem", { name: NEW_FILE_ITEM_RE }));
+    fireEvent.change(await screen.findByTestId("file-browser-draft"), {
+      target: { value: "taken.ts" },
+    });
+    // Right-clicking blurs the row, which commits the create — in flight.
+    await runMenuItem("a.ts", RENAME_ITEM_RE);
+
+    await act(async () => {
+      failCreate(new Error("already exists"));
+      await Promise.resolve();
+    });
+
+    expect(screen.getByTestId("file-browser-draft")).toHaveValue("a.ts");
+    expect(screen.queryByText(ALREADY_EXISTS_RE)).not.toBeInTheDocument();
+  });
+
+  it("a rename that resolves late leaves a New file row opened meanwhile", async () => {
+    mockedListDir.mockResolvedValue(oneFile);
+    let finishRename: () => void = () => undefined;
+    mockedRenameEntry.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishRename = () => resolve(undefined);
+        })
+    );
+    render(<FileBrowserTree cwd="/repo" sessionId="s1" />);
+    await runMenuItem("a.ts", RENAME_ITEM_RE);
+    const rename = await screen.findByTestId("file-browser-draft");
+    fireEvent.change(rename, { target: { value: "b.ts" } });
+    fireEvent.keyDown(rename, { key: "Enter" });
+    // While the rename is in flight, the toolbar opens a New file row.
+    fireEvent.click(screen.getByRole("button", { name: "New file" }));
+
+    await act(async () => {
+      finishRename();
+      await Promise.resolve();
+    });
+
+    expect(screen.getByTestId("file-browser-draft")).toHaveValue("");
+  });
+
   it("Rename re-seeds the row even when a create draft was already open in that folder", async () => {
     mockedListDir.mockResolvedValue(oneFile);
     render(<FileBrowserTree cwd="/repo" sessionId="s1" />);
@@ -1773,5 +1832,330 @@ describe("FileBrowserTree", () => {
       resolveRename();
       await Promise.resolve();
     });
+  });
+
+  describe("editor-style explorer", () => {
+    it("marks the open file's row as selected", async () => {
+      mockedListDir.mockResolvedValue(rootEntries);
+      useChanges.getState().selectFile("s1", "README.md");
+
+      render(<FileBrowserTree cwd="/repo" sessionId="s1" />);
+
+      const row = (await screen.findByText("README.md")).closest("button");
+      expect(row).toHaveAttribute("aria-current", "true");
+      const src = screen.getByText("src").closest("button");
+      expect(src).not.toHaveAttribute("aria-current");
+    });
+
+    it("paints git marks on changed files and the folders that hold them", async () => {
+      mockedListDir.mockResolvedValue(rootEntries);
+
+      render(
+        <FileBrowserTree
+          cwd="/repo"
+          decorations={{
+            dirs: new Set(["src"]),
+            files: new Map([["README.md", "added" as const]]),
+          }}
+          sessionId="s1"
+        />
+      );
+
+      const readme = (await screen.findByText("README.md")).closest("button");
+      expect(readme).toHaveAttribute("data-git", "added");
+      expect(readme).toHaveTextContent("A");
+      const src = screen.getByText("src").closest("button");
+      expect(src).toHaveAttribute("data-git", "contains");
+    });
+
+    it("opens every folder above a file opened from elsewhere", async () => {
+      mockNestedTree();
+      render(<FileBrowserTree cwd="/repo" sessionId="s1" />);
+      await screen.findByText("src");
+
+      act(() => useChanges.getState().selectFile("s1", "src/deep/nested.ts"));
+
+      expect(await screen.findByText("nested.ts")).toBeInTheDocument();
+      expect(useChanges.getState().expandedDirs.s1).toMatchObject({
+        src: true,
+        "src/deep": true,
+      });
+    });
+
+    it("collapse folders closes the whole tree", async () => {
+      mockNestedTree();
+      render(<FileBrowserTree cwd="/repo" sessionId="s1" />);
+      fireEvent.click(await screen.findByText("src"));
+      expect(await screen.findByText("main.ts")).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole("button", { name: "Collapse folders" }));
+
+      expect(screen.queryByText("main.ts")).not.toBeInTheDocument();
+    });
+
+    it("the toolbar's new file opens a naming row at the root", async () => {
+      mockedListDir.mockResolvedValue(rootEntries);
+      render(<FileBrowserTree cwd="/repo" sessionId="s1" />);
+      await screen.findByText("src");
+
+      fireEvent.click(screen.getByRole("button", { name: "New file" }));
+
+      const input = await screen.findByTestId("file-browser-draft");
+      fireEvent.change(input, { target: { value: "x.ts" } });
+      fireEvent.keyDown(input, { key: "Enter" });
+      await waitFor(() =>
+        expect(mockedCreateFile).toHaveBeenCalledWith("/repo", "x.ts")
+      );
+    });
+
+    it("arrow keys walk the rows; right opens a folder and left closes it", async () => {
+      mockNestedTree();
+      render(<FileBrowserTree cwd="/repo" sessionId="s1" />);
+      const src = (await screen.findByText("src")).closest(
+        "button"
+      ) as HTMLButtonElement;
+      src.focus();
+
+      fireEvent.keyDown(src, { key: "ArrowDown" });
+      expect(document.activeElement).toHaveTextContent("README.md");
+      fireEvent.keyDown(document.activeElement as Element, {
+        key: "ArrowUp",
+      });
+      expect(document.activeElement).toBe(src);
+
+      fireEvent.keyDown(src, { key: "ArrowRight" });
+      expect(await screen.findByText("main.ts")).toBeInTheDocument();
+      expect(src).toHaveAttribute("aria-expanded", "true");
+
+      // Left from a child goes to its folder; left again closes it.
+      const main = screen
+        .getByText("main.ts")
+        .closest("button") as HTMLButtonElement;
+      main.focus();
+      fireEvent.keyDown(main, { key: "ArrowLeft" });
+      expect(document.activeElement).toBe(src);
+      fireEvent.keyDown(src, { key: "ArrowLeft" });
+      expect(screen.queryByText("main.ts")).not.toBeInTheDocument();
+    });
+  });
+
+  describe("search", () => {
+    function searchBox(): HTMLInputElement {
+      return screen.getByRole("searchbox", { name: "Search files" });
+    }
+
+    it("searches the whole project and lists matches in the order the backend ranked them, in place of the tree", async () => {
+      mockedListDir.mockResolvedValue(rootEntries);
+      mockedFindFiles.mockResolvedValue({
+        entries: [
+          { isDir: false, path: "src/ui/IconButton.tsx" },
+          { isDir: false, path: "src/ui/Button.tsx" },
+        ],
+        truncated: false,
+        walkStopped: false,
+      });
+      render(<FileBrowserTree cwd="/repo" sessionId="s1" />);
+      await screen.findByText("src");
+
+      fireEvent.change(searchBox(), { target: { value: "button" } });
+
+      const results = await screen.findAllByTestId("file-search-result");
+      expect(mockedFindFiles).toHaveBeenCalledWith("/repo", "button");
+      expect(results.map((r) => r.getAttribute("data-row-path"))).toEqual([
+        "src/ui/IconButton.tsx",
+        "src/ui/Button.tsx",
+      ]);
+      expect(screen.queryByText("README.md")).not.toBeInTheDocument();
+    });
+
+    it("opening a result shows the file and puts the tree back", async () => {
+      mockedListDir.mockResolvedValue(rootEntries);
+      mockedFindFiles.mockResolvedValue({
+        entries: [{ isDir: false, path: "README.md" }],
+        truncated: false,
+        walkStopped: false,
+      });
+      render(<FileBrowserTree cwd="/repo" sessionId="s1" />);
+      await screen.findByText("src");
+
+      fireEvent.change(searchBox(), { target: { value: "read" } });
+      fireEvent.click(await screen.findByTestId("file-search-result"));
+
+      expect(useChanges.getState().ui.s1?.selectedFile).toBe("README.md");
+      expect(searchBox()).toHaveValue("");
+      expect(screen.getByText("src")).toBeInTheDocument();
+    });
+
+    it("Enter opens the top match", async () => {
+      mockedListDir.mockResolvedValue(rootEntries);
+      mockedFindFiles.mockResolvedValue({
+        entries: [
+          { isDir: false, path: "main.ts" },
+          { isDir: false, path: "a/deep/main.ts" },
+        ],
+        truncated: false,
+        walkStopped: false,
+      });
+      render(<FileBrowserTree cwd="/repo" sessionId="s1" />);
+      await screen.findByText("src");
+
+      fireEvent.change(searchBox(), { target: { value: "main" } });
+      await screen.findAllByTestId("file-search-result");
+      fireEvent.keyDown(searchBox(), { key: "Enter" });
+
+      expect(useChanges.getState().ui.s1?.selectedFile).toBe("main.ts");
+    });
+
+    it("a folder result opens that folder in the tree", async () => {
+      mockedListDir.mockResolvedValue(rootEntries);
+      mockedFindFiles.mockResolvedValue({
+        entries: [{ isDir: true, path: "src" }],
+        truncated: false,
+        walkStopped: false,
+      });
+      render(<FileBrowserTree cwd="/repo" sessionId="s1" />);
+      await screen.findByText("README.md");
+
+      fireEvent.change(searchBox(), { target: { value: "src" } });
+      fireEvent.click(await screen.findByTestId("file-search-result"));
+
+      expect(useChanges.getState().expandedDirs.s1?.src).toBe(true);
+      expect(useChanges.getState().ui.s1?.selectedFile).toBeUndefined();
+    });
+
+    it("Escape clears the search", async () => {
+      mockedListDir.mockResolvedValue(rootEntries);
+      mockedFindFiles.mockResolvedValue({
+        entries: [],
+        truncated: false,
+        walkStopped: false,
+      });
+      render(<FileBrowserTree cwd="/repo" sessionId="s1" />);
+      await screen.findByText("src");
+
+      fireEvent.change(searchBox(), { target: { value: "zzz" } });
+      expect(await screen.findByText("No files match.")).toBeInTheDocument();
+      fireEvent.keyDown(searchBox(), { key: "Escape" });
+
+      expect(searchBox()).toHaveValue("");
+      expect(screen.getByText("README.md")).toBeInTheDocument();
+    });
+
+    it("says when the backend cut the list", async () => {
+      mockedListDir.mockResolvedValue(rootEntries);
+      mockedFindFiles.mockResolvedValue({
+        entries: [{ isDir: false, path: "f.ts" }],
+        truncated: true,
+        walkStopped: false,
+      });
+      render(<FileBrowserTree cwd="/repo" sessionId="s1" />);
+      await screen.findByText("src");
+
+      fireEvent.change(searchBox(), { target: { value: "f" } });
+
+      expect(await screen.findByText(MORE_MATCHES_RE)).toBeInTheDocument();
+      expect(screen.queryByText(NOT_ALL_SEARCHED_RE)).not.toBeInTheDocument();
+    });
+
+    it("says the folder was too large to search completely, even when nothing matched", async () => {
+      mockedListDir.mockResolvedValue(rootEntries);
+      mockedFindFiles.mockResolvedValue({
+        entries: [],
+        truncated: false,
+        walkStopped: true,
+      });
+      render(<FileBrowserTree cwd="/repo" sessionId="s1" />);
+      await screen.findByText("src");
+
+      fireEvent.change(searchBox(), { target: { value: "deep" } });
+
+      expect(await screen.findByText(NOT_ALL_SEARCHED_RE)).toBeInTheDocument();
+      // A different fact from "too many matches", with different advice.
+      expect(screen.queryByText(MORE_MATCHES_RE)).not.toBeInTheDocument();
+    });
+
+    it("Enter pressed before the new answer lands opens the new query's top match, not the old one's", async () => {
+      mockedListDir.mockResolvedValue(rootEntries);
+      mockedFindFiles.mockImplementation((_cwd, query) =>
+        Promise.resolve({
+          entries: [{ isDir: false, path: `${query}.ts` }],
+          truncated: false,
+          walkStopped: false,
+        })
+      );
+      render(<FileBrowserTree cwd="/repo" sessionId="s1" />);
+      await screen.findByText("src");
+
+      fireEvent.change(searchBox(), { target: { value: "app" } });
+      await screen.findAllByTestId("file-search-result");
+      // Type on and press Enter inside the debounce.
+      fireEvent.change(searchBox(), { target: { value: "apps" } });
+      fireEvent.keyDown(searchBox(), { key: "Enter" });
+
+      await waitFor(() =>
+        expect(useChanges.getState().ui.s1?.selectedFile).toBe("apps.ts")
+      );
+    });
+
+    it("a slow answer for an older query never replaces a newer one", async () => {
+      mockedListDir.mockResolvedValue(rootEntries);
+      let answerOld: (v: FoundFiles) => void = () => undefined;
+      mockedFindFiles.mockImplementation((_cwd, query) =>
+        query === "ol"
+          ? new Promise((resolve) => {
+              answerOld = resolve;
+            })
+          : Promise.resolve({
+              entries: [{ isDir: false, path: "new.ts" }],
+              truncated: false,
+              walkStopped: false,
+            })
+      );
+      render(<FileBrowserTree cwd="/repo" sessionId="s1" />);
+      await screen.findByText("src");
+
+      fireEvent.change(searchBox(), { target: { value: "ol" } });
+      await waitFor(() =>
+        expect(mockedFindFiles).toHaveBeenCalledWith("/repo", "ol")
+      );
+      fireEvent.change(searchBox(), { target: { value: "new" } });
+      const resultPaths = () =>
+        screen
+          .queryAllByTestId("file-search-result")
+          .map((r) => r.getAttribute("data-row-path"));
+      await waitFor(() => expect(resultPaths()).toEqual(["new.ts"]));
+      await act(async () => {
+        answerOld({
+          entries: [{ isDir: false, path: "old.ts" }],
+          truncated: false,
+          walkStopped: false,
+        });
+        await Promise.resolve();
+      });
+
+      expect(resultPaths()).toEqual(["new.ts"]);
+    });
+  });
+  it("scrolls a file into view when its folders reopen from cache", async () => {
+    mockNestedTree();
+    const scrolled: string[] = [];
+    const original = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = function (this: Element) {
+      scrolled.push(this.textContent ?? "");
+    };
+    try {
+      render(<FileBrowserTree cwd="/repo" sessionId="s1" />);
+      fireEvent.click(await screen.findByText("src"));
+      fireEvent.click(await screen.findByText("deep"));
+      await screen.findByText("nested.ts");
+      // Listings are cached now; close everything.
+      fireEvent.click(screen.getByRole("button", { name: "Collapse folders" }));
+
+      act(() => useChanges.getState().selectFile("s1", "src/deep/nested.ts"));
+
+      await waitFor(() => expect(scrolled).toContain("nested.ts"));
+    } finally {
+      Element.prototype.scrollIntoView = original;
+    }
   });
 });

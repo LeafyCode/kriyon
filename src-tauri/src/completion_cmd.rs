@@ -429,6 +429,48 @@ mod tests {
     }
 
     #[test]
+    fn a_walk_stopped_by_its_visit_cap_reports_the_answer_as_cut() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        for i in 0..10 {
+            std::fs::write(root.join(format!("f{i}.txt")), "").unwrap();
+        }
+        // Fewer matches than the result cap, but the walk gave up early, so
+        // the answer may be missing files that exist.
+        let found = find_matches_within(root, "zzz", 5);
+        assert!(found.entries.is_empty());
+        assert!(found.walk_stopped);
+        // Not "more than 50 matched" — a different fact, with different advice.
+        assert!(!found.truncated);
+
+        let whole = find_matches_within(root, "zzz", 1_000);
+        assert!(!whole.walk_stopped);
+    }
+
+    #[test]
+    fn find_matches_ranks_every_match_before_cutting_and_says_it_cut() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        // 55 paths that only contain the query, all sorting before the one
+        // file whose name *is* the query.
+        for i in 0..55 {
+            std::fs::create_dir(root.join(format!("a{i:02}"))).unwrap();
+            std::fs::write(root.join(format!("a{i:02}/big_button_panel.ts")), "").unwrap();
+        }
+        std::fs::create_dir(root.join("zz")).unwrap();
+        std::fs::write(root.join("zz/button.ts"), "").unwrap();
+
+        let found = find_matches(root, "button");
+        assert_eq!(found.entries[0].path, "zz/button.ts");
+        assert_eq!(found.entries.len(), FILE_CAP);
+        assert!(found.truncated);
+
+        let few = find_matches(root, "zz");
+        assert!(!few.truncated);
+        assert!(!few.walk_stopped);
+    }
+
+    #[test]
     fn walk_files_sorts_dirs_before_files_and_matches_case_insensitively() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
@@ -554,8 +596,25 @@ const WALK_VISIT_CAP: usize = 20_000;
 /// relative path contains `query` (case-insensitive). Directories sort before
 /// files, then lexicographically; capped at `FILE_CAP`.
 fn walk_files(root: &Path, query: &str) -> Vec<FileEntry> {
+    let (mut out, _) = walk_matches(root, query, WALK_VISIT_CAP);
+    out.sort_by(|a, b| match (a.is_dir, b.is_dir) {
+        (true, false) => std::cmp::Ordering::Less,
+        (false, true) => std::cmp::Ordering::Greater,
+        _ => a.path.cmp(&b.path),
+    });
+    out.truncate(FILE_CAP);
+    out
+}
+
+/// Every entry under `root` whose relative path contains `query`
+/// (case-insensitive), unordered, visiting at most `visit_cap` entries — and
+/// whether the walk stopped at that cap, so a caller can say the answer may
+/// be missing files. Shared by `@`-mention completion and the Files search,
+/// which order and cut it differently.
+fn walk_matches(root: &Path, query: &str, visit_cap: usize) -> (Vec<FileEntry>, bool) {
     let needle = query.to_lowercase();
-    let mut out: Vec<FileEntry> = ignore::WalkBuilder::new(root)
+    let mut visited = 0usize;
+    let entries = ignore::WalkBuilder::new(root)
         .hidden(false) // show dotfiles; .gitignore still hides ignored ones
         .git_ignore(true)
         .git_global(true)
@@ -574,8 +633,14 @@ fn walk_files(root: &Path, query: &str) -> Vec<FileEntry> {
         // was never satisfied and the walk ran to the end of the tree every
         // time. On a cwd with a large unignored build dir that is the whole
         // difference between a bounded read and ~89k stat calls per keystroke.
-        .take(WALK_VISIT_CAP)
+        // One past the cap, so a walk that had more to give is told apart
+        // from one that ended exactly there.
+        .take(visit_cap.saturating_add(1))
         .filter_map(|entry| {
+            visited += 1;
+            if visited > visit_cap {
+                return None;
+            }
             let rel = entry.path().strip_prefix(root).ok()?;
             if rel.as_os_str().is_empty() {
                 return None; // skip the root itself
@@ -588,14 +653,58 @@ fn walk_files(root: &Path, query: &str) -> Vec<FileEntry> {
             Some(FileEntry { path, is_dir })
         })
         .collect();
+    // The walk produced one more entry than it may visit: it stopped early.
+    (entries, visited > visit_cap)
+}
 
-    out.sort_by(|a, b| match (a.is_dir, b.is_dir) {
-        (true, false) => std::cmp::Ordering::Less,
-        (false, true) => std::cmp::Ordering::Greater,
-        _ => a.path.cmp(&b.path),
-    });
-    out.truncate(FILE_CAP);
-    out
+/// The Files search's answer: the best [`FILE_CAP`] matches by name, plus the
+/// two different ways it can be incomplete — they call for different advice.
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FoundFiles {
+    pub entries: Vec<FileEntry>,
+    /// More than [`FILE_CAP`] matched: a longer query narrows it down.
+    pub truncated: bool,
+    /// The walk stopped at [`WALK_VISIT_CAP`] before seeing the whole tree,
+    /// so a file that exists may not be here — whatever the query.
+    pub walk_stopped: bool,
+}
+
+/// Rank every match by name ([`kriyon_core::file_search::compare_matches`])
+/// and only then cut — ranking after the cut loses the file whose name is
+/// the query whenever alphabetically earlier paths filled it.
+fn find_matches(root: &Path, query: &str) -> FoundFiles {
+    find_matches_within(root, query, WALK_VISIT_CAP)
+}
+
+fn find_matches_within(root: &Path, query: &str, visit_cap: usize) -> FoundFiles {
+    let (mut entries, walk_stopped) = walk_matches(root, query, visit_cap);
+    entries.sort_by(|a, b| kriyon_core::file_search::compare_matches(&a.path, &b.path, query));
+    let truncated = entries.len() > FILE_CAP;
+    entries.truncate(FILE_CAP);
+    FoundFiles {
+        entries,
+        truncated,
+        walk_stopped,
+    }
+}
+
+/// Find files anywhere under a session's `cwd` by name, for the Files view's
+/// search box. Same walk and trust-boundary check as [`list_files`]; ranked
+/// for finding one file rather than completing a path.
+///
+/// # Errors
+/// Returns an error string if `cwd` is not a known session/project directory.
+#[allow(clippy::needless_pass_by_value)]
+// `(async)` for the same reason as `list_files`: it walks a whole tree.
+#[tauri::command(async)]
+pub fn find_files(
+    store: tauri::State<'_, StoreState>,
+    cwd: String,
+    query: String,
+) -> Result<FoundFiles, String> {
+    let root = validate_cwd(store.inner(), Path::new(&cwd))?;
+    Ok(find_matches(&root, &query))
 }
 
 /// Filesystem completions for `@` mentions, relative to a session's `cwd`.

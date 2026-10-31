@@ -1,5 +1,11 @@
 import { beforeEach, expect, test } from "vitest";
-import { DEFAULT_LAYOUT, effectiveSessionSort, useLayout } from "./layout.ts";
+import {
+  DEFAULT_LAYOUT,
+  effectiveSessionSort,
+  FILE_TREE_WIDTH_MAX,
+  FILE_TREE_WIDTH_MIN,
+  useLayout,
+} from "./layout.ts";
 
 beforeEach(() => {
   useLayout.setState({ layout: DEFAULT_LAYOUT });
@@ -279,4 +285,14 @@ test("the session view the user last chose is the one sessions come back to", ()
   expect(useLayout.getState().layout.preferredSessionView).toBe("structured");
   store.setTranscriptView("raw");
   expect(useLayout.getState().layout.preferredSessionView).toBe("raw");
+});
+
+test("the file tree width is clamped to a usable range", () => {
+  const store = useLayout.getState();
+  store.setFileTreeWidth(10);
+  expect(useLayout.getState().layout.fileTreeWidth).toBe(FILE_TREE_WIDTH_MIN);
+  store.setFileTreeWidth(5000);
+  expect(useLayout.getState().layout.fileTreeWidth).toBe(FILE_TREE_WIDTH_MAX);
+  store.setFileTreeWidth(300);
+  expect(useLayout.getState().layout.fileTreeWidth).toBe(300);
 });

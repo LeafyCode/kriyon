@@ -24,6 +24,9 @@ import {
   idleSession,
   isPutAway,
   isWorktreeSession,
+  LIVE_TOUCH_GRACE_MS,
+  relativizeTouchedPath,
+  sessionClaudeFiles,
   sessionRow,
   sessionTouchedRelative,
   sessionWorkingDir,
@@ -152,6 +155,8 @@ beforeEach(() => {
     sessions: {},
     statusOrigin: {},
     touchedFiles: {},
+    touchedLive: {},
+    touchedSynced: {},
     repoToplevel: {},
     repoToplevelCwd: {},
   });
@@ -1134,6 +1139,110 @@ test("applyHooksOff ignores ids that are not sessions", () => {
   // claude and is never removed through `removeSession`.
   useSessions.getState().applyHooksOff("pane-1", "user");
   expect(useSessions.getState().hooksOff["pane-1"]).toBeUndefined();
+});
+
+test("setTouchedFromActivity makes the Activity log the record of Claude's files", () => {
+  useSessions.setState({
+    sessions: { s1: idleSession(base("s1")) },
+    // A denied edit the live stream counted; the log, which only counts
+    // finished steps, doesn't have it.
+    touchedFiles: { s1: ["/repo/denied.ts"] },
+  });
+  useSessions.getState().setTouchedFromActivity("s1", ["/repo/gen.ts"]);
+  expect(useSessions.getState().touchedFiles.s1).toEqual(["/repo/gen.ts"]);
+  expect(useSessions.getState().touchedSynced.s1).toBe(true);
+});
+
+test("setTouchedFromActivity keeps the same array when nothing changed", () => {
+  useSessions.setState({
+    sessions: { s1: idleSession(base("s1")) },
+    touchedFiles: { s1: ["/repo/a.ts", "/repo/b.ts"] },
+    touchedSynced: { s1: true },
+  });
+  const before = useSessions.getState().touchedFiles.s1;
+  useSessions
+    .getState()
+    .setTouchedFromActivity("s1", ["/repo/b.ts", "/repo/a.ts"]);
+  expect(useSessions.getState().touchedFiles.s1).toBe(before);
+});
+
+test("setTouchedFromActivity ignores a session that has been closed", () => {
+  useSessions.setState({ sessions: {}, touchedFiles: {}, touchedSynced: {} });
+  useSessions.getState().setTouchedFromActivity("gone", ["/repo/a.ts"]);
+  expect(useSessions.getState().touchedFiles.gone).toBeUndefined();
+  expect(useSessions.getState().touchedSynced.gone).toBeUndefined();
+});
+
+test("sessionClaudeFiles is unknown until Claude's files can be matched to the repo", () => {
+  useSessions.setState({
+    repoToplevel: {},
+    sessions: { s1: idleSession(base("s1")) },
+    touchedFiles: {},
+    touchedSynced: {},
+  });
+  // No repo root yet.
+  expect(sessionClaudeFiles("s1")).toBeNull();
+  // A root, but the Activity log hasn't answered yet.
+  useSessions.setState({ repoToplevel: { s1: "/repo" } });
+  expect(sessionClaudeFiles("s1")).toBeNull();
+  // The log answered: Claude changed nothing — a real, empty answer.
+  useSessions.setState({ touchedSynced: { s1: true } });
+  expect(sessionClaudeFiles("s1")?.size).toBe(0);
+  // Recorded paths none of which match the repo (a symlinked project path):
+  // unknown again, rather than "Claude changed nothing".
+  useSessions.setState({ touchedFiles: { s1: ["/elsewhere/a.ts"] } });
+  expect(sessionClaudeFiles("s1")).toBeNull();
+  useSessions.setState({ touchedFiles: { s1: ["/repo/a.ts"] } });
+  expect([...(sessionClaudeFiles("s1") ?? [])]).toEqual(["a.ts"]);
+});
+
+test("relativizeTouchedPath sees through macOS's /private firmlink either way", () => {
+  expect(relativizeTouchedPath("/tmp/repo/a.ts", "/private/tmp/repo")).toBe(
+    "a.ts"
+  );
+  expect(relativizeTouchedPath("/private/tmp/repo/a.ts", "/tmp/repo")).toBe(
+    "a.ts"
+  );
+  expect(relativizeTouchedPath("/elsewhere/a.ts", "/private/tmp/repo")).toBe(
+    null
+  );
+});
+
+function base(id: string) {
+  return {
+    archivedAt: null,
+    baselineOid: null,
+    claudeSessionId: null,
+    createdAt: 1,
+    cwd: "/repo",
+    id,
+    projectId: "p1",
+    title: id,
+    titleLocked: false,
+    worktreePath: null,
+  };
+}
+
+test("a live edit the Activity log hasn't taken in yet survives a sync, for a short grace", () => {
+  const now = 1_000_000;
+  useSessions.setState({
+    sessions: { s1: idleSession(base("s1")) },
+    touchedFiles: { s1: ["/repo/fresh.ts"] },
+    touchedLive: { s1: { "/repo/fresh.ts": now } },
+    touchedSynced: {},
+  });
+  // The log ingests every few seconds; a sync half a second later doesn't
+  // have the edit yet.
+  useSessions.getState().setTouchedFromActivity("s1", [], now + 500);
+  expect(useSessions.getState().touchedFiles.s1).toEqual(["/repo/fresh.ts"]);
+
+  // Past the grace, the log's answer stands: an edit it never recorded (a
+  // denied one) is dropped.
+  useSessions
+    .getState()
+    .setTouchedFromActivity("s1", [], now + LIVE_TOUCH_GRACE_MS + 1);
+  expect(useSessions.getState().touchedFiles.s1).toEqual([]);
+  expect(useSessions.getState().touchedLive.s1).toEqual({});
 });
 
 // --- Parking (ADR-0052) ---

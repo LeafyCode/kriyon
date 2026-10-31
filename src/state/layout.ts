@@ -61,6 +61,9 @@ export interface Layout {
   collapsedProjectIds: string[];
   /** Composer hidden to a slim reveal strip (terminal-first working style). */
   composerCollapsed: boolean;
+  /** The Files view's tree column width in px, user-resizable within the
+   * clamp range. */
+  fileTreeWidth: number;
   /** Fold sessions whose last activity predates this cutoff into a per-group
    *  "N older" disclosure; `off` shows all. */
   hideOlderThan: HideOlderThan;
@@ -139,6 +142,11 @@ export const SIDEBAR_WIDTH_DEFAULT = 278;
 export const SIDEBAR_WIDTH_MIN = 220;
 export const SIDEBAR_WIDTH_MAX = 420;
 
+export const FILE_TREE_WIDTH_DEFAULT = 260;
+// Wide enough for the three scope tabs (AI changes · All changes · Files).
+export const FILE_TREE_WIDTH_MIN = 240;
+export const FILE_TREE_WIDTH_MAX = 520;
+
 export const TERMINAL_DOCK_HEIGHT_DEFAULT = 260;
 export const TERMINAL_DOCK_HEIGHT_MIN = 120;
 export const TERMINAL_DOCK_HEIGHT_MAX = 640;
@@ -146,6 +154,11 @@ export const TERMINAL_DOCK_HEIGHT_MAX = 640;
 /** Clamp a requested sidebar width into the resizable range. */
 export function clampSidebarWidth(width: number): number {
   return Math.min(SIDEBAR_WIDTH_MAX, Math.max(SIDEBAR_WIDTH_MIN, width));
+}
+
+/** Clamp a requested file tree width into the resizable range. */
+export function clampFileTreeWidth(width: number): number {
+  return Math.min(FILE_TREE_WIDTH_MAX, Math.max(FILE_TREE_WIDTH_MIN, width));
 }
 
 /** Clamp a requested terminal dock height into the resizable range. */
@@ -185,6 +198,7 @@ export const DEFAULT_LAYOUT: Layout = {
   sidebarCollapsed: false,
   sidebarMode: "calm",
   sidebarWidth: SIDEBAR_WIDTH_DEFAULT,
+  fileTreeWidth: FILE_TREE_WIDTH_DEFAULT,
   terminalDockFullHeight: false,
   terminalDockHeight: TERMINAL_DOCK_HEIGHT_DEFAULT,
   terminalDockOpen: false,
@@ -220,6 +234,7 @@ interface LayoutState {
    */
   revealSessionView: () => void;
   setAutoSleepAfter: (value: AutoSleepAfter) => void;
+  setFileTreeWidth: (width: number) => void;
   setHideOlderThan: (value: HideOlderThan) => void;
   setInspectorChangesOpen: (open: boolean) => void;
   setInspectorTab: (tab: InspectorTab) => void;
@@ -271,6 +286,10 @@ export const useLayout = create<LayoutState>((set, get) => ({
   setSidebarWidth: (width) =>
     set((state) => ({
       layout: { ...state.layout, sidebarWidth: clampSidebarWidth(width) },
+    })),
+  setFileTreeWidth: (width) =>
+    set((state) => ({
+      layout: { ...state.layout, fileTreeWidth: clampFileTreeWidth(width) },
     })),
   toggleComposerCollapsed: () =>
     set((state) => ({

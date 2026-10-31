@@ -29,6 +29,7 @@ import {
   requestRefresh,
   // biome-ignore lint/suspicious/noImportCycles: deliberate and inert — see above.
 } from "./changesRefresh.ts";
+import { canonicalDir } from "./paths.ts";
 import { useUsageCards } from "./usageCards.ts";
 import {
   completedTasks,
@@ -366,6 +367,18 @@ export interface SessionsState {
    * not made here.)
    */
   setRepoToplevel: (id: string, cwd: string, toplevel?: string) => void;
+  /** Make the files the [Activity log] saw Claude change in `id` (absolute
+   * paths) its `touchedFiles`. The log is the one owner of that answer: it
+   * counts only finished steps, including subagents' edits, the files a
+   * command changed and everything from before a restart. A live-recorded
+   * edit the log hasn't taken in yet is kept for {@link LIVE_TOUCH_GRACE_MS};
+   * past that the log's answer stands. A session no longer in the store is
+   * ignored. */
+  setTouchedFromActivity: (
+    id: string,
+    paths: readonly string[],
+    now?: number
+  ) => void;
   /**
    * [Sleeping session]s: id → the phase while Kriyon has its `claude` stopped.
    * Absent means awake. `stuck` means the resume kept failing, so the row must
@@ -406,6 +419,15 @@ export interface SessionsState {
    * live-refresh trigger.
    */
   touchedFiles: Record<string, string[]>;
+  /** sessionId → path → when the live stream recorded Claude editing it. The
+   * [Activity log] takes hook events in every few seconds, so a sync right
+   * after an edit may not have it yet; these keep it for
+   * {@link LIVE_TOUCH_GRACE_MS} until the log confirms or the grace runs out. */
+  touchedLive: Record<string, Record<string, number>>;
+  /** Sessions whose `touchedFiles` the [Activity log] has answered for at
+   * least once — so an empty list means "Claude changed nothing", not "not
+   * known yet". See {@link sessionClaudeFiles}. */
+  touchedSynced: Record<string, boolean>;
   unarchiveSession: (id: string) => void;
   /** Bring every parked session of a project back to the rail. Starts
    *  nothing. */
@@ -696,24 +718,25 @@ export const EMPTY_TOUCHED_RELATIVE: Set<string> = new Set();
  * `../elsewhere/x.ts`), since {@link FileDiff.path} is always repo-relative
  * and such an entry could never match one anyway.
  *
- * Known gap: the Rust `repo_toplevel` command canonicalizes `cwd` (realpath),
- * so `toplevel` is always a realpath, while `touchedFiles` holds whatever
- * (possibly symlinked) path the edit tool actually used. Under a symlinked
- * project path — macOS's `/tmp` → `/private/tmp`, or a symlinked home
- * directory — every prefix test here fails and every badge for that session
- * silently vanishes. This fails safe (no file is ever mis-attributed to the
- * wrong session), so it's left as-is rather than special-cased.
+ * macOS's `/tmp` → `/private/tmp` firmlink is seen through (see
+ * `canonicalDir`). Known gap: any other symlinked project path (a symlinked
+ * home directory) still fails the prefix test, since the Rust
+ * `repo_toplevel` is a realpath and `touchedFiles` holds whatever path the
+ * tool used. That fails safe — no file is ever mis-attributed to the wrong
+ * session.
  */
 export function relativizeTouchedPath(
   absPath: string,
   toplevel: string
 ): string | null {
-  const root = toplevel.endsWith("/") ? toplevel.slice(0, -1) : toplevel;
-  const prefix = `${root}/`;
-  if (!absPath.startsWith(prefix)) {
+  // Both sides through one spelling: git canonicalizes the toplevel
+  // (`/private/tmp/…`) while a tool names the path it was given (`/tmp/…`).
+  const prefix = `${canonicalDir(toplevel)}/`;
+  const path = canonicalDir(absPath);
+  if (!path.startsWith(prefix)) {
     return null;
   }
-  return absPath.slice(prefix.length);
+  return path.slice(prefix.length);
 }
 
 /**
@@ -774,6 +797,31 @@ export function sessionTouchedRelative(sessionId: string): Set<string> {
   return result;
 }
 
+/**
+ * The files Claude changed in `sessionId`, relativized to the repo — or
+ * `null` while that can't be known: no repo toplevel yet, the [Activity log]
+ * not answered yet, or recorded paths none of which match the repo (a
+ * symlinked project path). The AI changes filter only applies to a real
+ * answer, so "can't tell" never reads as "Claude changed nothing".
+ * Returns {@link sessionTouchedRelative}'s stable `Set` when known.
+ */
+export function sessionClaudeFiles(sessionId: string): Set<string> | null {
+  const state = useSessions.getState();
+  if (!state.repoToplevel[sessionId]) {
+    return null;
+  }
+  const touched = state.touchedFiles[sessionId] ?? [];
+  if (touched.length === 0) {
+    return state.touchedSynced[sessionId] ? EMPTY_TOUCHED_RELATIVE : null;
+  }
+  const relative = sessionTouchedRelative(sessionId);
+  return relative.size > 0 ? relative : null;
+}
+
+/** How long a live-recorded edit outlives an [Activity log] sync that hasn't
+ * seen it — well past the log's ingest interval (a few seconds). */
+export const LIVE_TOUCH_GRACE_MS = 10_000;
+
 /** Every {@link SessionsState} slice keyed by session id, so
  *  {@link pruneById} can never drift from the store's shape. */
 const PER_SESSION_KEYS = [
@@ -792,6 +840,8 @@ const PER_SESSION_KEYS = [
   "sleeping",
   "statusOrigin",
   "touchedFiles",
+  "touchedSynced",
+  "touchedLive",
   "usage",
   "viewed",
 ] as const satisfies readonly (keyof SessionsState)[];
@@ -838,6 +888,8 @@ export const useSessions = create<SessionsState>((set, get) => ({
   projects: [],
   sessions: {},
   touchedFiles: {},
+  touchedSynced: {},
+  touchedLive: {},
   repoToplevel: {},
   repoToplevelCwd: {},
 
@@ -1288,6 +1340,41 @@ export const useSessions = create<SessionsState>((set, get) => ({
         touchedFiles: completedTarget
           ? withTouchedFile(state.touchedFiles, id, completedTarget)
           : state.touchedFiles,
+        touchedLive: completedTarget
+          ? {
+              ...state.touchedLive,
+              [id]: { ...state.touchedLive[id], [completedTarget]: Date.now() },
+            }
+          : state.touchedLive,
+      };
+    }),
+
+  setTouchedFromActivity: (id, paths, now = Date.now()) =>
+    set((state) => {
+      if (!state.sessions[id]) {
+        return state;
+      }
+      // The log's answer, plus live edits it hasn't taken in yet — within
+      // the grace. Confirmed or expired live entries are dropped.
+      const logged = new Set(paths);
+      const live: Record<string, number> = {};
+      for (const [path, at] of Object.entries(state.touchedLive[id] ?? {})) {
+        if (!logged.has(path) && now - at < LIVE_TOUCH_GRACE_MS) {
+          live[path] = at;
+        }
+      }
+      const next = [...paths, ...Object.keys(live)];
+      const prev = state.touchedFiles[id] ?? [];
+      const unchanged =
+        prev.length === next.length && next.every((p) => prev.includes(p));
+      return {
+        touchedFiles: unchanged
+          ? state.touchedFiles
+          : { ...state.touchedFiles, [id]: next },
+        touchedLive: { ...state.touchedLive, [id]: live },
+        touchedSynced: state.touchedSynced[id]
+          ? state.touchedSynced
+          : { ...state.touchedSynced, [id]: true },
       };
     }),
 

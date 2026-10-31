@@ -31,9 +31,10 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
   [Session diff]'s [Visible files]. Computed frontend-side from the hunks already on hand, so
   the number in the [Summary bar] and the [Changed-files list] is literally the diff on screen
   and not a second `git` opinion. _Avoid_: diff stats, counts.
-- **Changes view** — one of the two transcript tabs (Changes · Raw): the [Session]'s own
-  "what changed" surface, laid out as [File tree pane] | [Diff feed] | [Jump rail] under a
-  [Summary bar]. Read-and-edit, never a gate: it shows what git says changed, and the [Raw
+- **Changes view** — the transcript tab labelled **Files**, last in the header after the two
+  session views (Structured · Session · Files): the [Session]'s own "what changed" surface, and
+  its project files, laid out as [File tree pane] | [Diff feed] | [Jump rail] under a [Summary
+  bar]. The code keeps the name `changes`; only the label says Files. Read-and-edit, never a gate: it shows what git says changed, and the [Raw
   view] stays the source of truth for the work itself. _Avoid_: diff view, review view (that's
   the Inspector's [Merge outcome] flow).
 - **Transcript view** (`TranscriptView`) — which pane the center column is showing:
@@ -138,16 +139,20 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
   as a pure function, not in a render body. Memoized per session on exactly the fields it reads,
   so the scroll-rate writes it ignores (`activeFile`, the [Jump rail]'s `viewed`) cost an O(1)
   cache hit and no re-render. _Avoid_: changes selector, view state.
-- **Touched files** (`touchedFiles`, `sessionTouchedRelative`) — the paths a [Session]'s own
-  `Edit`/`Write` tool calls hit, reconstructed from hook events. Attribution only: a file the
-  [Session baseline] diff already found gets a "✎ this session" badge, and the opt-in,
-  default-off **My edits only** filter narrows the on-screen list to that set. Cumulative and
-  incomplete by construction (a `Bash`-driven edit leaves no trace, a revert never clears) — so
-  it labels *who* plausibly changed a file, and never gates whether a change exists (ADR 0015).
-  _Avoid_: edited files, session files.
-- **Summary bar** — the [Changes view]'s header strip: the baseline label, the [Diff totals],
-  and a refresh control with an "updated Xs ago" staleness hint. The baseline label is the
-  view's trust anchor and may never imply an anchor it can't name — `"HEAD · uncommitted"` for
+- **Touched files** (`touchedFiles`, `sessionTouchedRelative`, `setTouchedFromActivity`,
+  `sessionClaudeFiles`) — the files Claude changed in a [Session], as the [Activity log] records
+  them (`activity_changed_paths`: finished edits and writes, subagents' included, the files a
+  command changed — at most 20 per command — and edits from before a restart), which replaces
+  the record on every refresh; an edit the live stream saw is kept for up to 10 s until the log
+  takes it in.
+  `sessionClaudeFiles` is `null` while the answer can't be known. Per file, not per line, and attribution only: it never decides whether a change exists. It gives the "✎ this
+  session" badge and backs **Only Claude's edits**, which is on by default in AI changes
+  (ADR 0050, superseding ADR 0015's default-off). _Avoid_: edited files, session files.
+- **Summary bar** — the [Changes view]'s one-line header strip: the [Diff totals] ("No changes"
+  when there are none), what they are compared with in plain words (`comparedTo`: "since session
+  start", "vs last commit", "vs main"), the AI changes tab's "Only Claude's edits" switch, and
+  icon buttons for collapse, expand and refresh, with an "updated Xs ago" hint once stale. The
+  exact baseline label sits in the comparison's tooltip. That label is the view's trust anchor and may never imply an anchor it can't name — `"HEAD · uncommitted"` for
   a base-less diff, `"<base> @ <shortSha>"` for a branch, and `"session start · snapshot
   <shortSha>"` for a [Session baseline] (deliberately not the `@ <sha>` commit shorthand, since
   a baseline oid names a tree). A refresh is non-disruptive: it never scrolls, collapses, or
@@ -163,13 +168,32 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
   scrolled-past file marked `viewed`. A `viewed` flag survives a refresh unless that file's
   hunks actually changed, so refreshing never wipes the user's progress through a review.
   _Avoid_: minimap, scrollbar. Distinct from the [Viewed marker].
-- **File tree pane** — the [Changes view]'s left column, two tabs: **Changes** (this diff's
-  files, grouped by directory) and **All files** (the [All-files browser]). Both stay mounted
-  across a flip. Selecting a file either jumps the [Diff feed] to it or opens it in the [File
-  viewer].
+- **File tree pane** — the [Changes view]'s left column, three scope tabs: **AI changes** (the
+  [Session diff]'s files Claude changed — the [Touched files] — grouped by directory; turning
+  "Only Claude's edits" off shows everything since the session started), **All
+  changes** (the [Uncommitted diff]'s files, laid out the same way) and **Files** (the
+  [All-files browser]). All stay mounted across a flip. Clicking a changed file opens it in the [File viewer]
+  beside the list, as an editor's git panel does (a deleted file, having nothing to open,
+  scrolls the [Diff feed] to its card instead); the viewer covers the diff on every tab until
+  it is closed.
+- **Uncommitted diff** (`UncommittedChanges`, `SessionChanges.uncommitted`) — everything not yet
+  committed (or, in a worktree, not yet on the default branch), whoever made it: what an
+  editor's git panel shows, beside the [Session diff] rather than in place of it, so the
+  Inspector and the header count keep meaning "this session". Fetched only while All changes or
+  Files is showing (`scopeWantsUncommitted`); a session without a snapshot reuses its one diff.
+  _Avoid_: working changes, git changes.
 - **All-files browser** (`FileBrowserTree`, `list_dir`) — the lazy, directory-at-a-time tree of
   the whole repo under the [File tree pane]'s "All files" tab. Children are fetched on expand
   and never re-fetched behind a stale cwd. _Avoid_: file explorer, finder.
+- **File search** (`FileSearch`, `rankFileMatches`, `list_files`) — the box at the top of the
+  [All-files browser] that finds a file anywhere in the project by name, ranked so a match in
+  the file's own name beats one in a folder above it. Reuses the `@`-mention walk, so it
+  respects .gitignore and stops at 50 matches. While a query is typed its results replace the
+  tree; opening one shows it in the [File viewer] and reveals it in the tree. _Avoid_: filter
+  (it does not filter the tree), quick open.
+- **Tree decorations** (`TreeDecorations`, `treeDecorations`) — the git marks the [All-files
+  browser] paints: each changed file's kind of change, and which folders hold a change below
+  them, translated from the diff's toplevel-relative paths into the tree's cwd-relative ones.
 - **File viewer** — the whole-file pane the [Changes view] opens for a selected file. A text
   file is editable through the [Code editor]; a binary or truncated read is read-only and
   renders with a changed-line gutter marking what the current diff touched. Stays mounted and
@@ -188,6 +212,19 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
   chunk, and themed from `src/theme/tokens.ts` like every other surface. An unknown or
   failed-to-load grammar degrades to a plain, still-editable editor — never a broken view (ADR
   0016). _Avoid_: editor (generic), IDE.
+- **Session highlight** (`sessionHighlight`, `read_session_baseline`) — the [Code editor]'s
+  faint accent tint on lines that differ from the file as it was when the session started (its
+  [Session baseline] snapshot): what changed during this session, at line precision, whoever
+  typed it. A file the session created is tinted whole. _Avoid_: AI blame (it does not know
+  who typed a line, only when).
+- **Blame note** (`blameAnnotation`, `blame_file`) — a quiet note at the end of the cursor's
+  line: "Changed in this session", "Not committed yet", or the author, age and summary of the
+  commit that last touched it. Hidden while the buffer has unsaved edits, since git's line
+  numbers then no longer match.
+- **Change peek** (`changePeek`, `revertChangeAt`) — clicking a git-gutter marker shows what the
+  lines were in the last commit, with **Revert change** to put back just that change. An
+  ordinary edit: the buffer turns dirty and ⌘Z undoes it. _Avoid_: discard hunk (nothing is
+  written until Save).
 - **File draft** (`EditState`, `stashFileDraft`/`takeFileDraft`) — one file's unsaved editor buffer:
   the `draft` text, the `baseline` it was read as, and the [Save conflict guard] signature that
   baseline was read at. Lives in the [File viewer] while it is mounted, and is stashed in the

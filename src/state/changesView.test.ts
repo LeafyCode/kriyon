@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import type { DiffLine, FileDiff, SessionDiff } from "../types.ts";
 import { type EditState, type SessionChanges, useChanges } from "./changes.ts";
 import {
+  aiFilterApplies,
   type ChangesViewInput,
   type ChangesViewState,
   changedFileCount,
@@ -9,6 +10,7 @@ import {
   computeChangesView,
   cwdRelativePath,
   forgetChangesView,
+  treeDecorations,
 } from "./changesView.ts";
 
 function line(kind: DiffLine["kind"], text: string): DiffLine {
@@ -240,19 +242,13 @@ describe("computeChangesView — the pane matrix", () => {
     expect(view.pane).toBe("feed");
   });
 
-  it("shows the viewer only on the all-files tab with a file selected", () => {
+  it("shows the viewer whenever a file is open, on any tab", () => {
     const entry = readyEntry(diff([file("src/a.ts")]));
-    expect(
-      computeChangesView(input({ entry, selectedFile: "src/a.ts", tab: "all" }))
-        .pane
-    ).toBe("viewer");
-    // A file left open on the all-files tab stays selected across a flip back
-    // to Changes — but the feed, not the viewer, is what's on screen.
-    expect(
-      computeChangesView(
-        input({ entry, selectedFile: "src/a.ts", tab: "changes" })
-      ).pane
-    ).toBe("feed");
+    for (const tab of ["all", "changes", "uncommitted"] as const) {
+      expect(
+        computeChangesView(input({ entry, selectedFile: "src/a.ts", tab })).pane
+      ).toBe("viewer");
+    }
     expect(computeChangesView(input({ entry, tab: "all" })).pane).toBe("feed");
   });
 
@@ -334,7 +330,9 @@ describe("computeChangesView — the 'My edits only' filter", () => {
       input({ entry, myEditsOnly: true, touchedRelative: NO_TOUCHED })
     );
     expect(view.pane).toBe("empty");
-    expect(view.emptyMessage).toBe("No files touched by this session.");
+    expect(view.emptyMessage).toBe(
+      "Claude hasn't changed any files in this session. Your own edits are under All changes."
+    );
   });
 
   it("still names the baseline when the diff itself is empty and the filter is on", () => {
@@ -564,7 +562,8 @@ describe("changesView — memoized per session on its actual inputs", () => {
   it("reads the store's per-session defaults", () => {
     const view = changesView(state(), "s1", deps);
     expect(view.tab).toBe("changes");
-    expect(view.myEditsOnly).toBe(false);
+    // AI changes keeps to Claude's files unless turned off (ADR 0050).
+    expect(view.myEditsOnly).toBe(true);
     expect(view.selectedFile).toBeUndefined();
     expect(view.pendingJump).toBeUndefined();
   });
@@ -711,7 +710,8 @@ describe("changedFileCount — the number the Changes tab prints", () => {
   }
 
   it("counts the whole diff when no filter is biting", () => {
-    expect(changedFileCount(state(), "s1", NO_TOUCHED)).toBe(3);
+    const off = { s1: { myEditsOnly: false } };
+    expect(changedFileCount(state(off), "s1", NO_TOUCHED)).toBe(3);
   });
 
   it("counts what the feed shows once My edits only bites", () => {
@@ -757,5 +757,233 @@ describe("changedFileCount — the number the Changes tab prints", () => {
       ui: {},
     };
     expect(changedFileCount(empty, "s1", NO_TOUCHED)).toBe(0);
+  });
+});
+
+describe("treeDecorations", () => {
+  it("keys each changed file by its cwd-relative path and marks every folder above it", () => {
+    const deco = treeDecorations(
+      [
+        file("src/a.ts"),
+        file("src/ui/new.ts", 3, 0, { status: "added" }),
+        file("README.md"),
+      ],
+      "/repo",
+      "/repo"
+    );
+    expect(deco.files.get("src/a.ts")).toBe("modified");
+    expect(deco.files.get("src/ui/new.ts")).toBe("added");
+    expect(deco.files.get("README.md")).toBe("modified");
+    expect([...deco.dirs].sort()).toEqual(["src", "src/ui"]);
+  });
+
+  it("translates toplevel paths when the session runs in a subfolder", () => {
+    const deco = treeDecorations([file("app/src/a.ts")], "/repo", "/repo/app");
+    expect(deco.files.get("src/a.ts")).toBe("modified");
+    expect([...deco.dirs]).toEqual(["src"]);
+  });
+
+  it("drops changes outside the session's folder", () => {
+    const deco = treeDecorations([file("other/a.ts")], "/repo", "/repo/app");
+    expect(deco.files.size).toBe(0);
+    expect(deco.dirs.size).toBe(0);
+  });
+
+  it("returns the same object for the same inputs", () => {
+    const files = [file("src/a.ts")];
+    expect(treeDecorations(files, "/r", "/r")).toBe(
+      treeDecorations(files, "/r", "/r")
+    );
+  });
+});
+
+describe("the All changes scope", () => {
+  const sessionFiles = [file("src/claude.ts")];
+  const uncommittedFiles = [file("src/claude.ts"), file("src/mine.ts", 2, 1)];
+
+  function allChanges(overrides: Partial<ChangesViewInput> = {}) {
+    return computeChangesView(
+      input({
+        entry: readyEntry(diff(sessionFiles), {
+          baselineLabel: "session start",
+          uncommitted: {
+            diff: diff(uncommittedFiles),
+            label: "HEAD · uncommitted",
+          },
+        }),
+        tab: "uncommitted",
+        ...overrides,
+      })
+    );
+  }
+
+  it("lists every uncommitted file, not just the session's, with its own totals and label", () => {
+    const view = allChanges();
+    expect(view.displayFiles.map((f) => f.path)).toEqual([
+      "src/claude.ts",
+      "src/mine.ts",
+    ]);
+    expect(view.totals).toEqual({ additions: 3, deletions: 1, files: 2 });
+    expect(view.baselineLabel).toBe("HEAD · uncommitted");
+    expect(view.pane).toBe("feed");
+    // The session's own list is untouched — the Inspector reads it.
+    expect(view.files.map((f) => f.path)).toEqual(["src/claude.ts"]);
+  });
+
+  it("is loading until the uncommitted diff first lands", () => {
+    const view = computeChangesView(
+      input({ entry: readyEntry(diff(sessionFiles)), tab: "uncommitted" })
+    );
+    expect(view.pane).toBe("loading");
+    expect(view.feedMounted).toBe(false);
+  });
+
+  it("ignores the only-Claude's-files filter, which belongs to AI changes", () => {
+    const view = allChanges({ myEditsOnly: true });
+    expect(view.editsFilterActive).toBe(false);
+    expect(view.showEditsToggle).toBe(false);
+    expect(view.displayFiles).toHaveLength(2);
+  });
+
+  it("says so plainly when nothing is uncommitted", () => {
+    const view = computeChangesView(
+      input({
+        entry: readyEntry(diff(sessionFiles), {
+          uncommitted: { diff: diff([]), label: "HEAD · uncommitted" },
+        }),
+        tab: "uncommitted",
+      })
+    );
+    expect(view.pane).toBe("empty");
+    expect(view.emptyMessage).toBe("No uncommitted changes.");
+  });
+
+  it("shows its own fetch error", () => {
+    const view = allChanges({});
+    const failed = computeChangesView(
+      input({
+        entry: readyEntry(diff(sessionFiles), {
+          uncommitted: { diff: null, error: "git broke", label: "" },
+        }),
+        tab: "uncommitted",
+      })
+    );
+    expect(view.error).toBeUndefined();
+    expect(failed.error).toBe("git broke");
+    expect(failed.pane).toBe("error");
+  });
+
+  it("colours the Files tree from uncommitted work once it is loaded", () => {
+    const view = allChanges({ tab: "all" });
+    expect([...view.decorations.files.keys()].sort()).toEqual([
+      "src/claude.ts",
+      "src/mine.ts",
+    ]);
+  });
+
+  it("the AI changes tab keeps the session's own label", () => {
+    const view = allChanges({ tab: "changes" });
+    expect(view.baselineLabel).toBe("session start");
+    expect(view.displayFiles.map((f) => f.path)).toEqual(["src/claude.ts"]);
+  });
+});
+
+describe("AI changes keeps to Claude's files by default", () => {
+  beforeEach(() => {
+    forgetChangesView("s1");
+    useChanges.setState({
+      bySession: {},
+      dirtyFiles: {},
+      fileDrafts: {},
+      ui: {},
+    });
+  });
+
+  it("filters to the files Claude changed until the switch is turned off", () => {
+    useChanges.setState({
+      bySession: { s1: readyEntry(diff([file("claude.ts"), file("mine.ts")])) },
+    });
+    const deps = {
+      cwd: "/repo",
+      repoToplevel: "/repo",
+      touchedRelative: new Set(["claude.ts"]),
+    };
+
+    const before = changesView(useChanges.getState(), "s1", deps);
+    expect(before.myEditsOnly).toBe(true);
+    expect(before.displayFiles.map((f) => f.path)).toEqual(["claude.ts"]);
+    expect(
+      changedFileCount(useChanges.getState(), "s1", deps.touchedRelative)
+    ).toBe(1);
+
+    useChanges.getState().toggleMyEditsOnly("s1");
+    const after = changesView(useChanges.getState(), "s1", deps);
+    expect(after.displayFiles).toHaveLength(2);
+  });
+
+  it("says Claude changed nothing, rather than nothing changed", () => {
+    useChanges.setState({
+      bySession: { s1: readyEntry(diff([file("mine.ts")])) },
+    });
+    const view = changesView(useChanges.getState(), "s1", {
+      cwd: "/repo",
+      repoToplevel: "/repo",
+      touchedRelative: new Set(),
+    });
+    expect(view.pane).toBe("empty");
+    expect(view.emptyMessage).toBe(
+      "Claude hasn't changed any files in this session. Your own edits are under All changes."
+    );
+  });
+});
+
+describe("attribution that can't be known yet", () => {
+  it("leaves AI changes unfiltered rather than claiming Claude changed nothing", () => {
+    const view = computeChangesView(
+      input({
+        entry: readyEntry(diff([file("a.ts")])),
+        touchedRelative: null,
+      })
+    );
+    expect(view.editsFilterActive).toBe(false);
+    expect(view.showEditsToggle).toBe(false);
+    expect(view.displayFiles).toHaveLength(1);
+    expect(
+      changedFileCount(
+        {
+          bySession: { s1: readyEntry(diff([file("a.ts")])) },
+          dirtyFiles: {},
+          fileDrafts: {},
+          ui: {},
+        },
+        "s1",
+        null
+      )
+    ).toBe(1);
+  });
+});
+
+describe("the open file in a session rooted in a subfolder", () => {
+  it("finds its diff even though the two paths are spelled from different roots", () => {
+    const view = computeChangesView(
+      input({
+        cwd: "/repo/app",
+        entry: readyEntry(diff([file("app/src/a.ts")])),
+        repoToplevel: "/repo",
+        selectedFile: "src/a.ts",
+      })
+    );
+    expect(view.selectedFileDiff?.path).toBe("app/src/a.ts");
+  });
+});
+
+describe("aiFilterApplies", () => {
+  it("applies only when on, on AI changes, with Claude's files known", () => {
+    const known = new Set(["a.ts"]);
+    expect(aiFilterApplies(true, "changes", known)).toBe(true);
+    expect(aiFilterApplies(false, "changes", known)).toBe(false);
+    expect(aiFilterApplies(true, "uncommitted", known)).toBe(false);
+    expect(aiFilterApplies(true, "all", known)).toBe(false);
+    expect(aiFilterApplies(true, "changes", null)).toBe(false);
   });
 });

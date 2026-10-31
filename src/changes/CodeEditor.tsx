@@ -25,7 +25,8 @@ import type { EditorView } from "@codemirror/view";
 import { type CSSProperties, useEffect, useRef, useState } from "react";
 import { useLayout } from "../state/layout.ts";
 import { themeById } from "../theme/themes/index.ts";
-import { tokens } from "../theme/tokens.ts";
+import { accentAlpha, tokens } from "../theme/tokens.ts";
+import type { FileBlame } from "../types.ts";
 
 export interface CodeEditorProps {
   /** The HEAD version of the file, for the git-gutter's added/modified/
@@ -34,6 +35,10 @@ export interface CodeEditorProps {
    * `readBaseline`/`useFileEditorSession`'s `baselineText` for how a caller
    * derives this. */
   baseline?: string;
+  /** Who last touched each line, for the cursor-line blame note. Pass it
+   * only while the buffer matches the file on disk: once the draft moves,
+   * line numbers no longer line up with git's. */
+  blame?: FileBlame;
   /** A language id in the same vocabulary `langForPath` (`highlighter.ts`)
    * produces. Anything without an entry in {@link LANGUAGE_LOADERS} mounts as
    * a plain, ungrammared but still fully editable editor. */
@@ -46,6 +51,9 @@ export interface CodeEditorProps {
    * keyboard shortcut share one code path. */
   onSave?: () => void;
   readOnly?: boolean;
+  /** The file's text when the session started, for the session-change
+   * tint; `""` for a file the session created. `undefined` mounts none. */
+  sessionStart?: string;
   value: string;
 }
 
@@ -56,6 +64,7 @@ export interface CodeEditorProps {
 interface CoreModules {
   autocomplete: typeof import("@codemirror/autocomplete");
   commands: typeof import("@codemirror/commands");
+  editorGit: typeof import("./editorGit.ts");
   gitGutter: typeof import("./gitGutter.ts");
   highlight: typeof import("@lezer/highlight");
   indentMarkers: typeof import("@replit/codemirror-indentation-markers");
@@ -67,11 +76,38 @@ interface CoreModules {
 
 let corePromise: Promise<CoreModules> | undefined;
 
+/** The HEAD gutter, with its click-to-peek (and revert) on each marker. */
+function gutterExtension(
+  core: CoreModules,
+  baseline: string | undefined
+): Extension {
+  if (baseline === undefined) {
+    return [];
+  }
+  return core.gitGutter.gitGutter(baseline, core.editorGit.onMarkerClick);
+}
+
+/** The session tint and the cursor-line blame note, each when it has data,
+ * plus the gutter's change peek — inert without a gutter to click. */
+function annotationExtension(
+  core: CoreModules,
+  { blame, sessionStart }: { blame?: FileBlame; sessionStart?: string }
+): Extension {
+  return [
+    core.editorGit.changePeek,
+    sessionStart === undefined
+      ? []
+      : core.editorGit.sessionHighlight(sessionStart),
+    blame === undefined ? [] : core.editorGit.blameAnnotation(blame),
+  ];
+}
+
 function loadCore(): Promise<CoreModules> {
   if (!corePromise) {
     corePromise = Promise.all([
       import("@codemirror/autocomplete"),
       import("@codemirror/commands"),
+      import("./editorGit.ts"),
       import("./gitGutter.ts"),
       import("@lezer/highlight"),
       import("@replit/codemirror-indentation-markers"),
@@ -84,6 +120,7 @@ function loadCore(): Promise<CoreModules> {
         ([
           autocomplete,
           commands,
+          editorGit,
           gitGutter,
           highlight,
           indentMarkers,
@@ -94,6 +131,7 @@ function loadCore(): Promise<CoreModules> {
         ]) => ({
           autocomplete,
           commands,
+          editorGit,
           gitGutter,
           highlight,
           indentMarkers,
@@ -344,7 +382,70 @@ function buildEditorTheme(
       // without competing with the line-number gutter beside it. Structure
       // only — see Task 13's polish pass for the final tuned look.
       ".cm-gitGutter": { width: "3px" },
-      ".cm-gitMarker": { height: "100%" },
+      ".cm-gitMarker": { cursor: "pointer", height: "100%" },
+      // Lines changed since the session started: a faint accent wash, so
+      // what this session did reads at a glance without hiding the syntax.
+      ".cm-sessionLine": {
+        backgroundColor: accentAlpha(dark ? 0.07 : 0.06),
+        boxShadow: `inset 2px 0 0 ${accentAlpha(0.55)}`,
+      },
+      // The cursor line's blame: quiet, and set off from the code.
+      ".cm-blameNote": {
+        color: color.ink.faint,
+        fontFamily: font.sans,
+        fontSize: "11.5px",
+        fontStyle: "italic",
+        marginLeft: tokens.space.xl,
+        whiteSpace: "pre",
+      },
+      // The gutter's change peek: what the lines were, and a revert.
+      ".cm-tooltip.cm-changePeek": {
+        backgroundColor: color.raised,
+        border: `1px solid ${color.line.base}`,
+        borderRadius: tokens.radius.md,
+        fontFamily: font.sans,
+        fontSize: "12px",
+        maxWidth: "560px",
+        minWidth: "280px",
+      },
+      ".cm-changePeek-head": {
+        alignItems: "center",
+        borderBottom: `1px solid ${color.line.soft}`,
+        color: color.ink.muted,
+        display: "flex",
+        gap: tokens.space.sm,
+        padding: `${tokens.space.xs} ${tokens.space.xs} ${tokens.space.xs} ${tokens.space.sm}`,
+      },
+      ".cm-changePeek-head > span": { flex: 1 },
+      ".cm-changePeek-revert": {
+        background: color.surface.s2,
+        border: `1px solid ${color.line.base}`,
+        borderRadius: tokens.radius.sm,
+        color: color.ink.primary,
+        cursor: "pointer",
+        fontFamily: font.sans,
+        fontSize: "11.5px",
+        padding: `${tokens.space.xs} ${tokens.space.sm}`,
+      },
+      ".cm-changePeek-close": {
+        background: "transparent",
+        border: "none",
+        color: color.ink.muted,
+        cursor: "pointer",
+        fontSize: "14px",
+        padding: `0 ${tokens.space.xs}`,
+      },
+      ".cm-changePeek-old": {
+        background: color.delSoft,
+        color: color.diffDelInk,
+        fontFamily: font.mono,
+        fontSize: "12px",
+        margin: 0,
+        maxHeight: "240px",
+        overflow: "auto",
+        padding: `${tokens.space.xs} ${tokens.space.sm}`,
+        whiteSpace: "pre",
+      },
       ".cm-gitAdded": { background: color.add },
       ".cm-gitModified": { background: color.mod },
       ".cm-gitDeleted": {
@@ -595,10 +696,12 @@ const fallbackStyle: CSSProperties = {
 export function CodeEditor({
   value,
   baseline,
+  blame,
   language,
   onChange,
   onSave,
   readOnly = false,
+  sessionStart,
 }: CodeEditorProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<EditorView | null>(null);
@@ -610,6 +713,11 @@ export function CodeEditor({
   const coreRef = useRef<CoreModules | null>(null);
   const readOnlyCompartmentRef = useRef<Compartment | null>(null);
   const gutterCompartmentRef = useRef<Compartment | null>(null);
+  // The session tint and the blame note — one compartment, since both are
+  // reconfigured from the same fetch (`useGitAnnotations`).
+  const annotationCompartmentRef = useRef<Compartment | null>(null);
+  const annotationsRef = useRef({ blame, sessionStart });
+  annotationsRef.current = { blame, sessionStart };
   const themeCompartmentRef = useRef<Compartment | null>(null);
   const themeId = useLayout((state) => state.layout.themeId);
   const dark = themeById(themeId).appearance === "dark";
@@ -681,7 +789,6 @@ export function CodeEditor({
         const {
           autocomplete,
           commands,
-          gitGutter,
           highlight,
           indentMarkers,
           language: lang,
@@ -693,6 +800,8 @@ export function CodeEditor({
         readOnlyCompartmentRef.current = readOnlyCompartment;
         const gutterCompartment = new state.Compartment();
         gutterCompartmentRef.current = gutterCompartment;
+        const annotationCompartment = new state.Compartment();
+        annotationCompartmentRef.current = annotationCompartment;
         const themeCompartment = new state.Compartment();
         themeCompartmentRef.current = themeCompartment;
 
@@ -775,10 +884,9 @@ export function CodeEditor({
             state.EditorState.readOnly.of(readOnly),
             view.EditorView.editable.of(!readOnly),
           ]),
-          gutterCompartment.of(
-            baselineRef.current === undefined
-              ? []
-              : gitGutter.gitGutter(baselineRef.current)
+          gutterCompartment.of(gutterExtension(core, baselineRef.current)),
+          annotationCompartment.of(
+            annotationExtension(core, annotationsRef.current)
           ),
           themeCompartment.of(
             buildEditorTheme(view.EditorView, darkRef.current)
@@ -952,9 +1060,7 @@ export function CodeEditor({
           return;
         }
         view.dispatch({
-          effects: compartment.reconfigure(
-            baseline === undefined ? [] : core.gitGutter.gitGutter(baseline)
-          ),
+          effects: compartment.reconfigure(gutterExtension(core, baseline)),
         });
       })
       .catch(() => {
@@ -962,6 +1068,30 @@ export function CodeEditor({
         // near-impossible, but never leave an unhandled rejection.
       });
   }, [baseline]);
+
+  useEffect(() => {
+    const view = viewRef.current;
+    const compartment = annotationCompartmentRef.current;
+    if (!(view && compartment)) {
+      return;
+    }
+    loadCore()
+      .then((core) => {
+        // See the `[readOnly]` effect: a destroyed view must never be
+        // dispatched into.
+        if (viewRef.current !== view) {
+          return;
+        }
+        view.dispatch({
+          effects: compartment.reconfigure(
+            annotationExtension(core, { blame, sessionStart })
+          ),
+        });
+      })
+      .catch(() => {
+        // Core already loaded once to build this view.
+      });
+  }, [blame, sessionStart]);
 
   if (loadFailed) {
     return (

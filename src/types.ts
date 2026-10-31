@@ -220,6 +220,24 @@ export interface DiffLine {
   text: string;
 }
 
+/** One commit that last touched a line (mirrors Rust `kriyon_core::blame::BlameCommit`). */
+export interface BlameCommit {
+  author: string;
+  /** Seconds since the epoch. */
+  authorTime: number;
+  sha: string;
+  summary: string;
+  /** git's all-zero id: the line differs from what is committed. */
+  uncommitted: boolean;
+}
+
+/** Who last touched each line of a file (mirrors Rust `FileBlame`). */
+export interface FileBlame {
+  commits: BlameCommit[];
+  /** Per line, in order: an index into `commits`. */
+  lines: number[];
+}
+
 /** How a file changed (mirrors Rust `FileChange`). */
 export type FileChange = "added" | "modified" | "deleted" | "renamed";
 

@@ -333,6 +333,13 @@ vi.mock("./gitGutter.ts", () => ({
   gitGutter: (b: string) => ({ kind: "gitGutter", value: b }),
 }));
 
+vi.mock("./editorGit.ts", () => ({
+  blameAnnotation: (b: unknown) => ({ kind: "blameAnnotation", value: b }),
+  changePeek: { kind: "changePeek" },
+  onMarkerClick: () => false,
+  sessionHighlight: (s: string) => ({ kind: "sessionHighlight", value: s }),
+}));
+
 import { useLayout } from "../state/layout.ts";
 import { tokens } from "../theme/tokens.ts";
 import { CodeEditor } from "./CodeEditor.tsx";
@@ -855,6 +862,60 @@ describe("CodeEditor", () => {
 
     vi.doUnmock("@codemirror/state");
     vi.resetModules();
+  });
+
+  describe("session tint and blame", () => {
+    const blame = { commits: [], lines: [] };
+
+    it("mounts the session tint and the blame note when given their data", async () => {
+      render(
+        <CodeEditor
+          blame={blame}
+          language="typescript"
+          onChange={vi.fn()}
+          sessionStart="before"
+          value="const x = 1"
+        />
+      );
+      await screen.findByRole("textbox");
+
+      const kinds = flattenExtensions(mountedView().state.extensions);
+      expect(kinds).toContainEqual({
+        kind: "sessionHighlight",
+        value: "before",
+      });
+      expect(kinds).toContainEqual({ kind: "blameAnnotation", value: blame });
+    });
+
+    it("reconfigures both when blame arrives after mount, and drops it when cleared", async () => {
+      const { rerender } = render(
+        <CodeEditor language="typescript" onChange={vi.fn()} value="x" />
+      );
+      await screen.findByRole("textbox");
+      const view = mountedView();
+      view.dispatch.mockClear();
+
+      rerender(
+        <CodeEditor
+          blame={blame}
+          language="typescript"
+          onChange={vi.fn()}
+          value="x"
+        />
+      );
+
+      await waitFor(() => {
+        const values = view.dispatch.mock.calls.map(
+          (call) =>
+            (call[0] as { effects?: { value?: unknown } }).effects?.value
+        );
+        expect(values).toContainEqual([
+          { kind: "changePeek" },
+          [],
+          { kind: "blameAnnotation", value: blame },
+        ]);
+      });
+    });
   });
 
   describe("git gutter", () => {
