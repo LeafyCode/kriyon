@@ -36,6 +36,12 @@ cost was in the palettes, not the plumbing.
 
 - Teal's button label moved from near-white to the dark plane colour, which
   the new accent-label test caught at 2.9:1.
+- A light theme's terminal white and bright white must read at 3:1 on its plane.
+  Catppuccin Latte and Solarized Light ship darker whites than their upstream
+  palettes for that reason: Solarized's own bright white is its background.
+- The code editor follows `appearance` too, because CodeMirror's own dark-mode
+  styles outrank Kriyon's in places (a focused selection).
+- The mascot's thought bubbles follow the plane; the rest of the mascot does not.
 - Claude Code draws its own output in the terminal with the colours of its
   own `/theme` setting. On a light Kriyon theme, Claude should be set to a
   light theme too; Kriyon does not change Claude's settings.

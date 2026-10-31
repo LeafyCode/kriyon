@@ -212,7 +212,7 @@ _Current as of v0.9.0. Every entry here is shipped and reflected in `CHANGELOG.m
 ## Settings
 
 - **A real Settings page** — reachable from the footer gear, the title-bar gear, or ⌘,.
-- **Appearance** — theme.
+- **Appearance** — theme, from a grid of previews.
 - **Sidebar** — Calm or Triage layout.
 - **Notifications** — which sessions notify, and which sound (with preview).
 - **Memory** — warnings on/off, total budget, and the idle-sleep cutoff.
@@ -220,11 +220,11 @@ _Current as of v0.9.0. Every entry here is shipped and reflected in `CHANGELOG.m
 
 ## Appearance
 
-- **A calm code palette of its own** — one set of syntax colors for the editor and diffs: a teal keyword, warm functions, and a violet for properties. Switching accent never recolours code.
-- **Five color themes** — steel (default), indigo, blue, teal, graphite; switching restyles the whole app instantly, terminal included.
+- **Fifteen color themes, light and dark** — Kriyon's own Steel (default) and its accent variants (indigo, blue, teal, graphite), Steel Light, and the community palettes Catppuccin Mocha and Latte, Dracula, Gruvbox Dark, Nord, One Dark, Rosé Pine, Solarized Light and Tokyo Night. Settings shows each as a preview; switching restyles the whole app instantly, code editor and terminal included.
+- **Code colors that belong to the theme** — the Steel family shares one calm syntax palette (a teal keyword, warm functions, a violet for properties), so switching accent never recolours code; the other themes bring their own code and terminal colors.
 - **Self-hosted Geist and JetBrains Mono Nerd Font**, so type, glyphs and icons render the same everywhere without installing anything.
 - **Per-project identity colors**, switchable from the command palette along with everything else.
-- **Dark-only, native macOS feel** — one flat cool plane, hairline borders, no gradients and no elevation outside a real overlay.
+- **Native macOS feel** — one flat plane, hairline borders, no gradients and no elevation outside a real overlay.
 - **No title bar** — the sidebar carries the Kriyon mark and the navigation, and each column owns its own header; the window drags from any of them.
 - **Respects reduced-motion** and meets AA contrast — every stop of the ink ramp that carries text is at or above 4.5:1, enforced by a test rather than by eye.
 - **Tab strips work from the keyboard** — Session/Changes and the file tree's tabs are a single Tab stop, with the arrows moving between them and Home/End jumping to the ends.
