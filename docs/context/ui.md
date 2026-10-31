@@ -61,8 +61,10 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
 - **Palette menu** (`PaletteMenu`) — the project color-picker popover (swatch grid +
   Automatic), an [Anchored menu] adapter on the project header.
 - **Project menu** (`ProjectMenu`) — the project header's ⋯ popover, an [Anchored menu]
-  adapter: Rename, *Park project* (see [Parked project]), and the ask that opens the [Clear
-  project] confirm. _Avoid_: context
+  adapter, also opened by right-clicking the header: *Park project* (see [Parked project]),
+  Rename, Colour…, Sort sessions…, and the ask that opens the [Clear project] confirm. Colour
+  and sort live here rather than in the header's hover row, which keeps that row to new
+  worktree session, new session and ⋯ — short enough to leave the project name readable. _Avoid_: context
   menu, project settings.
 - **Confirm dialog** (`ConfirmDialog`) — the app's one "are you sure?" modal: an
   {@link Overlay} panel with a title, a line of body copy and a Cancel/destructive pair.

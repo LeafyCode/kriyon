@@ -13,7 +13,6 @@ import {
   GitBranch,
   GripVertical,
   MoreHorizontal,
-  Palette,
   Plus,
 } from "lucide-react";
 import { type CSSProperties, memo, useState } from "react";
@@ -450,6 +449,13 @@ function ProjectHeader({
   const sortMenu = useAnchoredMenu<HTMLDivElement>();
   const actionsMenu = useAnchoredMenu<HTMLDivElement>();
   const [editing, setEditing] = useState(false);
+  // The header popovers share one anchor — opening one must close the others
+  // or they'd stack at the identical spot.
+  const toggleActions = () => {
+    sortMenu.close();
+    picker.close();
+    actionsMenu.toggle();
+  };
   const commitRename = (next: string) => {
     setEditing(false);
     useSessions.getState().renameProject(project.id, next);
@@ -494,6 +500,16 @@ function ProjectHeader({
         // rename; the Rename hover action is the equivalent explicit path.
         data-testid={`project-header-${project.id}`}
         onClick={onToggleCollapsed}
+        // Right-click opens the same menu as ⋯ — where people look for
+        // "what can I do with this" on a desktop app.
+        onContextMenu={(event) => {
+          event.preventDefault();
+          sortMenu.close();
+          picker.close();
+          if (!actionsMenu.open) {
+            actionsMenu.toggle();
+          }
+        }}
         onDoubleClick={() => setEditing(true)}
         style={projectRowStyle}
         // The qualifier is the shortest thing that separates two twins; the
@@ -553,50 +569,6 @@ function ProjectHeader({
       </button>
       <span className="kr-reveal-cluster" style={headerActionsStyle}>
         <HeaderAction
-          ariaLabel={`More actions for ${project.name}`}
-          onClick={() => {
-            sortMenu.close();
-            picker.close();
-            actionsMenu.toggle();
-          }}
-          reveal={false}
-          title="Rename or clear this project"
-          triggerAria={actionsMenu.triggerAria}
-        >
-          <MoreHorizontal size={13} />
-        </HeaderAction>
-        <HeaderAction
-          ariaLabel={`Sort sessions in ${project.name}`}
-          onClick={() => {
-            // The header popovers share one anchor — opening one must close
-            // the others or they'd stack at the identical spot.
-            picker.close();
-            actionsMenu.close();
-            sortMenu.toggle();
-          }}
-          reveal={false}
-          title={
-            override
-              ? `Sorted by ${override} (overrides global)`
-              : "Sort this project's sessions"
-          }
-          triggerAria={sortMenu.triggerAria}
-        >
-          <ArrowUpDown size={12} />
-        </HeaderAction>
-        <HeaderAction
-          ariaLabel={`Change color of ${project.name}`}
-          onClick={() => {
-            sortMenu.close();
-            actionsMenu.close();
-            picker.toggle();
-          }}
-          reveal={false}
-          triggerAria={picker.triggerAria}
-        >
-          <Palette size={12} />
-        </HeaderAction>
-        <HeaderAction
           ariaLabel={`New worktree session in ${project.name}`}
           onClick={() =>
             useUi
@@ -615,6 +587,21 @@ function ProjectHeader({
           title="New session here (current branch)"
         >
           <Plus size={13} />
+        </HeaderAction>
+        {/* Last, on the solid end of the cluster's fade: first in line it sat
+            over the project name, half see-through. It owns every menu it
+            leads to, so it reads expanded while colour or sort is up too. */}
+        <HeaderAction
+          ariaLabel={`More actions for ${project.name}`}
+          onClick={toggleActions}
+          reveal={false}
+          title="Park, rename, colour, sort or close"
+          triggerAria={{
+            "aria-expanded": actionsMenu.open || picker.open || sortMenu.open,
+            "aria-haspopup": "menu",
+          }}
+        >
+          <MoreHorizontal size={13} />
         </HeaderAction>
       </span>
       {sortMenu.open ? (
@@ -635,6 +622,10 @@ function ProjectHeader({
       ) : null}
       {actionsMenu.open ? (
         <ProjectMenu
+          onColour={() => {
+            actionsMenu.close();
+            picker.toggle();
+          }}
           onRename={() => {
             actionsMenu.close();
             setEditing(true);
@@ -646,6 +637,10 @@ function ProjectHeader({
           onRequestPark={() => {
             actionsMenu.close();
             onRequestPark();
+          }}
+          onSort={() => {
+            actionsMenu.close();
+            sortMenu.toggle();
           }}
           projectId={project.id}
         />

@@ -54,6 +54,18 @@ import { Toast } from "../ui/Toast.tsx";
 import { PREWARM_DWELL_MS, SessionRow } from "./SessionRow.tsx";
 import { Sidebar } from "./Sidebar.tsx";
 
+/** Open a project's ⋯ menu and pick "Colour…" — colour lives in the menu. */
+function openColourMenu(projectName: string): void {
+  fireEvent.click(screen.getByLabelText(`More actions for ${projectName}`));
+  fireEvent.click(screen.getByRole("menuitem", { name: "Colour…" }));
+}
+
+/** Open a project's ⋯ menu and pick "Sort sessions…". */
+function openProjectSortMenu(projectName: string): void {
+  fireEvent.click(screen.getByLabelText(`More actions for ${projectName}`));
+  fireEvent.click(screen.getByRole("menuitem", { name: "Sort sessions…" }));
+}
+
 /** The rail's empty-state copy, as one top-level matcher. */
 const EMPTY_HINT = /No open sessions/;
 /** The park confirm's line for one busy session. */
@@ -1044,7 +1056,6 @@ test("calm never shows the new badge, even for unread finished work", () => {
 });
 
 const RE_PROJECT_P1 = /Project p1/;
-const RE_SORT_SESSIONS_IN = /Sort sessions in /;
 
 test("a project header shows its session count and collapses its group", () => {
   seed();
@@ -1569,9 +1580,7 @@ test("a project's hover palette action recolors it and can return to automatic",
     />
   );
 
-  fireEvent.click(
-    screen.getByRole("button", { name: "Change color of Project p1" })
-  );
+  openColourMenu("Project p1");
   fireEvent.click(screen.getByTestId("swatch-#a293e8"));
 
   expect(
@@ -1581,9 +1590,7 @@ test("a project's hover palette action recolors it and can return to automatic",
   expect(screen.queryByTestId("swatch-#a293e8")).not.toBeInTheDocument();
 
   // "Automatic" clears the explicit color back to the hashed palette hue.
-  fireEvent.click(
-    screen.getByRole("button", { name: "Change color of Project p1" })
-  );
+  openColourMenu("Project p1");
   fireEvent.click(screen.getByRole("menuitem", { name: "Automatic color" }));
   expect(
     useSessions.getState().projects.find((p) => p.id === "p1")?.color
@@ -1599,17 +1606,17 @@ test("the color popover dismisses on Escape and on clicking elsewhere", () => {
       onShowAbout={vi.fn()}
     />
   );
-  const trigger = screen.getByRole("button", {
-    name: "Change color of Project p1",
-  });
+  const trigger = screen.getByLabelText("More actions for Project p1");
 
-  fireEvent.click(trigger);
+  openColourMenu("Project p1");
+  // The ⋯ trigger owns every menu it leads to, so it reads expanded while
+  // the colour popover it opened is up.
   expect(trigger).toHaveAttribute("aria-expanded", "true");
   fireEvent.keyDown(document, { key: "Escape" });
   expect(screen.queryByTestId("swatch-#a293e8")).not.toBeInTheDocument();
   expect(trigger).toHaveAttribute("aria-expanded", "false");
 
-  fireEvent.click(trigger);
+  openColourMenu("Project p1");
   fireEvent.pointerDown(document.body);
   expect(screen.queryByTestId("swatch-#a293e8")).not.toBeInTheDocument();
 });
@@ -1625,9 +1632,7 @@ test("swatches carry human color names and a checked state", () => {
     />
   );
 
-  fireEvent.click(
-    screen.getByRole("button", { name: "Change color of Project p1" })
-  );
+  openColourMenu("Project p1");
 
   const selected = screen.getByRole("menuitemradio", {
     name: "Set color violet",
@@ -2277,17 +2282,17 @@ test("a project sort override is set from the header and survives a Follow globa
     />
   );
 
-  fireEvent.click(screen.getAllByLabelText(RE_SORT_SESSIONS_IN)[0]);
+  openProjectSortMenu("Project p1");
   fireEvent.click(screen.getByRole("menuitemradio", { name: "Manual" }));
   const overrides = () => useLayout.getState().layout.projectSortOverrides;
   expect(Object.values(overrides())).toEqual(["manual"]);
 
-  // Verify the override mode is shown in the button title
+  // The override stays visible on the header, not only inside the menu.
   expect(
-    screen.getAllByLabelText(RE_SORT_SESSIONS_IN)[0].getAttribute("title")
+    screen.getByTestId("sort-override-p1").getAttribute("title")
   ).toContain("Sorted by manual");
 
-  fireEvent.click(screen.getAllByLabelText(RE_SORT_SESSIONS_IN)[0]);
+  openProjectSortMenu("Project p1");
   fireEvent.click(screen.getByRole("menuitem", { name: "Follow global" }));
   expect(overrides()).toEqual({});
 });
@@ -3307,4 +3312,48 @@ test("a parked project's archived sessions stay out of the Archived group", () =
   // Unarchiving there would put the session back into a project that is
   // still parked — out of sight either way.
   expect(screen.queryByTestId("archived-group")).toBeNull();
+});
+
+test("a project header's hover row is new worktree, new session, then ⋯ last", () => {
+  seed();
+  renderSidebar();
+
+  const cluster = screen
+    .getByLabelText("More actions for Project p1")
+    .closest(".kr-reveal-cluster");
+  const labels = Array.from(cluster?.querySelectorAll("button") ?? []).map(
+    (button) => button.getAttribute("aria-label")
+  );
+  // ⋯ sits last, on the solid end of the fade, so it never sits over the name.
+  expect(labels).toEqual([
+    "New worktree session in Project p1",
+    "New session in Project p1",
+    "More actions for Project p1",
+  ]);
+});
+
+test("the project menu leads with Park and holds rename, colour, sort and close", () => {
+  seed();
+  renderSidebar();
+
+  fireEvent.click(screen.getByLabelText("More actions for Project p1"));
+
+  expect(
+    screen.getAllByRole("menuitem").map((item) => item.textContent)
+  ).toEqual([
+    "Park project",
+    "Rename",
+    "Colour…",
+    "Sort sessions…",
+    "Close all sessions",
+  ]);
+});
+
+test("right-clicking a project header opens its menu", () => {
+  seed();
+  renderSidebar();
+
+  fireEvent.contextMenu(screen.getByTestId("project-header-p1"));
+
+  expect(screen.getByTestId("park-project-p1")).toBeInTheDocument();
 });
