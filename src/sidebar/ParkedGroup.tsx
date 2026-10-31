@@ -1,31 +1,17 @@
 import { ChevronRight } from "lucide-react";
 import { type CSSProperties, memo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { useCommandCenter } from "../state/commandCenter.ts";
-import { effectiveSessionSort, useLayout } from "../state/layout.ts";
+import { useLayout } from "../state/layout.ts";
 import { isParked, useSessions } from "../state/sessions.ts";
+import { plural } from "../state/stopCost.ts";
 import { projectColor } from "../theme/projectColor.ts";
-import { button } from "../theme/recipes.ts";
 import { tokens } from "../theme/tokens.ts";
 import type { ProjectRow } from "../types.ts";
-import { EMPTY_ORDER, orderMatched } from "./sessionOrder.ts";
-
-// The same quiet, collapsed-by-default language as the Archived group: parked
-// projects are deliberately out of the way until asked for.
-const headerStyle: CSSProperties = {
-  alignItems: "center",
-  background: "transparent",
-  border: "none",
-  borderTop: `1px solid ${tokens.color.line.soft}`,
-  color: tokens.color.ink.muted,
-  cursor: "pointer",
-  display: "flex",
-  fontFamily: tokens.font.sans,
-  fontSize: "11.5px",
-  gap: "6px",
-  padding: "8px 8px 6px",
-  width: "100%",
-};
+import {
+  footSectionHeaderStyle,
+  restoreButtonStyle,
+} from "./ArchivedGroup.tsx";
+import { useOrderedSessions } from "./useOrderedSessions.ts";
 
 const projectRowStyle: CSSProperties = {
   alignItems: "center",
@@ -60,14 +46,6 @@ const countStyle: CSSProperties = {
   color: tokens.color.ink.faint,
   flex: "none",
   fontSize: "11px",
-};
-
-const unparkButtonStyle: CSSProperties = {
-  ...button("secondary", "sm"),
-  flex: "none",
-  fontSize: "10.5px",
-  height: "20px",
-  padding: "0 8px",
 };
 
 const sessionListStyle: CSSProperties = {
@@ -125,11 +103,17 @@ const stoppedRingStyle: CSSProperties = {
   width: "8px",
 };
 
-const foldNoteStyle: CSSProperties = {
+const foldToggleStyle: CSSProperties = {
+  background: "transparent",
+  border: "none",
+  borderRadius: tokens.radius.sm,
   color: tokens.color.ink.faint,
+  cursor: "pointer",
   fontFamily: tokens.font.sans,
   fontSize: "11px",
-  padding: "2px 8px 0 46px",
+  padding: "4px 8px 2px 46px",
+  textAlign: "left",
+  width: "100%",
 };
 
 function chevronStyle(open: boolean): CSSProperties {
@@ -159,10 +143,6 @@ function openParkedSession(sessionId: string): void {
   useLayout.getState().revealSessionView();
 }
 
-function plural(count: number, noun: string): string {
-  return `${count} ${noun}${count === 1 ? "" : "s"}`;
-}
-
 const ParkedProject = memo(function ParkedProject({
   nowMinute,
   project,
@@ -171,50 +151,30 @@ const ParkedProject = memo(function ParkedProject({
   project: ProjectRow;
 }) {
   // The project's parked sessions, ordered, folded and nested by the same
-  // function its rail group uses, so this previews exactly the rows unparking
-  // brings back — not every session the project ever had.
-  const mode = useLayout((state) => state.layout.sidebarMode);
-  const sort = useLayout((state) =>
-    effectiveSessionSort(state.layout, project.id)
-  );
-  const manual = useLayout(
-    (state) => state.layout.manualSessionOrder[project.id] ?? EMPTY_ORDER
-  );
-  const hideOlderThan = useLayout((state) => state.layout.hideOlderThan);
-  const lastChangeMs = useCommandCenter((state) => state.lastChangeMs);
-  const { collapsedDone, collapsedOld, nestDepth, rows } = useSessions(
-    (state) =>
-      orderMatched(
-        {
-          appendSeq: state.appendSeq,
-          sessions: state.sessions,
-          statusOrigin: state.statusOrigin,
-          viewed: state.viewed,
-        },
-        project,
-        "",
-        false,
-        mode,
-        sort,
-        manual,
-        {
-          activeSessionId: null,
-          lastChangeMs,
-          now: nowMinute,
-          threshold: hideOlderThan,
-        },
-        "parked"
-      )
-  );
-  const titles = useSessions(
-    useShallow((state) => rows.map((id) => state.sessions[id]?.title ?? ""))
+  // hook its rail group uses, so this previews exactly the rows unparking
+  // brings back.
+  const { collapsedDone, collapsedOld, nestDepth, rows } = useOrderedSessions(
+    project,
+    { nowMinute, parked: true }
   );
   const [open, setOpen] = useState(false);
-  const count = plural(rows.length, "session");
-  const folded = [
+  // The folded ones ("N done", "N older") stay a click away, as on the rail:
+  // a parked session must always be reachable from here.
+  const [showFolded, setShowFolded] = useState(false);
+  const folded = [...collapsedDone, ...collapsedOld];
+  const shown = showFolded ? [...rows, ...folded] : rows;
+  const titles = useSessions(
+    useShallow((state) => shown.map((id) => state.sessions[id]?.title ?? ""))
+  );
+  // Counts everything Unpark brings back, folded or not.
+  const count = plural(rows.length + folded.length, "session");
+  const foldLabel = [
     collapsedDone.length > 0 ? `${collapsedDone.length} done` : null,
     collapsedOld.length > 0 ? `${collapsedOld.length} older` : null,
-  ].filter((part): part is string => part !== null);
+  ]
+    .filter((part): part is string => part !== null)
+    .join(" · ");
+  const foldToggleText = showFolded ? "Show fewer" : foldLabel;
   return (
     <div data-testid={`parked-project-${project.id}`}>
       <div style={projectRowStyle}>
@@ -235,7 +195,7 @@ const ParkedProject = memo(function ParkedProject({
           aria-label={`Unpark ${project.name}`}
           className="kr-hover-surface"
           onClick={() => useSessions.getState().unparkProject(project.id)}
-          style={unparkButtonStyle}
+          style={restoreButtonStyle}
           title="Bring every parked session back. Each resumes when you open it."
           type="button"
         >
@@ -244,7 +204,7 @@ const ParkedProject = memo(function ParkedProject({
       </div>
       {open ? (
         <div style={sessionListStyle}>
-          {rows.map((id, index) => (
+          {shown.map((id, index) => (
             <button
               className="kr-hover-surface"
               key={id}
@@ -258,7 +218,15 @@ const ParkedProject = memo(function ParkedProject({
             </button>
           ))}
           {folded.length > 0 ? (
-            <span style={foldNoteStyle}>{folded.join(" · ")}</span>
+            <button
+              aria-expanded={showFolded}
+              className="kr-hover-surface"
+              onClick={() => setShowFolded((v) => !v)}
+              style={foldToggleStyle}
+              type="button"
+            >
+              {foldToggleText}
+            </button>
           ) : null}
         </div>
       ) : null}
@@ -311,7 +279,7 @@ const ParkedGroup = memo(function ParkedGroup({
       <button
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
-        style={headerStyle}
+        style={footSectionHeaderStyle}
         type="button"
       >
         <ChevronRight size={9} strokeWidth={2} style={chevronStyle(open)} />

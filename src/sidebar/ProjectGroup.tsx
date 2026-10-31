@@ -25,12 +25,15 @@ import {
 } from "../state/actions.ts";
 import { useCommandCenter } from "../state/commandCenter.ts";
 import {
-  effectiveSessionSort,
   type SessionSort,
   type SidebarMode,
   useLayout,
 } from "../state/layout.ts";
-import { isWorktreeSession, useSessions } from "../state/sessions.ts";
+import {
+  isPutAway,
+  isWorktreeSession,
+  useSessions,
+} from "../state/sessions.ts";
 import { useUi } from "../state/ui.ts";
 import { projectColor } from "../theme/projectColor.ts";
 import { tokens } from "../theme/tokens.ts";
@@ -51,24 +54,7 @@ import { compactAge } from "./pastSessionTime.ts";
 import type { ProjectLabel } from "./projectLabel.ts";
 import { SessionRow } from "./SessionRow.tsx";
 import { SortMenu } from "./SortMenu.tsx";
-import {
-  EMPTY_ORDER,
-  type HideInputs,
-  type OrderInputs,
-  orderMatched,
-} from "./sessionOrder.ts";
-
-/** The session-store slices the ordering cache reads, in one place. */
-function orderInputs(
-  state: ReturnType<typeof useSessions.getState>
-): OrderInputs {
-  return {
-    appendSeq: state.appendSeq,
-    sessions: state.sessions,
-    statusOrigin: state.statusOrigin,
-    viewed: state.viewed,
-  };
-}
+import { useOrderedSessions } from "./useOrderedSessions.ts";
 
 const projectHeaderStyle: CSSProperties = {
   alignItems: "center",
@@ -753,52 +739,16 @@ const ProjectGroup = memo(function ProjectGroup({
   sortable,
 }: ProjectGroupProps) {
   const sortableGroup = useSortable({ disabled: !sortable, id: project.id });
-  // A query matching the project name keeps the whole group; otherwise it
-  // narrows to sessions whose title matches.
-  const nameMatch =
-    filter !== "" && project.name.toLowerCase().includes(filter);
-  const filtering = filter !== "";
-  const mode = useLayout((state) => state.layout.sidebarMode);
-  // A filtered rail shows every match as a row (no Done fold), so its ordering
-  // stays `calm` even in triage — otherwise a searched-for finished session
-  // would hide inside the summary.
-  const listMode: SidebarMode = filtering ? "calm" : mode;
-  const sort = useLayout((state) =>
-    effectiveSessionSort(state.layout, project.id)
-  );
-  const manual = useLayout(
-    (state) => state.layout.manualSessionOrder[project.id] ?? EMPTY_ORDER
-  );
-  const hideOlderThan = useLayout((state) => state.layout.hideOlderThan);
+  const {
+    collapsedDone,
+    collapsedOld,
+    filtering,
+    mode,
+    nestDepth,
+    rows,
+    sort,
+  } = useOrderedSessions(project, { dormant, filter, nowMinute });
   const lastChangeMs = useCommandCenter((state) => state.lastChangeMs);
-  // Filtering shows every match (no fold), same guard as drag. A dormant
-  // group turns the threshold off too: its sessions are all stale by
-  // definition (that is what put it in the fold), so keeping the threshold on
-  // would hide every one of them behind a second "N older" fold inside the
-  // fold the user just opened.
-  const hide: HideInputs = {
-    activeSessionId: null, // set inside the selector from live store state
-    lastChangeMs,
-    now: nowMinute,
-    threshold: filtering || dormant ? "off" : hideOlderThan,
-  };
-  // One subscription for the whole ordering result: orderMatched's memo cache
-  // returns the same OrderedSessions identity while its inputs are unchanged,
-  // so plain equality suffices — no useShallow, and no second selector asking
-  // the same question for the other half of the answer.
-  const { collapsedDone, collapsedOld, nestDepth, rows } = useSessions(
-    (state) =>
-      orderMatched(
-        orderInputs(state),
-        project,
-        filter,
-        nameMatch,
-        listMode,
-        sort,
-        manual,
-        { ...hide, activeSessionId: state.activeSessionId }
-      )
-  );
   const [showDone, setShowDone] = useState(false);
   // The sessions the pending clear was asked about; null when no confirm is
   // up. The ids, not a count — see {@link ClearProjectConfirm}.
@@ -820,7 +770,7 @@ const ProjectGroup = memo(function ProjectGroup({
       (session) =>
         session.projectId === project.id &&
         (session.status === "waiting" || session.status === "error") &&
-        session.archivedAt === null
+        !isPutAway(session)
     )
   );
   // How many of this project's open sessions run in their own [Worktree] —
@@ -830,7 +780,7 @@ const ProjectGroup = memo(function ProjectGroup({
       Object.values(state.sessions).filter(
         (session) =>
           session.projectId === project.id &&
-          session.archivedAt === null &&
+          !isPutAway(session) &&
           isWorktreeSession(session)
       ).length
   );
@@ -854,7 +804,7 @@ const ProjectGroup = memo(function ProjectGroup({
   const lastActive = useSessions((state) => {
     let newest = 0;
     for (const session of Object.values(state.sessions)) {
-      if (session.projectId !== project.id || session.archivedAt !== null) {
+      if (session.projectId !== project.id || isPutAway(session)) {
         continue;
       }
       newest = Math.max(newest, lastChangeMs[session.id] ?? session.createdAt);

@@ -475,13 +475,13 @@ function computeMatched(
   sort: SessionSort,
   manual: string[],
   hide: HideInputs,
-  shelf: Shelf
+  parked: boolean
 ): MatchedSessions {
   const list = Object.values(input.sessions).filter(
     (session) =>
       session.projectId === project.id &&
       session.archivedAt === null &&
-      isParked(session) === (shelf === "parked") &&
+      isParked(session) === parked &&
       (filter === "" ||
         nameMatch ||
         session.title.toLowerCase().includes(filter))
@@ -591,15 +591,12 @@ const orderCache = new WeakMap<
  * instead of walking every session again. Guarded on every input it reads, so
  * a stale entry can only cause a recompute, never a wrong result. `manual` is
  * the project's saved id list ({@link EMPTY_ORDER} when it has none).
+ *
+ * `parked` picks which of the project's open sessions to draw: the ones on the
+ * rail (the default), or the parked ones waiting in the Parked section. Both
+ * are ordered, folded and nested by the same rules, so the Parked list
+ * previews exactly the rows unparking brings back.
  */
-/**
- * Which of a project's open sessions a listing draws: the ones on the rail, or
- * the parked ones waiting in the Parked section. Both are ordered and folded
- * by the same rules, so the Parked list previews exactly the rows unparking
- * brings back.
- */
-export type Shelf = "rail" | "parked";
-
 export function orderMatched(
   input: OrderInputs,
   project: ProjectRow,
@@ -609,7 +606,7 @@ export function orderMatched(
   sort: SessionSort,
   manual: string[],
   hide: HideInputs,
-  shelf: Shelf = "rail"
+  parked = false
 ): MatchedSessions {
   let byKey = orderCache.get(input.sessions);
   if (!byKey) {
@@ -629,7 +626,7 @@ export function orderMatched(
     hide.threshold,
     hide.now,
     hide.activeSessionId,
-    shelf,
+    parked,
   ]);
   const cached = byKey.get(key);
   if (
@@ -651,7 +648,7 @@ export function orderMatched(
     sort,
     manual,
     hide,
-    shelf
+    parked
   );
   byKey.set(key, {
     appendSeq: input.appendSeq,

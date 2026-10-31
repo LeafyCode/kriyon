@@ -3419,11 +3419,38 @@ test("a parked project lists what its group showed, with older sessions folded",
 
   fireEvent.click(screen.getByText("Parked (1)"));
   const parked = screen.getByTestId("parked-group");
-  // The header counts what unparking brings back on the rail.
-  expect(within(parked).getByText("1 session")).toBeInTheDocument();
+  // The header counts everything Unpark brings back, folded or not.
+  expect(within(parked).getByText("3 sessions")).toBeInTheDocument();
 
   fireEvent.click(within(parked).getByLabelText("Expand Project pk"));
   expect(within(parked).getByText("Fresh")).toBeInTheDocument();
   expect(within(parked).queryByText("Stale one")).toBeNull();
-  expect(within(parked).getByText("2 older")).toBeInTheDocument();
+
+  // The folded ones stay reachable: the fold opens like the rail's.
+  fireEvent.click(within(parked).getByText("2 older"));
+  fireEvent.click(within(parked).getByText("Stale one"));
+  expect(useSessions.getState().activeSessionId).toBe("stale1");
+  expect(useSessions.getState().sessions.stale1?.parkedAt).toBeNull();
+});
+
+test("a project header ignores its parked sessions", () => {
+  seed();
+  act(() => {
+    useSessions.setState((state) => ({
+      sessions: {
+        ...state.sessions,
+        s2: { ...state.sessions.s2, status: "waiting", worktreePath: "/wt" },
+      } as Record<string, UiSession>,
+    }));
+    useSessions.getState().parkProject("p1");
+    // Open one: p1 is back on the rail with only s1.
+    useSessions.getState().setActiveSession("s1");
+  });
+  renderSidebar();
+
+  const header = screen.getByTestId("project-header-p1");
+  // s2 is parked: its frozen "waiting" must not ring the header, and its
+  // worktree must not be counted.
+  expect(header).toHaveAttribute("data-needs-attention", "false");
+  expect(screen.queryByTestId("worktree-count-p1")).toBeNull();
 });
