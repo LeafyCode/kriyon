@@ -19,7 +19,6 @@ import { useIntegration } from "../state/integration.ts";
 import { isNestedCap, NESTED_CAP_RANGE, useLayout } from "../state/layout.ts";
 import { useUpdates } from "../state/updates.ts";
 import { button, card, inputBox, sectionLabel } from "../theme/recipes.ts";
-import { THEMES } from "../theme/themes/index.ts";
 import { tokens } from "../theme/tokens.ts";
 import type { NotifySound } from "../types.ts";
 import { ConfirmDialog } from "../ui/ConfirmDialog.tsx";
@@ -43,11 +42,7 @@ import {
   SIDEBAR_MODE_OPTIONS,
   UPDATE_CHANNEL_OPTIONS,
 } from "./settingsOptions.ts";
-
-const THEME_OPTIONS = THEMES.map((theme) => ({
-  label: theme.label,
-  value: theme.id,
-}));
+import { ThemePicker } from "./ThemePicker.tsx";
 
 const containerStyle: CSSProperties = {
   background: tokens.color.chrome.window,
@@ -89,6 +84,13 @@ const groupCardStyle: CSSProperties = {
   display: "flex",
   flexDirection: "column",
   overflow: "hidden",
+};
+
+const stackedRowStyle: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: tokens.space.md,
+  padding: `${tokens.space.md} 14px`,
 };
 
 const dividerStyle: CSSProperties = {
@@ -219,13 +221,17 @@ function SettingRow({
   label,
   hint,
   control,
+  stacked = false,
 }: {
   control: ReactNode;
   hint?: string;
   label: string;
+  /** Put the control under the label, full width — for a picker too wide to
+   *  sit beside it. */
+  stacked?: boolean;
 }) {
   return (
-    <div style={rowStyle}>
+    <div style={stacked ? stackedRowStyle : rowStyle}>
       <div style={rowTextStyle}>
         <span style={rowLabelStyle}>{label}</span>
         {hint ? <span style={rowHintStyle}>{hint}</span> : null}
@@ -566,8 +572,6 @@ function ignoreResult(promise: Promise<void>): void {
  * so a change here round-trips exactly like the palette shortcuts.
  */
 export function SettingsView() {
-  const themeId = useLayout((state) => state.layout.themeId);
-  const setThemeId = useLayout((state) => state.setThemeId);
   const sidebarMode = useLayout((state) => state.layout.sidebarMode);
   const setSidebarMode = useLayout((state) => state.setSidebarMode);
   const notifyPreference = useLayout((state) => state.layout.notifyPreference);
@@ -593,15 +597,10 @@ export function SettingsView() {
       <div style={bodyStyle}>
         <SettingGroup label="Appearance">
           <SettingRow
-            control={
-              <Segmented
-                ariaLabel="Theme"
-                onChange={setThemeId}
-                options={THEME_OPTIONS}
-                value={themeId}
-              />
-            }
+            control={<ThemePicker />}
+            hint="Light, dark and community palettes. Claude's own output follows its /theme setting."
             label="Theme"
+            stacked
           />
           <SettingRow
             control={<MascotPicker />}

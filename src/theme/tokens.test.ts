@@ -16,6 +16,10 @@ describe("tokens", () => {
     expect(tokens.color.textMuted).toBe(tokens.color.ink.muted);
   });
 
+  it("draws the mascot's thought bubbles in a themed colour", () => {
+    expect(tokens.mascot.thought).toBe("var(--kr-mascot-thought)");
+  });
+
   it("accentAlpha composes the accent RGB triplet at an arbitrary alpha", () => {
     expect(accentAlpha(0.5)).toBe("rgba(var(--kr-accent-rgb), 0.5)");
   });

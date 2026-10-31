@@ -45,7 +45,7 @@ body {
 }
 
 ::selection {
-  color: #fff;
+  color: var(--kr-ink-bright);
   background: rgba(var(--kr-accent-rgb), 0.32);
 }
 
@@ -57,14 +57,14 @@ body {
 }
 
 *::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(var(--kr-contrast-rgb), 0.08);
   background-clip: content-box;
   border: 2px solid transparent;
   border-radius: 8px;
 }
 
 *::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.16);
+  background: rgba(var(--kr-contrast-rgb), 0.16);
   background-clip: content-box;
 }
 
@@ -90,15 +90,15 @@ body {
   scrollbar-width: none;
 }
 .xterm .xterm-scrollable-element > .scrollbar > .slider {
-  background: rgba(255, 255, 255, 0.2) !important;
+  background: rgba(var(--kr-contrast-rgb), 0.2) !important;
   border-radius: 8px !important;
   transition: background 120ms linear;
 }
 .xterm .xterm-scrollable-element > .scrollbar > .slider:hover {
-  background: rgba(255, 255, 255, 0.34) !important;
+  background: rgba(var(--kr-contrast-rgb), 0.34) !important;
 }
 .xterm .xterm-scrollable-element > .scrollbar > .slider.active {
-  background: rgba(255, 255, 255, 0.42) !important;
+  background: rgba(var(--kr-contrast-rgb), 0.42) !important;
 }
 /* Thin, centered pill (only the vertical bar carries width/offset). */
 .xterm .xterm-scrollable-element > .scrollbar.vertical > .slider {

@@ -131,20 +131,21 @@ test("fills the shell's main area rather than shrinking to its content", () => {
 
 test("the theme control reflects and updates the store", () => {
   render(<SettingsView />);
-  fireEvent.click(screen.getByRole("tab", { name: "Teal" }));
-  expect(useLayout.getState().layout.themeId).toBe("teal");
+  const picker = screen.getByRole("group", { name: "Theme" });
+  fireEvent.click(within(picker).getByRole("button", { name: "Nord" }));
+  expect(useLayout.getState().layout.themeId).toBe("nord");
 });
 
 test("the theme picker lists every shipped theme, Steel selected by default", () => {
   render(<SettingsView />);
-  const picker = screen.getByRole("tablist", { name: "Theme" });
+  const picker = screen.getByRole("group", { name: "Theme" });
   expect(
     within(picker)
-      .getAllByRole("tab")
-      .map((tab) => tab.textContent)
+      .getAllByRole("button")
+      .map((option) => option.getAttribute("aria-label"))
   ).toEqual(THEMES.map((theme) => theme.label));
-  expect(within(picker).getByRole("tab", { name: "Steel" })).toHaveAttribute(
-    "aria-selected",
+  expect(within(picker).getByRole("button", { name: "Steel" })).toHaveAttribute(
+    "aria-pressed",
     "true"
   );
 });

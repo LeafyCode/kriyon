@@ -4,9 +4,11 @@
  * property and `tokens.ts` references those properties, so switching themes
  * restyles the whole app without any component re-rendering.
  *
- * To add a theme: copy an existing file in this folder, change the values,
- * and add it to the registry in `index.ts`. The type keeps you honest — a
- * missing key fails the type check.
+ * To add a theme: copy a full theme such as `nord.ts` (a palette spec passed
+ * to `defineTheme` in `define.ts`), change the values, and add it to the
+ * registry in `index.ts`. The spec's type keeps you honest — a missing key
+ * fails the type check. The Steel-family files instead layer an accent over
+ * `darkChrome` in `base.ts`.
  */
 export interface ThemeColors {
   /** The brand color: primary buttons, the logo mark, selection highlights. */
@@ -18,7 +20,7 @@ export interface ThemeColors {
    *  `:hover`, so this publishes through the seam and `.kr-hover-accent` in
    *  `App.css` reads it — the one hover an accent button has. */
   accentHover: string;
-  /** Accent-tinted text/links readable on dark chrome. */
+  /** Accent-tinted text/links readable on the theme's plane. */
   accentInk: string;
 
   /* Git / diff semantics. */
@@ -65,7 +67,8 @@ export interface ThemeColors {
   /** Text-selection fill in the code editor (`editor.selectionBackground`). */
   editorSelection: string;
 
-  /* Text ramp, brightest to faintest. */
+  /* Text ramp, strongest to faintest: brightest-first on a dark theme,
+   * darkest-first on a light one. */
   inkBright: string;
   inkDim: string;
   inkFaint: string;
@@ -81,6 +84,10 @@ export interface ThemeColors {
   /* Hairlines. */
   lineSoft: string;
   lineStrong: string;
+  /** The [Mascot]'s thought bubbles. They float beside the mascot on its
+   *  tile rather than on its body, so unlike the rest of the mascot they
+   *  follow the plane: near-white on a dark theme, grey on a light one. */
+  mascotThought: string;
   /** The git-gutter "modified" marker — VSCode-family blue, sitting between
    *  `add` (green) and `del` (red). */
   mod: string;
@@ -126,10 +133,12 @@ export interface ThemeColors {
    * only ever offered a handful of hues, which is why highlighting used to
    * collapse a dozen distinct token kinds into five colours.
    *
-   * Theme-independent on purpose: it lives in `darkChrome`, so switching the
-   * accent restyles the app without recolouring code. Highlighting is not
-   * branding — a keyword changing hue because the user picked a different
-   * accent would be noise, not theming. */
+   * Accent-independent on purpose: the Steel family shares it through
+   * `darkChrome`, so switching the accent restyles the app without
+   * recolouring code. Highlighting is not branding — a keyword changing hue
+   * because the user picked a different accent would be noise. A full theme
+   * (light, Dracula, Nord…) does bring its own, because there the code
+   * colours are half of what the theme is. */
   syntaxAttribute: string;
   syntaxComment: string;
   /** Booleans, `null`, enum members — constants that are not numbers.
@@ -164,10 +173,39 @@ export interface ThemeColors {
   syntaxVariable: string;
 }
 
+/**
+ * The sixteen ANSI colours a theme paints the terminal with. Named as xterm's
+ * `ITheme` names them, so `terminalTheme` can spread it straight in.
+ */
+export interface TerminalPalette {
+  black: string;
+  blue: string;
+  brightBlack: string;
+  brightBlue: string;
+  brightCyan: string;
+  brightGreen: string;
+  brightMagenta: string;
+  brightRed: string;
+  brightWhite: string;
+  brightYellow: string;
+  cyan: string;
+  green: string;
+  magenta: string;
+  red: string;
+  white: string;
+  yellow: string;
+}
+
 export interface Theme {
+  /** Whether the plane is light or dark. Drives the webview's
+   *  `color-scheme`, the ink-side wash colour, and the code editor's mode. */
+  appearance: "dark" | "light";
   colors: ThemeColors;
   /** Stable identifier, persisted in the layout. */
   id: string;
   /** Human label shown in the theme switcher. */
   label: string;
+  /** The terminal's ANSI palette. Absent → xterm's defaults, which only
+   *  suit a dark plane. */
+  terminal?: TerminalPalette;
 }

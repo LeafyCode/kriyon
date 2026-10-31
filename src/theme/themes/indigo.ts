@@ -5,6 +5,7 @@ import type { Theme } from "./types.ts";
 export const indigo: Theme = {
   id: "indigo",
   label: "Indigo",
+  appearance: "dark",
   colors: {
     ...darkChrome,
     accent: "#5E6AD2",

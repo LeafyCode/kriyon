@@ -1,4 +1,10 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 /**
@@ -212,7 +218,11 @@ const fakeEditorViewStatics = {
   },
   editable: { of: (value: boolean) => ({ kind: "editable", value }) },
   lineWrapping: { kind: "lineWrapping" },
-  theme: (spec: unknown) => ({ kind: "theme", value: spec }),
+  theme: (spec: unknown, options?: { dark?: boolean }) => ({
+    dark: options?.dark ?? false,
+    kind: "theme",
+    value: spec,
+  }),
   updateListener: {
     of: (fn: unknown) => ({ kind: "updateListener", value: fn }),
   },
@@ -323,6 +333,7 @@ vi.mock("./gitGutter.ts", () => ({
   gitGutter: (b: string) => ({ kind: "gitGutter", value: b }),
 }));
 
+import { useLayout } from "../state/layout.ts";
 import { tokens } from "../theme/tokens.ts";
 import { CodeEditor } from "./CodeEditor.tsx";
 
@@ -615,6 +626,40 @@ describe("CodeEditor", () => {
     // No handler, but the chord must still be reported handled (true) so the
     // browser's save dialog can never appear over the editor.
     expect(binding?.run?.()).toBe(true);
+  });
+
+  it("follows the theme's light or dark appearance", async () => {
+    // CodeMirror's own `&dark` base styles outrank ours in places (a focused
+    // selection is #233), so a light theme in dark mode left selected code
+    // unreadable.
+    useLayout.getState().setThemeId("steel");
+    render(
+      <CodeEditor
+        language="typescript"
+        onChange={vi.fn()}
+        value="const x = 1"
+      />
+    );
+    await screen.findByRole("textbox");
+    const view = mountedView();
+    const editorTheme = () =>
+      flattenExtensions(view.state.extensions).find(
+        (e) => e.kind === "theme"
+      ) as { dark: boolean } | undefined;
+    expect(editorTheme()?.dark).toBe(true);
+    view.dispatch.mockClear();
+
+    act(() => useLayout.getState().setThemeId("steel-light"));
+
+    await waitFor(() => expect(view.dispatch).toHaveBeenCalled());
+    const reconfigure = view.dispatch.mock.calls
+      .map(
+        (call) =>
+          (call[0] as { effects?: { kind?: string; value?: unknown } }).effects
+      )
+      .find((effects) => effects?.kind === "reconfigure");
+    expect(reconfigure?.value).toMatchObject({ dark: false, kind: "theme" });
+    act(() => useLayout.getState().setThemeId("steel"));
   });
 
   it("mounts with a line-number gutter and active-line highlighting", async () => {

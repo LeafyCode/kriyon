@@ -59,4 +59,4 @@ Boot phase, Main session lock, Session runtime, Watch route, Event subscription 
 
 The window chrome, menus, themes and the WebKit guards that keep the UI responsive.
 
-Stray caret, DOM weight, Collapsible section, Mascot, Wordmark, Nav row, Anchored menu, Header action, Sort menu, Palette menu, Project menu, Confirm dialog, Theme, Theme registry, Steel, Style recipe, Accent.
+Stray caret, DOM weight, Collapsible section, Mascot, Wordmark, Nav row, Anchored menu, Header action, Sort menu, Palette menu, Project menu, Confirm dialog, Theme, Theme registry, Palette spec, Terminal palette, Theme picker, Steel, Style recipe, Accent.
