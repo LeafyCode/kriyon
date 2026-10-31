@@ -429,6 +429,23 @@ mod tests {
     }
 
     #[test]
+    fn a_walk_stopped_by_its_visit_cap_reports_the_answer_as_cut() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        for i in 0..10 {
+            std::fs::write(root.join(format!("f{i}.txt")), "").unwrap();
+        }
+        // Fewer matches than the result cap, but the walk gave up early, so
+        // the answer may be missing files that exist.
+        let found = find_matches_within(root, "zzz", 5);
+        assert!(found.entries.is_empty());
+        assert!(found.truncated);
+
+        let whole = find_matches_within(root, "zzz", 1_000);
+        assert!(!whole.truncated);
+    }
+
+    #[test]
     fn find_matches_ranks_every_match_before_cutting_and_says_it_cut() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
@@ -576,7 +593,7 @@ const WALK_VISIT_CAP: usize = 20_000;
 /// relative path contains `query` (case-insensitive). Directories sort before
 /// files, then lexicographically; capped at `FILE_CAP`.
 fn walk_files(root: &Path, query: &str) -> Vec<FileEntry> {
-    let mut out = walk_matches(root, query);
+    let (mut out, _) = walk_matches(root, query, WALK_VISIT_CAP);
     out.sort_by(|a, b| match (a.is_dir, b.is_dir) {
         (true, false) => std::cmp::Ordering::Less,
         (false, true) => std::cmp::Ordering::Greater,
@@ -587,12 +604,14 @@ fn walk_files(root: &Path, query: &str) -> Vec<FileEntry> {
 }
 
 /// Every entry under `root` whose relative path contains `query`
-/// (case-insensitive), unordered and uncapped — within the walk's own
-/// [`WALK_VISIT_CAP`]. Shared by `@`-mention completion and the Files search,
+/// (case-insensitive), unordered, visiting at most `visit_cap` entries — and
+/// whether the walk stopped at that cap, so a caller can say the answer may
+/// be missing files. Shared by `@`-mention completion and the Files search,
 /// which order and cut it differently.
-fn walk_matches(root: &Path, query: &str) -> Vec<FileEntry> {
+fn walk_matches(root: &Path, query: &str, visit_cap: usize) -> (Vec<FileEntry>, bool) {
     let needle = query.to_lowercase();
-    ignore::WalkBuilder::new(root)
+    let mut visited = 0usize;
+    let entries = ignore::WalkBuilder::new(root)
         .hidden(false) // show dotfiles; .gitignore still hides ignored ones
         .git_ignore(true)
         .git_global(true)
@@ -611,8 +630,14 @@ fn walk_matches(root: &Path, query: &str) -> Vec<FileEntry> {
         // was never satisfied and the walk ran to the end of the tree every
         // time. On a cwd with a large unignored build dir that is the whole
         // difference between a bounded read and ~89k stat calls per keystroke.
-        .take(WALK_VISIT_CAP)
+        // One past the cap, so a walk that had more to give is told apart
+        // from one that ended exactly there.
+        .take(visit_cap.saturating_add(1))
         .filter_map(|entry| {
+            visited += 1;
+            if visited > visit_cap {
+                return None;
+            }
             let rel = entry.path().strip_prefix(root).ok()?;
             if rel.as_os_str().is_empty() {
                 return None; // skip the root itself
@@ -624,11 +649,14 @@ fn walk_matches(root: &Path, query: &str) -> Vec<FileEntry> {
             let is_dir = entry.file_type().is_some_and(|t| t.is_dir());
             Some(FileEntry { path, is_dir })
         })
-        .collect()
+        .collect();
+    // The walk produced one more entry than it may visit: it stopped early.
+    (entries, visited > visit_cap)
 }
 
 /// The Files search's answer: the best [`FILE_CAP`] matches by name, and
-/// whether more matched than that.
+/// whether the answer may be incomplete — more matched than that, or the
+/// walk stopped at [`WALK_VISIT_CAP`] before seeing the whole tree.
 #[derive(Clone, Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FoundFiles {
@@ -640,9 +668,13 @@ pub struct FoundFiles {
 /// and only then cut — ranking after the cut loses the file whose name is
 /// the query whenever alphabetically earlier paths filled it.
 fn find_matches(root: &Path, query: &str) -> FoundFiles {
-    let mut entries = walk_matches(root, query);
+    find_matches_within(root, query, WALK_VISIT_CAP)
+}
+
+fn find_matches_within(root: &Path, query: &str, visit_cap: usize) -> FoundFiles {
+    let (mut entries, walk_capped) = walk_matches(root, query, visit_cap);
     entries.sort_by(|a, b| kriyon_core::file_search::compare_matches(&a.path, &b.path, query));
-    let truncated = entries.len() > FILE_CAP;
+    let truncated = walk_capped || entries.len() > FILE_CAP;
     entries.truncate(FILE_CAP);
     FoundFiles { entries, truncated }
 }

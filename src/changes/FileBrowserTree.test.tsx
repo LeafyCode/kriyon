@@ -68,7 +68,7 @@ const CANCEL_RE = /^cancel$/i;
 const UNSAVED_RE = /unsaved/i;
 const ANOTHER_SESSION_RE = /another session/i;
 const PATH_SEPARATOR_RE = /must not contain a path separator/i;
-const MORE_MATCHES_RE = /more files match/i;
+const MORE_MATCHES_RE = /may be more matches/i;
 
 /** A `bySession` entry whose only interesting field is `fetchedAt` — the
  * "a diff refresh just landed" signal the tree revalidates off. */

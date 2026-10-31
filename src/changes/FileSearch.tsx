@@ -382,7 +382,7 @@ function SearchResults({
       })}
       {state.truncated ? (
         <div style={noteStyle}>
-          More files match. Keep typing to narrow it down.
+          There may be more matches. Keep typing to narrow it down.
         </div>
       ) : null}
     </>
