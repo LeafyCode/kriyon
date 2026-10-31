@@ -23,6 +23,8 @@
 import type { Compartment, Extension } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
 import { type CSSProperties, useEffect, useRef, useState } from "react";
+import { useLayout } from "../state/layout.ts";
+import { themeById } from "../theme/themes/index.ts";
 import { tokens } from "../theme/tokens.ts";
 
 export interface CodeEditorProps {
@@ -282,7 +284,8 @@ const EDITOR_LINE_HEIGHT = "1.55";
  * from the well.
  */
 function buildEditorTheme(
-  EditorView_: typeof import("@codemirror/view").EditorView
+  EditorView_: typeof import("@codemirror/view").EditorView,
+  dark: boolean
 ) {
   const { color, font } = tokens;
   return EditorView_.theme(
@@ -394,7 +397,10 @@ function buildEditorTheme(
       ".cm-searchMatch-selected": { backgroundColor: color.surface.s3 },
       ".cm-selectionMatch": { backgroundColor: color.surface.s2 },
     },
-    { dark: true }
+    // CodeMirror's own base styles pick a light or dark set from this, and
+    // some of them outrank the rules above (a focused selection is `#233` in
+    // dark mode) — so it has to follow the theme, not stay dark.
+    { dark }
   );
 }
 
@@ -604,6 +610,13 @@ export function CodeEditor({
   const coreRef = useRef<CoreModules | null>(null);
   const readOnlyCompartmentRef = useRef<Compartment | null>(null);
   const gutterCompartmentRef = useRef<Compartment | null>(null);
+  const themeCompartmentRef = useRef<Compartment | null>(null);
+  const themeId = useLayout((state) => state.layout.themeId);
+  const dark = themeById(themeId).appearance === "dark";
+  // Read at editor-creation time, like `valueRef`: the mount effect awaits
+  // two imports, and a theme switch in that window must still seed the view.
+  const darkRef = useRef(dark);
+  darkRef.current = dark;
   // Read at editor-creation time instead of closing over the mount-render's
   // `baseline`, mirroring `valueRef` below — the mount effect awaits two
   // dynamic imports before constructing the `EditorState`, so a `baseline`
@@ -680,6 +693,8 @@ export function CodeEditor({
         readOnlyCompartmentRef.current = readOnlyCompartment;
         const gutterCompartment = new state.Compartment();
         gutterCompartmentRef.current = gutterCompartment;
+        const themeCompartment = new state.Compartment();
+        themeCompartmentRef.current = themeCompartment;
 
         const extensions: Extension[] = [
           // Placed first so it wins precedence over the default keymap, and
@@ -735,7 +750,9 @@ export function CodeEditor({
             // `var(--kr-…)` reference works exactly like a literal here.
             colors: {
               activeDark: tokens.color.editorIndentGuideActive,
+              activeLight: tokens.color.editorIndentGuideActive,
               dark: tokens.color.editorIndentGuide,
+              light: tokens.color.editorIndentGuide,
             },
             hideFirstIndent: true,
             highlightActiveBlock: true,
@@ -763,7 +780,9 @@ export function CodeEditor({
               ? []
               : gitGutter.gitGutter(baselineRef.current)
           ),
-          buildEditorTheme(view.EditorView),
+          themeCompartment.of(
+            buildEditorTheme(view.EditorView, darkRef.current)
+          ),
           lang.syntaxHighlighting(
             buildHighlightStyle(lang.HighlightStyle, highlight.tags)
           ),
@@ -814,6 +833,7 @@ export function CodeEditor({
       viewRef.current = null;
       readOnlyCompartmentRef.current = null;
       gutterCompartmentRef.current = null;
+      themeCompartmentRef.current = null;
       coreRef.current = null;
     };
   }, [language]);
@@ -893,6 +913,30 @@ export function CodeEditor({
         // near-impossible, but never leave an unhandled rejection.
       });
   }, [readOnly]);
+
+  useEffect(() => {
+    const view = viewRef.current;
+    const compartment = themeCompartmentRef.current;
+    if (!(view && compartment)) {
+      return;
+    }
+    loadCore()
+      .then((core) => {
+        // See the `[readOnly]` effect: a destroyed view must never be
+        // dispatched into.
+        if (viewRef.current !== view) {
+          return;
+        }
+        view.dispatch({
+          effects: compartment.reconfigure(
+            buildEditorTheme(core.view.EditorView, dark)
+          ),
+        });
+      })
+      .catch(() => {
+        // Core already loaded once to build this view; see `[readOnly]`.
+      });
+  }, [dark]);
 
   useEffect(() => {
     const view = viewRef.current;
