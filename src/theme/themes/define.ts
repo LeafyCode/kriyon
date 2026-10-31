@@ -119,6 +119,15 @@ export function scrimFor(appearance: Appearance): string {
     : "rgba(5, 7, 12, 0.6)";
 }
 
+/** The mascot's thought bubbles: near-white beside a mascot on a dark plane,
+ *  the theme's muted ink on a light one. */
+export function mascotThoughtFor(
+  appearance: Appearance,
+  muted: string
+): string {
+  return appearance === "light" ? muted : "#e9edf8";
+}
+
 /** Expand a {@link PaletteSpec} into every colour the app reads. */
 function definePalette(spec: PaletteSpec): ThemeColors {
   const { accent, appearance, editor, ink, lines, planes, status, syntax } =
@@ -197,7 +206,7 @@ function definePalette(spec: PaletteSpec): ThemeColors {
     editorSelection: editor.selection,
 
     scrim: scrimFor(appearance),
-    mascotThought: appearance === "light" ? ink[3] : "#e9edf8",
+    mascotThought: mascotThoughtFor(appearance, ink[3]),
 
     syntaxAttribute: syntax.attribute,
     syntaxComment: syntax.comment,

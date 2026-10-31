@@ -1,10 +1,18 @@
-import { faintFill, inkWash, scrimFor, softFill } from "./define.ts";
+import {
+  faintFill,
+  inkWash,
+  mascotThoughtFor,
+  scrimFor,
+  softFill,
+} from "./define.ts";
 import type { ThemeColors } from "./types.ts";
 
 // The three status hues the soft fills and washes below are tinted from.
 const GREEN = "#3fb950";
 const AMBER = "#d29922";
 const CORAL = "#f0716f";
+// Hoisted so the mascot-bubble rule below can be handed it too.
+const INK_MUTED = "#79839a";
 
 /**
  * The shared dark chrome from the **BisBig direction** canvas (ADR-0023): one
@@ -53,7 +61,7 @@ export const darkChrome: Omit<
   inkBright: "#f2f5fa",
   inkPrimary: "#eceff5",
   inkSecondary: "#aab3c5",
-  inkMuted: "#79839a",
+  inkMuted: INK_MUTED,
   inkDim: "#5c677d",
   inkFaint: "#525d72",
 
@@ -130,7 +138,7 @@ export const darkChrome: Omit<
   editorSelection: "#3D4250A0",
 
   scrim: scrimFor("dark"),
-  mascotThought: "#e9edf8",
+  mascotThought: mascotThoughtFor("dark", INK_MUTED),
   chip: "#161b26",
 
   // Syntax palette — Kriyon's own: a teal keyword, a violet property, warm
