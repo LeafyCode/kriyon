@@ -33,7 +33,7 @@ tauri-plugin-shell = "2"
 tauri-plugin-deep-link = "2"
 tauri-plugin-dialog = "2"
 portable-pty = "0.9"
-parking_lot = "0.12"
+parking_lot = "0.13"
 tempfile = "3"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 thiserror = "2.0.18"
