@@ -13,7 +13,9 @@ use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use kriyon_core::orphan::{orphan_daemons, terminal_pane_ids, OrphanDaemon, ReapStep};
+use kriyon_core::orphan::{
+    fully_parked_projects, orphan_daemons, terminal_pane_ids, OrphanDaemon, ReapStep,
+};
 use kriyon_core::proc::ProcessTree;
 use kriyon_core::session::SessionId;
 use kriyon_core::tree_stop::may_signal;
@@ -280,7 +282,11 @@ fn owned_ids<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Option<HashSet<Str
             store.load_layout(TERMINALS_KEY).ok()?,
         )
     };
-    let parked = fully_parked_projects(&rows);
+    let parked = fully_parked_projects(
+        rows.iter()
+            .filter(|row| row.archived_at.is_none())
+            .map(|row| (row.project_id.as_str(), row.parked_at.is_some())),
+    );
     let mut owned: HashSet<String> = rows
         .into_iter()
         .filter(|row| !row.is_put_away())
@@ -290,23 +296,6 @@ fn owned_ids<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Option<HashSet<Str
     let state = app.state::<AppState>();
     owned.extend(state.sessions.lock().keys().map(|id| id.0.clone()));
     Some(owned)
-}
-
-/// Projects every one of whose open sessions is parked (and that has at least
-/// one): parking a project stops its [Project terminal]s too, and they stay
-/// stopped until one of its sessions comes back.
-fn fully_parked_projects(rows: &[crate::store::SessionRow]) -> HashSet<String> {
-    let mut parked = HashSet::new();
-    let mut live = HashSet::new();
-    for row in rows.iter().filter(|row| row.archived_at.is_none()) {
-        if row.parked_at.is_some() {
-            parked.insert(row.project_id.clone());
-        } else {
-            live.insert(row.project_id.clone());
-        }
-    }
-    parked.retain(|project| !live.contains(project));
-    parked
 }
 
 pub(crate) fn resolve_run_dir<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Option<PathBuf> {

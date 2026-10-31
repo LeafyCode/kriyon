@@ -70,6 +70,31 @@ pub fn terminal_pane_ids<S: BuildHasher>(
     Some(ids)
 }
 
+/// The projects whose every open session is parked (and that have at least
+/// one): a [Parked project]'s [Project terminal]s are stopped with it and stay
+/// stopped until one of its sessions comes back, so their panes are not owned.
+///
+/// `open_sessions` is each non-archived session as `(project_id, parked)`.
+/// The frontend's `fullyParkedProjectIds` decides the same thing for the
+/// terminal dock; change both together.
+#[must_use]
+pub fn fully_parked_projects<'a, I>(open_sessions: I) -> HashSet<String>
+where
+    I: IntoIterator<Item = (&'a str, bool)>,
+{
+    let mut parked = HashSet::new();
+    let mut live = HashSet::new();
+    for (project_id, is_parked) in open_sessions {
+        if is_parked {
+            parked.insert(project_id.to_string());
+        } else {
+            live.insert(project_id);
+        }
+    }
+    parked.retain(|project| !live.contains(project.as_str()));
+    parked
+}
+
 /// Every daemon in the sweep whose socket is in `run_dir` and whose id is not
 /// in `owned`. A daemon anywhere else — a `cargo test` daemon, another tool's —
 /// is never claimed (see [`daemon_session_id`]).
@@ -171,6 +196,19 @@ mod tests {
         let mut ids = terminal_pane_ids(Some(blob), &HashSet::new()).expect("readable blob");
         ids.sort();
         assert_eq!(ids, vec!["pane-a", "pane-b", "pane-c"]);
+    }
+
+    #[test]
+    fn a_project_is_fully_parked_only_with_no_open_session_left() {
+        let parked = fully_parked_projects([
+            ("all-parked", true),
+            ("all-parked", true),
+            ("mixed", true),
+            ("mixed", false),
+            ("live", false),
+        ]);
+        assert_eq!(parked, HashSet::from(["all-parked".to_string()]));
+        assert!(fully_parked_projects([]).is_empty());
     }
 
     #[test]
