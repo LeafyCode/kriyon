@@ -115,6 +115,26 @@ test("a suggestion that starts but whose worktree setup fails says so", async ()
   );
 });
 
+test("a suggestion whose worktree install fails names the install, not the setup", async () => {
+  vi.mocked(startProposal).mockResolvedValueOnce({
+    bootstrap: {
+      ok: false,
+      output: "pnpm was not found",
+      steps: [{ label: "install (pnpm install)", ok: false }],
+    },
+    error: null,
+    ok: false,
+  });
+  render(<SessionProposals />);
+  fireEvent.click(screen.getByRole("button", { name: "Start session" }));
+  await vi.waitFor(() =>
+    expect(showToast).toHaveBeenCalledWith(
+      "“Changelog”: it started, but the worktree's install (pnpm install) failed",
+      "error"
+    )
+  );
+});
+
 test("a long task stays folded to one line until opened, then scrolls in a capped box", () => {
   render(<SessionProposals />);
   expect(screen.queryByTestId("proposal-task-tu9")).not.toBeInTheDocument();

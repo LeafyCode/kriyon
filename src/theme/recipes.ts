@@ -25,7 +25,7 @@
 import type { CSSProperties } from "react";
 import type { SessionStatus } from "../types.ts";
 import { statusMeta } from "./status.ts";
-import { tokens } from "./tokens.ts";
+import { accentAlpha, tokens } from "./tokens.ts";
 
 /**
  * The `--kr-fill` / `--kr-fill-hover` pair `.kr-hover-surface` and
@@ -48,6 +48,26 @@ function fillVars(fill: string, hover?: string): CSSProperties {
     "--kr-fill": fill,
     ...(hover === undefined ? {} : { "--kr-fill-hover": hover }),
   } as CSSProperties;
+}
+
+/**
+ * One choice in a Settings picker — a theme thumbnail, a mascot. The picked
+ * one carries an accent wash and border and holds that fill under the
+ * pointer; the rest sit in the block well. Its host adds
+ * `kr-hover-surface`, so the fill rides `--kr-fill` (see {@link fillVars}).
+ * Layout (size, direction, padding) is the caller's.
+ */
+export function pickerOption(picked: boolean): CSSProperties {
+  const fill = picked ? accentAlpha(0.16) : tokens.color.blockWell;
+  return {
+    ...(picked ? fillVars(fill, fill) : fillVars(fill)),
+    border: `1px solid ${picked ? tokens.color.accent : tokens.color.line.base}`,
+    borderRadius: tokens.radius.lg,
+    color: picked ? tokens.color.ink.bright : tokens.color.ink.secondary,
+    cursor: "pointer",
+    fontFamily: tokens.font.sans,
+    fontSize: "11.5px",
+  };
 }
 
 /**
@@ -279,6 +299,10 @@ export function card(): CSSProperties {
  * `display: flex` is wrong (it breaks the control's own baseline and padding).
  * A caller that is a *frame* around several children — an icon, an input and a
  * kbd chip — adds `display: "flex"` itself.
+ *
+ * It never shrinks: inside a flex column capped at a max height (the spawn
+ * dialog in a short window), a shrinkable well gets squeezed to its text
+ * height instead of the column scrolling.
  */
 export function inputBox(): CSSProperties {
   return {
@@ -286,6 +310,7 @@ export function inputBox(): CSSProperties {
     background: tokens.color.inputWell,
     border: `1px solid ${tokens.color.line.base}`,
     borderRadius: tokens.radius.md,
+    flexShrink: 0,
     gap: "8px",
     height: "30px",
     padding: "0 10px",

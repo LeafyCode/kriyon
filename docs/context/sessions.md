@@ -104,8 +104,16 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
 - **Worktree bootstrap** — the one-time setup that makes a freshly created [Worktree]
   ready to work in: copying the project root's untracked top-level `.env*` files into it,
   running the [Install command] detected from the lockfile, then running the project's
-  optional [Setup command]. Best-effort — a failed step warns but never blocks the
+  optional [Setup command]. Both commands run with the [Shell PATH], so they find the
+  same tools as the terminal. Best-effort — a failed step warns but never blocks the
   Session from opening. _Avoid_: provisioning, worktree init.
+- **Shell PATH** (`shell_path.rs`) — the PATH the person's own shell sets up, read once per
+  app run by starting their shell as an interactive login shell (`$SHELL -ilc`, so
+  `.zshrc` counts) with a 10-second timeout. A Mac app opened from the Dock gets only the
+  system PATH, so without it a [Worktree bootstrap] cannot find pnpm and a git hook cannot
+  find node. Every [Git run] uses it once it is known, without waiting; the [Worktree
+  bootstrap], creating a worktree, merging one back and Discard wait for it. If it can't be read,
+  they keep the app's own PATH. _Avoid_: login env, fix-path.
 - **Install command** — the dependency-install command a [Worktree bootstrap] infers from
   which lockfile is present (`pnpm-lock.yaml`→`pnpm install`, `package-lock.json`→`npm
   install`, `yarn.lock`→`yarn`, `bun.lockb`→`bun install`), or none. Purely a function of

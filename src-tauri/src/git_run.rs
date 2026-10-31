@@ -122,8 +122,21 @@ impl GitRun {
     /// The prepared `Command`, with the ambient environment cleared and the
     /// caller's explicit vars applied.
     fn command(&self) -> Command {
+        self.command_with(crate::shell_path::ready())
+    }
+
+    /// [`Self::command`] with the [Shell PATH] given: git, and any hook or
+    /// LFS filter it fires, runs with the person's tools once the PATH is
+    /// known. Never waits for it, so a launch with a slow shell config does
+    /// not stall git; a caller that must have it (merging, creating a
+    /// worktree, Discard — they fire repo hooks) sets `PATH` itself, and that
+    /// wins.
+    fn command_with(&self, shell_path: Option<&str>) -> Command {
         let mut cmd = Command::new("git");
         cmd.arg("-C").arg(&self.repo).args(&self.args);
+        if let Some(path) = shell_path {
+            cmd.env("PATH", path);
+        }
         for var in AMBIENT_GIT_VARS {
             if !self.env.iter().any(|(key, _)| *key == var) {
                 cmd.env_remove(var);
@@ -356,6 +369,37 @@ fn reap(child: &mut Child) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn path_of(cmd: &Command) -> Option<OsString> {
+        cmd.get_envs()
+            .find(|(key, _)| *key == "PATH")
+            .and_then(|(_, value)| value.map(OsStr::to_os_string))
+    }
+
+    /// Once the [Shell PATH] has been read, every git run gets it, so a hook
+    /// or LFS filter that Discard or a future command fires finds the
+    /// person's tools without each caller having to remember.
+    #[test]
+    fn every_run_gets_the_shell_path_once_it_is_known() {
+        let cmd = GitRun::new("/repo")
+            .args(["status"])
+            .command_with(Some("/shell/bin:/usr/bin"));
+        assert_eq!(path_of(&cmd), Some("/shell/bin:/usr/bin".into()));
+    }
+
+    #[test]
+    fn a_run_keeps_the_apps_path_until_the_shell_path_is_known() {
+        let cmd = GitRun::new("/repo").args(["status"]).command_with(None);
+        assert_eq!(path_of(&cmd), None, "inherits the app's PATH");
+    }
+
+    #[test]
+    fn an_explicit_path_wins_over_the_shell_path() {
+        let cmd = GitRun::new("/repo")
+            .env("PATH", "/caller/bin")
+            .command_with(Some("/shell/bin"));
+        assert_eq!(path_of(&cmd), Some("/caller/bin".into()));
+    }
 
     fn git_available() -> bool {
         Command::new("git").arg("--version").output().is_ok()

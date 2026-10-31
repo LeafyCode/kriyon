@@ -6,6 +6,7 @@ import { showToast } from "../ui/Toast.tsx";
 import {
   createSession,
   createWorktreeSession,
+  failedSetupSteps,
   type SpawnResult,
 } from "./actions.ts";
 import { isStarting } from "./bootPhase.ts";
@@ -168,7 +169,7 @@ export function startNestedSession(
  *  failed setup step still started the session. */
 export function startProblem(result: SpawnResult): string | null {
   if (result.bootstrap && !result.bootstrap.ok) {
-    return "it started, but the worktree's setup step failed";
+    return `it started, but the worktree's ${failedSetupSteps(result.bootstrap)} failed`;
   }
   return result.ok ? null : (result.error ?? "unknown error");
 }

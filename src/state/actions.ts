@@ -493,6 +493,22 @@ export interface SpawnResult {
   ok: boolean;
 }
 
+/** The [Worktree bootstrap] steps that failed, in words — `install (pnpm
+ *  install)` — or "setup step" when the report names none. */
+export function failedSetupSteps(report: BootstrapReport): string {
+  const failed = report.steps
+    .filter((step) => !step.ok)
+    .map((step) => step.label);
+  return failed.length > 0 ? failed.join(", ") : "setup step";
+}
+
+/** What the spawn dialog shows when a worktree's setup failed after the
+ *  worktree and session were made. The dialog covers the session's terminal,
+ *  so it says to close it first. */
+export function setupFailureMessage(report: BootstrapReport): string {
+  return `The worktree and session were created, but ${failedSetupSteps(report)} failed. Press Close, then fix it in the session's terminal.\n${report.output}`;
+}
+
 /**
  * Make a fresh [Worktree] of `project` on `worktree.branch` (at the chosen
  * path, or the sibling one the Rust core picks), run its [Worktree
