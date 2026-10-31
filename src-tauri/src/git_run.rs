@@ -124,6 +124,11 @@ impl GitRun {
     fn command(&self) -> Command {
         let mut cmd = Command::new("git");
         cmd.arg("-C").arg(&self.repo).args(&self.args);
+        // The person's [Shell PATH], so a hook that calls pnpm, node or
+        // git-lfs finds it when the app was opened from the Dock.
+        if let Some(path) = crate::shell_path::user_path() {
+            cmd.env("PATH", path);
+        }
         for var in AMBIENT_GIT_VARS {
             if !self.env.iter().any(|(key, _)| *key == var) {
                 cmd.env_remove(var);

@@ -56,7 +56,8 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
   committed).
 - **Git run** (`GitRun`, `git_run.rs`) — one prepared `git -C <repo> …` invocation and the single
   way Kriyon spawns git. Owns what every caller would otherwise re-transcribe: stripping the
-  ambient `GIT_DIR`/`GIT_WORK_TREE`/`GIT_INDEX_FILE` so `-C` stays authoritative, retrying a spawn
+  ambient `GIT_DIR`/`GIT_WORK_TREE`/`GIT_INDEX_FILE` so `-C` stays authoritative, running with
+  the [Shell PATH] so hooks find the person's tools, retrying a spawn
   that macOS refused under fork pressure (EAGAIN/ENOMEM), and mapping a non-zero exit to its
   stderr. Callers pick an *outcome shape* rather than reaching past it: `text`/`bytes` (buffered,
   non-zero is an error), `outcome` (non-zero is data — a conflicted merge is not a failure), and

@@ -234,9 +234,46 @@ fn wrap_source_block(name: &str) -> String {
     )
 }
 
+/// The command a [Shell PATH] probe runs inside the person's shell: their PATH
+/// fenced by markers, so whatever their shell config prints (a banner, a
+/// warning, colors) can be told apart from it. `printenv` rather than
+/// `echo $PATH` so it reads the same in zsh, bash and fish.
+pub const PATH_PROBE: &str = "printf _KRIYON_PATH_; /usr/bin/printenv PATH; printf _KRIYON_PATH_";
+
+/// The PATH a [`PATH_PROBE`] printed, or `None` until both markers have been
+/// seen or when the PATH between them is empty.
+#[must_use]
+pub fn parse_path_probe(output: &str) -> Option<String> {
+    const MARK: &str = "_KRIYON_PATH_";
+    let (_, rest) = output.split_once(MARK)?;
+    let (path, _) = rest.split_once(MARK)?;
+    let path = path.trim();
+    (!path.is_empty()).then(|| path.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn path_probe_ignores_what_the_shell_config_prints() {
+        let out = "Welcome back!\n\x1b[32mhi\x1b[0m_KRIYON_PATH_/opt/homebrew/bin:/usr/bin\n_KRIYON_PATH_bye\n";
+        assert_eq!(
+            parse_path_probe(out).as_deref(),
+            Some("/opt/homebrew/bin:/usr/bin")
+        );
+    }
+
+    #[test]
+    fn path_probe_needs_both_markers_and_a_path() {
+        assert_eq!(parse_path_probe(""), None);
+        assert_eq!(parse_path_probe("_KRIYON_PATH_/usr/bin"), None, "cut off");
+        assert_eq!(
+            parse_path_probe("_KRIYON_PATH_\n_KRIYON_PATH_"),
+            None,
+            "empty"
+        );
+    }
 
     #[test]
     fn zshrc_contains_osc133_markers_and_sources_real_config() {
