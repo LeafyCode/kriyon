@@ -363,9 +363,10 @@ export interface SessionsState {
   /** Make the files the [Activity log] saw Claude change in `id` (absolute
    * paths) its `touchedFiles`. The log is the one owner of that answer: it
    * counts only finished steps, including subagents' edits, the files a
-   * command changed and everything from before a restart. The live stream's
-   * own additions are a stopgap until the next sync replaces them. A session
-   * no longer in the store is ignored. */
+   * command changed and everything from before a restart. A live-recorded
+   * edit the log hasn't taken in yet is kept for {@link LIVE_TOUCH_GRACE_MS};
+   * past that the log's answer stands. A session no longer in the store is
+   * ignored. */
   setTouchedFromActivity: (
     id: string,
     paths: readonly string[],

@@ -143,7 +143,8 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
   `sessionClaudeFiles`) — the files Claude changed in a [Session], as the [Activity log] records
   them (`activity_changed_paths`: finished edits and writes, subagents' included, the files a
   command changed — at most 20 per command — and edits from before a restart), which replaces
-  the record on every refresh; the live stream's own additions only bridge the gap until then.
+  the record on every refresh; an edit the live stream saw is kept for up to 10 s until the log
+  takes it in.
   `sessionClaudeFiles` is `null` while the answer can't be known. Per file, not per line, and attribution only: it never decides whether a change exists. It gives the "✎ this
   session" badge and backs **Only Claude's edits**, which is on by default in AI changes
   (ADR 0050, superseding ADR 0015's default-off). _Avoid_: edited files, session files.

@@ -293,13 +293,11 @@ export interface ChangesState {
    * {@link ChangesState.activeFile}. No-ops when unchanged so a scroll that
    * doesn't cross a card boundary never touches the store. */
   setActiveFile: (sessionId: string, path: string | null) => void;
-  /** Set every file currently in `sessionId`'s diff to `collapsed` in one
-   * batch — the SummaryBar's "Collapse all"/"Expand all" controls (outline
-   * mode for a large review). A no-op when the session has no diff yet. A
-   * later per-file {@link toggleCollapsed} still overrides its file, the same
-   * as any other explicit toggle. */
   /** Collapse or expand every card in `paths` — the files the scope on
-   * screen lists — or, without `paths`, every file in the session diff. */
+   * screen lists — or, without `paths`, every file in the session diff, in
+   * one batch: the SummaryBar's "Collapse all"/"Expand all". A no-op when
+   * there is nothing to act on. A later per-file {@link toggleCollapsed}
+   * still overrides its file. */
   setAllCollapsed: (
     sessionId: string,
     collapsed: boolean,

@@ -28,8 +28,10 @@ subagents included — with the target of each edit and write, and the files eac
 - **Source.** The Activity log owns the answer. On every refresh, the files it saw Claude change
   in the session (`activity_changed_paths`: finished edits and writes, plus each command's
   changed files) replace `touchedFiles` (`setTouchedFromActivity`). The live stream still adds
-  edits as they happen, as a stopgap until the next sync; a failed or denied edit it counted is
-  dropped then, since the log counts only finished steps.
+  edits as they happen (`touchedLive`): the log takes hook events in every few seconds, so a sync
+  keeps a live edit it hasn't seen yet for `LIVE_TOUCH_GRACE_MS` (10 s). Past that the log's
+  answer stands, so a failed or denied edit — which the log, counting only finished steps, never
+  records — is dropped.
 - **Unknown is not empty.** `sessionClaudeFiles` returns `null` while the answer can't be known —
   no repo toplevel yet, the log not answered yet, or recorded paths none of which match the repo
   (a symlinked project path) — and the filter stands down, so "can't tell" never reads as
