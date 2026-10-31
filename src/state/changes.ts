@@ -180,6 +180,9 @@ export interface ChangesState {
    * one. */
   activeFile: Record<string, string | null>;
   bySession: Record<string, SessionChanges>;
+  /** Close every open folder in this session's All-files tree — the
+   * explorer's "Collapse folders" button. */
+  collapseAllDirs: (sessionId: string) => void;
   /** Take and clear the pending jump for `sessionId`. */
   consumeJump: (sessionId: string) => void;
   /** sessionId → the repo-relative path of the file currently dirty in that
@@ -198,6 +201,10 @@ export interface ChangesState {
   /** sessionId → repo-relative dir paths currently expanded in the All-files
    * tree. "" is the repo root. */
   expandedDirs: Record<string, Record<string, boolean>>;
+  /** Open every folder above `path` (cwd-relative) so its row is on screen —
+   * what an editor does when a file is opened from somewhere other than the
+   * tree. A root-level path opens nothing. */
+  expandToPath: (sessionId: string, path: string) => void;
   /** sessionId → path → the [File draft] stashed when that pane was unmounted
    * while dirty. Only dirty drafts are ever stashed, and only by the pane
    * going away underneath the user (the [Warm pane] LRU evicting it) — a
@@ -606,6 +613,33 @@ export const useChanges = create<ChangesState>((set, get) => ({
       },
     }));
   },
+
+  collapseAllDirs: (sessionId) =>
+    set((state) => ({
+      expandedDirs: { ...state.expandedDirs, [sessionId]: {} },
+    })),
+
+  expandToPath: (sessionId, path) =>
+    set((state) => {
+      const parts = path.split("/").slice(0, -1);
+      if (parts.length === 0) {
+        return state;
+      }
+      const prev = state.expandedDirs[sessionId] ?? EMPTY_EXPANDED_DIRS;
+      const next = { ...prev };
+      let changed = false;
+      for (let i = 1; i <= parts.length; i += 1) {
+        const dir = parts.slice(0, i).join("/");
+        if (next[dir] !== true) {
+          next[dir] = true;
+          changed = true;
+        }
+      }
+      if (!changed) {
+        return state;
+      }
+      return { expandedDirs: { ...state.expandedDirs, [sessionId]: next } };
+    }),
 
   pruneExpandedDirsUnder: (sessionId, path) =>
     set((state) => {

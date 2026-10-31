@@ -42,9 +42,9 @@ const bodyStyle: CSSProperties = {
   minHeight: 0,
 };
 
-// Layout: tree 236px | feed flex | jump rail 26px (see FileTreePane's
-// FILE_TREE_WIDTH and JumpRail's JUMP_RAIL_WIDTH) — the feed takes whatever
-// width is left between the two fixed-width columns.
+// Layout: tree (user-resizable, `fileTreeWidth` in the layout) | feed flex |
+// jump rail 26px (JumpRail's JUMP_RAIL_WIDTH) — the feed takes whatever width
+// is left between the two.
 const feedStyle: CSSProperties = {
   flex: 1,
   minHeight: 0,
@@ -439,6 +439,7 @@ export function ChangesView({ sessionId }: { sessionId: string }) {
   return (
     <div data-testid="changes-view" style={rootStyle}>
       <SummaryBar
+        diffControls={!view.showViewer}
         isVisible={isVisible}
         onRefresh={() => doRefresh("manual")}
         pulsing={pulsing}
@@ -489,7 +490,11 @@ export function ChangesView({ sessionId }: { sessionId: string }) {
           tab={view.tab}
         >
           {filesTabMounted ? (
-            <FileBrowserTree cwd={cwd} sessionId={sessionId} />
+            <FileBrowserTree
+              cwd={cwd}
+              decorations={view.decorations}
+              sessionId={sessionId}
+            />
           ) : null}
         </FileTreePane>
         <div style={feedStyle}>

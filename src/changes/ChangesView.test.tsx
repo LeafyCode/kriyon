@@ -1619,7 +1619,7 @@ describe("ChangesView", () => {
       useChanges.getState().setTab("s1", "all");
     });
     expect(screen.getByTestId("file-tree-pane-all")).toHaveStyle({
-      display: "contents",
+      display: "flex",
     });
     expect(screen.getByText("README.md")).toBeInTheDocument();
     // No second root listDir call — the cache survived the flip.

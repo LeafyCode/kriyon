@@ -5,8 +5,9 @@ import { DEFAULT_LAYOUT, useLayout } from "../state/layout.ts";
 import { idleSession, useSessions } from "../state/sessions.ts";
 import { SessionHeader } from "./SessionHeader.tsx";
 
-const CHANGES_TAB = /Changes/;
-const CHANGES_WITH_NO_COUNT = /^Changes$/;
+const CHANGES_TAB = /Files/;
+const CHANGES_WITH_NO_COUNT = /^Files$/;
+const TRAILING_COUNT = /\d+$/;
 const STRUCTURED_OFF_TITLE = /Kriyon Companion is off/;
 
 vi.mock("../ipc/bridge.ts", () => ({
@@ -62,7 +63,7 @@ beforeEach(() => {
  * "Changes 1" badge over a Changes view showing nothing, because the one
  * dirty file predated the session and so isn't in its baseline diff.
  */
-test("the Changes tab counts this session's changed files, not the dirty working tree", () => {
+test("the Files tab counts this session's changed files, not the dirty working tree", () => {
   useChanges.setState({
     bySession: {
       s1: {
@@ -86,7 +87,7 @@ test("the Changes tab counts this session's changed files, not the dirty working
   expect(tab).toHaveTextContent(CHANGES_WITH_NO_COUNT);
 });
 
-test("the Changes tab shows the session's own file count when it has one", () => {
+test("the Files tab shows the session's own file count when it has one", () => {
   useChanges.setState({
     bySession: {
       s1: {
@@ -105,7 +106,7 @@ test("the Changes tab shows the session's own file count when it has one", () =>
   render(<SessionHeader />);
 
   expect(screen.getByRole("tab", { name: CHANGES_TAB })).toHaveTextContent(
-    "Changes3"
+    "Files3"
   );
 });
 
@@ -115,4 +116,12 @@ test("the Structured tab opens even with the companion off, where the view offer
   // The status loads after the first render; it must not disable the tab.
   await screen.findByTitle(STRUCTURED_OFF_TITLE);
   expect(tab).toBeEnabled();
+});
+
+test("the Files tab sits last, after the two session views", () => {
+  render(<SessionHeader />);
+  const labels = screen
+    .getAllByRole("tab")
+    .map((tab) => tab.textContent?.replace(TRAILING_COUNT, ""));
+  expect(labels).toEqual(["Structured", "Session", "Files"]);
 });

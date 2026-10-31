@@ -31,9 +31,10 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
   [Session diff]'s [Visible files]. Computed frontend-side from the hunks already on hand, so
   the number in the [Summary bar] and the [Changed-files list] is literally the diff on screen
   and not a second `git` opinion. _Avoid_: diff stats, counts.
-- **Changes view** — one of the two transcript tabs (Changes · Raw): the [Session]'s own
-  "what changed" surface, laid out as [File tree pane] | [Diff feed] | [Jump rail] under a
-  [Summary bar]. Read-and-edit, never a gate: it shows what git says changed, and the [Raw
+- **Changes view** — the transcript tab labelled **Files**, last in the header after the two
+  session views (Structured · Session · Files): the [Session]'s own "what changed" surface, and
+  its project files, laid out as [File tree pane] | [Diff feed] | [Jump rail] under a [Summary
+  bar]. The code keeps the name `changes`; only the label says Files. Read-and-edit, never a gate: it shows what git says changed, and the [Raw
   view] stays the source of truth for the work itself. _Avoid_: diff view, review view (that's
   the Inspector's [Merge outcome] flow).
 - **Transcript view** (`TranscriptView`) — which pane the center column is showing:
@@ -170,6 +171,15 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
 - **All-files browser** (`FileBrowserTree`, `list_dir`) — the lazy, directory-at-a-time tree of
   the whole repo under the [File tree pane]'s "All files" tab. Children are fetched on expand
   and never re-fetched behind a stale cwd. _Avoid_: file explorer, finder.
+- **File search** (`FileSearch`, `rankFileMatches`, `list_files`) — the box at the top of the
+  [All-files browser] that finds a file anywhere in the project by name, ranked so a match in
+  the file's own name beats one in a folder above it. Reuses the `@`-mention walk, so it
+  respects .gitignore and stops at 50 matches. While a query is typed its results replace the
+  tree; opening one shows it in the [File viewer] and reveals it in the tree. _Avoid_: filter
+  (it does not filter the tree), quick open.
+- **Tree decorations** (`TreeDecorations`, `treeDecorations`) — the git marks the [All-files
+  browser] paints: each changed file's kind of change, and which folders hold a change below
+  them, translated from the diff's toplevel-relative paths into the tree's cwd-relative ones.
 - **File viewer** — the whole-file pane the [Changes view] opens for a selected file. A text
   file is editable through the [Code editor]; a binary or truncated read is read-only and
   renders with a changed-line gutter marking what the current diff touched. Stays mounted and

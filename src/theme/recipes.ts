@@ -145,6 +145,41 @@ export function iconButton(): CSSProperties {
   };
 }
 
+/**
+ * One row of a file tree — the Files view's changed-files list and its
+ * All-files explorer share it, so the two tabs swap in the same column
+ * without the rows jumping.
+ *
+ * 24px and 13px: a code editor's explorer density, where a list of names is
+ * scanned rather than read. `flex: none` matters — a row inside a flex
+ * column must never shrink, or a long tree squashes its rows into each other
+ * instead of scrolling. The selected row holds its wash under the pointer;
+ * the host adds `kr-hover-surface kr-tree-row` for the hover and focus ring.
+ */
+export function treeRow(selected = false): CSSProperties {
+  return {
+    alignItems: "center",
+    ...fillVars(
+      selected ? tokens.color.surface.active : "transparent",
+      selected ? tokens.color.surface.active : undefined
+    ),
+    border: "none",
+    borderRadius: tokens.radius.sm,
+    color: selected ? tokens.color.ink.bright : tokens.color.ink.secondary,
+    cursor: "pointer",
+    display: "flex",
+    flex: "none",
+    fontFamily: tokens.font.sans,
+    fontSize: "13px",
+    height: "24px",
+    lineHeight: 1,
+    minWidth: 0,
+    padding: "0 8px 0 6px",
+    textAlign: "left",
+    width: "100%",
+  };
+}
+
 export type ButtonVariant = "primary" | "secondary" | "ghost" | "danger";
 
 const BUTTON_FILL: Record<

@@ -1,4 +1,9 @@
-import type { DiffTotals, FileDiff, SessionDiff } from "../types.ts";
+import type {
+  DiffTotals,
+  FileChange,
+  FileDiff,
+  SessionDiff,
+} from "../types.ts";
 import {
   type ChangesState,
   computeTotalsFromFiles,
@@ -78,6 +83,9 @@ export interface ChangesViewInput {
 
 /** One session's resolved Code Changes View — see the module doc. */
 export interface ChangesViewModel {
+  /** The All-files tree's git marks — see {@link TreeDecorations}. Built
+   * from the unfiltered `files`: that tab ignores the filter. */
+  decorations: TreeDecorations;
   /** `BudgetNotice`'s input: the raw diff, budget fields and all. */
   diff: SessionDiff | null;
   /** The toplevel-relative paths of `displayFiles` rows carrying unsaved
@@ -215,6 +223,61 @@ export function cwdRelativePath(
   return path;
 }
 
+/**
+ * The All-files tree's git marks: how each changed file changed, and which
+ * folders hold a change somewhere below them — the colouring every code
+ * editor's explorer gives a working tree.
+ *
+ * Keyed in the tree's own vocabulary (cwd-relative), not the diff's
+ * (toplevel-relative). A change outside the session's folder has no row in
+ * that tree, so it is dropped rather than keyed by a `../` path nothing
+ * looks up.
+ */
+export interface TreeDecorations {
+  dirs: ReadonlySet<string>;
+  files: ReadonlyMap<string, FileChange>;
+}
+
+const treeDecorationsCache = new WeakMap<
+  FileDiff[],
+  { cwd: string; result: TreeDecorations; toplevel: string }
+>();
+
+/** {@link TreeDecorations} for `files`, memoized on the array and the two
+ * paths it is translated between, so the tree re-renders only when a refresh
+ * actually lands. */
+export function treeDecorations(
+  files: FileDiff[],
+  toplevel: string,
+  cwd: string
+): TreeDecorations {
+  const hit = treeDecorationsCache.get(files);
+  if (hit && hit.cwd === cwd && hit.toplevel === toplevel) {
+    return hit.result;
+  }
+  const marks = new Map<string, FileChange>();
+  const dirs = new Set<string>();
+  for (const f of files) {
+    const path = cwdRelativePath(f.path, toplevel, cwd);
+    if (path.startsWith("../")) {
+      continue;
+    }
+    marks.set(path, f.status);
+    let slash = path.lastIndexOf("/");
+    while (slash > 0) {
+      const dir = path.slice(0, slash);
+      if (dirs.has(dir)) {
+        break;
+      }
+      dirs.add(dir);
+      slash = dir.lastIndexOf("/");
+    }
+  }
+  const result: TreeDecorations = { dirs, files: marks };
+  treeDecorationsCache.set(files, { cwd, result, toplevel });
+  return result;
+}
+
 /** Stable empty list for a session with no diff yet, so "no files" is one
  * array identity rather than a fresh `[]` per call. */
 const NO_FILES: FileDiff[] = [];
@@ -341,6 +404,7 @@ export function computeChangesView(input: ChangesViewInput): ChangesViewModel {
   const hiddenByMyEditsFilter =
     editsFilterActive && files.length > 0 && isEmpty;
   return {
+    decorations: treeDecorations(files, input.repoToplevel, input.cwd),
     diff: entry?.diff ?? null,
     displayFiles,
     dirtyPaths: computeDirtyPaths(displayFiles, input),

@@ -9,6 +9,7 @@ import {
   computeChangesView,
   cwdRelativePath,
   forgetChangesView,
+  treeDecorations,
 } from "./changesView.ts";
 
 function line(kind: DiffLine["kind"], text: string): DiffLine {
@@ -757,5 +758,42 @@ describe("changedFileCount — the number the Changes tab prints", () => {
       ui: {},
     };
     expect(changedFileCount(empty, "s1", NO_TOUCHED)).toBe(0);
+  });
+});
+
+describe("treeDecorations", () => {
+  it("keys each changed file by its cwd-relative path and marks every folder above it", () => {
+    const deco = treeDecorations(
+      [
+        file("src/a.ts"),
+        file("src/ui/new.ts", 3, 0, { status: "added" }),
+        file("README.md"),
+      ],
+      "/repo",
+      "/repo"
+    );
+    expect(deco.files.get("src/a.ts")).toBe("modified");
+    expect(deco.files.get("src/ui/new.ts")).toBe("added");
+    expect(deco.files.get("README.md")).toBe("modified");
+    expect([...deco.dirs].sort()).toEqual(["src", "src/ui"]);
+  });
+
+  it("translates toplevel paths when the session runs in a subfolder", () => {
+    const deco = treeDecorations([file("app/src/a.ts")], "/repo", "/repo/app");
+    expect(deco.files.get("src/a.ts")).toBe("modified");
+    expect([...deco.dirs]).toEqual(["src"]);
+  });
+
+  it("drops changes outside the session's folder", () => {
+    const deco = treeDecorations([file("other/a.ts")], "/repo", "/repo/app");
+    expect(deco.files.size).toBe(0);
+    expect(deco.dirs.size).toBe(0);
+  });
+
+  it("returns the same object for the same inputs", () => {
+    const files = [file("src/a.ts")];
+    expect(treeDecorations(files, "/r", "/r")).toBe(
+      treeDecorations(files, "/r", "/r")
+    );
   });
 });

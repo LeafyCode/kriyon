@@ -475,28 +475,38 @@ describe("FileViewer", () => {
     expect(mockedWriteFile).not.toHaveBeenCalled();
   });
 
-  it("shows the discard-edits button as unavailable while the draft is clean", async () => {
-    // It was named "Revert" — which reads as a git operation next to a file
-    // that has a git gutter — and it carried the plain enabled styling in
-    // both states, so a clean buffer offered a button that looked pressable
-    // and did nothing. Same faint-ink/0.6 treatment Save already has.
+  it("offers Save and Discard edits only while there are unsaved edits", async () => {
+    // A clean buffer used to carry both, washed out and disabled — two
+    // controls that could do nothing, in the busiest strip of the view. An
+    // editor shows them when there is something to save.
     mockedReadFile.mockResolvedValue(content({ content: "original" }));
     renderViewer();
+    await screen.findByRole("textbox");
 
-    const button = await screen.findByRole("button", {
-      name: DISCARD_EDITS_RE,
-    });
-    expect(button).toBeDisabled();
-    expect(button).toHaveStyle({
-      color: tokens.color.ink.faint,
-      cursor: "default",
-      opacity: "0.6",
-    });
+    expect(
+      screen.queryByRole("button", { name: DISCARD_EDITS_RE })
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: SAVE_BUTTON_RE })
+    ).not.toBeInTheDocument();
 
     typeInto(screen.getByRole("textbox"), "changed");
 
-    expect(button).toBeEnabled();
-    expect(button).toHaveStyle({ cursor: "pointer", opacity: "1" });
+    expect(
+      screen.getByRole("button", { name: DISCARD_EDITS_RE })
+    ).toBeEnabled();
+    expect(screen.getByRole("button", { name: SAVE_BUTTON_RE })).toBeEnabled();
+  });
+
+  it("shows where the file lives as a breadcrumb, file name last", async () => {
+    mockedReadFile.mockResolvedValue(content());
+    renderViewer({ cwd: "/repo", path: "src/changes/a.ts" });
+    await screen.findByRole("textbox");
+
+    const crumbs = within(screen.getByTestId("file-viewer-path"))
+      .getAllByTestId("file-viewer-crumb")
+      .map((c) => c.textContent);
+    expect(crumbs).toEqual(["src", "changes", "a.ts"]);
   });
 
   /**
@@ -564,7 +574,7 @@ describe("FileViewer", () => {
       });
     });
 
-    it("offers it disabled for a tracked file that already matches HEAD", async () => {
+    it("offers nothing for a tracked file that already matches HEAD", async () => {
       mockedReadFile.mockResolvedValue(content({ content: "same" }));
       mockedReadBaseline.mockResolvedValue({
         content: "same",
@@ -574,11 +584,10 @@ describe("FileViewer", () => {
       renderViewer();
       await screen.findByRole("textbox");
 
-      await waitFor(() => {
-        expect(
-          screen.getByRole("button", { name: DISCARD_FILE_RE })
-        ).toBeDisabled();
-      });
+      await waitFor(() => expect(mockedReadBaseline).toHaveBeenCalled());
+      expect(
+        screen.queryByRole("button", { name: DISCARD_FILE_RE })
+      ).not.toBeInTheDocument();
     });
 
     it("confirms first, then restores from HEAD and refreshes the Changes view", async () => {
@@ -792,7 +801,7 @@ describe("FileViewer", () => {
     // The label reads "Open in editor" and must route through `openInEditor`
     // (macOS `open -t`), so an `.html`/`.svg` lands in a text editor instead
     // of a browser — never `openPath`, which uses the type-default app.
-    fireEvent.click(screen.getByText("Open in editor"));
+    fireEvent.click(screen.getByRole("button", { name: "Open in editor" }));
 
     await waitFor(() => {
       expect(mockedOpenInEditor).toHaveBeenCalledWith("/repo", "a.ts");
@@ -811,8 +820,8 @@ describe("FileViewer", () => {
     // A binary has no editable view — a text editor would show gibberish, so
     // the button falls back to the type-default app (a PDF in Preview, an
     // image in the viewer) and is labelled "Open", not "Open in editor".
-    expect(screen.queryByText("Open in editor")).toBeNull();
-    fireEvent.click(screen.getByText("Open"));
+    expect(screen.queryByRole("button", { name: "Open in editor" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Open" }));
 
     await waitFor(() => {
       expect(mockedOpenPath).toHaveBeenCalledWith("/repo", "a.ts");
@@ -839,7 +848,7 @@ describe("FileViewer", () => {
     const catchSpy = vi.spyOn(rejected, "catch");
     mockedOpenInEditor.mockReturnValue(rejected);
 
-    fireEvent.click(screen.getByText("Open in editor"));
+    fireEvent.click(screen.getByRole("button", { name: "Open in editor" }));
 
     await waitFor(() => {
       expect(catchSpy).toHaveBeenCalled();

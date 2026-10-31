@@ -44,7 +44,7 @@ const UNSENT_BODY: Record<Exclude<UnsentWork, null>, string> = {
   both: "It has an unsent message and unsaved file edits. Closing it now discards both.",
   draft: "It has an unsent message. Closing it now discards the draft.",
   files:
-    "It has unsaved file edits in the Changes view. Closing it now discards them.",
+    "It has unsaved file edits in the Files view. Closing it now discards them.",
 };
 
 /**

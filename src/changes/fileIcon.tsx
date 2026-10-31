@@ -32,7 +32,7 @@ import { langForPath } from "./highlighter.ts";
  *
  * Icons are lucide (already a dependency), not a ported editor icon theme:
  * those are hundreds of bespoke SVGs, and the job here is telling file kinds
- * apart at 14px in a 236px column, which a tinted glyph does.
+ * apart at 14px in a narrow column, which a tinted glyph does.
  */
 interface FileIconSpec {
   color: string;

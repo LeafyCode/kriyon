@@ -199,7 +199,7 @@ function buildItems(
       id: "cmd:toggle-transcript",
       kind: "View",
       // The palette's only route into the Changes view.
-      label: "Toggle Changes / Session view",
+      label: "Toggle Files / Session view",
       run: useLayout.getState().toggleTranscriptView,
     },
   ];

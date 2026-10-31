@@ -10,9 +10,11 @@ import {
 import { themeById } from "../theme/themes/index.ts";
 import type { NotifyPreference, NotifySound, SessionRow } from "../types.ts";
 import {
+  clampFileTreeWidth,
   clampSidebarWidth,
   clampTerminalDockHeight,
   DEFAULT_LAYOUT,
+  FILE_TREE_WIDTH_DEFAULT,
   type HideOlderThan,
   isNestedCap,
   type Layout,
@@ -326,6 +328,10 @@ export function parseLayout(json: string | null): Layout | undefined {
       typeof parsed.sidebarWidth === "number"
         ? clampSidebarWidth(parsed.sidebarWidth)
         : SIDEBAR_WIDTH_DEFAULT,
+    fileTreeWidth:
+      typeof parsed.fileTreeWidth === "number"
+        ? clampFileTreeWidth(parsed.fileTreeWidth)
+        : FILE_TREE_WIDTH_DEFAULT,
     terminalDockFullHeight: parsed.terminalDockFullHeight === true,
     terminalDockHeight:
       typeof parsed.terminalDockHeight === "number"

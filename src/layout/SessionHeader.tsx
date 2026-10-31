@@ -204,8 +204,11 @@ export function SessionHeader() {
                     "Kriyon Companion is off. Open to turn it on."),
               value: "structured",
             },
-            { count: changedFiles, label: "Changes", value: "changes" },
             { label: "Session", value: "raw" },
+            // Last, apart from the two ways of watching the session: this is
+            // the project's files (changed ones and the whole tree), a place
+            // you visit rather than a view a session opens in.
+            { count: changedFiles, label: "Files", value: "changes" },
           ]}
           value={transcriptView}
           variant="underline"

@@ -426,3 +426,16 @@ describe("SummaryBar", () => {
     );
   });
 });
+
+it("collapse and expand are left out while a file is open instead of the diff", () => {
+  render(
+    <SummaryBar
+      diffControls={false}
+      onRefresh={() => undefined}
+      sessionId="s1"
+    />
+  );
+  expect(screen.queryByTestId("summary-collapse-all")).not.toBeInTheDocument();
+  expect(screen.queryByTestId("summary-expand-all")).not.toBeInTheDocument();
+  expect(screen.getByTestId("summary-refresh")).toBeInTheDocument();
+});

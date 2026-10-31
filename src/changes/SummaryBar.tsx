@@ -127,12 +127,17 @@ function filesChangedLabel(files: number): string {
  * filter still gets the honest whole-diff totals (mirroring `isVisible`).
  */
 export function SummaryBar({
+  diffControls = true,
   isVisible = true,
   onRefresh,
   pulsing = false,
   sessionId,
   totals: displayTotals,
 }: {
+  /** Whether the diff feed is what's below — its Collapse all / Expand all
+   * only mean something then. With a file open in the editor they are left
+   * out rather than offered to do nothing. */
+  diffControls?: boolean;
   isVisible?: boolean;
   onRefresh: () => void;
   pulsing?: boolean;
@@ -187,26 +192,30 @@ export function SummaryBar({
           {formatAgo(elapsed)}
         </span>
       ) : null}
-      <button
-        className="kr-hover-surface"
-        data-testid="summary-collapse-all"
-        disabled={!hasFiles}
-        onClick={() => setAllCollapsed(sessionId, true)}
-        style={collapseButtonStyle}
-        type="button"
-      >
-        Collapse all
-      </button>
-      <button
-        className="kr-hover-surface"
-        data-testid="summary-expand-all"
-        disabled={!hasFiles}
-        onClick={() => setAllCollapsed(sessionId, false)}
-        style={collapseButtonStyle}
-        type="button"
-      >
-        Expand all
-      </button>
+      {diffControls ? (
+        <>
+          <button
+            className="kr-hover-surface"
+            data-testid="summary-collapse-all"
+            disabled={!hasFiles}
+            onClick={() => setAllCollapsed(sessionId, true)}
+            style={collapseButtonStyle}
+            type="button"
+          >
+            Collapse all
+          </button>
+          <button
+            className="kr-hover-surface"
+            data-testid="summary-expand-all"
+            disabled={!hasFiles}
+            onClick={() => setAllCollapsed(sessionId, false)}
+            style={collapseButtonStyle}
+            type="button"
+          >
+            Expand all
+          </button>
+        </>
+      ) : null}
       <button
         className="kr-hover-surface"
         data-testid="summary-refresh"

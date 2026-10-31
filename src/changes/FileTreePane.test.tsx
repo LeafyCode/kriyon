@@ -10,6 +10,11 @@ vi.mock("../state/changes.ts", async (importOriginal) => {
 });
 
 import { fileDiffCounts } from "../state/changes.ts";
+import {
+  DEFAULT_LAYOUT,
+  FILE_TREE_WIDTH_DEFAULT,
+  useLayout,
+} from "../state/layout.ts";
 import type { FileDiff } from "../types.ts";
 import { FileTreePane } from "./FileTreePane.tsx";
 
@@ -362,4 +367,47 @@ describe("FileTreePane", () => {
       callsAfterMount
     );
   });
+});
+
+test("dragging the column edge resizes the file tree and remembers it", () => {
+  useLayout.setState({ layout: DEFAULT_LAYOUT });
+  render(
+    <FileTreePane
+      files={[]}
+      onJumpToFile={vi.fn()}
+      onTabChange={vi.fn()}
+      tab="changes"
+    />
+  );
+  const pane = screen.getByTestId("file-tree-pane");
+  expect(pane).toHaveStyle({ width: `${FILE_TREE_WIDTH_DEFAULT}px` });
+
+  const handle = screen.getByTestId("file-tree-resize");
+  fireEvent.mouseDown(handle, { clientX: 300 });
+  fireEvent.mouseMove(window, { clientX: 340 });
+  fireEvent.mouseUp(window);
+
+  expect(useLayout.getState().layout.fileTreeWidth).toBe(
+    FILE_TREE_WIDTH_DEFAULT + 40
+  );
+  expect(pane).toHaveStyle({ width: `${FILE_TREE_WIDTH_DEFAULT + 40}px` });
+
+  fireEvent.doubleClick(handle);
+  expect(useLayout.getState().layout.fileTreeWidth).toBe(
+    FILE_TREE_WIDTH_DEFAULT
+  );
+});
+
+test("each changed file shows how it changed", () => {
+  render(
+    <FileTreePane
+      files={[{ ...file("src/new.ts"), status: "added" }, file("src/old.ts")]}
+      onJumpToFile={vi.fn()}
+      onTabChange={vi.fn()}
+      tab="changes"
+    />
+  );
+  const rows = screen.getAllByTestId("file-tree-file-row");
+  expect(rows[0]).toHaveAttribute("data-git", "added");
+  expect(rows[1]).toHaveAttribute("data-git", "modified");
 });

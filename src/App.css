@@ -247,6 +247,13 @@ body {
   border-color: var(--kr-line-strong);
 }
 
+/* A tree row's focus ring sits inside the row: the tree scrolls, and an
+ * outset ring is clipped by the scroll edge on the first and last rows. */
+.kr-tree-row:focus-visible {
+  outline: 1px solid rgba(var(--kr-accent-rgb), 0.7);
+  outline-offset: -1px;
+}
+
 .kr-focusable:focus-visible {
   outline: 2px solid rgba(var(--kr-accent-rgb), 0.55);
   outline-offset: 2px;
