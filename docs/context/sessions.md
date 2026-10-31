@@ -49,6 +49,15 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
   a row visible (the active session, running/waiting/error work, an unread finish) each
   keep the group visible too, and a filter turns the fold off. _Avoid_: hidden project,
   stale project.
+- **Parked project** (`parkedAt`) — a [Project (Workspace)] the user has put away for now with
+  *Park project*. Every [Session] in it and every [Project terminal] it owns is stopped (the
+  same stop archiving uses), but nothing else changes: session rows, titles, order, [Archived
+  session]s, [Transcript]s and [Worktree]s all stay. The group leaves the rail for a "Parked"
+  section at the bottom of the sidebar. *Unpark* brings the group back as it was; each session
+  resumes (`claude --resume`) only when it is opened, and each terminal opens a fresh shell.
+  Unlike an [Inactive project], parking is the user's choice and never undoes itself on a
+  timer; unlike [Clear project], nothing is closed. _Avoid_: shelved, hidden, archived
+  project, sleeping project.
 - **Past session** (`PastSession`) — a session discovered from a folder's
   on-disk Claude history (`~/.claude/projects/<encoded-cwd>/<id>.jsonl`) that
   Kriyon does not yet track. Carries the [Claude session id] (the file stem),
