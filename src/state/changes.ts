@@ -298,7 +298,13 @@ export interface ChangesState {
    * mode for a large review). A no-op when the session has no diff yet. A
    * later per-file {@link toggleCollapsed} still overrides its file, the same
    * as any other explicit toggle. */
-  setAllCollapsed: (sessionId: string, collapsed: boolean) => void;
+  /** Collapse or expand every card in `paths` — the files the scope on
+   * screen lists — or, without `paths`, every file in the session diff. */
+  setAllCollapsed: (
+    sessionId: string,
+    collapsed: boolean,
+    paths?: readonly string[]
+  ) => void;
   /** Publish `sessionId`'s live dirty path — see {@link ChangesState.dirtyFiles}. */
   setDirtyFile: (sessionId: string, path: string | null) => void;
   setTab: (sessionId: string, tab: FileTreeTab) => void;
@@ -783,16 +789,16 @@ export const useChanges = create<ChangesState>((set, get) => ({
   setTab: (sessionId, tab) =>
     set((state) => patchUi(state, sessionId, { tab })),
 
-  setAllCollapsed: (sessionId, collapsed) =>
+  setAllCollapsed: (sessionId, collapsed, paths) =>
     set((s) => {
       const prev = s.bySession[sessionId];
-      const files = prev?.diff?.files ?? [];
-      if (!prev || files.length === 0) {
+      const targets = paths ?? (prev?.diff?.files ?? []).map((f) => f.path);
+      if (!prev || targets.length === 0) {
         return s;
       }
       const nextCollapsed = { ...prev.collapsed };
-      for (const file of files) {
-        nextCollapsed[file.path] = collapsed;
+      for (const path of targets) {
+        nextCollapsed[path] = collapsed;
       }
       return {
         bySession: {

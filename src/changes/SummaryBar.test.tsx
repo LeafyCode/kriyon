@@ -500,3 +500,35 @@ describe("the redesigned bar", () => {
     expect(screen.getByRole("button", { name: "Refresh" })).toBeInTheDocument();
   });
 });
+
+it("collapse and expand act on the files the scope on screen lists", () => {
+  // All changes: the session diff is empty, the scope lists two files.
+  useChanges.setState({
+    bySession: {
+      s1: {
+        baselineLabel: "",
+        collapsed: {},
+        diff: { base: "HEAD", files: [] },
+        fetchedAt: Date.now(),
+        hunkHashes: {},
+        status: "ready",
+        totals: null,
+        viewed: {},
+      },
+    },
+  });
+  render(
+    <SummaryBar
+      onRefresh={vi.fn()}
+      paths={["mine.ts", "other.ts"]}
+      sessionId="s1"
+    />
+  );
+  const collapse = screen.getByRole("button", { name: "Collapse all" });
+  expect(collapse).toBeEnabled();
+  fireEvent.click(collapse);
+  expect(useChanges.getState().bySession.s1?.collapsed).toEqual({
+    "mine.ts": true,
+    "other.ts": true,
+  });
+});

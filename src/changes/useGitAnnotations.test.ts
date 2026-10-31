@@ -151,3 +151,17 @@ test("blame waits while there are unsaved edits", async () => {
   rerender({ dirty: false });
   expect(result.current.blame).toBe(blame);
 });
+
+test("a save (unsaved edits gone) refetches blame at once, inside the refetch floor", async () => {
+  const { result, rerender } = renderHook(
+    ({ dirty }) => useGitAnnotations("/repo", "a.ts", "s1", dirty),
+    { initialProps: { dirty: false } }
+  );
+  await waitFor(() => expect(result.current.blame).toBe(blame));
+  rerender({ dirty: true });
+  mockedBlame.mockClear();
+
+  rerender({ dirty: false });
+
+  await waitFor(() => expect(mockedBlame).toHaveBeenCalledTimes(1));
+});

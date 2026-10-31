@@ -1511,6 +1511,26 @@ describe("ChangesView", () => {
     });
   });
 
+  test("a deleted file's row closes the open file and shows its diff", async () => {
+    seedReadySession("s1", [
+      fileDiff("src/a.ts"),
+      { ...fileDiff("src/gone.ts"), status: "deleted" },
+    ]);
+    renderChangesView("s1");
+    const list = within(screen.getByTestId("file-tree-pane-changes"));
+    fireEvent.click(list.getByText("a.ts"));
+    await waitFor(() => {
+      expect(screen.getByTestId("file-viewer")).toBeVisible();
+    });
+
+    fireEvent.click(list.getByText("gone.ts"));
+
+    expect(useChanges.getState().ui.s1?.selectedFile).toBeUndefined();
+    expect(screen.getByTestId("diff-feed").parentElement).toHaveStyle({
+      display: "block",
+    });
+  });
+
   test("an Inspector jump while a file is open opens the jumped-to file", () => {
     seedReadySession("s1", [fileDiff("src/a.ts"), fileDiff("src/b.ts")]);
     renderChangesView("s1");

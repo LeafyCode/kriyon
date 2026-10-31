@@ -207,6 +207,7 @@ export function SummaryBar({
   editsToggle,
   isVisible = true,
   onRefresh,
+  paths,
   pulsing = false,
   sessionId,
   totals: displayTotals,
@@ -225,6 +226,9 @@ export function SummaryBar({
   diffControls?: boolean;
   isVisible?: boolean;
   onRefresh: () => void;
+  /** The files the scope on screen lists — what Collapse all and Expand all
+   * act on. Without it they act on the whole session diff. */
+  paths?: readonly string[];
   pulsing?: boolean;
   sessionId: string;
   totals?: DiffTotals | null;
@@ -234,7 +238,9 @@ export function SummaryBar({
   const totals = displayTotals ?? entry?.totals;
   const loading = entry?.status === "loading";
   const fetchedAt = entry?.fetchedAt;
-  const hasFiles = Boolean(entry?.diff?.files.length);
+  const hasFiles = paths
+    ? paths.length > 0
+    : Boolean(entry?.diff?.files.length);
 
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -308,7 +314,7 @@ export function SummaryBar({
             className="kr-hover-surface"
             data-testid="summary-collapse-all"
             disabled={!hasFiles}
-            onClick={() => setAllCollapsed(sessionId, true)}
+            onClick={() => setAllCollapsed(sessionId, true, paths)}
             style={iconButtonStyle}
             title="Collapse all"
             type="button"
@@ -320,7 +326,7 @@ export function SummaryBar({
             className="kr-hover-surface"
             data-testid="summary-expand-all"
             disabled={!hasFiles}
-            onClick={() => setAllCollapsed(sessionId, false)}
+            onClick={() => setAllCollapsed(sessionId, false, paths)}
             style={iconButtonStyle}
             title="Expand all"
             type="button"

@@ -84,6 +84,17 @@ export function useGitAnnotations(
     fetchAll();
   }, [fetchAll]);
 
+  // Unsaved edits just went away — a save, or a discard. The file on disk is
+  // what blame describes, and a save changes it, so fetch now rather than
+  // wait for a refresh the floor below may skip.
+  const wasDirtyRef = useRef(dirty);
+  useEffect(() => {
+    if (wasDirtyRef.current && !dirty) {
+      fetchAll();
+    }
+    wasDirtyRef.current = dirty;
+  }, [dirty, fetchAll]);
+
   useRevalidateOn(sessionId, () => {
     if (Date.now() - lastFetchRef.current >= BASELINE_REFETCH_INTERVAL_MS) {
       fetchAll();

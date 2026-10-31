@@ -2,6 +2,7 @@ import {
   type CSSProperties,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -256,6 +257,7 @@ export function ChangesView({ sessionId }: { sessionId: string }) {
   // one place that knows when an entry stops being needed.
   useEffect(() => () => forgetChangesView(sessionId), [sessionId]);
   const consumeJump = useChanges((s) => s.consumeJump);
+  const requestJump = useChanges((s) => s.requestJump);
   const setTab = useChanges((s) => s.setTab);
   const selectFile = useChanges((s) => s.selectFile);
   const toggleMyEditsOnly = useChanges((s) => s.toggleMyEditsOnly);
@@ -388,6 +390,26 @@ export function ChangesView({ sessionId }: { sessionId: string }) {
     showViewer,
     tab,
   } = view;
+  const displayPaths = useMemo(
+    () => displayFiles.map((f) => f.path),
+    [displayFiles]
+  );
+
+  // A row with no file to open (a deletion) shows its diff. With a file
+  // open, the diff is hidden behind it, so close the file first — an
+  // unsaved draft is stashed on the way out and comes back on reopen — and
+  // let the jump land once the diff is on screen.
+  const handleJumpToFile = useCallback(
+    (path: string) => {
+      if (showViewer) {
+        selectFile(sessionId, undefined);
+        requestJump(sessionId, path);
+        return;
+      }
+      diffFeedRef.current?.scrollToFile(path);
+    },
+    [requestJump, selectFile, sessionId, showViewer]
+  );
   const { pendingJump } = view;
   useEffect(() => {
     if (pendingJump === undefined) {
@@ -459,6 +481,7 @@ export function ChangesView({ sessionId }: { sessionId: string }) {
         }
         isVisible={isVisible}
         onRefresh={() => doRefresh("manual")}
+        paths={displayPaths}
         pulsing={pulsing}
         sessionId={sessionId}
         totals={view.totals}
@@ -480,7 +503,7 @@ export function ChangesView({ sessionId }: { sessionId: string }) {
         <FileTreePane
           dirtyPaths={view.dirtyPaths}
           files={view.displayFiles}
-          onJumpToFile={(path) => diffFeedRef.current?.scrollToFile(path)}
+          onJumpToFile={handleJumpToFile}
           onOpenFile={handleOpenFile}
           onTabChange={(next) => setTab(sessionId, next)}
           selectedPath={view.selectedFileDiff?.path}
