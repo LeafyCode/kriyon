@@ -9,8 +9,9 @@
 //!
 //! The fix most desktop apps use (VS Code, Tauri's `fix-path-env`): run the
 //! person's shell once as an interactive login shell (`-ilc`, so `.zshrc` is
-//! read too) and take its PATH. Every process Kriyon starts that may need a
-//! tool from it — [Git run] and the [Worktree bootstrap] — gets that PATH.
+//! read too) and take its PATH. The commands that run the person's own tools
+//! get it as an argument: the [Worktree bootstrap], and the git commands
+//! that fire repo hooks (creating a worktree, merging one back).
 //!
 //! A slow or broken shell config must never wedge the app, so the probe has a
 //! timeout and a failure falls back to the app's own PATH.
@@ -96,8 +97,7 @@ fn probe(shell: &str, timeout: Duration) -> Option<String> {
         // A hung config: stop the shell and anything it started.
         #[cfg(unix)]
         if let Ok(pid) = i32::try_from(child.id()) {
-            // SAFETY: plain syscall; `-pid` names the group made by `process_group(0)`.
-            unsafe { libc::kill(-pid, libc::SIGKILL) };
+            crate::daemon_rt::signal_group_gated(pid, libc::SIGKILL);
         }
     }
     let _ = child.kill();

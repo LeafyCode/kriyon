@@ -43,6 +43,24 @@ pub(crate) fn signal_gated(pid: i32, signal: libc::c_int) {
     }
 }
 
+/// Send `signal` to every process in group `pgid` if the [Signal gate] allows
+/// `pgid` itself: the group of a child started with `process_group(0)`, whose
+/// id is the child's pid. The gate keeps `kill(-1)` (every process the person
+/// owns) and Kriyon's own group out of reach.
+#[cfg(unix)]
+pub(crate) fn signal_group_gated(pgid: i32, signal: libc::c_int) {
+    let own_pid = i32::try_from(std::process::id()).unwrap_or(0);
+    // SAFETY: getpgrp(2) only reads this process's group id.
+    let own_group = unsafe { libc::getpgrp() };
+    if may_signal(pgid, &[own_pid, own_group]) {
+        // SAFETY: plain kill(2) on a group the gate has proven is > 1 and not
+        // ours; no memory involved.
+        unsafe {
+            libc::kill(-pgid, signal);
+        }
+    }
+}
+
 /// The file whose `flock` marks the instance that owns a [Run dir].
 const OWNER_LOCK: &str = ".owner.lock";
 /// How long a non-owning instance waits for the daemon's greeting before
