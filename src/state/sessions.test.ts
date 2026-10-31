@@ -1268,3 +1268,21 @@ test("archiving the active session never hands the selection to a parked one", (
 
   expect(useSessions.getState().activeSessionId).toBe("s0");
 });
+
+test("closing the active session never hands the selection to a parked one", () => {
+  useSessions.setState({
+    activeSessionId: "s1",
+    projects: [makeProject("live"), makeProject("pk")],
+    sessions: {
+      s0: inProject("s0", "live", 1),
+      s1: inProject("s1", "live", 2),
+      parked: { ...inProject("parked", "pk", 9), parkedAt: 10 },
+    },
+    warmPanes: [],
+  });
+
+  useSessions.getState().removeSession("s1");
+
+  // Selecting it would launch it while it still sits in the Parked list.
+  expect(useSessions.getState().activeSessionId).toBe("s0");
+});

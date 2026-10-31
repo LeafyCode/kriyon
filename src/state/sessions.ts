@@ -449,7 +449,6 @@ export function badgeCount(activity: SessionActivity | undefined): number {
   return agents + shells;
 }
 
-/** Picks the most-recently-created session id, or null if there are none. */
 /** Whether a session is parked: stopped and off the rail until opened. */
 export function isParked(session: UiSession): boolean {
   return session.archivedAt === null && (session.parkedAt ?? null) !== null;
@@ -465,9 +464,10 @@ export function isPutAway(session: UiSession): boolean {
 }
 
 /**
- * Ids of every [Parked project]: one with at least one parked session and no
- * session still on the rail. Its [Project terminal]s stay stopped until one of
- * its sessions comes back.
+ * Ids of every fully parked project: one with at least one parked session and
+ * none left on the rail. Its [Project terminal]s stay stopped (and unmounted)
+ * until one of its sessions comes back. The orphan sweep decides the same thing
+ * in Rust (`fully_parked_projects` in kriyon-core); change both together.
  */
 export function fullyParkedProjectIds(
   sessions: Record<string, UiSession>
@@ -485,15 +485,6 @@ export function fullyParkedProjectIds(
     parked.delete(id);
   }
   return parked;
-}
-
-/** The sessions still in sight — neither archived nor parked. */
-function liveSessions(
-  sessions: Record<string, UiSession>
-): Record<string, UiSession> {
-  return Object.fromEntries(
-    Object.entries(sessions).filter(([, s]) => !isPutAway(s))
-  );
 }
 
 /**
@@ -531,9 +522,19 @@ function unparked(
   return next;
 }
 
+/**
+ * The newest session still in sight, or null if there is none — where the
+ * selection goes when the selected session leaves. Never a put-away one:
+ * selecting a session launches it, and an archived or parked session must not
+ * start while it sits out of sight. One home for every path that moves the
+ * selection (close, archive, park), so none can forget the rule.
+ */
 function newestSessionId(sessions: Record<string, UiSession>): string | null {
   let newest: UiSession | undefined;
   for (const s of Object.values(sessions)) {
+    if (isPutAway(s)) {
+      continue;
+    }
     if (!newest || s.createdAt > newest.createdAt) {
       newest = s;
     }
@@ -1051,11 +1052,10 @@ export const useSessions = create<SessionsState>((set, get) => ({
       // screen and the warm set: a pane still wired to the stopped host would
       // sit dead, and would stay blank after an un-archive. The selection moves
       // to the newest session still in sight, exactly as a close would move it.
-      const live = liveSessions(sessions);
       return {
         activeSessionId:
           state.activeSessionId === id
-            ? newestSessionId(live)
+            ? newestSessionId(sessions)
             : state.activeSessionId,
         sessions,
         warmPanes: state.warmPanes.filter((warmId) => warmId !== id),
@@ -1087,7 +1087,7 @@ export const useSessions = create<SessionsState>((set, get) => ({
       return {
         activeSessionId:
           active !== null && parked(active)
-            ? newestSessionId(liveSessions(sessions))
+            ? newestSessionId(sessions)
             : active,
         sessions,
         warmPanes: state.warmPanes.filter((warmId) => !parked(warmId)),
