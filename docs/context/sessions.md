@@ -95,8 +95,9 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
   app run by starting their shell as an interactive login shell (`$SHELL -ilc`, so
   `.zshrc` counts) with a 10-second timeout. A Mac app opened from the Dock gets only the
   system PATH, so without it a [Worktree bootstrap] cannot find pnpm and a git hook cannot
-  find node. [Git run] and the [Worktree bootstrap] use it; if it can't be read, they keep
-  the app's own PATH. _Avoid_: login env, fix-path.
+  find node. The [Worktree bootstrap] and the git commands that fire repo hooks (creating a
+  worktree, merging one back) take it as an argument; if it can't be read, they keep the
+  app's own PATH. _Avoid_: login env, fix-path.
 - **Install command** — the dependency-install command a [Worktree bootstrap] infers from
   which lockfile is present (`pnpm-lock.yaml`→`pnpm install`, `package-lock.json`→`npm
   install`, `yarn.lock`→`yarn`, `bun.lockb`→`bun install`), or none. Purely a function of

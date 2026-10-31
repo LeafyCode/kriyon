@@ -54,25 +54,44 @@ pub fn repo_status(repo_path: &str) -> Result<RepoStatus, String> {
     Ok(parse_status(&stdout))
 }
 
-/// Create a new worktree at `path` on a freshly-created branch `branch`.
-///
-/// `git worktree add` also exits non-zero when only the repo's post-checkout
-/// hook failed (say, git-lfs is not installed), after the worktree was made.
-/// That counts as created — git's docs say the hook cannot change the
-/// checkout's outcome — so the caller opens it rather than retrying onto a
-/// branch that is now taken.
+/// Create a new worktree at `path` on a freshly-created branch `branch`, with
+/// the person's [Shell PATH] so its post-checkout hook (git-lfs, say) finds
+/// their tools when the app was opened from the Dock.
 ///
 /// # Errors
 /// Returns an error string if git did not create the worktree.
 #[tauri::command(async)]
 pub fn create_worktree(repo_path: &str, branch: &str, path: &str) -> Result<(), String> {
+    create_worktree_with(repo_path, branch, path, crate::shell_path::user_path())
+}
+
+/// [`create_worktree`] with git and its hooks run on `shell_path` (`None`
+/// keeps the app's own PATH).
+///
+/// `git worktree add` also exits non-zero when only the repo's post-checkout
+/// hook failed, after the worktree was made. That counts as created — git's
+/// docs say the hook cannot change the checkout's outcome — so the caller
+/// opens it rather than retrying onto a branch that is now taken. Only a
+/// folder that was not there before the call counts: an existing worktree on
+/// the same branch is not one this call made.
+pub(crate) fn create_worktree_with(
+    repo_path: &str,
+    branch: &str,
+    path: &str,
+    shell_path: Option<&str>,
+) -> Result<(), String> {
     reject_flag_like("repo_path", repo_path)?;
     reject_flag_like("branch", branch)?;
     reject_flag_like("path", path)?;
+    let existed = std::path::Path::new(path).exists();
     // `--` terminates option parsing so `path` is always treated as positional.
-    match run_git(repo_path, &["worktree", "add", "-b", branch, "--", path]) {
+    let mut add = GitRun::new(repo_path).args(["worktree", "add", "-b", branch, "--", path]);
+    if let Some(shell_path) = shell_path {
+        add = add.env("PATH", shell_path);
+    }
+    match add.text() {
         Ok(_) => Ok(()),
-        Err(e) if is_worktree_on(path, branch) => {
+        Err(e) if !existed && is_worktree_on(path, branch) => {
             eprintln!("kriyon: worktree {path} created, but a git hook failed: {e}");
             Ok(())
         }
@@ -847,19 +866,34 @@ fn diff_working_tree_for(
 /// returns [`MergeOutcome::Clean`]; a conflict returns the unmerged paths and
 /// leaves the repo in the merging state for the user to resolve in the terminal.
 ///
+/// The merge runs with the person's [Shell PATH], so a commit hook that calls
+/// pnpm or node finds it when the app was opened from the Dock.
+///
 /// # Errors
 /// Returns an error string only if git cannot be spawned, or the merge failed
 /// for a reason other than conflicts.
 #[tauri::command(async)]
 pub fn merge_worktree(repo_path: &str, branch: &str) -> Result<MergeOutcome, String> {
+    merge_worktree_with(repo_path, branch, crate::shell_path::user_path())
+}
+
+/// [`merge_worktree`] with git and its hooks run on `shell_path` (`None` keeps
+/// the app's own PATH).
+pub(crate) fn merge_worktree_with(
+    repo_path: &str,
+    branch: &str,
+    shell_path: Option<&str>,
+) -> Result<MergeOutcome, String> {
     reject_flag_like("repo_path", repo_path)?;
     reject_flag_like("branch", branch)?;
     let was_merging = is_merging(repo_path);
     // `outcome`, not `text`: a conflicted merge exits non-zero and that is the
     // answer this command returns, not a failure to report.
-    let merge = GitRun::new(repo_path)
-        .args(["merge", "--no-edit", "--", branch])
-        .outcome()?;
+    let mut merge = GitRun::new(repo_path).args(["merge", "--no-edit", "--", branch]);
+    if let Some(shell_path) = shell_path {
+        merge = merge.env("PATH", shell_path);
+    }
+    let merge = merge.outcome()?;
     if merge.success {
         return Ok(MergeOutcome::Clean);
     }
@@ -1689,7 +1723,7 @@ mod tests {
         let wt_path = wt_dir.path().join("feature");
         let wt = wt_path.to_str().expect("utf8 worktree path");
 
-        create_worktree(repo, "feature", wt).expect("create worktree");
+        create_worktree_with(repo, "feature", wt, None).expect("create worktree");
 
         assert_eq!(worktree_count(repo), 2, "expected main + feature worktrees");
 
@@ -1710,7 +1744,7 @@ mod tests {
         let wt_dir = tempfile::tempdir().expect("worktree parent dir");
         let wt_path = wt_dir.path().join("feature");
         let wt = wt_path.to_str().expect("utf8 worktree path");
-        create_worktree(repo, "feature", wt).expect("create worktree");
+        create_worktree_with(repo, "feature", wt, None).expect("create worktree");
         std::fs::write(wt_path.join("dirty.txt"), "uncommitted").expect("write");
 
         assert!(
@@ -1728,14 +1762,14 @@ mod tests {
     #[test]
     fn rejects_flag_like_arguments() {
         // Values that could smuggle a git flag are rejected before git runs.
-        assert!(create_worktree("/repo", "--upload-pack=evil", "/wt").is_err());
-        assert!(create_worktree("/repo", "feature", "--foo").is_err());
+        assert!(create_worktree_with("/repo", "--upload-pack=evil", "/wt", None).is_err());
+        assert!(create_worktree_with("/repo", "feature", "--foo", None).is_err());
         assert!(remove_worktree("/repo", "--force", false).is_err());
         assert!(repo_status("--bare").is_err());
         let store = store_with_project_root("/wt");
         assert!(diff_worktree_for(&store, "-C", "main").is_err());
         assert!(diff_worktree_for(&store, "/wt", "--evil").is_err());
-        assert!(merge_worktree("/repo", "--force").is_err());
+        assert!(merge_worktree_with("/repo", "--force", None).is_err());
         assert!(default_branch("--bare").is_err());
     }
 
@@ -1761,7 +1795,7 @@ mod tests {
         let repo = dir.path().to_str().expect("utf8");
         let wt = dir.path().join("wt");
         let wt_path = wt.to_str().expect("utf8");
-        create_worktree(repo, "feat/x", wt_path).expect("worktree");
+        create_worktree_with(repo, "feat/x", wt_path, None).expect("worktree");
         let store = store_with_project_root(&canonical(dir.path()));
         assert_eq!(unmerged_commits_for(&store, wt_path).expect("counts"), 0);
 
@@ -1793,7 +1827,7 @@ mod tests {
         let repo = dir.path().to_str().expect("utf8");
         let wt = dir.path().join("wt");
         let wt_path = wt.to_str().expect("utf8");
-        create_worktree(repo, "feat/x", wt_path).expect("worktree");
+        create_worktree_with(repo, "feat/x", wt_path, None).expect("worktree");
         commit_file(&wt, "g.txt", "two");
         commit_file(&wt, "h.txt", "three");
         let store = store_with_project_root(&canonical(dir.path()));
@@ -1814,7 +1848,7 @@ mod tests {
         let repo = dir.path().to_str().expect("utf8");
         let wt = dir.path().join("wt");
         let wt_path = wt.to_str().expect("utf8");
-        create_worktree(repo, "feat/x", wt_path).expect("worktree");
+        create_worktree_with(repo, "feat/x", wt_path, None).expect("worktree");
         commit_file(&wt, "g.txt", "two");
         let store = store_with_project_root(&canonical(dir.path()));
 
@@ -3652,7 +3686,7 @@ mod tests {
         git_setup(repo, &["commit", "-m", "add g"]);
         git_setup(repo, &["checkout", "main"]);
         assert_eq!(
-            merge_worktree(repo, "feature").expect("merge"),
+            merge_worktree_with(repo, "feature", None).expect("merge"),
             MergeOutcome::Clean
         );
 
@@ -3664,7 +3698,7 @@ mod tests {
         std::fs::write(dir.path().join("f.txt"), "ours\n").expect("write");
         git_setup(repo, &["commit", "-am", "ours"]);
 
-        match merge_worktree(repo, "conflict").expect("merge") {
+        match merge_worktree_with(repo, "conflict", None).expect("merge") {
             MergeOutcome::Conflicted { files } => {
                 assert!(files.contains(&"f.txt".to_string()), "got {files:?}");
             }
@@ -3695,32 +3729,91 @@ mod tests {
         git_setup(repo, &["commit", "-m", "main"]);
     }
 
-    /// A hook that calls `pnpm` must find it even when the app was opened from
-    /// the Dock: git runs with the person's [Shell PATH].
+    /// A tool that exists only in its own folder, so it is found only through a
+    /// PATH that names that folder, standing in for pnpm in `~/Library/pnpm/bin`.
+    /// Returns the folder and a PATH with it in front; the tool touches `$1`.
+    #[cfg(unix)]
+    fn shell_only_tool() -> (tempfile::TempDir, String) {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().expect("tool dir");
+        let tool = dir.path().join("kriyon-hook-tool");
+        std::fs::write(&tool, "#!/bin/sh\ntouch \"$1\"\n").expect("write tool");
+        std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        let path = format!("{}:/usr/bin:/bin", dir.path().display());
+        (dir, path)
+    }
+
+    /// A merge-back hook that calls a tool from the person's shell PATH finds it:
+    /// the merge runs with the [Shell PATH] it is given.
     #[test]
     #[cfg(unix)]
-    fn git_hooks_run_with_the_shell_path() {
+    fn a_merge_hook_finds_tools_on_the_shell_path() {
         if !git_available() {
             return;
         }
-        let Some(want) = crate::shell_path::user_path() else {
-            return; // No readable shell here (e.g. a bare CI box): nothing to assert.
-        };
+        let (_tools, path) = shell_only_tool();
         let dir = init_repo_with_commit();
         diverge_feature(dir.path());
+        let marker = dir.path().join("hook-ran");
         write_hook(
             dir.path(),
             "commit-msg",
-            "printf %s \"$PATH\" > \"$(git rev-parse --git-dir)/hook-path\"",
+            &format!("kriyon-hook-tool '{}'", marker.display()),
         );
 
-        merge_worktree(dir.path().to_str().unwrap(), "feature").expect("merge");
+        let outcome = merge_worktree_with(dir.path().to_str().unwrap(), "feature", Some(&path))
+            .expect("the hook found its tool, so the merge went through");
 
-        let got = std::fs::read_to_string(dir.path().join(".git/hook-path")).expect("hook ran");
-        // git puts its own exec-path in front; the rest is the shell's PATH.
+        assert_eq!(outcome, MergeOutcome::Clean);
+        assert!(marker.exists(), "the hook ran its tool");
+    }
+
+    /// The same for a new worktree's post-checkout hook (git-lfs, say).
+    #[test]
+    #[cfg(unix)]
+    fn a_checkout_hook_finds_tools_on_the_shell_path() {
+        if !git_available() {
+            return;
+        }
+        let (_tools, path) = shell_only_tool();
+        let dir = init_repo_with_commit();
+        let marker = dir.path().join("hook-ran");
+        write_hook(
+            dir.path(),
+            "post-checkout",
+            &format!("kriyon-hook-tool '{}'", marker.display()),
+        );
+        let parent = tempfile::tempdir().expect("parent");
+        let wt = parent.path().join("wt");
+
+        create_worktree_with(
+            dir.path().to_str().unwrap(),
+            "feat/lfs",
+            wt.to_str().unwrap(),
+            Some(&path),
+        )
+        .expect("worktree");
+
+        assert!(marker.exists(), "the hook ran its tool");
+    }
+
+    /// A worktree that was already there is not one this call made: asking for
+    /// it again must fail, not open a second session in the same folder.
+    #[test]
+    fn a_worktree_that_already_existed_is_still_an_error() {
+        if !git_available() {
+            return;
+        }
+        let dir = init_repo_with_commit();
+        let repo = dir.path().to_str().unwrap();
+        let parent = tempfile::tempdir().expect("parent");
+        let wt = parent.path().join("wt");
+        let wt_path = wt.to_str().unwrap();
+        create_worktree_with(repo, "feat/again", wt_path, None).expect("first");
+
         assert!(
-            got.ends_with(want),
-            "hook PATH {got:?} lacks the shell PATH {want:?}"
+            create_worktree_with(repo, "feat/again", wt_path, None).is_err(),
+            "the branch and folder are taken"
         );
     }
 
@@ -3741,7 +3834,7 @@ mod tests {
             "echo 'commitlint: not found' >&2; exit 1",
         );
 
-        let err = merge_worktree(repo, "feature").expect_err("hook rejects the merge");
+        let err = merge_worktree_with(repo, "feature", None).expect_err("hook rejects the merge");
         assert!(
             err.contains("commitlint"),
             "the hook's error is shown: {err}"
@@ -3779,7 +3872,7 @@ mod tests {
             "setup: mid-merge"
         );
 
-        let _ = merge_worktree(repo, "conflict");
+        let _ = merge_worktree_with(repo, "conflict", None);
         assert!(
             dir.path().join(".git/MERGE_HEAD").exists(),
             "their merge kept"
@@ -3802,7 +3895,7 @@ mod tests {
         let wt = parent.path().join("wt");
         let wt_path = wt.to_str().unwrap();
 
-        create_worktree(repo, "feat/hooked", wt_path).expect("worktree is there");
+        create_worktree_with(repo, "feat/hooked", wt_path, None).expect("worktree is there");
         assert!(wt.join("f.txt").exists(), "checked out");
     }
 
@@ -3817,6 +3910,6 @@ mod tests {
         git_setup(repo, &["branch", "taken"]);
         let parent = tempfile::tempdir().expect("parent");
         let wt = parent.path().join("wt");
-        assert!(create_worktree(repo, "taken", wt.to_str().unwrap()).is_err());
+        assert!(create_worktree_with(repo, "taken", wt.to_str().unwrap(), None).is_err());
     }
 }
