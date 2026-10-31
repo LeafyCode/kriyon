@@ -34,7 +34,13 @@ import {
   type UiSession,
   useSessions,
 } from "./sessions.ts";
-import { freedMemoryNote, stopCostFor } from "./stopCost.ts";
+import {
+  freedMemoryNote,
+  hasTotalStopCost,
+  plural,
+  stopCostOfAll,
+  type TotalStopCost,
+} from "./stopCost.ts";
 import { projectPaneIds, useTerminals } from "./terminals.ts";
 import { sessionPaneMounts } from "./warmPanes.ts";
 
@@ -62,66 +68,39 @@ export function archiveSessionAndStop(sessionId: string): void {
   }
 }
 
-/** What parking a project would stop — read by its confirm and its toast. */
-export interface ParkCost {
+/**
+ * What parking a project would stop — read by its confirm and its toast: the
+ * same [Stop cost] the quit gate adds up, over the project's sessions still on
+ * the rail, plus its busy terminals. Built from `stopCostOfAll` and
+ * `hasTotalStopCost`, so parking can never warn about less than quitting would.
+ */
+export interface ParkCost extends TotalStopCost {
   /** Terminal panes with a command running. */
   busyTerminals: number;
-  /** Background commands the project's sessions are running, by name. */
-  commands: string[];
   /** The sessions parking stops (every one still on the rail). */
   sessionIds: string[];
-  /** Sessions still starting Claude up. */
-  starting: number;
-  /** Sessions mid-turn. */
-  working: number;
 }
 
-/**
- * The [Stop cost] of every session in a project plus its busy terminals: the
- * same answer the close confirm and the quit gate read, so parking can't warn
- * about less than they would.
- */
 export function projectParkCost(projectId: string): ParkCost {
   const state = useSessions.getState();
-  const cost: ParkCost = {
-    busyTerminals: 0,
-    commands: [],
-    sessionIds: [],
-    starting: 0,
-    working: 0,
-  };
-  for (const session of Object.values(state.sessions)) {
-    if (session.projectId !== projectId || isPutAway(session)) {
-      continue;
-    }
-    cost.sessionIds.push(session.id);
-    const one = stopCostFor(session, state);
-    cost.commands.push(...one.commands);
-    if (one.engagement === "running") {
-      cost.working += 1;
-    } else if (one.engagement === "starting") {
-      cost.starting += 1;
-    }
-  }
+  const sessions = Object.fromEntries(
+    Object.entries(state.sessions).filter(
+      ([, session]) => session.projectId === projectId && !isPutAway(session)
+    )
+  );
   const terminals = useTerminals.getState();
-  cost.busyTerminals = projectPaneIds(terminals.byProject, projectId).filter(
-    (id) => terminals.isPaneBusy(id)
-  ).length;
-  return cost;
+  return {
+    ...stopCostOfAll({ ...state, sessions }),
+    busyTerminals: projectPaneIds(terminals.byProject, projectId).filter((id) =>
+      terminals.isPaneBusy(id)
+    ).length,
+    sessionIds: Object.keys(sessions),
+  };
 }
 
 /** Whether parking would stop any work in flight — when its confirm is owed. */
 export function hasParkCost(cost: ParkCost): boolean {
-  return (
-    cost.working > 0 ||
-    cost.starting > 0 ||
-    cost.commands.length > 0 ||
-    cost.busyTerminals > 0
-  );
-}
-
-function plural(count: number, noun: string): string {
-  return `${count} ${noun}${count === 1 ? "" : "s"}`;
+  return hasTotalStopCost(cost) || cost.busyTerminals > 0;
 }
 
 /**
@@ -257,13 +236,6 @@ function persistThenWarm(project: ProjectRow, session: SessionRow): void {
 }
 
 /**
- * Open a new session in `project` (created if absent), with `cwd` and `title`.
- * The one intake transaction: ensure the project, build the row, add it, and make
- * it active — all in one place so a new field or side effect has a single home.
- * Making it active is what launches `claude` (the active-session effect in `App`
- * launches/resumes a session the first time it is viewed).
- */
-/**
  * Make sure `project` is in the store, returning the store's row for it — the
  * row that gets persisted, since the caller's copy may be a fresh one built
  * from a folder pick.
@@ -277,6 +249,13 @@ function ensureProject(project: ProjectRow): ProjectRow {
   );
 }
 
+/**
+ * Open a new session in `project` (created if absent), with `cwd` and `title`.
+ * The one intake transaction: ensure the project, build the row, add it, and make
+ * it active — all in one place so a new field or side effect has a single home.
+ * Making it active is what launches `claude` (the active-session effect in `App`
+ * launches/resumes a session the first time it is viewed).
+ */
 export function createSession(
   project: ProjectRow,
   cwd: string,

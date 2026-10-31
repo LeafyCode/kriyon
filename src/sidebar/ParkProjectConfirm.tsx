@@ -4,12 +4,9 @@
  * terminal. A {@link ConfirmDialog} adapter, like {@link ClearProjectConfirm}.
  */
 import { type ParkCost, parkProjectAndStop } from "../state/actions.ts";
+import { plural } from "../state/stopCost.ts";
 import type { ProjectRow } from "../types.ts";
 import { ConfirmDialog } from "../ui/ConfirmDialog.tsx";
-
-function plural(count: number, noun: string): string {
-  return `${count} ${noun}${count === 1 ? "" : "s"}`;
-}
 
 /** "2 sessions are working and 1 terminal is running a command" — what the
  *  park would interrupt, in one plain line. */

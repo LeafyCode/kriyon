@@ -30,6 +30,7 @@ vi.mock("../ui/Toast.tsx", () => ({ showToast: vi.fn() }));
 import {
   captureBaseline,
   sleepIdleSessions,
+  upsertProject,
   upsertSession,
 } from "../ipc/bridge.ts";
 import {
@@ -1012,11 +1013,18 @@ describe("parking a project", () => {
     });
   });
 
-  it("a new session in a project with parked sessions leaves them parked", () => {
+  it("a new session in a known folder saves the stored project row, not a blank one", () => {
+    vi.mocked(upsertProject).mockClear();
     useSessions.setState({
       activeSessionId: null,
       projects: [
-        { ...project("/work/proj"), name: "proj", path: "/work/proj" },
+        {
+          color: "#a293e8",
+          id: "/work/proj",
+          name: "proj",
+          path: "/work/proj",
+          setupCommand: "make",
+        },
       ],
       sessions: {
         old: { ...inProject("old", "/work/proj"), parkedAt: 10 },
@@ -1025,8 +1033,12 @@ describe("parking a project", () => {
 
     createSessionInFolder("/work/proj");
 
-    const state = useSessions.getState();
-    expect(state.sessions.old?.parkedAt).toBe(10);
-    expect(state.activeSessionId).not.toBe("old");
+    // The folder pick builds a fresh row with no colour or setup command;
+    // saving that one would wipe the project's own settings.
+    const saved = vi.mocked(upsertProject).mock.lastCall?.[0];
+    expect(saved?.color).toBe("#a293e8");
+    expect(saved?.setupCommand).toBe("make");
+    // A new session joins the rail; the parked ones stay parked.
+    expect(useSessions.getState().sessions.old?.parkedAt).toBe(10);
   });
 });
