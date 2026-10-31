@@ -30,6 +30,7 @@ vi.mock("../ui/Toast.tsx", () => ({ showToast: vi.fn() }));
 import {
   captureBaseline,
   sleepIdleSessions,
+  upsertProject,
   upsertSession,
 } from "../ipc/bridge.ts";
 import {
@@ -49,7 +50,9 @@ import {
   focusSessionFromNotification,
   launchActiveSession,
   noteResumeFailed,
+  parkProjectAndStop,
   prewarmSession,
+  projectParkCost,
   restartSessionFresh,
   resumePastSession,
   sessionBecameLive,
@@ -65,6 +68,7 @@ import {
   type UiSession,
   useSessions,
 } from "./sessions.ts";
+import { useTerminals } from "./terminals.ts";
 
 /** Flush pending microtasks — the `captureBaseline().then(setBaseline)` chain
  * fired-and-forgotten by `createSession` after it returns synchronously. */
@@ -879,5 +883,162 @@ describe("sleepIdleSessionsNow", () => {
       "Could not sleep idle sessions: boom",
       "error"
     );
+  });
+});
+
+describe("parking a project", () => {
+  function project(id: string): ProjectRow {
+    return { color: null, id, name: id, path: `/${id}`, setupCommand: null };
+  }
+  function inProject(id: string, projectId: string): UiSession {
+    return idleSession({ ...row(id), projectId });
+  }
+  function terminalsFor(projectId: string, paneIds: string[]) {
+    return {
+      [projectId]: {
+        activeTabId: "t1",
+        tabs: [
+          {
+            activePaneId: paneIds[0] ?? "",
+            direction: "row" as const,
+            id: "t1",
+            layout: [],
+            panes: paneIds.map((id) => ({ cwd: "/x", id })),
+            title: "dev",
+          },
+        ],
+      },
+    };
+  }
+
+  beforeEach(() => {
+    vi.mocked(disposeSession).mockClear();
+    vi.mocked(upsertSession).mockClear();
+    vi.mocked(showToast).mockClear();
+    useTerminals.setState({ busyPanes: {}, byProject: {}, deadPanes: {} });
+  });
+
+  it("stops every rail session and terminal in the project and nothing else", () => {
+    useSessions.setState({
+      activeSessionId: "b1",
+      projects: [project("pa"), project("pb")],
+      sessions: {
+        a1: inProject("a1", "pa"),
+        a2: inProject("a2", "pa"),
+        old: { ...inProject("old", "pa"), archivedAt: 5 },
+        b1: inProject("b1", "pb"),
+      },
+      warmPanes: [],
+    });
+    useTerminals.setState({
+      byProject: {
+        ...terminalsFor("pa", ["pane-a"]),
+        ...terminalsFor("pb", ["pane-b"]),
+      },
+    });
+
+    parkProjectAndStop("pa");
+
+    const stopped = vi.mocked(disposeSession).mock.calls.map(([id]) => id);
+    // The archived one is already stopped.
+    expect(stopped).toEqual(expect.arrayContaining(["a1", "a2", "pane-a"]));
+    expect(stopped).toHaveLength(3);
+    const { sessions } = useSessions.getState();
+    expect(sessions.a1?.parkedAt).toBeGreaterThan(0);
+    expect(sessions.b1?.parkedAt).toBeUndefined();
+    // The terminal layout stays, so unparking brings the tabs back.
+    expect(useTerminals.getState().byProject.pa?.tabs[0]?.panes).toHaveLength(
+      1
+    );
+    expect(showToast).toHaveBeenCalledExactlyOnceWith(
+      "Parked pa · 2 sessions and 1 terminal stopped"
+    );
+  });
+
+  it("saves the parked rows at once rather than waiting for the debounce", () => {
+    useSessions.setState({
+      activeSessionId: null,
+      projects: [project("pa")],
+      sessions: { a1: inProject("a1", "pa") },
+      warmPanes: [],
+    });
+
+    parkProjectAndStop("pa");
+
+    const saved = vi.mocked(upsertSession).mock.lastCall?.[0];
+    expect(saved?.id).toBe("a1");
+    expect(saved?.parkedAt).toBeGreaterThan(0);
+  });
+
+  it("clears the stopped terminals' busy flags so a quit does not count them", () => {
+    useSessions.setState({
+      activeSessionId: null,
+      projects: [project("pa")],
+      sessions: {},
+      warmPanes: [],
+    });
+    useTerminals.setState({
+      busyPanes: { "pane-a": true },
+      byProject: terminalsFor("pa", ["pane-a"]),
+    });
+
+    parkProjectAndStop("pa");
+
+    expect(useTerminals.getState().hasBusyPanes()).toBe(false);
+  });
+
+  it("names what parking would stop, skipping what is already parked", () => {
+    useSessions.setState({
+      activity: {},
+      bootPhase: {},
+      exited: {},
+      projects: [project("pa")],
+      sessions: {
+        a1: { ...inProject("a1", "pa"), status: "running" },
+        a2: inProject("a2", "pa"),
+        a3: { ...inProject("a3", "pa"), parkedAt: 4, status: "running" },
+      },
+    });
+    useTerminals.setState({
+      busyPanes: { "pane-a": true },
+      byProject: terminalsFor("pa", ["pane-a", "pane-b"]),
+    });
+
+    expect(projectParkCost("pa")).toEqual({
+      busyTerminals: 1,
+      commands: [],
+      sessionIds: ["a1", "a2"],
+      starting: 0,
+      working: 1,
+    });
+  });
+
+  it("a new session in a known folder saves the stored project row, not a blank one", () => {
+    vi.mocked(upsertProject).mockClear();
+    useSessions.setState({
+      activeSessionId: null,
+      projects: [
+        {
+          color: "#a293e8",
+          id: "/work/proj",
+          name: "proj",
+          path: "/work/proj",
+          setupCommand: "make",
+        },
+      ],
+      sessions: {
+        old: { ...inProject("old", "/work/proj"), parkedAt: 10 },
+      },
+    });
+
+    createSessionInFolder("/work/proj");
+
+    // The folder pick builds a fresh row with no colour or setup command;
+    // saving that one would wipe the project's own settings.
+    const saved = vi.mocked(upsertProject).mock.lastCall?.[0];
+    expect(saved?.color).toBe("#a293e8");
+    expect(saved?.setupCommand).toBe("make");
+    // A new session joins the rail; the parked ones stay parked.
+    expect(useSessions.getState().sessions.old?.parkedAt).toBe(10);
   });
 });

@@ -3,7 +3,7 @@ import type { CSSProperties, ReactNode } from "react";
 import { pickFocusSession } from "../sidebar/sessionOrder.ts";
 import { useCommandCenter } from "../state/commandCenter.ts";
 import { useLayout } from "../state/layout.ts";
-import { useSessions } from "../state/sessions.ts";
+import { isPutAway, useSessions } from "../state/sessions.ts";
 import { useUi } from "../state/ui.ts";
 import { accentAlpha, tokens } from "../theme/tokens.ts";
 import { TOP_BAND_HEIGHT, TRAFFIC_LIGHT_CLEARANCE } from "./topBand.ts";
@@ -107,8 +107,7 @@ export function FocusRail() {
   // most recently active, then newest — see pickFocusSession.
   function focusSessionOf(projectId: string): string | undefined {
     const projectSessions = Object.values(sessions).filter(
-      (session) =>
-        session.projectId === projectId && session.archivedAt === null
+      (session) => session.projectId === projectId && !isPutAway(session)
     );
     return pickFocusSession(projectSessions, lastChangeMs)?.id;
   }

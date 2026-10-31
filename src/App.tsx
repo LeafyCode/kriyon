@@ -34,7 +34,7 @@ import {
 import { hydrate, installPersistence } from "./state/persistence.ts";
 import { useSessions } from "./state/sessions.ts";
 import { freedMemoryNote } from "./state/stopCost.ts";
-import { useTerminals } from "./state/terminals.ts";
+import { installParkedTerminalStops, useTerminals } from "./state/terminals.ts";
 import { useUpdates } from "./state/updates.ts";
 import { useSessionWatch } from "./state/useSessionWatch.ts";
 import { sessionPaneMounts } from "./state/warmPanes.ts";
@@ -296,6 +296,7 @@ function App() {
     );
     ignore(hydrate().then(sessionRequestsReady));
     const stopPersistence = installPersistence();
+    const stopParkedTerminals = installParkedTerminalStops();
     const stopListeners = installSessionListeners();
     const stopHeldBack = installHeldBackStarts();
     const stopCommandCenter = installCommandCenterListeners();
@@ -319,6 +320,7 @@ function App() {
       stopUpdateChanged();
       stopUpdateAnswered();
       stopPersistence();
+      stopParkedTerminals();
       stopListeners();
       stopHeldBack();
       stopCommandCenter();

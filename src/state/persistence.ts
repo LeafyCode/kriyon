@@ -8,7 +8,12 @@ import {
   upsertSession,
 } from "../ipc/bridge.ts";
 import { themeById } from "../theme/themes/index.ts";
-import type { NotifyPreference, NotifySound, SessionRow } from "../types.ts";
+import type {
+  NotifyPreference,
+  NotifySound,
+  ProjectRow,
+  SessionRow,
+} from "../types.ts";
 import {
   clampSidebarWidth,
   clampTerminalDockHeight,
@@ -24,6 +29,7 @@ import {
 import { usePromptLibrary } from "./promptLibrary.ts";
 import {
   idleSession,
+  isPutAway,
   sessionRow,
   type UiSession,
   useSessions,
@@ -397,7 +403,12 @@ export async function hydrate(): Promise<void> {
   const sessions: Record<string, UiSession> = {};
   let newest: SessionRow | undefined;
   for (const row of sessionRows) {
-    sessions[row.id] = idleSession(row);
+    const session = idleSession(row);
+    sessions[row.id] = session;
+    // A put-away session would boot on open, undoing the park or archive.
+    if (isPutAway(session)) {
+      continue;
+    }
     if (!newest || row.createdAt > newest.createdAt) {
       newest = row;
     }
@@ -458,16 +469,16 @@ function fieldToken(
 }
 
 /**
- * Fold a {@link SessionRow} (via {@link sessionRow}) into one fingerprint
- * line, keyed in sorted-field order rather than the object's own insertion
- * order — so a field added to `SessionRow`/`sessionRow` later joins
+ * Fold a {@link SessionRow} (via {@link sessionRow}) or a {@link ProjectRow}
+ * into one fingerprint line, keyed in sorted-field order rather than the
+ * object's own insertion order — so a field added to either row later joins
  * {@link persistKey}'s fingerprint automatically, without this function
  * having to be told about it.
  */
-function rowKey(row: SessionRow): string {
-  return (Object.keys(row) as (keyof SessionRow)[])
-    .sort((a, b) => (a < b ? -1 : 1))
-    .map((key) => fieldToken(row[key]))
+function rowKey(row: SessionRow | ProjectRow): string {
+  return Object.entries(row)
+    .sort(([a], [b]) => (a < b ? -1 : 1))
+    .map(([, value]) => fieldToken(value))
     .join(SEP);
 }
 
@@ -480,11 +491,7 @@ function rowKey(row: SessionRow): string {
 export function persistKey(
   state: ReturnType<typeof useSessions.getState>
 ): string {
-  const projects = state.projects
-    .map((p) =>
-      [p.id, p.name, p.path, p.color ?? "", p.setupCommand ?? ""].join(SEP)
-    )
-    .join("\n");
+  const projects = state.projects.map(rowKey).join("\n");
   const sessions = Object.values(state.sessions)
     .map((s) => rowKey(sessionRow(s)))
     .sort()

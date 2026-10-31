@@ -1,6 +1,6 @@
 import type { CSSProperties } from "react";
 import { useLayout } from "../state/layout.ts";
-import { useSessions } from "../state/sessions.ts";
+import { fullyParkedProjectIds, useSessions } from "../state/sessions.ts";
 import { useTerminals } from "../state/terminals.ts";
 import { TerminalWorkspace } from "../terminal/TerminalWorkspace.tsx";
 import { tokens } from "../theme/tokens.ts";
@@ -47,13 +47,16 @@ export function TerminalDock() {
   // Keep a workspace mounted for every project that has terminals, plus the
   // active project (which may not have any tabs yet). Only the active one is
   // visible; the rest are hidden-but-alive so switching projects never tears
-  // down — and blanks — a running terminal.
+  // down — and blanks — a running terminal. A [Parked project]'s terminals are
+  // stopped, so its workspace unmounts too: a mounted pane would start a fresh
+  // shell behind the person's back.
+  const parked = fullyParkedProjectIds(sessions);
   const mountedProjectIds = Array.from(
     new Set([
       ...Object.keys(byProject),
       ...(activeProjectId ? [activeProjectId] : []),
     ])
-  );
+  ).filter((id) => !parked.has(id));
 
   const startDrag = (event: {
     clientY: number;

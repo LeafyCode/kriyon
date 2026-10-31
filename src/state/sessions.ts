@@ -107,6 +107,8 @@ export interface UiSession {
   nestedUnder?: string | null;
   /** The [Handoff link] (see {@link SessionRow.parentSessionId}). */
   parentSessionId?: string | null;
+  /** When the session was parked (see {@link SessionRow.parkedAt}). */
+  parkedAt?: number | null;
   projectId: string;
   status: SessionStatus;
   summary: string;
@@ -146,6 +148,7 @@ export function sessionRow(session: UiSession): SessionRow {
     id: session.id,
     nestedUnder: session.nestedUnder ?? null,
     parentSessionId: session.parentSessionId ?? null,
+    parkedAt: session.parkedAt ?? null,
     projectId: session.projectId,
     title: session.title,
     titleLocked: session.titleLocked,
@@ -270,6 +273,10 @@ export interface SessionsState {
    * panes). See {@link SessionsState.exited}.
    */
   noteSessionExited: (id: string) => void;
+  /** Park every session of a project still on the rail: stamp `parkedAt`, and
+   *  move the selection and warm panes off them. Stopping them is
+   *  `parkProjectAndStop`'s job. */
+  parkProject: (projectId: string) => void;
   /** Where each [Nested session] not yet launched reports its first answer. */
   pendingReport: Record<string, NestedReport>;
   /** In-memory seed prompts for follow-up sessions, consumed at first launch. Never persisted. */
@@ -400,6 +407,9 @@ export interface SessionsState {
    */
   touchedFiles: Record<string, string[]>;
   unarchiveSession: (id: string) => void;
+  /** Bring every parked session of a project back to the rail. Starts
+   *  nothing. */
+  unparkProject: (projectId: string) => void;
   usage: Record<string, UsageSnapshot>;
   /**
    * The {@link ViewedMarker} per session — what the user had seen when they last
@@ -439,10 +449,92 @@ export function badgeCount(activity: SessionActivity | undefined): number {
   return agents + shells;
 }
 
-/** Picks the most-recently-created session id, or null if there are none. */
+/** Whether a session is parked: stopped and off the rail until opened. */
+export function isParked(session: UiSession): boolean {
+  return session.archivedAt === null && (session.parkedAt ?? null) !== null;
+}
+
+/**
+ * Whether a session is put away: an [Archived session] or a parked one. Both
+ * are stopped, so neither is live — the one check every surface that means
+ * "skip what is not live" asks, so parking can't miss a path.
+ */
+export function isPutAway(session: UiSession): boolean {
+  return session.archivedAt !== null || (session.parkedAt ?? null) !== null;
+}
+
+/**
+ * Ids of every fully parked project: one with at least one parked session and
+ * none left on the rail. Its [Project terminal]s stay stopped (and unmounted)
+ * until one of its sessions comes back. The orphan sweep decides the same thing
+ * in Rust (`fully_parked_projects` in kriyon-core); change both together.
+ */
+export function fullyParkedProjectIds(
+  sessions: Record<string, UiSession>
+): ReadonlySet<string> {
+  const parked = new Set<string>();
+  const live = new Set<string>();
+  for (const session of Object.values(sessions)) {
+    if (isParked(session)) {
+      parked.add(session.projectId);
+    } else if (!isPutAway(session)) {
+      live.add(session.projectId);
+    }
+  }
+  for (const id of live) {
+    parked.delete(id);
+  }
+  return parked;
+}
+
+/**
+ * `id` and every session it is nested under, up its lead chain. Opening a
+ * parked [Nested session] brings its leads back with it, so it shows nested
+ * under them rather than orphaned at the top level.
+ */
+function withLeads(
+  sessions: Record<string, UiSession>,
+  id: string
+): Set<string> {
+  const chain = new Set<string>();
+  let current: string | null | undefined = id;
+  while (current && !chain.has(current) && sessions[current]) {
+    chain.add(current);
+    current = sessions[current]?.nestedUnder;
+  }
+  return chain;
+}
+
+/** `sessions` with `parkedAt` cleared on the given ids — the same object when
+ *  none of them was parked, so subscribers don't churn. */
+function unparked(
+  sessions: Record<string, UiSession>,
+  ids: Iterable<string>
+): Record<string, UiSession> {
+  let next = sessions;
+  for (const id of ids) {
+    const session = next[id];
+    if (session && (session.parkedAt ?? null) !== null) {
+      next = next === sessions ? { ...sessions } : next;
+      next[id] = { ...session, parkedAt: null };
+    }
+  }
+  return next;
+}
+
+/**
+ * The newest session still in sight, or null if there is none — where the
+ * selection goes when the selected session leaves. Never a put-away one:
+ * selecting a session launches it, and an archived or parked session must not
+ * start while it sits out of sight. One home for every path that moves the
+ * selection (close, archive, park), so none can forget the rule.
+ */
 function newestSessionId(sessions: Record<string, UiSession>): string | null {
   let newest: UiSession | undefined;
   for (const s of Object.values(sessions)) {
+    if (isPutAway(s)) {
+      continue;
+    }
     if (!newest || s.createdAt > newest.createdAt) {
       newest = s;
     }
@@ -833,9 +925,15 @@ export const useSessions = create<SessionsState>((set, get) => ({
       // The warm set is LRU-bounded, so this may evict the coldest pane (its
       // xterm unmounts; the daemon lives on — see nextWarmPanes).
       const { warm } = nextWarmPanes(state.warmPanes, prev, id);
+      // Opening a session is what launches it, so opening a parked one — from
+      // the Parked section, the palette, a notification — brings it back to
+      // the rail: a running session must never sit hidden. Only it comes back
+      // (with its leads, if it is nested); the rest of its project stays
+      // parked, out of the way.
       return {
         warmPanes: warm,
         activeSessionId: id,
+        sessions: unparked(state.sessions, withLeads(state.sessions, id)),
         viewed,
       };
     }),
@@ -954,16 +1052,45 @@ export const useSessions = create<SessionsState>((set, get) => ({
       // screen and the warm set: a pane still wired to the stopped host would
       // sit dead, and would stay blank after an un-archive. The selection moves
       // to the newest session still in sight, exactly as a close would move it.
-      const live = Object.fromEntries(
-        Object.entries(sessions).filter(([, s]) => s.archivedAt === null)
-      );
       return {
         activeSessionId:
           state.activeSessionId === id
-            ? newestSessionId(live)
+            ? newestSessionId(sessions)
             : state.activeSessionId,
         sessions,
         warmPanes: state.warmPanes.filter((warmId) => warmId !== id),
+      };
+    }),
+
+  parkProject: (projectId) =>
+    set((state) => {
+      const now = Date.now();
+      let parkedAny = false;
+      const sessions = { ...state.sessions };
+      for (const session of Object.values(state.sessions)) {
+        if (session.projectId === projectId && !isPutAway(session)) {
+          sessions[session.id] = { ...session, parkedAt: now };
+          parkedAny = true;
+        }
+      }
+      if (!parkedAny) {
+        return state;
+      }
+      // Parking stops every session it parks (see `parkProjectAndStop`), so —
+      // exactly as archiving one does — their terminals leave the screen and
+      // the warm set, and the selection moves to the newest session still in
+      // sight.
+      const parked = (id: string) =>
+        (sessions[id]?.parkedAt ?? null) !== null &&
+        sessions[id]?.projectId === projectId;
+      const active = state.activeSessionId;
+      return {
+        activeSessionId:
+          active !== null && parked(active)
+            ? newestSessionId(sessions)
+            : active,
+        sessions,
+        warmPanes: state.warmPanes.filter((warmId) => !parked(warmId)),
       };
     }),
 
@@ -976,6 +1103,16 @@ export const useSessions = create<SessionsState>((set, get) => ({
       return {
         sessions: { ...state.sessions, [id]: { ...session, archivedAt: null } },
       };
+    }),
+
+  unparkProject: (projectId) =>
+    set((state) => {
+      const ids = Object.values(state.sessions)
+        .filter((s) => s.projectId === projectId && isParked(s))
+        .map((s) => s.id);
+      const sessions = unparked(state.sessions, ids);
+      // Nothing starts here: each session resumes only when it is opened.
+      return sessions === state.sessions ? state : { sessions };
     }),
 
   removeSession: (id) => {

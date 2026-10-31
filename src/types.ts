@@ -181,6 +181,10 @@ export interface SessionRow {
   /** The [Handoff link]: the session this [Follow-up session] was spawned
    *  from, or null/absent for an ordinary session. Display only. */
   parentSessionId?: string | null;
+  /** When the session was parked (ms since epoch), or null/absent. A parked
+   *  session is stopped and off the rail until opened (mirrors Rust
+   *  `parked_at`, ADR-0052). */
+  parkedAt?: number | null;
   projectId: string;
   title: string;
   /** The user renamed this session by hand; Claude's `ai-title` must not

@@ -8,7 +8,7 @@ import { type CSSProperties, useEffect, useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useCommandCenter } from "../state/commandCenter.ts";
 import { useLayout } from "../state/layout.ts";
-import { type UiSession, useSessions } from "../state/sessions.ts";
+import { isPutAway, type UiSession, useSessions } from "../state/sessions.ts";
 import { iconButton, sectionLabel } from "../theme/recipes.ts";
 import { tokens } from "../theme/tokens.ts";
 import type { ProjectRow } from "../types.ts";
@@ -16,6 +16,7 @@ import { useAnchoredMenu } from "../ui/AnchoredMenu.tsx";
 import { ArchivedGroup } from "./ArchivedGroup.tsx";
 import { useProjectDrag } from "./dragCommit.ts";
 import { NeedsYouSection } from "./NeedsYouSection.tsx";
+import { ParkedGroup } from "./ParkedGroup.tsx";
 import { ProjectGroup } from "./ProjectGroup.tsx";
 import { projectLabels } from "./projectLabel.ts";
 import { ResizeHandle } from "./ResizeHandle.tsx";
@@ -189,7 +190,7 @@ export function Sidebar({
     useShallow((state) => {
       const byProject = new Map<string, UiSession[]>();
       for (const session of Object.values(state.sessions)) {
-        if (session.archivedAt !== null) {
+        if (isPutAway(session)) {
           continue;
         }
         const bucket = byProject.get(session.projectId);
@@ -201,7 +202,8 @@ export function Sidebar({
       }
       // Archived sessions do not hold a group open: a project whose every
       // session has been archived would otherwise sit on the rail forever as
-      // an empty header with a `0` count.
+      // an empty header with a `0` count. Parked sessions don't either:
+      // they wait in the Parked section.
       const included = state.projects.filter((project) =>
         byProject.has(project.id)
       );
@@ -413,6 +415,7 @@ export function Sidebar({
             ) : null}
           </>
         ) : null}
+        <ParkedGroup nowMinute={nowMinute} />
         <ArchivedGroup />
       </div>
       <SidebarFooter onShowAbout={onShowAbout} />

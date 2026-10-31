@@ -9,7 +9,7 @@ import {
 import { type CSSProperties, type ReactNode, useMemo } from "react";
 import { TOP_BAND_HEIGHT, TRAFFIC_LIGHT_CLEARANCE } from "../layout/topBand.ts";
 import { useLayout } from "../state/layout.ts";
-import { useSessions } from "../state/sessions.ts";
+import { isPutAway, useSessions } from "../state/sessions.ts";
 import { useUi } from "../state/ui.ts";
 import { iconButton, inputBox, kbd, row30 } from "../theme/recipes.ts";
 import { tokens } from "../theme/tokens.ts";
@@ -174,9 +174,8 @@ export function SidebarHeader({ query, setQuery }: SidebarHeaderProps) {
 
   const openSessions = useSessions(
     (state) =>
-      Object.values(state.sessions).filter(
-        (session) => session.archivedAt === null
-      ).length
+      Object.values(state.sessions).filter((session) => !isPutAway(session))
+        .length
   );
   // The Command centre's count is the same "how many want me" number the
   // needs-you section renders, so the two can never disagree. The selector
