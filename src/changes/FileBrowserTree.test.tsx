@@ -2054,6 +2054,7 @@ describe("FileBrowserTree", () => {
       fireEvent.change(searchBox(), { target: { value: "f" } });
 
       expect(await screen.findByText(MORE_MATCHES_RE)).toBeInTheDocument();
+      expect(screen.queryByText(NOT_ALL_SEARCHED_RE)).not.toBeInTheDocument();
     });
 
     it("says the folder was too large to search completely, even when nothing matched", async () => {
@@ -2069,6 +2070,8 @@ describe("FileBrowserTree", () => {
       fireEvent.change(searchBox(), { target: { value: "deep" } });
 
       expect(await screen.findByText(NOT_ALL_SEARCHED_RE)).toBeInTheDocument();
+      // A different fact from "too many matches", with different advice.
+      expect(screen.queryByText(MORE_MATCHES_RE)).not.toBeInTheDocument();
     });
 
     it("Enter pressed before the new answer lands opens the new query's top match, not the old one's", async () => {

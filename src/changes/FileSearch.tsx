@@ -348,8 +348,9 @@ function SearchResults({
   if (state.status !== "done") {
     return <div style={noteStyle}>Searching…</div>;
   }
-  // Said first, and even with nothing found: here "No files match" alone
-  // would be wrong — the file may be in the part never searched.
+  // Shown last, under whatever was found — and even with nothing found:
+  // "No files match" alone would be wrong, since the file may be in the part
+  // never searched.
   const notAllSearched = state.walkStopped ? (
     <div style={noteStyle}>
       This folder is too large to search completely, so some files were not
