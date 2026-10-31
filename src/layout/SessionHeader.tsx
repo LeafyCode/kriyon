@@ -3,7 +3,7 @@ import type { CSSProperties } from "react";
 import { useChanges } from "../state/changes.ts";
 import { changedFileCount } from "../state/changesView.ts";
 import { useLayout } from "../state/layout.ts";
-import { sessionTouchedRelative, useSessions } from "../state/sessions.ts";
+import { sessionClaudeFiles, useSessions } from "../state/sessions.ts";
 import { useActiveSession, useRepoStatus } from "../state/useActiveSession.ts";
 import { projectColor } from "../theme/projectColor.ts";
 import { iconButton, pill } from "../theme/recipes.ts";
@@ -122,7 +122,7 @@ export function SessionHeader() {
   // [Summary bar], and reading the whole-diff count made it contradict the bar
   // whenever "My edits only" narrowed the feed beneath them both.
   const touchedRelative = useSessions(() =>
-    sessionTouchedRelative(session?.id ?? "")
+    sessionClaudeFiles(session?.id ?? "")
   );
   const changedFiles = useChanges((state) =>
     changedFileCount(state, session?.id ?? "", touchedRelative)

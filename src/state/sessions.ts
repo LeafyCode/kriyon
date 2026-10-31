@@ -265,11 +265,6 @@ export interface SessionsState {
    * here — no sidebar surface renders it (the tray reads its own snapshot).
    */
   memory: Record<string, number>;
-  /** Add the files the [Activity log] saw Claude change in `id` (absolute
-   * paths) to its `touchedFiles` — the log records what the live activity
-   * stream can't: subagents' edits, the files a command changed, and
-   * everything from before a restart. */
-  mergeTouchedFiles: (id: string, paths: readonly string[]) => void;
   /**
    * Record that a session's `claude` exited underneath the app. Ignores ids the
    * store does not know (the host's exit signal is shared with Project terminal
@@ -365,6 +360,13 @@ export interface SessionsState {
    * not made here.)
    */
   setRepoToplevel: (id: string, cwd: string, toplevel?: string) => void;
+  /** Make the files the [Activity log] saw Claude change in `id` (absolute
+   * paths) its `touchedFiles`. The log is the one owner of that answer: it
+   * counts only finished steps, including subagents' edits, the files a
+   * command changed and everything from before a restart. The live stream's
+   * own additions are a stopgap until the next sync replaces them. A session
+   * no longer in the store is ignored. */
+  setTouchedFromActivity: (id: string, paths: readonly string[]) => void;
   /**
    * [Sleeping session]s: id → the phase while Kriyon has its `claude` stopped.
    * Absent means awake. `stuck` means the resume kept failing, so the row must
@@ -405,6 +407,10 @@ export interface SessionsState {
    * live-refresh trigger.
    */
   touchedFiles: Record<string, string[]>;
+  /** Sessions whose `touchedFiles` the [Activity log] has answered for at
+   * least once — so an empty list means "Claude changed nothing", not "not
+   * known yet". See {@link sessionClaudeFiles}. */
+  touchedSynced: Record<string, boolean>;
   unarchiveSession: (id: string) => void;
   usage: Record<string, UsageSnapshot>;
   /**
@@ -689,6 +695,27 @@ export function sessionTouchedRelative(sessionId: string): Set<string> {
   return result;
 }
 
+/**
+ * The files Claude changed in `sessionId`, relativized to the repo — or
+ * `null` while that can't be known: no repo toplevel yet, the [Activity log]
+ * not answered yet, or recorded paths none of which match the repo (a
+ * symlinked project path). The AI changes filter only applies to a real
+ * answer, so "can't tell" never reads as "Claude changed nothing".
+ * Returns {@link sessionTouchedRelative}'s stable `Set` when known.
+ */
+export function sessionClaudeFiles(sessionId: string): Set<string> | null {
+  const state = useSessions.getState();
+  if (!state.repoToplevel[sessionId]) {
+    return null;
+  }
+  const touched = state.touchedFiles[sessionId] ?? [];
+  if (touched.length === 0) {
+    return state.touchedSynced[sessionId] ? EMPTY_TOUCHED_RELATIVE : null;
+  }
+  const relative = sessionTouchedRelative(sessionId);
+  return relative.size > 0 ? relative : null;
+}
+
 /** Every {@link SessionsState} slice keyed by session id, so
  *  {@link pruneById} can never drift from the store's shape. */
 const PER_SESSION_KEYS = [
@@ -707,6 +734,7 @@ const PER_SESSION_KEYS = [
   "sleeping",
   "statusOrigin",
   "touchedFiles",
+  "touchedSynced",
   "usage",
   "viewed",
 ] as const satisfies readonly (keyof SessionsState)[];
@@ -753,6 +781,7 @@ export const useSessions = create<SessionsState>((set, get) => ({
   projects: [],
   sessions: {},
   touchedFiles: {},
+  touchedSynced: {},
   repoToplevel: {},
   repoToplevelCwd: {},
 
@@ -1161,13 +1190,26 @@ export const useSessions = create<SessionsState>((set, get) => ({
       };
     }),
 
-  mergeTouchedFiles: (id, paths) =>
+  setTouchedFromActivity: (id, paths) =>
     set((state) => {
-      let touched = state.touchedFiles;
-      for (const path of paths) {
-        touched = withTouchedFile(touched, id, path);
+      if (!state.sessions[id]) {
+        return state;
       }
-      return touched === state.touchedFiles ? state : { touchedFiles: touched };
+      const prev = state.touchedFiles[id] ?? [];
+      const unchanged =
+        prev.length === paths.length &&
+        new Set(prev).size === paths.length &&
+        paths.every((p) => prev.includes(p));
+      const synced = state.touchedSynced[id] === true;
+      if (unchanged && synced) {
+        return state;
+      }
+      return {
+        touchedFiles: unchanged
+          ? state.touchedFiles
+          : { ...state.touchedFiles, [id]: [...paths] },
+        touchedSynced: { ...state.touchedSynced, [id]: true },
+      };
     }),
 
   setPendingSeedPrompt: (id, text) =>

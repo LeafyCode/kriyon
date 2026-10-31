@@ -23,6 +23,7 @@ import {
   idleSession,
   isWorktreeSession,
   relativizeTouchedPath,
+  sessionClaudeFiles,
   sessionRow,
   sessionTouchedRelative,
   sessionWorkingDir,
@@ -1128,21 +1129,59 @@ test("applyHooksOff ignores ids that are not sessions", () => {
   expect(useSessions.getState().hooksOff["pane-1"]).toBeUndefined();
 });
 
-test("mergeTouchedFiles adds the files the Activity log saw Claude change, once each", () => {
-  const store = useSessions.getState();
-  useSessions.setState({ touchedFiles: { s1: ["/repo/a.ts"] } });
-  store.mergeTouchedFiles("s1", ["/repo/a.ts", "/repo/gen.ts"]);
-  expect(useSessions.getState().touchedFiles.s1).toEqual([
-    "/repo/a.ts",
-    "/repo/gen.ts",
-  ]);
+test("setTouchedFromActivity makes the Activity log the record of Claude's files", () => {
+  useSessions.setState({
+    sessions: { s1: idleSession(base("s1")) },
+    // A denied edit the live stream counted; the log, which only counts
+    // finished steps, doesn't have it.
+    touchedFiles: { s1: ["/repo/denied.ts"] },
+  });
+  useSessions.getState().setTouchedFromActivity("s1", ["/repo/gen.ts"]);
+  expect(useSessions.getState().touchedFiles.s1).toEqual(["/repo/gen.ts"]);
+  expect(useSessions.getState().touchedSynced.s1).toBe(true);
 });
 
-test("mergeTouchedFiles keeps the same array when it learns nothing new", () => {
-  useSessions.setState({ touchedFiles: { s1: ["/repo/a.ts"] } });
+test("setTouchedFromActivity keeps the same array when nothing changed", () => {
+  useSessions.setState({
+    sessions: { s1: idleSession(base("s1")) },
+    touchedFiles: { s1: ["/repo/a.ts", "/repo/b.ts"] },
+    touchedSynced: { s1: true },
+  });
   const before = useSessions.getState().touchedFiles.s1;
-  useSessions.getState().mergeTouchedFiles("s1", ["/repo/a.ts"]);
+  useSessions
+    .getState()
+    .setTouchedFromActivity("s1", ["/repo/b.ts", "/repo/a.ts"]);
   expect(useSessions.getState().touchedFiles.s1).toBe(before);
+});
+
+test("setTouchedFromActivity ignores a session that has been closed", () => {
+  useSessions.setState({ sessions: {}, touchedFiles: {}, touchedSynced: {} });
+  useSessions.getState().setTouchedFromActivity("gone", ["/repo/a.ts"]);
+  expect(useSessions.getState().touchedFiles.gone).toBeUndefined();
+  expect(useSessions.getState().touchedSynced.gone).toBeUndefined();
+});
+
+test("sessionClaudeFiles is unknown until Claude's files can be matched to the repo", () => {
+  useSessions.setState({
+    repoToplevel: {},
+    sessions: { s1: idleSession(base("s1")) },
+    touchedFiles: {},
+    touchedSynced: {},
+  });
+  // No repo root yet.
+  expect(sessionClaudeFiles("s1")).toBeNull();
+  // A root, but the Activity log hasn't answered yet.
+  useSessions.setState({ repoToplevel: { s1: "/repo" } });
+  expect(sessionClaudeFiles("s1")).toBeNull();
+  // The log answered: Claude changed nothing — a real, empty answer.
+  useSessions.setState({ touchedSynced: { s1: true } });
+  expect(sessionClaudeFiles("s1")?.size).toBe(0);
+  // Recorded paths none of which match the repo (a symlinked project path):
+  // unknown again, rather than "Claude changed nothing".
+  useSessions.setState({ touchedFiles: { s1: ["/elsewhere/a.ts"] } });
+  expect(sessionClaudeFiles("s1")).toBeNull();
+  useSessions.setState({ touchedFiles: { s1: ["/repo/a.ts"] } });
+  expect([...(sessionClaudeFiles("s1") ?? [])]).toEqual(["a.ts"]);
 });
 
 test("relativizeTouchedPath sees through macOS's /private firmlink either way", () => {
@@ -1156,3 +1195,18 @@ test("relativizeTouchedPath sees through macOS's /private firmlink either way", 
     null
   );
 });
+
+function base(id: string) {
+  return {
+    archivedAt: null,
+    baselineOid: null,
+    claudeSessionId: null,
+    createdAt: 1,
+    cwd: "/repo",
+    id,
+    projectId: "p1",
+    title: id,
+    titleLocked: false,
+    worktreePath: null,
+  };
+}

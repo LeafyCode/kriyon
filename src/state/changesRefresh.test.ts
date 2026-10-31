@@ -1595,6 +1595,7 @@ test("a refresh learns from the Activity log which files Claude changed, Bash an
   await vi.waitFor(() =>
     expect(useSessions.getState().touchedFiles.s1).toEqual(["/repo/gen.ts"])
   );
+  expect(useSessions.getState().touchedSynced.s1).toBe(true);
   expect(mockedActivityChangedPaths).toHaveBeenCalledWith("s1");
 });
 
@@ -1644,4 +1645,40 @@ describe("what the diff is compared with, in plain words", () => {
     await refreshSessionChanges("s1");
     expect(useChanges.getState().bySession.s1?.comparedTo).toBe("vs main");
   });
+});
+
+test("a collapse made while the uncommitted diff is fetched is kept", async () => {
+  useSessions
+    .getState()
+    .addSession(locatedSession("s1", { baselineOid: "cafe" }));
+  useSessions.getState().setActiveSession("s1");
+  useChanges.getState().setTab("s1", "uncommitted");
+  mockedDiffSessionChanges.mockResolvedValue({
+    base: "HEAD",
+    files: [
+      {
+        binary: false,
+        hunks: [{ header: "@@", lines: [{ kind: "added", text: "x" }] }],
+        oldPath: null,
+        path: "a.ts",
+        status: "modified",
+      },
+    ],
+  });
+  let finish: (d: SessionDiff) => void = () => undefined;
+  mockedDiffWorkingTree.mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      })
+  );
+
+  const run = refreshSessionChanges("s1");
+  await vi.waitFor(() => expect(mockedDiffWorkingTree).toHaveBeenCalled());
+  // The user collapses a card while the second diff is still running.
+  useChanges.getState().toggleCollapsed("s1", "a.ts");
+  finish(emptyDiff());
+  await run;
+
+  expect(useChanges.getState().bySession.s1?.collapsed["a.ts"]).toBe(true);
 });

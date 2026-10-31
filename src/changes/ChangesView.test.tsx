@@ -67,6 +67,7 @@ vi.mock("./CodeEditor.tsx", () => ({
 }));
 
 import {
+  activityChangedPaths,
   defaultBranch,
   diffSessionChanges,
   diffWorkingTree,
@@ -263,6 +264,7 @@ function idleActivity(): SessionActivity {
 describe("ChangesView", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(activityChangedPaths).mockResolvedValue([]);
     useSessions.setState({
       activeSessionId: null,
       projects: [],
@@ -1951,6 +1953,11 @@ describe("ChangesView", () => {
         },
       });
       mockedRepoToplevel.mockResolvedValueOnce("/repo-wt/feat");
+      // The Activity log, which owns this record, agrees with it.
+      vi.mocked(activityChangedPaths).mockResolvedValue([
+        "/repo-wt/feat/a.ts",
+        "/repo/decoy.ts",
+      ]);
 
       renderChangesView("s1");
 
@@ -2001,6 +2008,11 @@ describe("ChangesView", () => {
 
     it("is hidden on the All-files tab, where FileBrowserTree ignores the filter entirely", () => {
       seedReadySession("s1", [fileDiff("a.ts")]);
+      // Claude's files are known (the Activity log answered: none).
+      useSessions.setState({
+        repoToplevel: { s1: "/repo" },
+        touchedSynced: { s1: true },
+      });
 
       renderChangesView("s1");
       expect(
@@ -2018,6 +2030,11 @@ describe("ChangesView", () => {
 
     it("is visible on the Changes tab once a diff has loaded", () => {
       seedReadySession("s1", [fileDiff("a.ts")]);
+      // Claude's files are known (the Activity log answered: none).
+      useSessions.setState({
+        repoToplevel: { s1: "/repo" },
+        touchedSynced: { s1: true },
+      });
 
       renderChangesView("s1");
 

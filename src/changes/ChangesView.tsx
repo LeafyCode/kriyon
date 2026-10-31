@@ -15,6 +15,7 @@ import {
 } from "../state/changesView.ts";
 import { useLayout } from "../state/layout.ts";
 import {
+  sessionClaudeFiles,
   sessionTouchedRelative,
   sessionWorkingDir,
   useSessions,
@@ -231,14 +232,22 @@ export function ChangesView({ sessionId }: { sessionId: string }) {
   // The same shared resource the Details rail and the header read, so this is
   // a third subscriber to one `git status`, not a third spawn of it.
   const repo = useRepoView(cwd);
+  // For the "this session" badges on diff cards.
   const touchedRelative = useSessions(() => sessionTouchedRelative(sessionId));
+  // For the AI changes filter: `null` while Claude's files can't be known,
+  // so the filter stands down instead of hiding everything.
+  const claudeFiles = useSessions(() => sessionClaudeFiles(sessionId));
   // The one subscription that replaced thirteen. `changesView` is memoized on
   // exactly the fields it reads (see `state/changesView.ts`), so the store
   // ticks this view doesn't care about — `setActiveFile` and `markViewed`,
   // both written on every card the user scrolls past — return the identical
   // object and re-render nothing.
   const view = useChanges((s) =>
-    changesView(s, sessionId, { cwd, repoToplevel, touchedRelative })
+    changesView(s, sessionId, {
+      cwd,
+      repoToplevel,
+      touchedRelative: claudeFiles,
+    })
   );
   // Release this session's memo entry when its pane goes away, so a closed
   // session's diff isn't retained here after `dropSession` drops it from the

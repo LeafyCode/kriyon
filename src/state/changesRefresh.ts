@@ -178,7 +178,7 @@ function ensureRepoToplevel(sessionId: string, cwd: string): void {
 function syncChangedPaths(sessionId: string): void {
   activityChangedPaths(sessionId)
     .then((paths) => {
-      useSessions.getState().mergeTouchedFiles(sessionId, paths);
+      useSessions.getState().setTouchedFromActivity(sessionId, paths);
     })
     .catch(() => {
       // Best-effort: the live record still stands.
@@ -389,6 +389,15 @@ async function doRefresh(
     } else {
       diff = await diffWorkingTree(cwd, options.base);
     }
+    // Awaited before `prev` is read: the write below spreads `prev`, so
+    // anything read before this await would put back a collapse or a viewed
+    // mark the user made while the second diff ran.
+    const uncommitted = await fetchUncommitted(
+      sessionId,
+      cwd,
+      options.base,
+      anchoredToBaseline ? undefined : diff
+    );
     const prev = useChanges.getState().bySession[sessionId] ?? EMPTY_ENTRY;
     const { hunkHashes, viewed } = nextViewedState(
       diff.files,
@@ -398,12 +407,6 @@ async function doRefresh(
     const baselineLabel = anchoredToBaseline
       ? computeSessionBaselineLabel(diff.baseSha)
       : computeBaselineLabel(options.base, diff.baseSha);
-    const uncommitted = await fetchUncommitted(
-      sessionId,
-      cwd,
-      options.base,
-      anchoredToBaseline ? undefined : diff
-    );
     useChanges.setState((s) => ({
       bySession: {
         ...s.bySession,

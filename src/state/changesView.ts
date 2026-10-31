@@ -78,9 +78,10 @@ export interface ChangesViewInput {
   repoToplevel: string;
   selectedFile: string | undefined;
   tab: FileTreeTab;
-  /** This session's [Touched files], relativized — see
-   * `sessionTouchedRelative` in `state/sessions.ts`. */
-  touchedRelative: Set<string>;
+  /** The files Claude changed, relativized — or `null` while that can't be
+   * known (see `sessionClaudeFiles` in `state/sessions.ts`), in which case
+   * the AI changes filter stands down rather than hiding everything. */
+  touchedRelative: Set<string> | null;
 }
 
 /** One session's resolved Code Changes View — see the module doc. */
@@ -375,7 +376,8 @@ export function computeChangesView(input: ChangesViewInput): ChangesViewModel {
   // A file open in the editor covers the diff column on every tab: the list
   // on the left stays, as an editor's git panel does.
   const showViewer = Boolean(selectedFile);
-  const editsFilterActive = myEditsOnly && tab === "changes";
+  const editsFilterActive =
+    myEditsOnly && tab === "changes" && input.touchedRelative !== null;
   // Both memoized on their inputs' identity rather than rebuilt per call —
   // `DiffFeed` reads a new `files` array as "a refresh landed". See
   // {@link visibleFilesCache}.
@@ -416,10 +418,14 @@ export function computeChangesView(input: ChangesViewInput): ChangesViewModel {
     pendingJump: input.pendingJump,
     selectedFile,
     selectedFileDiff: selectedFile
-      ? (files.find((f) => f.path === selectedFile) ??
-        uncommittedFiles?.find((f) => f.path === selectedFile))
+      ? findSelectedDiff(
+          selectedFile,
+          [files, uncommittedFiles ?? NO_FILES],
+          input
+        )
       : undefined,
-    showEditsToggle: tab === "changes" && loadedOnce,
+    showEditsToggle:
+      tab === "changes" && loadedOnce && input.touchedRelative !== null,
     showViewer,
     tab,
     totals: scope.totals,
@@ -432,6 +438,26 @@ function emptySessionMessage(entry: SessionChanges | undefined): string {
   return entry?.comparedTo
     ? `No changes ${entry.comparedTo}.`
     : `No changes vs ${entry?.baselineLabel}.`;
+}
+
+/** The diff behind the open file. The open file is cwd-relative (what the
+ * viewer reads); diff paths are toplevel-relative (git's), so each is put in
+ * the viewer's spelling before comparing — the two differ in a session rooted
+ * in a repo subfolder. */
+function findSelectedDiff(
+  selectedFile: string,
+  lists: FileDiff[][],
+  input: ChangesViewInput
+): FileDiff | undefined {
+  for (const list of lists) {
+    const hit = list.find(
+      (f) =>
+        cwdRelativePath(f.path, input.repoToplevel, input.cwd) === selectedFile
+    );
+    if (hit) {
+      return hit;
+    }
+  }
 }
 
 /** What the diff column lists for the active scope — see {@link scopeOf}. */
@@ -474,9 +500,10 @@ function scopeOf(
       totals: uncommittedFiles ? computeTotalsFromFiles(shown) : null,
     };
   }
-  const displayFiles = editsFilterActive
-    ? memoFilteredFiles(files, input.touchedRelative)
-    : files;
+  const displayFiles =
+    editsFilterActive && input.touchedRelative
+      ? memoFilteredFiles(files, input.touchedRelative)
+      : files;
   const hasError = entry?.status === "error" && Boolean(entry.error);
   return {
     comparedTo: entry?.comparedTo ?? "",
@@ -514,7 +541,7 @@ export type ChangesViewState = Pick<
 export interface ChangesViewDeps {
   cwd: string;
   repoToplevel: string;
-  touchedRelative: Set<string>;
+  touchedRelative: Set<string> | null;
 }
 
 /**
@@ -536,7 +563,7 @@ interface ChangesViewKey {
   repoToplevel: string;
   status: SessionChanges["status"] | undefined;
   totals: DiffTotals | null | undefined;
-  touchedRelative: Set<string>;
+  touchedRelative: Set<string> | null;
   /** One reference for the tab, the selection, the filter and the pending
    * jump: every field of `SessionChangesUi` is an input to this view, so the
    * store keeps them in one object that changes exactly when this view has to
@@ -616,13 +643,13 @@ export function forgetChangesView(sessionId: string): void {
 export function changedFileCount(
   state: ChangesViewState,
   sessionId: string,
-  touchedRelative: Set<string>
+  touchedRelative: Set<string> | null
 ): number {
   const entry = state.bySession[sessionId];
   const ui = state.ui[sessionId];
   const editsFilterActive =
     myEditsOnlyOf(ui) && (ui?.tab ?? "changes") === "changes";
-  if (!editsFilterActive) {
+  if (!(editsFilterActive && touchedRelative)) {
     return entry?.totals?.files ?? 0;
   }
   const files = memoFilteredFiles(

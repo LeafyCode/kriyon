@@ -935,3 +935,43 @@ describe("AI changes keeps to Claude's files by default", () => {
     );
   });
 });
+
+describe("attribution that can't be known yet", () => {
+  it("leaves AI changes unfiltered rather than claiming Claude changed nothing", () => {
+    const view = computeChangesView(
+      input({
+        entry: readyEntry(diff([file("a.ts")])),
+        touchedRelative: null,
+      })
+    );
+    expect(view.editsFilterActive).toBe(false);
+    expect(view.showEditsToggle).toBe(false);
+    expect(view.displayFiles).toHaveLength(1);
+    expect(
+      changedFileCount(
+        {
+          bySession: { s1: readyEntry(diff([file("a.ts")])) },
+          dirtyFiles: {},
+          fileDrafts: {},
+          ui: {},
+        },
+        "s1",
+        null
+      )
+    ).toBe(1);
+  });
+});
+
+describe("the open file in a session rooted in a subfolder", () => {
+  it("finds its diff even though the two paths are spelled from different roots", () => {
+    const view = computeChangesView(
+      input({
+        cwd: "/repo/app",
+        entry: readyEntry(diff([file("app/src/a.ts")])),
+        repoToplevel: "/repo",
+        selectedFile: "src/a.ts",
+      })
+    );
+    expect(view.selectedFileDiff?.path).toBe("app/src/a.ts");
+  });
+});
