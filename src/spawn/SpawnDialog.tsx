@@ -517,7 +517,13 @@ export function SpawnDialog() {
     ok: boolean;
   }): void {
     if (result.bootstrap && !result.bootstrap.ok) {
-      setError(`Setup command failed:\n${result.bootstrap.output}`);
+      const failed = result.bootstrap.steps
+        .filter((step) => !step.ok)
+        .map((step) => step.label)
+        .join(", ");
+      setError(
+        `The worktree and session were created, but ${failed} failed. Fix it in the session's terminal, then press Close.\n${result.bootstrap.output}`
+      );
       setSpawned(true);
       return;
     }
