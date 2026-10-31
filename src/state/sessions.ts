@@ -183,7 +183,8 @@ export function sessionWorkingDir(session: UiSession | undefined): string {
 /**
  * The branch-shaped label for a worktree [Session] — the last segment of its
  * [Worktree] path (the sanitized branch dir) — or null when the session runs
- * in the project folder. Drives the sidebar row's `⎇ name` chip.
+ * in the project folder. Drives the sidebar row's worktree mark beside the
+ * title and the branch name on its meta line.
  */
 export function worktreeName(session: UiSession | undefined): string | null {
   if (!isWorktreeSession(session)) {
