@@ -1,4 +1,10 @@
-import { faintFill, inkWash, scrimFor, softFill } from "./define.ts";
+import {
+  DARK_MASCOT_THOUGHT,
+  faintFill,
+  inkWash,
+  scrimFor,
+  softFill,
+} from "./define.ts";
 import type { ThemeColors } from "./types.ts";
 
 // The three status hues the soft fills and washes below are tinted from.
@@ -130,7 +136,7 @@ export const darkChrome: Omit<
   editorSelection: "#3D4250A0",
 
   scrim: scrimFor("dark"),
-  mascotThought: "#e9edf8",
+  mascotThought: DARK_MASCOT_THOUGHT,
   chip: "#161b26",
 
   // Syntax palette — Kriyon's own: a teal keyword, a violet property, warm
