@@ -13,9 +13,14 @@ export type ChangesFetchStatus = "error" | "idle" | "loading" | "ready";
 
 /** One session's Code Changes View state. */
 export interface SessionChanges {
+  /** The exact comparison point, for the summary bar's tooltip:
+   * `session start · snapshot ac1741c`, `HEAD · uncommitted`, `main @ 1a2b`. */
   baselineLabel: string;
   /** File path → user-toggled collapse; preserved across `refresh`. */
   collapsed: Record<string, boolean>;
+  /** The same comparison in plain words, for the summary bar itself:
+   * `since session start`, `vs last commit`, `vs main`. */
+  comparedTo?: string;
   diff: SessionDiff | null;
   error?: string;
   /** `Date.now()` of the last *successful* fetch — `0` if one has never
@@ -110,6 +115,8 @@ export function scopeWantsUncommitted(tab: FileTreeTab | undefined): boolean {
  * session diff rather than in place of it, so the Inspector and the header
  * count keep meaning "this session". */
 export interface UncommittedChanges {
+  /** Plain words, like {@link SessionChanges.comparedTo}. */
+  comparedTo?: string;
   diff: SessionDiff | null;
   /** Why the last fetch failed, over whatever `diff` still holds. */
   error?: string;

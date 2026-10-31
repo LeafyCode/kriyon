@@ -89,6 +89,9 @@ export interface ChangesViewModel {
    * the session start for AI changes, HEAD (or the base branch) for All
    * changes. */
   baselineLabel: string;
+  /** The same comparison in plain words (`since session start`, `vs last
+   * commit`) — what the summary bar shows; `baselineLabel` is its tooltip. */
+  comparedTo: string;
   /** The All-files tree's git marks — see {@link TreeDecorations}. Built
    * from the unfiltered `files`: that tab ignores the filter. */
   decorations: TreeDecorations;
@@ -385,6 +388,7 @@ export function computeChangesView(input: ChangesViewInput): ChangesViewModel {
   const isEmpty = scopeLoaded && displayFiles.length === 0;
   return {
     baselineLabel: scope.label,
+    comparedTo: scope.comparedTo,
     decorations: treeDecorations(
       uncommittedFiles ?? files,
       input.repoToplevel,
@@ -420,8 +424,17 @@ export function computeChangesView(input: ChangesViewInput): ChangesViewModel {
   };
 }
 
+/** "No changes since session start." — in the plain words the bar uses,
+ * falling back to the exact label for an entry from before they existed. */
+function emptySessionMessage(entry: SessionChanges | undefined): string {
+  return entry?.comparedTo
+    ? `No changes ${entry.comparedTo}.`
+    : `No changes vs ${entry?.baselineLabel}.`;
+}
+
 /** What the diff column lists for the active scope — see {@link scopeOf}. */
 interface Scope {
+  comparedTo: string;
   diff: SessionDiff | null;
   displayFiles: FileDiff[];
   emptyMessage: (hiddenByFilter: boolean) => string;
@@ -449,6 +462,7 @@ function scopeOf(
     const uncommitted = entry?.uncommitted;
     const shown = uncommittedFiles ?? NO_FILES;
     return {
+      comparedTo: uncommitted?.comparedTo ?? "",
       diff: uncommitted?.diff ?? null,
       displayFiles: shown,
       emptyMessage: () => "No uncommitted changes.",
@@ -463,6 +477,7 @@ function scopeOf(
     : files;
   const hasError = entry?.status === "error" && Boolean(entry.error);
   return {
+    comparedTo: entry?.comparedTo ?? "",
     diff: entry?.diff ?? null,
     displayFiles,
     // "Changes exist, the filter hid every one of them" must not read as
@@ -470,7 +485,7 @@ function scopeOf(
     emptyMessage: (hiddenByFilter) =>
       editsFilterActive && hiddenByFilter
         ? "Claude hasn't changed any files in this session. Your own edits are under All changes."
-        : `No changes vs ${entry?.baselineLabel}.`,
+        : emptySessionMessage(entry),
     error: hasError ? entry?.error : undefined,
     label: entry?.baselineLabel ?? "",
     scopeLoaded: entry !== undefined && entry.diff !== null,
@@ -510,6 +525,7 @@ export interface ChangesViewDeps {
  */
 interface ChangesViewKey {
   baselineLabel: string | undefined;
+  comparedTo: string | undefined;
   cwd: string;
   diff: SessionDiff | null | undefined;
   dirtyPath: string | null | undefined;
@@ -530,6 +546,7 @@ interface ChangesViewKey {
 function sameKey(a: ChangesViewKey, b: ChangesViewKey): boolean {
   return (
     a.baselineLabel === b.baselineLabel &&
+    a.comparedTo === b.comparedTo &&
     a.cwd === b.cwd &&
     a.diff === b.diff &&
     a.dirtyPath === b.dirtyPath &&
@@ -639,6 +656,7 @@ export function changesView(
   };
   const key: ChangesViewKey = {
     baselineLabel: entry?.baselineLabel,
+    comparedTo: entry?.comparedTo,
     cwd: input.cwd,
     diff: entry?.diff,
     dirtyPath: input.dirtyPath,

@@ -1606,3 +1606,42 @@ test("an unavailable Activity log never fails the refresh", async () => {
 
   expect(useChanges.getState().bySession.s1?.status).toBe("ready");
 });
+
+describe("what the diff is compared with, in plain words", () => {
+  test("a session with a start snapshot: since session start", async () => {
+    useSessions
+      .getState()
+      .addSession(locatedSession("s1", { baselineOid: "cafe" }));
+    useSessions.getState().setActiveSession("s1");
+    await refreshSessionChanges("s1");
+    expect(useChanges.getState().bySession.s1?.comparedTo).toBe(
+      "since session start"
+    );
+  });
+
+  test("a plain session without one: vs last commit, and All changes says the same", async () => {
+    seedActiveSession();
+    useChanges.getState().setTab("s1", "uncommitted");
+    await refreshSessionChanges("s1");
+    const entry = useChanges.getState().bySession.s1;
+    expect(entry?.comparedTo).toBe("vs last commit");
+    expect(entry?.uncommitted?.comparedTo).toBe("vs last commit");
+  });
+
+  test("a worktree session: vs its base branch", async () => {
+    const s = useSessions.getState();
+    s.addProject({
+      color: null,
+      id: "p1",
+      name: "p1",
+      path: "/repo",
+      setupCommand: null,
+    });
+    s.addSession(
+      locatedSession("s1", { projectId: "p1", worktreePath: "/repo-wt/x" })
+    );
+    s.setActiveSession("s1");
+    await refreshSessionChanges("s1");
+    expect(useChanges.getState().bySession.s1?.comparedTo).toBe("vs main");
+  });
+});

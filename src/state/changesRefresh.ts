@@ -232,6 +232,16 @@ function computeBaselineLabel(
   return baseSha ? `${base} @ ${baseSha}` : base;
 }
 
+/** What a diff is compared with, in words a person reads at a glance — the
+ * summary bar's label. The exact point (snapshot id, branch sha) is
+ * {@link computeBaselineLabel}'s, kept for the tooltip. */
+function comparedToPhrase(anchoredToBaseline: boolean, base?: string): string {
+  if (anchoredToBaseline) {
+    return "since session start";
+  }
+  return base ? `vs ${base}` : "vs last commit";
+}
+
 /**
  * The baseline label for a baseline-anchored refresh (`diffSessionChanges`,
  * not `diffWorkingTree`) — deliberately its own function rather than a
@@ -400,6 +410,7 @@ async function doRefresh(
         [sessionId]: {
           ...prev,
           baselineLabel,
+          comparedTo: comparedToPhrase(anchoredToBaseline, options.base),
           diff,
           error: undefined,
           fetchedAt: Date.now(),
@@ -457,6 +468,7 @@ async function fetchUncommitted(
   }
   if (sameAsSession) {
     return {
+      comparedTo: comparedToPhrase(false, base),
       diff: sameAsSession,
       label: computeBaselineLabel(base, sameAsSession.baseSha),
     };
@@ -464,9 +476,14 @@ async function fetchUncommitted(
   const prev = useChanges.getState().bySession[sessionId]?.uncommitted;
   try {
     const diff = await diffWorkingTree(cwd, base);
-    return { diff, label: computeBaselineLabel(base, diff.baseSha) };
+    return {
+      comparedTo: comparedToPhrase(false, base),
+      diff,
+      label: computeBaselineLabel(base, diff.baseSha),
+    };
   } catch (err) {
     return {
+      comparedTo: comparedToPhrase(false, base),
       diff: prev?.diff ?? null,
       error: failureMessage(err),
       label: prev?.label ?? computeBaselineLabel(base, null),

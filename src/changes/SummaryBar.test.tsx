@@ -439,3 +439,64 @@ it("collapse and expand are left out while a file is open instead of the diff", 
   expect(screen.queryByTestId("summary-expand-all")).not.toBeInTheDocument();
   expect(screen.getByTestId("summary-refresh")).toBeInTheDocument();
 });
+
+describe("the redesigned bar", () => {
+  beforeEach(() => {
+    useChanges.setState({
+      bySession: {
+        s1: {
+          baselineLabel: "session start · snapshot ac1741c",
+          collapsed: {},
+          comparedTo: "since session start",
+          diff: null,
+          fetchedAt: Date.now(),
+          hunkHashes: {},
+          status: "ready",
+          totals: { additions: 0, deletions: 0, files: 0 },
+          viewed: {},
+        },
+      },
+    });
+  });
+
+  it("says No changes instead of a row of zeros", () => {
+    render(<SummaryBar onRefresh={vi.fn()} sessionId="s1" />);
+    const totals = screen.getByTestId("summary-totals");
+    expect(totals).toHaveTextContent("No changes");
+    expect(totals).not.toHaveTextContent("+0");
+  });
+
+  it("says what it compares against in plain words, with the snapshot in the tooltip", () => {
+    render(<SummaryBar onRefresh={vi.fn()} sessionId="s1" />);
+    const label = screen.getByTestId("summary-baseline");
+    expect(label).toHaveTextContent("since session start");
+    expect(label).not.toHaveTextContent("snapshot");
+    expect(label.getAttribute("title")).toContain("ac1741c");
+  });
+
+  it("carries the Only Claude's edits switch in the same row", () => {
+    const onToggle = vi.fn();
+    render(
+      <SummaryBar
+        editsToggle={{ checked: true, onToggle }}
+        onRefresh={vi.fn()}
+        sessionId="s1"
+      />
+    );
+    const toggle = screen.getByRole("switch", { name: "Only Claude's edits" });
+    expect(toggle).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(toggle);
+    expect(onToggle).toHaveBeenCalledTimes(1);
+  });
+
+  it("names its icon buttons", () => {
+    render(<SummaryBar onRefresh={vi.fn()} sessionId="s1" />);
+    expect(
+      screen.getByRole("button", { name: "Collapse all" })
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Expand all" })
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Refresh" })).toBeInTheDocument();
+  });
+});

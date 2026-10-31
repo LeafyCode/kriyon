@@ -146,9 +146,11 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
   line, and attribution only: it never decides whether a change exists. It gives the "✎ this
   session" badge and backs **Only Claude's edits**, which is on by default in AI changes
   (ADR 0050, superseding ADR 0015's default-off). _Avoid_: edited files, session files.
-- **Summary bar** — the [Changes view]'s header strip: the baseline label, the [Diff totals],
-  and a refresh control with an "updated Xs ago" staleness hint. The baseline label is the
-  view's trust anchor and may never imply an anchor it can't name — `"HEAD · uncommitted"` for
+- **Summary bar** — the [Changes view]'s one-line header strip: the [Diff totals] ("No changes"
+  when there are none), what they are compared with in plain words (`comparedTo`: "since session
+  start", "vs last commit", "vs main"), the AI changes tab's "Only Claude's edits" switch, and
+  icon buttons for collapse, expand and refresh, with an "updated Xs ago" hint once stale. The
+  exact baseline label sits in the comparison's tooltip. That label is the view's trust anchor and may never imply an anchor it can't name — `"HEAD · uncommitted"` for
   a base-less diff, `"<base> @ <shortSha>"` for a branch, and `"session start · snapshot
   <shortSha>"` for a [Session baseline] (deliberately not the `@ <sha>` commit shorthand, since
   a baseline oid names a tree). A refresh is non-disruptive: it never scrolls, collapses, or

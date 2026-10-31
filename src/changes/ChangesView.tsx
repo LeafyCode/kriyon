@@ -138,52 +138,6 @@ const errorBannerStyle: CSSProperties = {
   padding: `${tokens.space.sm} ${tokens.space.md}`,
 };
 
-const editsToggleRowStyle: CSSProperties = {
-  alignItems: "center",
-  borderBottom: `1px solid ${tokens.color.line.soft}`,
-  cursor: "pointer",
-  display: "flex",
-  flex: "none",
-  fontFamily: tokens.font.sans,
-  fontSize: "11.5px",
-  gap: tokens.space.sm,
-  height: "30px",
-  padding: `0 ${tokens.space.md}`,
-};
-
-const editsToggleLabelStyle: CSSProperties = {
-  color: tokens.color.ink.muted,
-};
-
-/** The switch's track — accent-filled when on, and off the same sunken well
- * every other input in the app sits in (`inputWell`), so "off" reads as an
- * empty groove rather than a raised chip waiting to be pressed. */
-function switchTrackStyle(checked: boolean): CSSProperties {
-  return {
-    background: checked ? tokens.color.accent : tokens.color.inputWell,
-    border: `1px solid ${tokens.color.line.base}`,
-    borderRadius: tokens.radius.pill,
-    cursor: "pointer",
-    display: "inline-flex",
-    flex: "none",
-    height: "16px",
-    padding: "1px",
-    transition: `background-color ${tokens.motion.hover}`,
-    width: "28px",
-  };
-}
-
-function switchThumbStyle(checked: boolean): CSSProperties {
-  return {
-    background: tokens.color.onAccent,
-    borderRadius: "50%",
-    height: "12px",
-    transform: checked ? "translateX(12px)" : "translateX(0)",
-    transition: `transform ${tokens.motion.hover}`,
-    width: "12px",
-  };
-}
-
 /** How long `SummaryBar`'s pulse stays lit after a silent refresh, before
  * fading back out — a UI-timing constant, not a design token (`tokens.motion`
  * holds CSS transition strings for styling, not raw millisecond durations for
@@ -451,34 +405,22 @@ export function ChangesView({ sessionId }: { sessionId: string }) {
     <div data-testid="changes-view" style={rootStyle}>
       <SummaryBar
         baselineLabel={view.baselineLabel}
+        comparedTo={view.comparedTo}
         diffControls={!view.showViewer}
+        editsToggle={
+          view.showEditsToggle
+            ? {
+                checked: view.myEditsOnly,
+                onToggle: () => toggleMyEditsOnly(sessionId),
+              }
+            : undefined
+        }
         isVisible={isVisible}
         onRefresh={() => doRefresh("manual")}
         pulsing={pulsing}
         sessionId={sessionId}
         totals={view.totals}
       />
-      {view.showEditsToggle ? (
-        // A `<label>` (not a bare row div) so the visible "Only Claude's edits"
-        // text is the switch's one accessible name — no separate
-        // `aria-label` duplicating it — and clicking the text itself
-        // toggles the switch (the label's native click-forwarding to its
-        // labelable descendant), giving the control a bigger hit target
-        // than the 28px-wide track alone.
-        <label style={editsToggleRowStyle}>
-          <button
-            aria-checked={view.myEditsOnly}
-            data-testid="my-edits-only-toggle"
-            onClick={() => toggleMyEditsOnly(sessionId)}
-            role="switch"
-            style={switchTrackStyle(view.myEditsOnly)}
-            type="button"
-          >
-            <span style={switchThumbStyle(view.myEditsOnly)} />
-          </button>
-          <span style={editsToggleLabelStyle}>Only Claude's edits</span>
-        </label>
-      ) : null}
       {view.error ? (
         <div data-testid="changes-error" style={errorBannerStyle}>
           {view.error}
