@@ -72,7 +72,7 @@ pub fn create_worktree(repo_path: &str, branch: &str, path: &str) -> Result<(), 
 /// hook failed, after the worktree was made. That counts as created — git's
 /// docs say the hook cannot change the checkout's outcome — so the caller
 /// opens it rather than retrying onto a branch that is now taken. Only a
-/// folder that was not there before the call counts: an existing worktree on
+/// worktree that was not there before the call counts: an existing one on
 /// the same branch is not one this call made.
 pub(crate) fn create_worktree_with(
     repo_path: &str,
@@ -83,7 +83,7 @@ pub(crate) fn create_worktree_with(
     reject_flag_like("repo_path", repo_path)?;
     reject_flag_like("branch", branch)?;
     reject_flag_like("path", path)?;
-    let existed = std::path::Path::new(path).exists();
+    let existed = is_worktree_on(path, branch);
     // `--` terminates option parsing so `path` is always treated as positional.
     let mut add = GitRun::new(repo_path).args(["worktree", "add", "-b", branch, "--", path]);
     if let Some(shell_path) = shell_path {
@@ -3897,6 +3897,25 @@ mod tests {
 
         create_worktree_with(repo, "feat/hooked", wt_path, None).expect("worktree is there");
         assert!(wt.join("f.txt").exists(), "checked out");
+    }
+
+    /// The person may pick an existing empty folder as the location. If only
+    /// the hook fails there, the worktree was still made by this call.
+    #[test]
+    #[cfg(unix)]
+    fn a_hook_failure_in_a_chosen_empty_folder_still_counts_as_created() {
+        if !git_available() {
+            return;
+        }
+        let dir = init_repo_with_commit();
+        let repo = dir.path().to_str().unwrap();
+        write_hook(dir.path(), "post-checkout", "exit 1");
+        let parent = tempfile::tempdir().expect("parent");
+        let wt = parent.path().join("chosen");
+        std::fs::create_dir(&wt).expect("empty folder the person chose");
+
+        create_worktree_with(repo, "feat/chosen", wt.to_str().unwrap(), None)
+            .expect("worktree is there");
     }
 
     /// A real failure (the branch is already taken) is still an error.
