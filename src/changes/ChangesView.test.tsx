@@ -536,10 +536,13 @@ describe("ChangesView", () => {
     });
   });
 
-  it("clicking an off-screen file in the tree scrolls the virtualized feed to its card", async () => {
+  it("clicking an off-screen deleted file in the tree scrolls the virtualized feed to its card", async () => {
+    // A deleted file has nothing to open, so its row jumps to its diff —
+    // every other row opens the file instead.
     const files = Array.from({ length: 30 }, (_, i) =>
       file(`src/file${String(i).padStart(2, "0")}.ts`)
     );
+    files[25] = { ...files[25], status: "deleted" };
     useChanges.setState({
       refresh: vi.fn().mockResolvedValue(undefined),
       bySession: {
@@ -1460,7 +1463,7 @@ describe("ChangesView", () => {
     expect(screen.getByTestId("diff-feed")).toBeTruthy();
   });
 
-  test("clicking a diff card's edit button opens that file in the viewer, flipping to the all-files tab", async () => {
+  test("clicking a diff card's edit button opens that file in the viewer, staying on the same tab", async () => {
     seedReadySession("s1", [fileDiff("src/a.ts")]);
     renderChangesView("s1");
 
@@ -1474,24 +1477,49 @@ describe("ChangesView", () => {
     fireEvent.click(card.getByRole("button", { name: EDIT_FILE_BUTTON_RE }));
 
     expect(useChanges.getState().ui.s1?.selectedFile).toBe("src/a.ts");
-    expect(useChanges.getState().ui.s1?.tab).toBe("all");
+    expect(useChanges.getState().ui.s1?.tab ?? "changes").toBe("changes");
     await waitFor(() => {
       expect(screen.getByTestId("file-viewer")).toBeInTheDocument();
     });
   });
 
-  test("clicking a tree row's edit button opens that file in the viewer, flipping to the all-files tab", async () => {
-    seedReadySession("s1", [fileDiff("src/a.ts")]);
+  test("clicking a changed file opens it beside the list, which stays put with the file marked", async () => {
+    seedReadySession("s1", [fileDiff("src/a.ts"), fileDiff("src/b.ts")]);
     renderChangesView("s1");
 
-    const tree = within(screen.getByTestId("file-tree-pane"));
-    fireEvent.click(tree.getByRole("button", { name: EDIT_FILE_BUTTON_RE }));
+    const list = within(screen.getByTestId("file-tree-pane-changes"));
+    fireEvent.click(list.getByText("b.ts"));
 
-    expect(useChanges.getState().ui.s1?.selectedFile).toBe("src/a.ts");
-    expect(useChanges.getState().ui.s1?.tab).toBe("all");
+    expect(useChanges.getState().ui.s1?.selectedFile).toBe("src/b.ts");
+    expect(useChanges.getState().ui.s1?.tab ?? "changes").toBe("changes");
     await waitFor(() => {
-      expect(screen.getByTestId("file-viewer")).toBeInTheDocument();
+      expect(screen.getByTestId("file-viewer")).toBeVisible();
     });
+    expect(screen.getByTestId("diff-feed").parentElement).toHaveStyle({
+      display: "none",
+    });
+    const rows = list.getAllByTestId("file-tree-file-row");
+    expect(rows[1]).toHaveAttribute("aria-current", "true");
+    expect(rows[0]).not.toHaveAttribute("aria-current");
+
+    // Closing it goes back to the diff list.
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    expect(screen.getByTestId("diff-feed").parentElement).toHaveStyle({
+      display: "block",
+    });
+  });
+
+  test("an Inspector jump while a file is open opens the jumped-to file", () => {
+    seedReadySession("s1", [fileDiff("src/a.ts"), fileDiff("src/b.ts")]);
+    renderChangesView("s1");
+    fireEvent.click(
+      within(screen.getByTestId("file-tree-pane-changes")).getByText("a.ts")
+    );
+
+    act(() => useChanges.getState().requestJump("s1", "src/b.ts"));
+
+    expect(useChanges.getState().ui.s1?.selectedFile).toBe("src/b.ts");
+    expect(useChanges.getState().ui.s1?.pendingJump).toBeUndefined();
   });
 
   test("translates a repo-toplevel-relative diff path into a cwd-relative one for a session rooted in a subdirectory", async () => {
@@ -1507,7 +1535,6 @@ describe("ChangesView", () => {
     fireEvent.click(card.getByRole("button", { name: EDIT_FILE_BUTTON_RE }));
 
     expect(useChanges.getState().ui.s1?.selectedFile).toBe("src/a.ts");
-    expect(useChanges.getState().ui.s1?.tab).toBe("all");
     await waitFor(() => {
       expect(screen.getByTestId("file-viewer")).toBeInTheDocument();
     });
@@ -1634,7 +1661,7 @@ describe("ChangesView", () => {
     expect(mockedListDir).toHaveBeenCalledTimes(1);
   });
 
-  test("the file viewer survives a tab flip — stays mounted (display:none when hidden) and keeps its draft", async () => {
+  test("an open file stays open, draft and all, across a tab flip", async () => {
     mockedReadFile.mockResolvedValueOnce({
       binary: false,
       content: "hello",
@@ -1659,14 +1686,12 @@ describe("ChangesView", () => {
       useChanges.getState().setTab("s1", "changes");
     });
 
-    // Still in the DOM — not unmounted — just hidden via display:none, the
-    // same pane keep-alive rule DiffFeed already follows.
+    // The file stays open beside the AI changes list, as in an editor's
+    // git panel; the diff waits behind it until the file is closed.
     const viewer = screen.getByTestId("file-viewer");
-    expect(viewer).toBeInTheDocument();
-    expect(viewer.parentElement).toHaveStyle({ display: "none" });
-    // The diff feed (Changes tab's own content) is visible again.
+    expect(viewer.parentElement).toHaveStyle({ display: "block" });
     expect(screen.getByTestId("diff-feed").parentElement).toHaveStyle({
-      display: "block",
+      display: "none",
     });
 
     act(() => {
@@ -2022,11 +2047,7 @@ describe("ChangesView", () => {
   });
 
   describe("a jump while a file is open on the All-files tab", () => {
-    it("switches back to the Changes tab so the feed is actually visible, instead of scrolling a hidden feed and dropping the request", async () => {
-      // The viewer is showing (All-files tab + a selected file), so DiffFeed
-      // is display:none — `scrollToFile` on a hidden virtualizer is a silent
-      // no-op, and consuming the jump afterwards threw the user's click away:
-      // they stayed on the All-files tab with the OLD file open.
+    it("opens the jumped-to file when a file is already open, rather than scrolling a hidden feed", async () => {
       const files = Array.from({ length: 30 }, (_, i) =>
         fileDiff(`src/file${String(i).padStart(2, "0")}.ts`)
       );
@@ -2040,31 +2061,16 @@ describe("ChangesView", () => {
       await waitFor(() => {
         expect(screen.getByTestId("file-viewer")).toBeInTheDocument();
       });
-      expect(findDiffCard("src/file25.ts")).toBeNull();
 
       act(() => {
         useChanges.getState().requestJump("s1", "src/file25.ts");
       });
 
       await waitFor(() => {
-        expect(useChanges.getState().ui.s1?.tab).toBe("changes");
-      });
-      await waitFor(() => {
-        expect(findDiffCard("src/file25.ts")).not.toBeNull();
+        expect(useChanges.getState().ui.s1?.selectedFile).toBe("src/file25.ts");
       });
       expect(useChanges.getState().ui.s1?.pendingJump).toBeUndefined();
-      // The feed is the thing on screen now…
-      expect(screen.getByTestId("diff-feed").parentElement).toHaveStyle({
-        display: "block",
-      });
-      // …and the previously open file wasn't destroyed to get there: the
-      // viewer is still mounted (draft, cursor, scroll intact), just hidden,
-      // exactly as a normal tab flip leaves it.
-      expect(screen.getByTestId("file-viewer")).toBeInTheDocument();
-      expect(screen.getByTestId("file-viewer").parentElement).toHaveStyle({
-        display: "none",
-      });
-      expect(useChanges.getState().ui.s1?.selectedFile).toBe("src/file00.ts");
+      expect(useChanges.getState().ui.s1?.tab).toBe("all");
     });
   });
 

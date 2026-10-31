@@ -115,67 +115,58 @@ describe("FileTreePane", () => {
     expect(onJumpToFile).toHaveBeenCalledWith("src/changes/DiffFeed.tsx");
   });
 
-  it("shows no edit button on a row when onEditFile is not passed", () => {
-    render(
-      <FileTreePane
-        files={[file("src/a.ts")]}
-        onJumpToFile={vi.fn()}
-        onTabChange={vi.fn()}
-        tab="changes"
-      />
-    );
-
-    expect(
-      screen.queryByRole("button", { name: EDIT_FILE_BUTTON_RE })
-    ).not.toBeInTheDocument();
-  });
-
-  it("calls onEditFile with the file's path when a row's edit button is clicked, without jumping", () => {
-    const onEditFile = vi.fn();
+  it("opens a changed file when its row is clicked, given onOpenFile", () => {
+    const onOpenFile = vi.fn();
     const onJumpToFile = vi.fn();
     render(
       <FileTreePane
         files={[file("src/a.ts")]}
-        onEditFile={onEditFile}
         onJumpToFile={onJumpToFile}
+        onOpenFile={onOpenFile}
         onTabChange={vi.fn()}
         tab="changes"
       />
     );
 
-    fireEvent.click(screen.getByRole("button", { name: EDIT_FILE_BUTTON_RE }));
+    fireEvent.click(screen.getByText("a.ts"));
 
-    expect(onEditFile).toHaveBeenCalledWith("src/a.ts");
+    expect(onOpenFile).toHaveBeenCalledWith("src/a.ts");
     expect(onJumpToFile).not.toHaveBeenCalled();
   });
 
-  it("offers no edit button on a deleted file — there is nothing to open", () => {
+  it("jumps to a deleted file's diff instead — there is no file to open", () => {
+    const onOpenFile = vi.fn();
+    const onJumpToFile = vi.fn();
     render(
       <FileTreePane
         files={[file("src/gone.ts", { hunks: [], status: "deleted" })]}
-        onEditFile={vi.fn()}
-        onJumpToFile={vi.fn()}
+        onJumpToFile={onJumpToFile}
+        onOpenFile={onOpenFile}
         onTabChange={vi.fn()}
         tab="changes"
       />
     );
 
-    expect(
-      screen.queryByRole("button", { name: EDIT_FILE_BUTTON_RE })
-    ).not.toBeInTheDocument();
+    fireEvent.click(screen.getByText("gone.ts"));
+
+    expect(onJumpToFile).toHaveBeenCalledWith("src/gone.ts");
+    expect(onOpenFile).not.toHaveBeenCalled();
   });
 
-  it("offers no edit button on a binary file — the viewer cannot edit it", () => {
+  it("marks the open file's row, and offers no separate edit button", () => {
     render(
       <FileTreePane
-        files={[file("logo.png", { binary: true, hunks: [] })]}
-        onEditFile={vi.fn()}
+        files={[file("src/a.ts"), file("src/b.ts")]}
         onJumpToFile={vi.fn()}
+        onOpenFile={vi.fn()}
         onTabChange={vi.fn()}
+        selectedPath="src/b.ts"
         tab="changes"
       />
     );
-
+    const rows = screen.getAllByTestId("file-tree-file-row");
+    expect(rows[1]).toHaveAttribute("aria-current", "true");
+    expect(rows[0]).not.toHaveAttribute("aria-current");
     expect(
       screen.queryByRole("button", { name: EDIT_FILE_BUTTON_RE })
     ).not.toBeInTheDocument();

@@ -1,4 +1,3 @@
-import { Pencil } from "lucide-react";
 import { type CSSProperties, type ReactNode, useMemo } from "react";
 // The per-file additions/deletions count is defined in the changes store,
 // alongside the auto-collapse rule that also derives from it.
@@ -6,7 +5,6 @@ import {
   type FileTreeTab,
   fileDiffCounts,
   fileKind,
-  isEditableFile,
 } from "../state/changes.ts";
 import { FILE_TREE_WIDTH_DEFAULT, useLayout } from "../state/layout.ts";
 import { treeRow } from "../theme/recipes.ts";
@@ -191,9 +189,9 @@ const dirLabelTextStyle: CSSProperties = {
 /** One file's row: the jump button and the edit button side by side (a
  * button inside a button is invalid HTML and would swallow the edit click
  * as a jump click too). The row wears the hover, so the whole width lights. */
-function rowWrapStyle(nested: boolean): CSSProperties {
+function rowWrapStyle(nested: boolean, selected: boolean): CSSProperties {
   return {
-    ...treeRow(),
+    ...treeRow(selected),
     cursor: "default",
     padding: nested ? "0 4px 0 24px" : "0 4px 0 6px",
   };
@@ -213,21 +211,6 @@ const jumpButtonStyle: CSSProperties = {
   minWidth: 0,
   padding: 0,
   textAlign: "left",
-};
-
-/** The row's edit button — quiet until wanted, like an editor's inline
- * actions. */
-const editRowButtonStyle: CSSProperties = {
-  alignItems: "center",
-  background: "none",
-  border: "none",
-  borderRadius: tokens.radius.sm,
-  color: tokens.color.ink.faint,
-  cursor: "pointer",
-  display: "flex",
-  flex: "none",
-  marginLeft: "2px",
-  padding: "3px",
 };
 
 /** The unsaved-changes dot — the same dot the All-files tab shows. */
@@ -323,9 +306,10 @@ export function FileTreePane({
   children,
   dirtyPaths = EMPTY_DIRTY_PATHS,
   files,
-  onEditFile,
   onJumpToFile,
+  onOpenFile,
   onTabChange,
+  selectedPath,
   tab,
 }: {
   children?: ReactNode;
@@ -338,12 +322,15 @@ export function FileTreePane({
    * renders no dots. */
   dirtyPaths?: ReadonlySet<string>;
   files: FileDiff[];
-  /** Called with a file's path when its row's "Edit file" button is
-   * clicked. Undefined renders no edit button on any row; a row whose file
-   * {@link isEditableFile} rejects renders none either way. */
-  onEditFile?: (path: string) => void;
+  /** Scroll the diff to a file's card — what a row does when there is no
+   * file to open (a deletion), or when no `onOpenFile` is given. */
   onJumpToFile: (path: string) => void;
+  /** Open a changed file in the editor beside the list, the way an
+   * editor's git panel does. Paths are this pane's own (toplevel-relative). */
+  onOpenFile?: (path: string) => void;
   onTabChange: (tab: FileTreeTab) => void;
+  /** The row of the file open in the editor, marked as current. */
+  selectedPath?: string;
   tab: FileTreeTab;
 }) {
   // Keyed only on `files`' own identity: ChangesView re-renders this pane's
@@ -392,16 +379,24 @@ export function FileTreePane({
                   on the one surface that lists every file at once. */}
               {group.files.map(({ additions, deletions, file, kind }) => (
                 <div
+                  aria-current={file.path === selectedPath ? "true" : undefined}
                   className="kr-hover-surface"
                   data-git={file.status}
                   data-testid="file-tree-file-row"
                   key={file.path}
-                  style={rowWrapStyle(Boolean(group.dir))}
+                  style={rowWrapStyle(
+                    Boolean(group.dir),
+                    file.path === selectedPath
+                  )}
                   title={rowTitle(file)}
                 >
                   <button
                     className="kr-tree-row"
-                    onClick={() => onJumpToFile(file.path)}
+                    onClick={() =>
+                      onOpenFile && file.status !== "deleted"
+                        ? onOpenFile(file.path)
+                        : onJumpToFile(file.path)
+                    }
                     style={{ ...jumpButtonStyle, color: GIT_INK[file.status] }}
                     type="button"
                   >
@@ -434,18 +429,6 @@ export function FileTreePane({
                       />
                     ) : null}
                   </button>
-                  {onEditFile && isEditableFile(file) ? (
-                    <button
-                      aria-label="Edit file"
-                      className="kr-hover-surface"
-                      onClick={() => onEditFile(file.path)}
-                      style={editRowButtonStyle}
-                      title="Edit this file"
-                      type="button"
-                    >
-                      <Pencil size={12} />
-                    </button>
-                  ) : null}
                 </div>
               ))}
             </div>

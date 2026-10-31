@@ -170,8 +170,10 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
   [Session diff]'s files Claude changed — the [Touched files] — grouped by directory; turning
   "Only Claude's edits" off shows everything since the session started), **All
   changes** (the [Uncommitted diff]'s files, laid out the same way) and **Files** (the
-  [All-files browser]). All stay mounted across a flip. Selecting a file either jumps the [Diff
-  feed] to it or opens it in the [File viewer].
+  [All-files browser]). All stay mounted across a flip. Clicking a changed file opens it in the [File viewer]
+  beside the list, as an editor's git panel does (a deleted file, having nothing to open,
+  scrolls the [Diff feed] to its card instead); the viewer covers the diff on every tab until
+  it is closed.
 - **Uncommitted diff** (`UncommittedChanges`, `SessionChanges.uncommitted`) — everything not yet
   committed (or, in a worktree, not yet on the default branch), whoever made it: what an
   editor's git panel shows, beside the [Session diff] rather than in place of it, so the

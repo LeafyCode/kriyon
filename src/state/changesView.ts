@@ -372,7 +372,9 @@ function computePane(params: {
  * the memoized store-reading wrapper every consumer actually calls. */
 export function computeChangesView(input: ChangesViewInput): ChangesViewModel {
   const { entry, myEditsOnly, selectedFile, tab } = input;
-  const showViewer = tab === "all" && Boolean(selectedFile);
+  // A file open in the editor covers the diff column on every tab: the list
+  // on the left stays, as an editor's git panel does.
+  const showViewer = Boolean(selectedFile);
   const editsFilterActive = myEditsOnly && tab === "changes";
   // Both memoized on their inputs' identity rather than rebuilt per call —
   // `DiffFeed` reads a new `files` array as "a refresh landed". See

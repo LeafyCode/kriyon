@@ -60,7 +60,13 @@ function diffFeedWrapStyle(hidden: boolean): CSSProperties {
 }
 
 /** What the pending-jump effect should do about the requested path. */
-type JumpPlan = "clear-filter" | "drop" | "hold" | "scroll" | "show-feed";
+type JumpPlan =
+  | "clear-filter"
+  | "drop"
+  | "hold"
+  | "open"
+  | "scroll"
+  | "show-feed";
 
 /** Exactly the [Changes view model] fields {@link planJump} reads — a `Pick`
  * rather than the whole model, so the effect below can list them as its deps
@@ -68,7 +74,12 @@ type JumpPlan = "clear-filter" | "drop" | "hold" | "scroll" | "show-feed";
  * appearing, the totals moving). */
 type JumpContext = Pick<
   ChangesViewModel,
-  "displayFiles" | "editsFilterActive" | "files" | "loadedOnce" | "tab"
+  | "displayFiles"
+  | "editsFilterActive"
+  | "files"
+  | "loadedOnce"
+  | "showViewer"
+  | "tab"
 >;
 
 /**
@@ -81,6 +92,9 @@ type JumpContext = Pick<
  * a jump target the My-edits-only filter is hiding is still a real file in
  * the diff. The outcomes:
  *
+ * - `"open"` — a file is open in the editor, so the diff is hidden behind
+ *   it. Clicking a changed file opens it; a jump to one does the same, and
+ *   the viewer's own switch guard keeps an unsaved draft safe.
  * - `"show-feed"` — another scope is on screen: All changes lists a
  *   different diff, and on Files `DiffFeed` is hidden behind `FileViewer`
  *   (`scrollToFile` on a hidden virtualizer is a silent no-op). A jump names
@@ -108,6 +122,9 @@ type JumpContext = Pick<
 function planJump(view: JumpContext, path: string): JumpPlan {
   if (!view.files.some((f) => f.path === path)) {
     return view.loadedOnce ? "drop" : "hold";
+  }
+  if (view.showViewer) {
+    return "open";
   }
   if (view.tab !== "changes") {
     return "show-feed";
@@ -278,13 +295,15 @@ export function ChangesView({ sessionId }: { sessionId: string }) {
   // read off the store at click time rather than subscribed to: it changes
   // once per session and a subscription would only churn this callback's
   // identity (and with it every memoized card) for nothing.
-  const handleEditFile = useCallback(
+  //
+  // Opens the file beside whatever list is showing, without changing tabs —
+  // the way an editor's git panel opens a changed file.
+  const handleOpenFile = useCallback(
     (path: string) => {
       const toplevel = useSessions.getState().repoToplevel[sessionId] ?? "";
       selectFile(sessionId, cwdRelativePath(path, toplevel, cwd));
-      setTab(sessionId, "all");
     },
-    [selectFile, setTab, sessionId, cwd]
+    [selectFile, sessionId, cwd]
   );
 
   // Delegates entirely to the shared helper (see this component's top doc
@@ -352,16 +371,28 @@ export function ChangesView({ sessionId }: { sessionId: string }) {
   // consuming a jump writes the store and so produces a new view, and
   // re-running this effect on that (or on an unrelated dirty dot) is churn at
   // best and a re-entrant jump at worst.
-  const { displayFiles, editsFilterActive, files, loadedOnce, tab } = view;
+  const {
+    displayFiles,
+    editsFilterActive,
+    files,
+    loadedOnce,
+    showViewer,
+    tab,
+  } = view;
   const { pendingJump } = view;
   useEffect(() => {
     if (pendingJump === undefined) {
       return;
     }
     const plan = planJump(
-      { displayFiles, editsFilterActive, files, loadedOnce, tab },
+      { displayFiles, editsFilterActive, files, loadedOnce, showViewer, tab },
       pendingJump
     );
+    if (plan === "open") {
+      handleOpenFile(pendingJump);
+      consumeJump(sessionId);
+      return;
+    }
     if (plan === "show-feed") {
       setTab(sessionId, "changes");
       return;
@@ -386,8 +417,10 @@ export function ChangesView({ sessionId }: { sessionId: string }) {
     pendingJump,
     sessionId,
     setTab,
+    showViewer,
     tab,
     toggleMyEditsOnly,
+    handleOpenFile,
   ]);
 
   // Opening a scope that lists uncommitted work (All changes, or Files for
@@ -438,9 +471,10 @@ export function ChangesView({ sessionId }: { sessionId: string }) {
         <FileTreePane
           dirtyPaths={view.dirtyPaths}
           files={view.displayFiles}
-          onEditFile={handleEditFile}
           onJumpToFile={(path) => diffFeedRef.current?.scrollToFile(path)}
+          onOpenFile={handleOpenFile}
           onTabChange={(next) => setTab(sessionId, next)}
+          selectedPath={view.selectedFileDiff?.path}
           tab={view.tab}
         >
           {filesTabMounted ? (
@@ -457,7 +491,7 @@ export function ChangesView({ sessionId }: { sessionId: string }) {
               <DiffFeed
                 files={view.displayFiles}
                 onActiveFileChange={(path) => setActiveFile(sessionId, path)}
-                onEditFile={handleEditFile}
+                onEditFile={handleOpenFile}
                 onSilentRefresh={handleSilentRefresh}
                 ref={diffFeedRef}
                 sessionId={sessionId}

@@ -241,19 +241,13 @@ describe("computeChangesView — the pane matrix", () => {
     expect(view.pane).toBe("feed");
   });
 
-  it("shows the viewer only on the all-files tab with a file selected", () => {
+  it("shows the viewer whenever a file is open, on any tab", () => {
     const entry = readyEntry(diff([file("src/a.ts")]));
-    expect(
-      computeChangesView(input({ entry, selectedFile: "src/a.ts", tab: "all" }))
-        .pane
-    ).toBe("viewer");
-    // A file left open on the all-files tab stays selected across a flip back
-    // to Changes — but the feed, not the viewer, is what's on screen.
-    expect(
-      computeChangesView(
-        input({ entry, selectedFile: "src/a.ts", tab: "changes" })
-      ).pane
-    ).toBe("feed");
+    for (const tab of ["all", "changes", "uncommitted"] as const) {
+      expect(
+        computeChangesView(input({ entry, selectedFile: "src/a.ts", tab })).pane
+      ).toBe("viewer");
+    }
     expect(computeChangesView(input({ entry, tab: "all" })).pane).toBe("feed");
   });
 
