@@ -3,7 +3,14 @@ import type { ProjectRow } from "../types.ts";
 import { projectLabels } from "./projectLabel.ts";
 
 function project(name: string, path: string): ProjectRow {
-  return { color: null, id: path, name, path, setupCommand: null };
+  return {
+    color: null,
+    id: path,
+    name,
+    path,
+    parkedAt: null,
+    setupCommand: null,
+  };
 }
 
 /** A rail like a real one: three `acme`, two `bisbig`, two `globex-app`. */

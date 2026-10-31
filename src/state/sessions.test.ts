@@ -21,7 +21,9 @@ import { DEFAULT_LAYOUT, useLayout } from "./layout.ts";
 import {
   badgeCount,
   idleSession,
+  isPutAway,
   isWorktreeSession,
+  parkedProjectIds,
   sessionRow,
   sessionTouchedRelative,
   sessionWorkingDir,
@@ -35,7 +37,14 @@ import { MAX_WARM_PANES, sessionPaneMounts } from "./warmPanes.ts";
 const mockedUpsertSession = vi.mocked(upsertSession);
 
 function makeProject(id: string): ProjectRow {
-  return { color: null, id, name: id, path: "", setupCommand: null };
+  return {
+    color: null,
+    id,
+    name: id,
+    path: "",
+    parkedAt: null,
+    setupCommand: null,
+  };
 }
 
 function makeSession(id: string, createdAt: number): UiSession {
@@ -1125,4 +1134,114 @@ test("applyHooksOff ignores ids that are not sessions", () => {
   // claude and is never removed through `removeSession`.
   useSessions.getState().applyHooksOff("pane-1", "user");
   expect(useSessions.getState().hooksOff["pane-1"]).toBeUndefined();
+});
+
+// --- Parked project (ADR-0052) ---
+
+function inProject(
+  id: string,
+  projectId: string,
+  createdAt: number
+): UiSession {
+  return { ...makeSession(id, createdAt), projectId };
+}
+
+test("isPutAway is true for an archived session or one in a parked project", () => {
+  const parked = parkedProjectIds([
+    { ...makeProject("p1"), parkedAt: 10 },
+    makeProject("p2"),
+  ]);
+  expect(isPutAway(inProject("a", "p2", 1), parked)).toBe(false);
+  expect(isPutAway({ ...inProject("b", "p2", 1), archivedAt: 5 }, parked)).toBe(
+    true
+  );
+  expect(isPutAway(inProject("c", "p1", 1), parked)).toBe(true);
+});
+
+test("parking a project stamps it, drops its warm panes and moves the selection off it", () => {
+  useSessions.setState({
+    activeSessionId: "a2",
+    projects: [makeProject("pa"), makeProject("pb")],
+    sessions: {
+      a1: inProject("a1", "pa", 1),
+      a2: inProject("a2", "pa", 9),
+      b1: inProject("b1", "pb", 2),
+    },
+    warmPanes: ["a1", "b1"],
+  });
+
+  useSessions.getState().parkProject("pa");
+
+  const state = useSessions.getState();
+  expect(state.projects.find((p) => p.id === "pa")?.parkedAt).toBeGreaterThan(
+    0
+  );
+  // a1 is newer than b1 but its project is parked, so it is out of sight.
+  expect(state.activeSessionId).toBe("b1");
+  expect(state.warmPanes).toEqual(["b1"]);
+  // Parking keeps every session row as it was.
+  expect(state.sessions.a1).toEqual(inProject("a1", "pa", 1));
+});
+
+test("parking leaves the selection alone when it is in another project", () => {
+  useSessions.setState({
+    activeSessionId: "b1",
+    projects: [makeProject("pa"), makeProject("pb")],
+    sessions: { a1: inProject("a1", "pa", 1), b1: inProject("b1", "pb", 2) },
+    warmPanes: [],
+  });
+
+  useSessions.getState().parkProject("pa");
+
+  expect(useSessions.getState().activeSessionId).toBe("b1");
+});
+
+test("unparking clears the stamp and starts nothing", () => {
+  useSessions.setState({
+    activeSessionId: null,
+    projects: [{ ...makeProject("pa"), parkedAt: 10 }],
+    sessions: { a1: inProject("a1", "pa", 1) },
+    warmPanes: [],
+  });
+
+  useSessions.getState().unparkProject("pa");
+
+  const state = useSessions.getState();
+  expect(state.projects[0]?.parkedAt).toBeNull();
+  expect(state.activeSessionId).toBeNull();
+  expect(state.warmPanes).toEqual([]);
+});
+
+test("archiving the active session never hands the selection to a parked project", () => {
+  useSessions.setState({
+    activeSessionId: "s1",
+    projects: [makeProject("live"), { ...makeProject("pk"), parkedAt: 10 }],
+    sessions: {
+      s0: inProject("s0", "live", 1),
+      s1: inProject("s1", "live", 2),
+      parked: inProject("parked", "pk", 9),
+    },
+    warmPanes: [],
+  });
+
+  useSessions.getState().archiveSession("s1");
+
+  expect(useSessions.getState().activeSessionId).toBe("s0");
+});
+
+test("opening a session of a parked project unparks it, whatever opened it", () => {
+  useSessions.setState({
+    activeSessionId: null,
+    projects: [{ ...makeProject("pk"), parkedAt: 10 }],
+    sessions: { a1: inProject("a1", "pk", 1) },
+    warmPanes: [],
+  });
+
+  // The palette, a notification and the Needs-you rail all open a session
+  // this way; opening one is what launches it, so it must not stay hidden.
+  useSessions.getState().setActiveSession("a1");
+
+  const state = useSessions.getState();
+  expect(state.activeSessionId).toBe("a1");
+  expect(state.projects[0]?.parkedAt).toBeNull();
 });

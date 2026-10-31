@@ -8,7 +8,7 @@ import {
   useCommandCenter,
 } from "./commandCenter.ts";
 import { buildNeedsYouEntries, type NeedsYouEntry } from "./needsYou.ts";
-import { useSessions } from "./sessions.ts";
+import { parkedProjectIds, useSessions } from "./sessions.ts";
 
 /** How often staleness and blocked durations are recomputed so `unknown` and
  *  elapsed times advance even when no backend event arrives to trigger a render. */
@@ -53,6 +53,7 @@ export function useNeedsYouView(): NeedsYouView {
 
   const standings = buildStandings(
     sessions,
+    parkedProjectIds(projects),
     lastSeenMs,
     lastChangeMs,
     nowMs,

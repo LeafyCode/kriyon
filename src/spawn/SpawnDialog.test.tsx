@@ -35,6 +35,7 @@ const project: ProjectRow = {
   id: "p1",
   name: "Repo",
   path: "/repo",
+  parkedAt: null,
   setupCommand: null,
 };
 function session(over: Partial<UiSession> & { id: string }): UiSession {

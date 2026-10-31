@@ -30,6 +30,7 @@ vi.mock("../ui/Toast.tsx", () => ({ showToast: vi.fn() }));
 import {
   captureBaseline,
   sleepIdleSessions,
+  upsertProject,
   upsertSession,
 } from "../ipc/bridge.ts";
 import {
@@ -49,7 +50,9 @@ import {
   focusSessionFromNotification,
   launchActiveSession,
   noteResumeFailed,
+  parkProjectAndStop,
   prewarmSession,
+  projectParkCost,
   restartSessionFresh,
   resumePastSession,
   sessionBecameLive,
@@ -65,6 +68,7 @@ import {
   type UiSession,
   useSessions,
 } from "./sessions.ts";
+import { useTerminals } from "./terminals.ts";
 
 /** Flush pending microtasks — the `captureBaseline().then(setBaseline)` chain
  * fired-and-forgotten by `createSession` after it returns synchronously. */
@@ -105,6 +109,7 @@ describe("resumePastSession", () => {
         id: "/work/repo",
         name: "repo",
         path: "/work/repo",
+        parkedAt: null,
         setupCommand: null,
       },
     ]);
@@ -207,6 +212,7 @@ describe("createSession baseline capture", () => {
     id: "/repo",
     name: "repo",
     path: "/repo",
+    parkedAt: null,
     setupCommand: null,
   };
 
@@ -337,6 +343,7 @@ describe("spawnFollowUpSession", () => {
     id: "p1",
     name: "Repo",
     path: "/repo",
+    parkedAt: null,
     setupCommand: null,
   };
   const predecessor: UiSession = {
@@ -879,5 +886,172 @@ describe("sleepIdleSessionsNow", () => {
       "Could not sleep idle sessions: boom",
       "error"
     );
+  });
+});
+
+describe("parking a project", () => {
+  function project(id: string, parkedAt: number | null = null): ProjectRow {
+    return {
+      color: null,
+      id,
+      name: id,
+      parkedAt,
+      path: `/${id}`,
+      setupCommand: null,
+    };
+  }
+  function inProject(id: string, projectId: string): UiSession {
+    return idleSession({ ...row(id), projectId });
+  }
+  function terminalsFor(projectId: string, paneIds: string[]) {
+    return {
+      [projectId]: {
+        activeTabId: "t1",
+        tabs: [
+          {
+            activePaneId: paneIds[0] ?? "",
+            direction: "row" as const,
+            id: "t1",
+            layout: [],
+            panes: paneIds.map((id) => ({ cwd: "/x", id })),
+            title: "dev",
+          },
+        ],
+      },
+    };
+  }
+
+  beforeEach(() => {
+    vi.mocked(disposeSession).mockClear();
+    vi.mocked(upsertProject).mockClear();
+    vi.mocked(showToast).mockClear();
+    useTerminals.setState({
+      busyPanes: {},
+      byProject: {},
+      deadPanes: {},
+    });
+  });
+
+  it("stops every session and terminal in the project and nothing else", () => {
+    useSessions.setState({
+      activeSessionId: "b1",
+      projects: [project("pa"), project("pb")],
+      sessions: {
+        a1: inProject("a1", "pa"),
+        a2: inProject("a2", "pa"),
+        old: { ...inProject("old", "pa"), archivedAt: 5 },
+        b1: inProject("b1", "pb"),
+      },
+      warmPanes: [],
+    });
+    useTerminals.setState({
+      byProject: {
+        ...terminalsFor("pa", ["pane-a"]),
+        ...terminalsFor("pb", ["pane-b"]),
+      },
+    });
+
+    parkProjectAndStop("pa");
+
+    const stopped = vi.mocked(disposeSession).mock.calls.map(([id]) => id);
+    // The archived one is already stopped.
+    expect(stopped).toEqual(expect.arrayContaining(["a1", "a2", "pane-a"]));
+    expect(stopped).toHaveLength(3);
+    expect(
+      useSessions.getState().projects.find((p) => p.id === "pa")?.parkedAt
+    ).toBeGreaterThan(0);
+    // The terminal layout stays, so unparking brings the tabs back.
+    expect(useTerminals.getState().byProject.pa?.tabs[0]?.panes).toHaveLength(
+      1
+    );
+    expect(showToast).toHaveBeenCalledExactlyOnceWith(
+      "Parked pa · 2 sessions and 1 terminal stopped"
+    );
+  });
+
+  it("saves the parked flag at once rather than waiting for the debounce", () => {
+    useSessions.setState({
+      activeSessionId: null,
+      projects: [project("pa")],
+      sessions: { a1: inProject("a1", "pa") },
+      warmPanes: [],
+    });
+
+    parkProjectAndStop("pa");
+
+    const saved = vi.mocked(upsertProject).mock.lastCall?.[0];
+    expect(saved?.id).toBe("pa");
+    expect(saved?.parkedAt).toBeGreaterThan(0);
+  });
+
+  it("clears the stopped terminals' busy flags so a quit does not count them", () => {
+    useSessions.setState({
+      activeSessionId: null,
+      projects: [project("pa")],
+      sessions: {},
+      warmPanes: [],
+    });
+    useTerminals.setState({
+      busyPanes: { "pane-a": true },
+      byProject: terminalsFor("pa", ["pane-a"]),
+    });
+
+    parkProjectAndStop("pa");
+
+    expect(useTerminals.getState().hasBusyPanes()).toBe(false);
+  });
+
+  it("names what parking would stop", () => {
+    useSessions.setState({
+      activity: {},
+      bootPhase: {},
+      exited: {},
+      projects: [project("pa")],
+      sessions: {
+        a1: { ...inProject("a1", "pa"), status: "running" },
+        a2: inProject("a2", "pa"),
+      },
+    });
+    useTerminals.setState({
+      busyPanes: { "pane-a": true },
+      byProject: terminalsFor("pa", ["pane-a", "pane-b"]),
+    });
+
+    expect(projectParkCost("pa")).toEqual({
+      busyTerminals: 1,
+      commands: [],
+      sessionIds: ["a1", "a2"],
+      starting: 0,
+      working: 1,
+    });
+  });
+
+  it("starting a new session in a parked project unparks it", () => {
+    useSessions.setState({
+      activeSessionId: null,
+      projects: [
+        { ...project("/work/proj", 10), name: "proj", path: "/work/proj" },
+      ],
+      sessions: {},
+    });
+
+    createSessionInFolder("/work/proj");
+
+    expect(useSessions.getState().projects[0]?.parkedAt).toBeNull();
+    expect(vi.mocked(upsertProject).mock.lastCall?.[0].parkedAt).toBeNull();
+  });
+
+  it("resuming a past session in a parked project unparks it", () => {
+    useSessions.setState({
+      activeSessionId: null,
+      projects: [
+        { ...project("/work/proj", 10), name: "proj", path: "/work/proj" },
+      ],
+      sessions: {},
+    });
+
+    resumePastSession(pastSession({ cwd: "/work/proj" }));
+
+    expect(useSessions.getState().projects[0]?.parkedAt).toBeNull();
   });
 });

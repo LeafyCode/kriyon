@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import type { UiSession } from "../state/sessions.ts";
-import type { SessionActivity, SessionStatus } from "../types.ts";
+import type { ProjectRow, SessionActivity, SessionStatus } from "../types.ts";
 import { needsYouSectionItems } from "./needsYouItems.ts";
 
 function session(
@@ -39,6 +39,7 @@ const EMPTY = {
   activeSessionId: null,
   activity: {},
   appendSeq: {},
+  projects: [] as ProjectRow[],
   statusOrigin: {} as Record<string, "seeded" | "live">,
   sessions: {},
   viewed: {},
@@ -177,6 +178,25 @@ test("running, idle, and archived sessions never qualify", () => {
       s2: session("s2", "idle", 2),
       s3: session("s3", "waiting", 3, 99), // archived
     },
+  });
+
+  expect(items).toEqual([]);
+});
+
+test("sessions of a parked project never qualify", () => {
+  const items = needsYouSectionItems({
+    ...EMPTY,
+    projects: [
+      {
+        color: null,
+        id: "p1",
+        name: "p1",
+        parkedAt: 10,
+        path: "/x",
+        setupCommand: null,
+      },
+    ],
+    sessions: { s1: session("s1", "waiting", 1) },
   });
 
   expect(items).toEqual([]);

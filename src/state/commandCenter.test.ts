@@ -39,6 +39,7 @@ function makeProject(id: string): ProjectRow {
     id,
     name: `Project ${id}`,
     path: `/${id}`,
+    parkedAt: null,
     setupCommand: null,
   };
 }
@@ -104,7 +105,13 @@ test("buildStandings derives one entry per session", () => {
   const lastSeen = { s1: now - 100 };
   const lastChange = { s1: now - 50 };
 
-  const standings = buildStandings(sessions, lastSeen, lastChange, now);
+  const standings = buildStandings(
+    sessions,
+    new Set(),
+    lastSeen,
+    lastChange,
+    now
+  );
 
   const s1 = standings.find((s) => s.sessionId === "s1");
   const s2 = standings.find((s) => s.sessionId === "s2");
@@ -145,7 +152,41 @@ test("buildStandings omits archived sessions", () => {
     live: { ...base, archivedAt: null, id: "live" },
     gone: { ...base, archivedAt: now - 1000, id: "gone" },
   };
-  const standings = buildStandings(sessions, { live: now, gone: now }, {}, now);
+  const standings = buildStandings(
+    sessions,
+    new Set(),
+    { live: now, gone: now },
+    {},
+    now
+  );
+  expect(standings.map((s) => s.sessionId)).toEqual(["live"]);
+});
+
+test("buildStandings omits sessions of a parked project", () => {
+  const now = Date.now();
+  const base = {
+    archivedAt: null,
+    baselineOid: null,
+    claudeSessionId: null,
+    createdAt: 1,
+    cwd: "/r",
+    status: "running" as const,
+    summary: "",
+    title: "T",
+    titleLocked: false,
+    worktreePath: null,
+  };
+  const sessions = {
+    live: { ...base, id: "live", projectId: "p1" },
+    parked: { ...base, id: "parked", projectId: "pk" },
+  };
+  const standings = buildStandings(
+    sessions,
+    new Set(["pk"]),
+    { live: now, parked: now },
+    {},
+    now
+  );
   expect(standings.map((s) => s.sessionId)).toEqual(["live"]);
 });
 
@@ -156,7 +197,7 @@ test("needsYou filters to awaiting_input standings only", () => {
     s2: makeSession("s2", "p1", "running"),
   };
   const lastSeen = { s1: now, s2: now };
-  const standings = buildStandings(sessions, lastSeen, {}, now);
+  const standings = buildStandings(sessions, new Set(), lastSeen, {}, now);
 
   const blocked = needsYou(standings);
   expect(blocked.map((s) => s.sessionId)).toEqual(["s1"]);
@@ -169,7 +210,7 @@ test("groupByProject preserves project order and omits empty projects", () => {
     s2: makeSession("s2", "p1", "running"),
   };
   const lastSeen = { s1: now, s2: now };
-  const standings = buildStandings(sessions, lastSeen, {}, now);
+  const standings = buildStandings(sessions, new Set(), lastSeen, {}, now);
   const projects = [makeProject("p1"), makeProject("p2"), makeProject("p3")];
 
   const groups = groupByProject(standings, projects);
@@ -215,7 +256,7 @@ test("buildStandings reads unknown for a session whose hooks are off", () => {
     s1: makeSession("s1", "p1", "idle", 5),
   };
   // The watcher is alive, but no hook can ever report a status.
-  const standings = buildStandings(sessions, { s1: now }, {}, now, {
+  const standings = buildStandings(sessions, new Set(), { s1: now }, {}, now, {
     s1: "user",
   });
   expect(standings[0]?.state).toBe("unknown");

@@ -122,22 +122,24 @@ export function FocusRail() {
           minWidth: `${Math.min(RAIL_WIDTH, TRAFFIC_LIGHT_CLEARANCE)}px`,
         }}
       />
-      {projects.map((project) => {
-        const first = focusSessionOf(project.id);
-        return (
-          <button
-            className="kr-hover-surface"
-            disabled={!first}
-            key={project.id}
-            onClick={() => first && setActiveSession(first)}
-            style={tileStyle(project.id === activeProjectId)}
-            title={project.name}
-            type="button"
-          >
-            {project.name.charAt(0).toUpperCase()}
-          </button>
-        );
-      })}
+      {projects
+        .filter((project) => project.parkedAt === null)
+        .map((project) => {
+          const first = focusSessionOf(project.id);
+          return (
+            <button
+              className="kr-hover-surface"
+              disabled={!first}
+              key={project.id}
+              onClick={() => first && setActiveSession(first)}
+              style={tileStyle(project.id === activeProjectId)}
+              title={project.name}
+              type="button"
+            >
+              {project.name.charAt(0).toUpperCase()}
+            </button>
+          );
+        })}
       <div style={{ flex: 1 }} />
       <ViewTile
         icon={<MessagesSquare size={15} strokeWidth={1.75} />}

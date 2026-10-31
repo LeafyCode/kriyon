@@ -95,6 +95,9 @@ export interface ProjectRow {
   color: string | null;
   id: string;
   name: string;
+  /** When the project was parked (ms since epoch), or null while it is on the
+   *  rail (mirrors Rust `parked_at`). See [Parked project]. */
+  parkedAt: number | null;
   path: string;
   /** Optional per-worktree setup command (mirrors Rust `setup_command`). */
   setupCommand: string | null;

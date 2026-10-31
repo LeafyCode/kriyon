@@ -1,7 +1,7 @@
 # ADR 0052 — Park a project: stop everything in it, keep everything about it
 
 **Date:** 2026-10-31
-**Status:** Proposed
+**Status:** Accepted
 
 ## Context
 
@@ -51,9 +51,11 @@ an auto-archive that killed running work with no way back.
   or subagent, holding unsent text, or running a busy terminal, a Confirm
   dialog names it. Nothing busy means no dialog.
 - **Parking is the person's choice and only the person undoes it.** No timer
-  and no activity brings a parked project back. Two actions unpark it: the
-  Unpark control, and starting a new session in the project (which implies the
-  person wants to work there).
+  and no activity brings a parked project back. Three actions unpark it: the
+  Unpark control, starting a new session in the project, and opening one of its
+  sessions from anywhere (the Parked section, ⌘K, a notification). Opening a
+  session is what launches it, so the store's `setActiveSession` unparks — one
+  place, so no path can run a session inside a project that stays hidden.
 - **Unparking is lazy.** The group returns as it was. Each session resumes
   with `claude --resume` only when it is opened, and each terminal pane opens
   a fresh shell when shown. Restarting all of them at once would bring back
@@ -62,8 +64,14 @@ an auto-archive that killed running work with no way back.
   Command center, the Needs-you rail, notifications, auto-sleep and daemon
   adoption. The orphan-daemon sweep treats them like archived rows, so a
   daemon that outlives a park is reaped.
-- **Parked sessions stay findable.** History and search still list them,
-  marked "Parked". Reading a parked session's transcript does not unpark it.
+- **Parked sessions stay findable.** The Parked section lists each project's
+  sessions, and ⌘K still lists them, marked "Parked". Opening one unparks the
+  project. A read-only view that doesn't unpark was considered and left out:
+  it would need a session view with no terminal, which Kriyon doesn't have.
+- **One "put away" check.** Archived sessions and sessions of a parked project
+  are both "put away" (`isPutAway` in the frontend, `SessionRow::is_put_away`
+  in Rust). Every surface that means "skip what is not live" asks it, so a
+  later surface can't skip archived sessions and forget parked ones.
 
 ## Consequences
 

@@ -132,6 +132,7 @@ describe("importPromptsFromCommands", () => {
           id: "proj1",
           name: "Proj",
           path: "/p",
+          parkedAt: null,
           setupCommand: null,
         },
       ],

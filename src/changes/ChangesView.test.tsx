@@ -113,6 +113,7 @@ const project: ProjectRow = {
   id: "p1",
   name: "proj",
   path: "/repo",
+  parkedAt: null,
   setupCommand: null,
 };
 

@@ -53,8 +53,11 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
   *Park project*. Every [Session] in it and every [Project terminal] it owns is stopped (the
   same stop archiving uses), but nothing else changes: session rows, titles, order, [Archived
   session]s, [Transcript]s and [Worktree]s all stay. The group leaves the rail for a "Parked"
-  section at the bottom of the sidebar. *Unpark* brings the group back as it was; each session
-  resumes (`claude --resume`) only when it is opened, and each terminal opens a fresh shell.
+  section at the bottom of the sidebar (`ParkedGroup`). *Unpark* brings the group back as it
+  was; each session resumes (`claude --resume`) only when it is opened, and each terminal
+  opens a fresh shell. Starting a session in the project, or opening one of its sessions from
+  anywhere (the Parked section, ⌘K, a notification), unparks it too: a session that runs must
+  never sit hidden.
   Unlike an [Inactive project], parking is the user's choice and never undoes itself on a
   timer; unlike [Clear project], nothing is closed. _Avoid_: shelved, hidden, archived
   project, sleeping project.

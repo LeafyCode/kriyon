@@ -28,7 +28,8 @@ import { markBootLive, markBootStart } from "./bootTiming.ts";
 import { useCompletions } from "./completions.ts";
 import { useLayout } from "./layout.ts";
 import { idleSession, type UiSession, useSessions } from "./sessions.ts";
-import { freedMemoryNote } from "./stopCost.ts";
+import { freedMemoryNote, stopCostFor } from "./stopCost.ts";
+import { projectPaneIds, useTerminals } from "./terminals.ts";
 import { sessionPaneMounts } from "./warmPanes.ts";
 
 /**
@@ -53,6 +54,104 @@ export function archiveSessionAndStop(sessionId: string): void {
   if (freed) {
     showToast(freed);
   }
+}
+
+/** What parking a project would stop — read by its confirm and its toast. */
+export interface ParkCost {
+  /** Terminal panes with a command running. */
+  busyTerminals: number;
+  /** Background commands the project's sessions are running, by name. */
+  commands: string[];
+  /** The sessions parking stops (every one not already archived). */
+  sessionIds: string[];
+  /** Sessions still starting Claude up. */
+  starting: number;
+  /** Sessions mid-turn. */
+  working: number;
+}
+
+/**
+ * The [Stop cost] of every session in a project plus its busy terminals: the
+ * same answer the close confirm and the quit gate read, so parking can't warn
+ * about less than they would.
+ */
+export function projectParkCost(projectId: string): ParkCost {
+  const state = useSessions.getState();
+  const cost: ParkCost = {
+    busyTerminals: 0,
+    commands: [],
+    sessionIds: [],
+    starting: 0,
+    working: 0,
+  };
+  for (const session of Object.values(state.sessions)) {
+    if (session.projectId !== projectId || session.archivedAt !== null) {
+      continue;
+    }
+    cost.sessionIds.push(session.id);
+    const one = stopCostFor(session, state);
+    cost.commands.push(...one.commands);
+    if (one.engagement === "running") {
+      cost.working += 1;
+    } else if (one.engagement === "starting") {
+      cost.starting += 1;
+    }
+  }
+  const terminals = useTerminals.getState();
+  cost.busyTerminals = projectPaneIds(terminals.byProject, projectId).filter(
+    (id) => terminals.isPaneBusy(id)
+  ).length;
+  return cost;
+}
+
+/** Whether parking would stop any work in flight — when its confirm is owed. */
+export function hasParkCost(cost: ParkCost): boolean {
+  return (
+    cost.working > 0 ||
+    cost.starting > 0 ||
+    cost.commands.length > 0 ||
+    cost.busyTerminals > 0
+  );
+}
+
+function plural(count: number, noun: string): string {
+  return `${count} ${noun}${count === 1 ? "" : "s"}`;
+}
+
+/**
+ * Park a project: put it away and stop everything it runs (ADR-0052). Every
+ * session not already archived and every [Project terminal] is stopped; rows,
+ * titles, order, transcripts, worktrees and terminal tabs all stay. The flag is
+ * saved at once, before the stops, so a crash mid-stop still leaves the project
+ * parked and the orphan sweep finishes the job.
+ */
+export function parkProjectAndStop(projectId: string): void {
+  const state = useSessions.getState();
+  const project = state.projects.find((p) => p.id === projectId);
+  if (!project || project.parkedAt !== null) {
+    return;
+  }
+  const { sessionIds } = projectParkCost(projectId);
+  const paneCount = projectPaneIds(
+    useTerminals.getState().byProject,
+    projectId
+  ).length;
+  state.parkProject(projectId);
+  const parked = useSessions
+    .getState()
+    .projects.find((p) => p.id === projectId);
+  if (parked && isTauriRuntime()) {
+    ignore(upsertProject(parked));
+  }
+  for (const id of sessionIds) {
+    ignore(disposeSession(id));
+  }
+  useTerminals.getState().stopProject(projectId);
+  const stopped =
+    paneCount > 0
+      ? `${plural(sessionIds.length, "session")} and ${plural(paneCount, "terminal")}`
+      : plural(sessionIds.length, "session");
+  showToast(`Parked ${project.name} · ${stopped} stopped`);
 }
 
 /**
@@ -152,6 +251,22 @@ function persistThenWarm(project: ProjectRow, session: SessionRow): void {
  * Making it active is what launches `claude` (the active-session effect in `App`
  * launches/resumes a session the first time it is viewed).
  */
+/**
+ * Make sure `project` is in the store and on the rail, returning the store's
+ * row for it. Starting a session in a [Parked project] means the person wants
+ * to work there, so it unparks it. The store's row is what gets persisted: the
+ * caller's copy may be a fresh one (a folder pick) or a stale one (parked).
+ */
+function ensureProject(project: ProjectRow): ProjectRow {
+  const state = useSessions.getState();
+  // `addProject` is a no-op if the project id already exists.
+  state.addProject(project);
+  state.unparkProject(project.id);
+  return (
+    useSessions.getState().projects.find((p) => p.id === project.id) ?? project
+  );
+}
+
 export function createSession(
   project: ProjectRow,
   cwd: string,
@@ -169,8 +284,7 @@ export function createSession(
   }
 ): string {
   const state = useSessions.getState();
-  // `addProject` is a no-op if the project id already exists.
-  state.addProject(project);
+  const stored = ensureProject(project);
   const id = crypto.randomUUID();
   const row: SessionRow = {
     archivedAt: null,
@@ -197,7 +311,7 @@ export function createSession(
     // Mounted out of sight, then launched: the activation effect that starts
     // a shown session never runs for it.
     state.warmSession(id);
-    persistThenWarm(project, row);
+    persistThenWarm(stored, row);
     // Its [Boot phase] reads `launching` from this call on, so a second
     // request in the same batch counts it against the [Nested session cap].
     ignore(launchActiveSession(id));
@@ -213,7 +327,7 @@ export function createSession(
   useLayout.getState().revealSessionView();
   // Persist the row, then warm the composer's slash-command catalog for this
   // cwd so it's ready before the user's first `/`.
-  persistThenWarm(project, row);
+  persistThenWarm(stored, row);
   // Fire-and-forget: capture a git baseline for the Changes view to diff
   // against later. Must never block session creation or throw — `ignore`
   // swallows a rejection (cwd isn't a git repo, capture failed), leaving
@@ -254,6 +368,7 @@ export function createSessionInDefaultProject(): void {
       id: "default",
       name: "Home",
       path: defaultCwd,
+      parkedAt: null,
       setupCommand: null,
     },
     defaultCwd,
@@ -269,7 +384,7 @@ export function createSessionInDefaultProject(): void {
 export function createSessionInFolder(path: string): void {
   const name = basename(path);
   createSession(
-    { color: null, id: path, name, path, setupCommand: null },
+    { color: null, id: path, name, path, parkedAt: null, setupCommand: null },
     path,
     name
   );
@@ -301,9 +416,10 @@ export function resumePastSession(past: PastSession): void {
     id: cwd,
     name,
     path: cwd,
+    parkedAt: null,
     setupCommand: null,
   };
-  state.addProject(project);
+  const stored = ensureProject(project);
   const id = crypto.randomUUID();
   const row: SessionRow = {
     archivedAt: null,
@@ -325,7 +441,7 @@ export function resumePastSession(past: PastSession): void {
   useLayout.getState().revealSessionView();
   // Persist + warm so the composer's completions validate against a known root
   // and are ready before the first `/`, the same as a fresh session.
-  persistThenWarm(project, row);
+  persistThenWarm(stored, row);
 }
 
 /**

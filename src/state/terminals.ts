@@ -74,6 +74,9 @@ export interface TerminalsState {
   setPaneExited: (paneId: string) => void;
   setQuitConfirm: (stakes: QuitStakes | null) => void;
   splitPane: (projectId: string, tabId: string, cwd: string) => string;
+  /** Stop every pane of a [Parked project], keeping its tabs and layout so
+   *  unparking brings them back; each pane opens a fresh shell when shown. */
+  stopProject: (projectId: string) => void;
 }
 
 function newPane(cwd: string): TerminalPane {
@@ -382,4 +385,27 @@ export const useTerminals = create<TerminalsState>((set, get) => ({
   hasBusyPanes: () => Object.keys(get().busyPanes).length > 0,
 
   hydrate: (byProject) => set({ byProject }),
+
+  stopProject: (projectId) => {
+    const paneIds = projectPaneIds(get().byProject, projectId);
+    for (const id of paneIds) {
+      disposeSession(id);
+    }
+    set((state) => ({
+      busyPanes: pruneBusy(state.busyPanes, paneIds),
+      deadPanes: pruneBusy(state.deadPanes, paneIds),
+    }));
+  },
 }));
+
+/** Every [Terminal pane] id a project owns, across all its tabs. */
+export function projectPaneIds(
+  byProject: Record<string, ProjectTerminals>,
+  projectId: string
+): string[] {
+  return (
+    byProject[projectId]?.tabs.flatMap((tab) =>
+      tab.panes.map((pane) => pane.id)
+    ) ?? []
+  );
+}

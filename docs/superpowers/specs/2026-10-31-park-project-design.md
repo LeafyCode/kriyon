@@ -2,6 +2,13 @@
 
 **Date:** 2026-10-31 · **Branch:** `feat/park-project` · **Decision:** [ADR-0052](../../adr/0052-park-a-project.md)
 
+> **As built (2026-10-31).** Differences from the design below: opening a
+> parked session unparks the project instead of showing a read-only view (no
+> session view without a terminal exists); the "Parked" toast has no Undo (the
+> app's toast has no action button); the confirm stops whatever the project
+> holds when it is confirmed rather than a snapshot; and no new IPC commands —
+> `parkedAt` rides on the existing `upsert_project`, saved at once on park.
+
 ## Goal
 
 Let a person put away a project they are not working on today: stop every

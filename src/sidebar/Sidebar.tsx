@@ -16,6 +16,7 @@ import { useAnchoredMenu } from "../ui/AnchoredMenu.tsx";
 import { ArchivedGroup } from "./ArchivedGroup.tsx";
 import { useProjectDrag } from "./dragCommit.ts";
 import { NeedsYouSection } from "./NeedsYouSection.tsx";
+import { ParkedGroup } from "./ParkedGroup.tsx";
 import { ProjectGroup } from "./ProjectGroup.tsx";
 import { projectLabels } from "./projectLabel.ts";
 import { ResizeHandle } from "./ResizeHandle.tsx";
@@ -201,9 +202,10 @@ export function Sidebar({
       }
       // Archived sessions do not hold a group open: a project whose every
       // session has been archived would otherwise sit on the rail forever as
-      // an empty header with a `0` count.
-      const included = state.projects.filter((project) =>
-        byProject.has(project.id)
+      // an empty header with a `0` count. A parked project lives in the
+      // Parked section instead.
+      const included = state.projects.filter(
+        (project) => byProject.has(project.id) && project.parkedAt === null
       );
       return sortProjects(included, byProject, mode, manualProjectOrder);
     })
@@ -413,6 +415,7 @@ export function Sidebar({
             ) : null}
           </>
         ) : null}
+        <ParkedGroup />
         <ArchivedGroup />
       </div>
       <SidebarFooter onShowAbout={onShowAbout} />

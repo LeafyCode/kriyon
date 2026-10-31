@@ -477,6 +477,7 @@ describe("base and baseline resolution", () => {
       id: "p1",
       name: "p1",
       path: "/repo",
+      parkedAt: null,
       setupCommand: null,
     });
     s.addSession(
@@ -503,6 +504,7 @@ describe("base and baseline resolution", () => {
       id: "p1",
       name: "p1",
       path: "/repo",
+      parkedAt: null,
       setupCommand: null,
     });
     s.addSession(
@@ -874,6 +876,7 @@ test("a worktree session's debounced refresh resolves the repo's default branch 
     id: "p1",
     name: "p1",
     path: "/repo",
+    parkedAt: null,
     setupCommand: null,
   });
   s.addSession(
@@ -924,6 +927,7 @@ test("a worktree session's debounced refresh threads its baselineOid alongside t
     id: "p1",
     name: "p1",
     path: "/repo",
+    parkedAt: null,
     setupCommand: null,
   });
   s.addSession(
@@ -1199,6 +1203,7 @@ test("the default branch is resolved once per project, not once per refresh", as
     id: "p1",
     name: "p1",
     path: "/repo",
+    parkedAt: null,
     setupCommand: null,
   });
   s.addSession(
@@ -1224,6 +1229,7 @@ test("forgetting a memoized default branch makes the next refresh resolve it aga
     id: "p1",
     name: "p1",
     path: "/repo",
+    parkedAt: null,
     setupCommand: null,
   });
   s.addSession(

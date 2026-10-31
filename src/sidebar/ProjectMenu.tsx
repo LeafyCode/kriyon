@@ -1,6 +1,7 @@
 /**
- * A project header's "⋯" popover: rename, and the destructive clear that
- * closes every session in the group. Its own component (the session row's
+ * A project header's "⋯" popover: rename, park (put the project away and stop
+ * what it runs), and the destructive clear that closes every session in the
+ * group. Its own component (the session row's
  * `⋯` menu is the sibling pattern) so the header stays about chrome.
  *
  * The clear only *asks* here — the confirm itself is the group's centered
@@ -43,11 +44,15 @@ interface ProjectMenuProps {
   onRename: () => void;
   /** Ask to close every session in the project — opens the group's confirm. */
   onRequestClear: () => void;
+  /** Ask to park the project — parks at once, or opens the group's confirm
+   *  when work is in flight. */
+  onRequestPark: () => void;
   projectId: string;
 }
 
 export function ProjectMenu({
   onRequestClear,
+  onRequestPark,
   onRename,
   projectId,
 }: ProjectMenuProps) {
@@ -62,6 +67,17 @@ export function ProjectMenu({
         type="button"
       >
         Rename
+      </button>
+      <button
+        className="kr-hover-surface"
+        data-testid={`park-project-${projectId}`}
+        onClick={onRequestPark}
+        role="menuitem"
+        style={itemStyle}
+        title="Stop its sessions and terminals and move it to Parked"
+        type="button"
+      >
+        Park project
       </button>
       <button
         className="kr-hover-surface"

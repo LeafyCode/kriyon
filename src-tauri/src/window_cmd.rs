@@ -361,6 +361,7 @@ mod tray_command_tests {
                 path: "/tmp".to_string(),
                 color: None,
                 setup_command: None,
+                parked_at: None,
             })
             .expect("project");
         store

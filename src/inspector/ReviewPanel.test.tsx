@@ -107,6 +107,7 @@ function seedActiveSession(): void {
         id: "p1",
         name: "repo",
         path: "/repo",
+        parkedAt: null,
         setupCommand: null,
       },
     ],

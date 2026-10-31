@@ -81,6 +81,7 @@ function seedLead(): void {
     id: "p1",
     name: "Repo",
     path: "/repo",
+    parkedAt: null,
     setupCommand: null,
   });
   state.addSession(

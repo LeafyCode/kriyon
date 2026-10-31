@@ -43,15 +43,23 @@ pub enum ReapStep {
 /// an unreadable blob says nothing about which daemons are owned. Entries of an
 /// unexpected shape inside a readable blob are skipped, matching the frontend's
 /// own tolerant `parseTerminals`.
+///
+/// Panes of a [Parked project] (ids in `parked_projects`) are left out: parking stops
+/// them, so a daemon still serving one is a leftover.
 #[must_use]
-pub fn terminal_pane_ids(blob: Option<&str>) -> Option<Vec<String>> {
+pub fn terminal_pane_ids<S: BuildHasher>(
+    blob: Option<&str>,
+    parked_projects: &HashSet<String, S>,
+) -> Option<Vec<String>> {
     let Some(blob) = blob else {
         return Some(Vec::new());
     };
     let parsed: serde_json::Value = serde_json::from_str(blob).ok()?;
     let projects = parsed.as_object()?;
     let ids = projects
-        .values()
+        .iter()
+        .filter(|(project_id, _)| !parked_projects.contains(*project_id))
+        .map(|(_, project)| project)
         .filter_map(|project| project.get("tabs")?.as_array())
         .flatten()
         .filter_map(|tab| tab.get("panes")?.as_array())
@@ -160,23 +168,39 @@ mod tests {
             ]},
             "proj-2": {"activeTabId": "t3", "tabs": []}
         }"#;
-        let mut ids = terminal_pane_ids(Some(blob)).expect("readable blob");
+        let mut ids = terminal_pane_ids(Some(blob), &HashSet::new()).expect("readable blob");
         ids.sort();
         assert_eq!(ids, vec!["pane-a", "pane-b", "pane-c"]);
     }
 
     #[test]
+    fn a_parked_projects_panes_are_left_out() {
+        let blob = r#"{
+            "proj-1": {"tabs": [{"panes": [{"id": "pane-a"}]}]},
+            "parked": {"tabs": [{"panes": [{"id": "pane-z"}]}]}
+        }"#;
+        let parked = HashSet::from(["parked".to_string()]);
+        assert_eq!(
+            terminal_pane_ids(Some(blob), &parked),
+            Some(vec!["pane-a".to_string()])
+        );
+    }
+
+    #[test]
     fn no_blob_means_no_panes_but_an_unreadable_blob_means_unknown() {
-        assert_eq!(terminal_pane_ids(None), Some(Vec::new()));
+        assert_eq!(terminal_pane_ids(None, &HashSet::new()), Some(Vec::new()));
         // Fail closed: `None` tells the caller ownership is unknowable.
-        assert_eq!(terminal_pane_ids(Some("{not json")), None);
-        assert_eq!(terminal_pane_ids(Some("[1, 2]")), None);
+        assert_eq!(terminal_pane_ids(Some("{not json"), &HashSet::new()), None);
+        assert_eq!(terminal_pane_ids(Some("[1, 2]"), &HashSet::new()), None);
     }
 
     #[test]
     fn oddly_shaped_entries_inside_a_readable_blob_are_skipped() {
         let blob = r#"{"layout": {"sidebar": 240}, "proj": {"tabs": [{"panes": [{"id": "p"}, {"noid": 1}]}, 7]}}"#;
-        assert_eq!(terminal_pane_ids(Some(blob)), Some(vec!["p".to_string()]));
+        assert_eq!(
+            terminal_pane_ids(Some(blob), &HashSet::new()),
+            Some(vec!["p".to_string()])
+        );
     }
 
     #[test]

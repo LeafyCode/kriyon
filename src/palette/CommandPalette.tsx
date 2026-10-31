@@ -85,8 +85,17 @@ function buildItems(
   projects: ReturnType<typeof useSessions.getState>["projects"],
   setActiveSession: (id: string) => void
 ): PaletteItem[] {
-  const projectName = (id: string) =>
-    projects.find((project) => project.id === id)?.name ?? "";
+  // A [Parked project]'s sessions stay findable here, marked; opening one
+  // unparks the project (see `setActiveSession`).
+  const projectName = (id: string) => {
+    const project = projects.find((p) => p.id === id);
+    if (!project) {
+      return "";
+    }
+    return project.parkedAt === null
+      ? project.name
+      : `${project.name} · Parked`;
+  };
 
   const sessionItems: PaletteItem[] = Object.values(sessions)
     .sort((a, b) => a.createdAt - b.createdAt)

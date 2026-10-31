@@ -456,6 +456,7 @@ mod tests {
                 path: path.to_string(),
                 color: None,
                 setup_command: None,
+                parked_at: None,
             })
             .unwrap();
         StoreState(Mutex::new(store))

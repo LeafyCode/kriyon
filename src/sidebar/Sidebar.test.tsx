@@ -56,6 +56,8 @@ import { Sidebar } from "./Sidebar.tsx";
 
 /** The rail's empty-state copy, as one top-level matcher. */
 const EMPTY_HINT = /No open sessions/;
+/** The park confirm's line for one busy session. */
+const ONE_SESSION_WORKING = /1 session is working/;
 
 function makeProject(id: string): ProjectRow {
   return {
@@ -63,6 +65,7 @@ function makeProject(id: string): ProjectRow {
     id,
     name: `Project ${id}`,
     path: `/${id}`,
+    parkedAt: null,
     setupCommand: null,
   };
 }
@@ -1722,6 +1725,7 @@ test("projects sort alphabetically regardless of creation order", () => {
     id: "zz",
     name: "Alpha",
     path: "/zz",
+    parkedAt: null,
     setupCommand: null,
   });
   useSessions.getState().addSession({
@@ -2820,6 +2824,7 @@ function seedTwins(): void {
     id: "t1",
     name: "acme",
     path: "/Users/p/Projects/Acme/acme",
+    parkedAt: null,
     setupCommand: null,
   });
   state.addProject({
@@ -2827,6 +2832,7 @@ function seedTwins(): void {
     id: "t2",
     name: "acme",
     path: "/Users/p/Projects/Acme/review/acme",
+    parkedAt: null,
     setupCommand: null,
   });
   for (const [id, projectId] of [
@@ -3195,4 +3201,110 @@ test("a nested session whose lead is filtered out isn't drawn indented", () => {
     .getAllByTestId("session-row")
     .find((row) => row.textContent?.includes("Nested One"));
   expect(nestedRow?.querySelector("[data-nest-depth='0']")).not.toBeNull();
+});
+
+// --- Parked project (ADR-0052) ---
+
+function renderSidebar() {
+  render(
+    <Sidebar
+      onCloseSession={vi.fn()}
+      onNewSession={vi.fn()}
+      onShowAbout={vi.fn()}
+    />
+  );
+}
+
+test("parking a busy project asks first and names what it would stop", () => {
+  seed();
+  renderSidebar();
+
+  fireEvent.click(screen.getByLabelText("More actions for Project p1"));
+  fireEvent.click(screen.getByTestId("park-project-p1"));
+
+  // s1 is running, so nothing is parked until the confirm.
+  expect(useSessions.getState().projects[0]?.parkedAt).toBeNull();
+  expect(screen.getByText("Park Project p1?")).toBeInTheDocument();
+  expect(screen.getByText(ONE_SESSION_WORKING)).toBeInTheDocument();
+
+  fireEvent.click(screen.getByTestId("confirm-park-project-p1"));
+
+  expect(
+    useSessions.getState().projects.find((p) => p.id === "p1")?.parkedAt
+  ).toBeGreaterThan(0);
+});
+
+test("parking a quiet project needs no confirm", () => {
+  seed();
+  renderSidebar();
+
+  fireEvent.click(screen.getByLabelText("More actions for Project p2"));
+  fireEvent.click(screen.getByTestId("park-project-p2"));
+
+  expect(screen.queryByTestId("park-project-backdrop")).toBeNull();
+  expect(
+    useSessions.getState().projects.find((p) => p.id === "p2")?.parkedAt
+  ).toBeGreaterThan(0);
+});
+
+test("a parked project leaves the rail for a closed Parked section", () => {
+  seed();
+  act(() => {
+    useSessions.getState().parkProject("p2");
+  });
+  renderSidebar();
+
+  expect(screen.getAllByTestId("project-group")).toHaveLength(1);
+  expect(screen.queryByText("Session Three")).toBeNull();
+  const parked = screen.getByTestId("parked-group");
+  expect(within(parked).getByText("Parked (1)")).toBeInTheDocument();
+
+  fireEvent.click(within(parked).getByText("Parked (1)"));
+  expect(within(parked).getByText("Project p2")).toBeInTheDocument();
+  expect(within(parked).getByText("1 session")).toBeInTheDocument();
+});
+
+test("Unpark brings the project back to the rail as it was", () => {
+  seed();
+  act(() => {
+    useSessions.getState().parkProject("p2");
+  });
+  renderSidebar();
+
+  fireEvent.click(screen.getByText("Parked (1)"));
+  fireEvent.click(screen.getByLabelText("Unpark Project p2"));
+
+  expect(useSessions.getState().projects[1]?.parkedAt).toBeNull();
+  expect(screen.getAllByTestId("project-group")).toHaveLength(2);
+  expect(screen.getByText("Session Three")).toBeInTheDocument();
+  expect(screen.queryByTestId("parked-group")).toBeNull();
+});
+
+test("opening a session of a parked project unparks it and selects it", () => {
+  seed();
+  act(() => {
+    useSessions.getState().parkProject("p2");
+  });
+  renderSidebar();
+
+  fireEvent.click(screen.getByText("Parked (1)"));
+  fireEvent.click(screen.getByLabelText("Expand Project p2"));
+  fireEvent.click(screen.getByText("Session Three"));
+
+  const state = useSessions.getState();
+  expect(state.projects[1]?.parkedAt).toBeNull();
+  expect(state.activeSessionId).toBe("s3");
+});
+
+test("a parked project's archived sessions stay out of the Archived group", () => {
+  seed();
+  act(() => {
+    useSessions.getState().archiveSession("s3");
+    useSessions.getState().parkProject("p2");
+  });
+  renderSidebar();
+
+  // Unarchiving there would put the session back into a project that is
+  // still parked — out of sight either way.
+  expect(screen.queryByTestId("archived-group")).toBeNull();
 });

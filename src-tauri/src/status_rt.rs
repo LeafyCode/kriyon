@@ -601,6 +601,7 @@ mod tests {
             path: "/tmp".to_string(),
             color: None,
             setup_command: None,
+            parked_at: None,
         }
     }
 

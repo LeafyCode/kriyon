@@ -17,7 +17,13 @@ import {
   Plus,
 } from "lucide-react";
 import { type CSSProperties, memo, useState } from "react";
-import { createSessionInProject } from "../state/actions.ts";
+import {
+  createSessionInProject,
+  hasParkCost,
+  type ParkCost,
+  parkProjectAndStop,
+  projectParkCost,
+} from "../state/actions.ts";
 import { useCommandCenter } from "../state/commandCenter.ts";
 import {
   effectiveSessionSort,
@@ -40,6 +46,7 @@ import { EarlierSessions } from "./EarlierSessions.tsx";
 import { HeaderAction } from "./HeaderAction.tsx";
 import { InlineRename } from "./InlineRename.tsx";
 import { PaletteMenu } from "./PaletteMenu.tsx";
+import { ParkProjectConfirm } from "./ParkProjectConfirm.tsx";
 import { ProjectMenu } from "./ProjectMenu.tsx";
 import { compactAge } from "./pastSessionTime.ts";
 import type { ProjectLabel } from "./projectLabel.ts";
@@ -369,6 +376,8 @@ interface ProjectHeaderProps {
   label: ProjectLabel;
   /** Ask to close every session in this project — the group owns the confirm. */
   onRequestClear: () => void;
+  /** Ask to park this project — the group owns the confirm. */
+  onRequestPark: () => void;
   onToggleCollapsed: () => void;
   override: SessionSort | undefined;
   project: ProjectRow;
@@ -429,6 +438,7 @@ function ProjectHeader({
   expandedLook,
   label,
   onRequestClear,
+  onRequestPark,
   onToggleCollapsed,
   override,
   project,
@@ -633,6 +643,10 @@ function ProjectHeader({
             actionsMenu.close();
             onRequestClear();
           }}
+          onRequestPark={() => {
+            actionsMenu.close();
+            onRequestPark();
+          }}
           projectId={project.id}
         />
       ) : null}
@@ -795,6 +809,17 @@ const ProjectGroup = memo(function ProjectGroup({
   // up. The ids, not a count — see {@link ClearProjectConfirm}.
   const [clearing, setClearing] = useState<string[] | null>(null);
   const closeClearConfirm = () => setClearing(null);
+  // What the pending park would stop; null when no confirm is up. Parking
+  // with nothing in flight skips the confirm entirely.
+  const [parking, setParking] = useState<ParkCost | null>(null);
+  const requestPark = () => {
+    const cost = projectParkCost(project.id);
+    if (hasParkCost(cost)) {
+      setParking(cost);
+    } else {
+      parkProjectAndStop(project.id);
+    }
+  };
   const attention = useSessions((state) =>
     Object.values(state.sessions).some(
       (session) =>
@@ -881,6 +906,7 @@ const ProjectGroup = memo(function ProjectGroup({
         expandedLook={filtering || !collapsed}
         label={label}
         onRequestClear={() => setClearing(projectSessionIds(project.id))}
+        onRequestPark={requestPark}
         onToggleCollapsed={toggleCollapsed}
         override={override}
         project={project}
@@ -963,6 +989,11 @@ const ProjectGroup = memo(function ProjectGroup({
         onCloseSession={onCloseSession}
         project={project}
         sessionIds={clearing}
+      />
+      <ParkProjectConfirm
+        cost={parking}
+        onCancel={() => setParking(null)}
+        project={project}
       />
     </div>
   );
