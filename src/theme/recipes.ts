@@ -279,6 +279,10 @@ export function card(): CSSProperties {
  * `display: flex` is wrong (it breaks the control's own baseline and padding).
  * A caller that is a *frame* around several children — an icon, an input and a
  * kbd chip — adds `display: "flex"` itself.
+ *
+ * It never shrinks: inside a flex column capped at a max height (the spawn
+ * dialog in a short window), a shrinkable well gets squeezed to its text
+ * height instead of the column scrolling.
  */
 export function inputBox(): CSSProperties {
   return {
@@ -286,6 +290,7 @@ export function inputBox(): CSSProperties {
     background: tokens.color.inputWell,
     border: `1px solid ${tokens.color.line.base}`,
     borderRadius: tokens.radius.md,
+    flexShrink: 0,
     gap: "8px",
     height: "30px",
     padding: "0 10px",

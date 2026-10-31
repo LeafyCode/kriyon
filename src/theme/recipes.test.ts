@@ -105,6 +105,12 @@ describe("style recipes", () => {
     expect(iconButton().width).toBe("26px");
   });
 
+  it("keeps an input well 30px tall inside a flex column that runs short", () => {
+    // A dialog capped at a max height squeezes its children; an input must
+    // keep its height so the dialog scrolls instead.
+    expect(inputBox().flexShrink).toBe(0);
+  });
+
   it("never asks for a weight the UI face does not ship", () => {
     for (const [name, style] of Object.entries(EVERY_RECIPE)) {
       const weight = (style as { fontWeight?: number }).fontWeight;
