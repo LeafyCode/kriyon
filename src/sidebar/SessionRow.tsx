@@ -339,8 +339,43 @@ function SidebarStatusGlyph({
 }
 
 /**
- * The row's second line: live context, the [Session footprint] chip, and the
- * worktree branch chip. Extracted so SessionRow's render stays within the
+ * The row's first line: the title, which clips, and for a worktree session a
+ * branch mark beside it, which never does.
+ */
+function SessionTitleLine({
+  branchLabel,
+  color,
+  emphasis,
+  sessionId,
+  title,
+}: {
+  branchLabel: string | null;
+  color: string;
+  emphasis: boolean;
+  sessionId: string;
+  title: string;
+}): ReactNode {
+  return (
+    <span style={titleLineStyle}>
+      <span style={sessionTitleStyle(color, emphasis)}>{title}</span>
+      {branchLabel ? (
+        <span
+          aria-label={`Runs in its own worktree: ${branchLabel}`}
+          data-testid={`worktree-mark-${sessionId}`}
+          role="img"
+          style={worktreeMarkStyle}
+          title={`Runs in its own worktree: ${branchLabel}`}
+        >
+          <GitBranch size={11} />
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
+/**
+ * The row's second line: the worktree branch, live context and the
+ * [Session footprint] chip. Extracted so SessionRow's render stays within the
  * complexity budget as chips accrue.
  */
 function SessionMetaLine({
@@ -402,6 +437,17 @@ function SessionMetaLine({
           {work.label}
         </span>
       ) : null}
+      {/* Then the branch, so it reads as part of the session's identity and
+          not as one more number beside memory and CPU. */}
+      {branchLabel ? (
+        <span
+          data-testid={`worktree-branch-${sessionId}`}
+          style={worktreeChipStyle}
+          title="Runs in its own worktree"
+        >
+          {branchLabel}
+        </span>
+      ) : null}
       {suggested > 0 ? (
         <span
           data-testid={`suggested-chip-${sessionId}`}
@@ -448,12 +494,6 @@ function SessionMetaLine({
           title="CPU this session's processes are using (100% = one core)"
         >
           {formatCpu(cpuPct)}
-        </span>
-      ) : null}
-      {branchLabel ? (
-        <span style={worktreeChipStyle} title="Runs in its own worktree">
-          <GitBranch size={10} />
-          {branchLabel}
         </span>
       ) : null}
     </span>
@@ -712,14 +752,34 @@ const cpuChipStyle: CSSProperties = {
   fontSize: "10.5px",
 };
 
+/** The branch name on the meta line. Capped and clipped on its own, so a long
+ *  branch never crowds out the chips after it. */
 const worktreeChipStyle: CSSProperties = {
-  alignItems: "center",
-  color: tokens.color.ink.faint,
-  display: "flex",
-  flex: "none",
+  color: tokens.color.ink.muted,
+  flex: "0 1 auto",
   fontFamily: tokens.font.mono,
   fontSize: "10.5px",
-  gap: "3px",
+  maxWidth: "60%",
+  minWidth: 0,
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+};
+
+/** The title line: the title clips, the worktree mark beside it never does. */
+const titleLineStyle: CSSProperties = {
+  alignItems: "center",
+  display: "flex",
+  gap: "4px",
+  minWidth: 0,
+};
+
+/** The worktree mark: in the accent, so a worktree session stands out from
+ *  plain ones at a glance, without reading the meta line. */
+const worktreeMarkStyle: CSSProperties = {
+  color: tokens.color.accentBright,
+  display: "flex",
+  flex: "none",
 };
 
 /** The yellow warning while a worktree's work isn't in the base branch:
@@ -1209,16 +1269,17 @@ export const SessionRow = memo(function SessionRow({
               value={session.title}
             />
           ) : (
-            <span
-              style={sessionTitleStyle(
+            <SessionTitleLine
+              branchLabel={branchLabel}
+              color={
                 sleeping
                   ? tokens.color.ink.faint
-                  : titleInk(active, session.status, view.doneUnseen),
-                active
-              )}
-            >
-              {session.title}
-            </span>
+                  : titleInk(active, session.status, view.doneUnseen)
+              }
+              emphasis={active}
+              sessionId={sessionId}
+              title={session.title}
+            />
           )}
           <SessionMetaLine
             branchLabel={branchLabel}

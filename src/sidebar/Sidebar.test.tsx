@@ -1169,6 +1169,72 @@ test("a worktree session shows its worktree name", () => {
   expect(screen.getByText("feat-flow")).toBeInTheDocument();
 });
 
+test("a worktree session carries a branch mark on its title line", () => {
+  seed();
+  useSessions.getState().addSession({
+    archivedAt: null,
+    baselineOid: null,
+    claudeSessionId: null,
+    createdAt: 4,
+    cwd: "/wt/feat-flow",
+    id: "s4",
+    projectId: "p2",
+    status: "idle",
+    summary: "",
+    title: "Worktree session",
+    titleLocked: false,
+    worktreePath: "/wt/feat-flow",
+  });
+  render(
+    <Sidebar
+      onCloseSession={vi.fn()}
+      onNewSession={vi.fn()}
+      onShowAbout={vi.fn()}
+    />
+  );
+
+  const mark = screen.getByTestId("worktree-mark-s4");
+  // Beside the title, not down among the memory and CPU numbers.
+  expect(mark.parentElement).toHaveTextContent("Worktree session");
+  expect(mark).toHaveAccessibleName("Runs in its own worktree: feat-flow");
+  // Plain sessions carry no mark.
+  expect(screen.queryByTestId("worktree-mark-s1")).not.toBeInTheDocument();
+});
+
+test("a worktree session's branch name sits ahead of memory and CPU on its meta line", () => {
+  seed();
+  useSessions.getState().addSession({
+    archivedAt: null,
+    baselineOid: null,
+    claudeSessionId: null,
+    createdAt: 4,
+    cwd: "/wt/feat-flow",
+    id: "s4",
+    projectId: "p2",
+    status: "running",
+    summary: "",
+    title: "Worktree session",
+    titleLocked: false,
+    worktreePath: "/wt/feat-flow",
+  });
+  useSessions.setState({ cpu: { s4: 3 }, memory: { s4: 400 } });
+  render(
+    <Sidebar
+      onCloseSession={vi.fn()}
+      onNewSession={vi.fn()}
+      onShowAbout={vi.fn()}
+    />
+  );
+
+  const branch = screen.getByTestId("worktree-branch-s4");
+  const line = branch.parentElement as HTMLElement;
+  const chips = Array.from(line.children);
+  const memory = screen.getByTestId("memory-chip-s4");
+  // Nothing to warn about here, so the branch is first.
+  expect(chips[0]).toBe(branch);
+  expect(chips.indexOf(branch)).toBeLessThan(chips.indexOf(memory));
+});
+
 test("the close button is hover-revealed", () => {
   seed();
   render(
