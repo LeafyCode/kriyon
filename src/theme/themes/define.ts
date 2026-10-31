@@ -112,15 +112,20 @@ export function faintFill(appearance: Appearance, hex: string): string {
   return hexAlpha(hex, appearance === "light" ? 0.1 : 0.08);
 }
 
-/** The mascot's thought bubbles on a dark plane: the near-white the art was
- *  drawn with. A light plane uses its own muted ink instead. */
-export const DARK_MASCOT_THOUGHT = "#e9edf8";
-
 /** The scrim behind every modal. */
 export function scrimFor(appearance: Appearance): string {
   return appearance === "light"
     ? "rgba(15, 20, 30, 0.32)"
     : "rgba(5, 7, 12, 0.6)";
+}
+
+/** The mascot's thought bubbles: near-white beside a mascot on a dark plane,
+ *  the theme's muted ink on a light one. */
+export function mascotThoughtFor(
+  appearance: Appearance,
+  muted: string
+): string {
+  return appearance === "light" ? muted : "#e9edf8";
 }
 
 /** Expand a {@link PaletteSpec} into every colour the app reads. */
@@ -201,7 +206,7 @@ function definePalette(spec: PaletteSpec): ThemeColors {
     editorSelection: editor.selection,
 
     scrim: scrimFor(appearance),
-    mascotThought: appearance === "light" ? ink[3] : DARK_MASCOT_THOUGHT,
+    mascotThought: mascotThoughtFor(appearance, ink[3]),
 
     syntaxAttribute: syntax.attribute,
     syntaxComment: syntax.comment,
