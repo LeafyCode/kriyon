@@ -1,7 +1,7 @@
 import { formatMb } from "../sidebar/memoryChip.ts";
-import type { ProjectRow, SessionActivity } from "../types.ts";
+import type { SessionActivity } from "../types.ts";
 import { type BootPhase, isStarting } from "./bootPhase.ts";
-import { isPutAway, parkedProjectIds, type UiSession } from "./sessions.ts";
+import { isPutAway, type UiSession } from "./sessions.ts";
 
 /**
  * The [Stop cost]: what stopping a [Session]'s processes would destroy right
@@ -124,20 +124,16 @@ export function hasTotalStopCost(total: TotalStopCost): boolean {
 }
 
 /**
- * The whole app's [Stop cost]. Put-away sessions (archived, or in a [Parked
- * project]) are skipped: both are stopped, so whatever status they froze with
- * describes nothing still running.
+ * The whole app's [Stop cost]. Put-away sessions (archived or parked) are
+ * skipped: both are stopped, so whatever status they froze with describes
+ * nothing still running.
  */
 export function stopCostOfAll(
-  view: StopCostView & {
-    projects: readonly ProjectRow[];
-    sessions: Record<string, UiSession>;
-  }
+  view: StopCostView & { sessions: Record<string, UiSession> }
 ): TotalStopCost {
   const total: TotalStopCost = { commands: [], starting: 0, working: 0 };
-  const parked = parkedProjectIds(view.projects);
   for (const session of Object.values(view.sessions)) {
-    if (isPutAway(session, parked)) {
+    if (isPutAway(session)) {
       continue;
     }
     const cost = stopCostFor(session, view);

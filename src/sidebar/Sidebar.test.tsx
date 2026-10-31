@@ -77,7 +77,6 @@ function makeProject(id: string): ProjectRow {
     id,
     name: `Project ${id}`,
     path: `/${id}`,
-    parkedAt: null,
     setupCommand: null,
   };
 }
@@ -1730,7 +1729,6 @@ test("projects sort alphabetically regardless of creation order", () => {
     id: "zz",
     name: "Alpha",
     path: "/zz",
-    parkedAt: null,
     setupCommand: null,
   });
   useSessions.getState().addSession({
@@ -2829,7 +2827,6 @@ function seedTwins(): void {
     id: "t1",
     name: "acme",
     path: "/Users/p/Projects/Acme/acme",
-    parkedAt: null,
     setupCommand: null,
   });
   state.addProject({
@@ -2837,7 +2834,6 @@ function seedTwins(): void {
     id: "t2",
     name: "acme",
     path: "/Users/p/Projects/Acme/review/acme",
-    parkedAt: null,
     setupCommand: null,
   });
   for (const [id, projectId] of [
@@ -3220,6 +3216,15 @@ function renderSidebar() {
   );
 }
 
+/** Park every session of a project, as the menu's Park project does. */
+function parkAll(projectId: string): void {
+  act(() => {
+    useSessions.getState().parkProject(projectId);
+  });
+}
+
+const parkedAt = (id: string) => useSessions.getState().sessions[id]?.parkedAt;
+
 test("parking a busy project asks first and names what it would stop", () => {
   seed();
   renderSidebar();
@@ -3228,15 +3233,14 @@ test("parking a busy project asks first and names what it would stop", () => {
   fireEvent.click(screen.getByTestId("park-project-p1"));
 
   // s1 is running, so nothing is parked until the confirm.
-  expect(useSessions.getState().projects[0]?.parkedAt).toBeNull();
+  expect(parkedAt("s1")).toBeUndefined();
   expect(screen.getByText("Park Project p1?")).toBeInTheDocument();
   expect(screen.getByText(ONE_SESSION_WORKING)).toBeInTheDocument();
 
   fireEvent.click(screen.getByTestId("confirm-park-project-p1"));
 
-  expect(
-    useSessions.getState().projects.find((p) => p.id === "p1")?.parkedAt
-  ).toBeGreaterThan(0);
+  expect(parkedAt("s1")).toBeGreaterThan(0);
+  expect(parkedAt("s2")).toBeGreaterThan(0);
 });
 
 test("parking a quiet project needs no confirm", () => {
@@ -3247,16 +3251,12 @@ test("parking a quiet project needs no confirm", () => {
   fireEvent.click(screen.getByTestId("park-project-p2"));
 
   expect(screen.queryByTestId("park-project-backdrop")).toBeNull();
-  expect(
-    useSessions.getState().projects.find((p) => p.id === "p2")?.parkedAt
-  ).toBeGreaterThan(0);
+  expect(parkedAt("s3")).toBeGreaterThan(0);
 });
 
 test("a parked project leaves the rail for a closed Parked section", () => {
   seed();
-  act(() => {
-    useSessions.getState().parkProject("p2");
-  });
+  parkAll("p2");
   renderSidebar();
 
   expect(screen.getAllByTestId("project-group")).toHaveLength(1);
@@ -3269,49 +3269,70 @@ test("a parked project leaves the rail for a closed Parked section", () => {
   expect(within(parked).getByText("1 session")).toBeInTheDocument();
 });
 
-test("Unpark brings the project back to the rail as it was", () => {
+test("Unpark brings every parked session back to the rail", () => {
   seed();
-  act(() => {
-    useSessions.getState().parkProject("p2");
-  });
+  parkAll("p1");
   renderSidebar();
 
   fireEvent.click(screen.getByText("Parked (1)"));
-  fireEvent.click(screen.getByLabelText("Unpark Project p2"));
+  fireEvent.click(screen.getByLabelText("Unpark Project p1"));
 
-  expect(useSessions.getState().projects[1]?.parkedAt).toBeNull();
-  expect(screen.getAllByTestId("project-group")).toHaveLength(2);
-  expect(screen.getByText("Session Three")).toBeInTheDocument();
+  expect(parkedAt("s1")).toBeNull();
+  expect(parkedAt("s2")).toBeNull();
+  expect(screen.getByText("Session One")).toBeInTheDocument();
+  expect(screen.getByText("Session Two")).toBeInTheDocument();
   expect(screen.queryByTestId("parked-group")).toBeNull();
 });
 
-test("opening a session of a parked project unparks it and selects it", () => {
+test("opening one parked session brings back only that one", () => {
+  seed();
+  parkAll("p1");
+  renderSidebar();
+
+  fireEvent.click(screen.getByText("Parked (1)"));
+  fireEvent.click(screen.getByLabelText("Expand Project p1"));
+  fireEvent.click(screen.getByText("Session One"));
+
+  expect(useSessions.getState().activeSessionId).toBe("s1");
+  expect(parkedAt("s1")).toBeNull();
+  // The rest stays parked: the rail shows the one session, not the project.
+  expect(parkedAt("s2")).toBeGreaterThan(0);
+  const rail = screen.getAllByTestId("project-group");
+  expect(rail.some((group) => within(group).queryByText("Session Two"))).toBe(
+    false
+  );
+  expect(screen.getByTestId("parked-group")).toBeInTheDocument();
+});
+
+test("a parked nested session sits under its lead in the Parked list", () => {
   seed();
   act(() => {
-    useSessions.getState().parkProject("p2");
+    const state = useSessions.getState();
+    state.addSession({
+      ...state.sessions.s2,
+      createdAt: 9,
+      id: "child",
+      nestedUnder: "s2",
+      title: "Child of Two",
+    } as UiSession);
+    state.parkProject("p1");
   });
   renderSidebar();
 
   fireEvent.click(screen.getByText("Parked (1)"));
-  fireEvent.click(screen.getByLabelText("Expand Project p2"));
-  fireEvent.click(screen.getByText("Session Three"));
+  fireEvent.click(screen.getByLabelText("Expand Project p1"));
 
-  const state = useSessions.getState();
-  expect(state.projects[1]?.parkedAt).toBeNull();
-  expect(state.activeSessionId).toBe("s3");
-});
-
-test("a parked project's archived sessions stay out of the Archived group", () => {
-  seed();
-  act(() => {
-    useSessions.getState().archiveSession("s3");
-    useSessions.getState().parkProject("p2");
-  });
-  renderSidebar();
-
-  // Unarchiving there would put the session back into a project that is
-  // still parked — out of sight either way.
-  expect(screen.queryByTestId("archived-group")).toBeNull();
+  const parked = screen.getByTestId("parked-group");
+  const titles = within(parked)
+    .getAllByTitle("Bring back and open only this session")
+    .map((row) => row.textContent);
+  const lead = titles.indexOf("Session Two");
+  expect(titles[lead + 1]).toBe("Child of Two");
+  const child = within(parked).getByText("Child of Two").closest("button");
+  const leadRow = within(parked).getByText("Session Two").closest("button");
+  expect(Number.parseInt(child?.style.paddingLeft ?? "0", 10)).toBeGreaterThan(
+    Number.parseInt(leadRow?.style.paddingLeft ?? "0", 10)
+  );
 });
 
 test("a project header's hover row is new worktree, new session, then ⋯ last", () => {
@@ -3368,6 +3389,7 @@ test("a parked project lists what its group showed, with older sessions folded",
     baselineOid: null,
     claudeSessionId: null,
     cwd: "",
+    parkedAt: now,
     projectId: "pk",
     status: "idle" as const,
     summary: "",
@@ -3376,7 +3398,7 @@ test("a parked project lists what its group showed, with older sessions folded",
   };
   useSessions.setState({
     activeSessionId: null,
-    projects: [{ ...makeProject("pk"), parkedAt: now }],
+    projects: [makeProject("pk")],
     sessions: {
       fresh: { ...base, createdAt: now - 1000, id: "fresh", title: "Fresh" },
       stale1: {

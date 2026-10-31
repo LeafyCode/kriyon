@@ -95,9 +95,6 @@ export interface ProjectRow {
   color: string | null;
   id: string;
   name: string;
-  /** When the project was parked (ms since epoch), or null while it is on the
-   *  rail (mirrors Rust `parked_at`). See [Parked project]. */
-  parkedAt: number | null;
   path: string;
   /** Optional per-worktree setup command (mirrors Rust `setup_command`). */
   setupCommand: string | null;
@@ -184,6 +181,10 @@ export interface SessionRow {
   /** The [Handoff link]: the session this [Follow-up session] was spawned
    *  from, or null/absent for an ordinary session. Display only. */
   parentSessionId?: string | null;
+  /** When the session was parked (ms since epoch), or null/absent. A parked
+   *  session is stopped and off the rail until opened (mirrors Rust
+   *  `parked_at`, ADR-0052). */
+  parkedAt?: number | null;
   projectId: string;
   title: string;
   /** The user renamed this session by hand; Claude's `ai-title` must not

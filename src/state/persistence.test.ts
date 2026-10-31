@@ -72,7 +72,6 @@ function project(id: string): ProjectRow {
     id,
     name: id,
     path: `/${id}`,
-    parkedAt: null,
     setupCommand: null,
   };
 }
@@ -125,7 +124,6 @@ test("hydrate populates the store from the bridge", async () => {
       id: "p1",
       name: "Proj",
       path: "/p",
-      parkedAt: null,
       setupCommand: null,
     },
   ]);
@@ -448,7 +446,6 @@ test("persistKey changes when any single ProjectRow field is perturbed", () => {
     color: "#fff",
     id: "p1",
     name: "Proj",
-    parkedAt: 10,
     path: "/p",
     setupCommand: "make",
   };
@@ -466,14 +463,11 @@ test("persistKey changes when any single ProjectRow field is perturbed", () => {
   }
 });
 
-test("hydrate never selects a session of a parked project", async () => {
-  mockedListProjects.mockResolvedValue([
-    { ...project("live"), parkedAt: null },
-    { ...project("pk"), parkedAt: 10 },
-  ]);
+test("hydrate never selects a parked session", async () => {
+  mockedListProjects.mockResolvedValue([project("p1")]);
   mockedListSessions.mockResolvedValue([
-    sessionRow({ ...session("old", "live"), createdAt: 1 }),
-    sessionRow({ ...session("newer", "pk"), createdAt: 9 }),
+    sessionRow({ ...session("old", "p1"), createdAt: 1 }),
+    sessionRow({ ...session("newer", "p1"), createdAt: 9, parkedAt: 10 }),
   ]);
 
   await hydrate();
@@ -503,7 +497,6 @@ test("hydrate does not block core hydration when listPrompts rejects", async () 
       id: "p1",
       name: "Proj",
       path: "/p",
-      parkedAt: null,
       setupCommand: null,
     },
   ]);

@@ -29,7 +29,6 @@ const project: ProjectRow = {
   id: "p1",
   name: "Kriyon",
   path: "/k",
-  parkedAt: null,
   setupCommand: null,
 };
 

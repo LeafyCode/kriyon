@@ -1,10 +1,6 @@
-import {
-  isPutAway,
-  parkedProjectIds,
-  type UiSession,
-} from "../state/sessions.ts";
+import { isPutAway, type UiSession } from "../state/sessions.ts";
 import { unseenOutput, type ViewedMarker } from "../state/viewedMarker.ts";
-import type { PendingAskKind, ProjectRow, SessionActivity } from "../types.ts";
+import type { PendingAskKind, SessionActivity } from "../types.ts";
 
 /**
  * What a Needs-you section row is about: an exact question to answer, a plain
@@ -53,15 +49,13 @@ export function needsYouSectionItems(args: {
   activeSessionId: string | null;
   activity: Record<string, SessionActivity>;
   appendSeq: Record<string, number>;
-  projects: readonly ProjectRow[];
   sessions: Record<string, UiSession>;
   statusOrigin: Record<string, "seeded" | "live">;
   viewed: Record<string, ViewedMarker>;
 }): NeedsYouItem[] {
   const items: NeedsYouItem[] = [];
-  const parked = parkedProjectIds(args.projects);
   for (const session of Object.values(args.sessions)) {
-    if (isPutAway(session, parked)) {
+    if (isPutAway(session)) {
       continue;
     }
     if (session.status === "waiting") {

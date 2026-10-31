@@ -12,7 +12,6 @@ function makeProject(id: string): ProjectRow {
     id,
     name: `Project ${id}`,
     path: `/${id}`,
-    parkedAt: null,
     setupCommand: null,
   };
 }

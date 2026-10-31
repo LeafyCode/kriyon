@@ -3,7 +3,7 @@ import type {
   SessionSort,
   SidebarMode,
 } from "../state/layout.ts";
-import type { UiSession } from "../state/sessions.ts";
+import { isParked, isPutAway, type UiSession } from "../state/sessions.ts";
 import { unseenOutput, type ViewedMarker } from "../state/viewedMarker.ts";
 import type { ProjectRow, SessionStatus } from "../types.ts";
 
@@ -48,7 +48,7 @@ export function sessionRank(status: SessionStatus): number {
 export function projectUrgency(sessions: UiSession[]): number {
   let best = 3;
   for (const session of sessions) {
-    if (session.archivedAt !== null) {
+    if (isPutAway(session)) {
       continue;
     }
     if (session.status === "waiting" || session.status === "error") {
@@ -435,7 +435,7 @@ export function inactiveProjectIds(
   }
   const byProject = new Map<string, string[]>();
   for (const session of Object.values(input.sessions)) {
-    if (session.archivedAt !== null) {
+    if (isPutAway(session)) {
       continue;
     }
     const bucket = byProject.get(session.projectId);
@@ -474,12 +474,14 @@ function computeMatched(
   mode: SidebarMode,
   sort: SessionSort,
   manual: string[],
-  hide: HideInputs
+  hide: HideInputs,
+  shelf: Shelf
 ): MatchedSessions {
   const list = Object.values(input.sessions).filter(
     (session) =>
       session.projectId === project.id &&
       session.archivedAt === null &&
+      isParked(session) === (shelf === "parked") &&
       (filter === "" ||
         nameMatch ||
         session.title.toLowerCase().includes(filter))
@@ -590,6 +592,14 @@ const orderCache = new WeakMap<
  * a stale entry can only cause a recompute, never a wrong result. `manual` is
  * the project's saved id list ({@link EMPTY_ORDER} when it has none).
  */
+/**
+ * Which of a project's open sessions a listing draws: the ones on the rail, or
+ * the parked ones waiting in the Parked section. Both are ordered and folded
+ * by the same rules, so the Parked list previews exactly the rows unparking
+ * brings back.
+ */
+export type Shelf = "rail" | "parked";
+
 export function orderMatched(
   input: OrderInputs,
   project: ProjectRow,
@@ -598,7 +608,8 @@ export function orderMatched(
   mode: SidebarMode,
   sort: SessionSort,
   manual: string[],
-  hide: HideInputs
+  hide: HideInputs,
+  shelf: Shelf = "rail"
 ): MatchedSessions {
   let byKey = orderCache.get(input.sessions);
   if (!byKey) {
@@ -618,6 +629,7 @@ export function orderMatched(
     hide.threshold,
     hide.now,
     hide.activeSessionId,
+    shelf,
   ]);
   const cached = byKey.get(key);
   if (
@@ -638,7 +650,8 @@ export function orderMatched(
     mode,
     sort,
     manual,
-    hide
+    hide,
+    shelf
   );
   byKey.set(key, {
     appendSeq: input.appendSeq,

@@ -41,14 +41,7 @@ function session(
 }
 
 function project(id: string, name: string): ProjectRow {
-  return {
-    color: null,
-    id,
-    name,
-    path: `/${id}`,
-    parkedAt: null,
-    setupCommand: null,
-  };
+  return { color: null, id, name, path: `/${id}`, setupCommand: null };
 }
 
 const noneUnseen = () => 0;

@@ -10,7 +10,7 @@ import {
 } from "./actions.ts";
 import { isStarting } from "./bootPhase.ts";
 import { useLayout } from "./layout.ts";
-import { isPutAway, parkedProjectIds, useSessions } from "./sessions.ts";
+import { isPutAway, useSessions } from "./sessions.ts";
 
 /**
  * [Nested session]s (ADR-0049): sessions started from another session — by
@@ -183,14 +183,13 @@ export function startProblem(result: SpawnResult): string | null {
  * hold it back depending only on how soon that turn ends.
  */
 function busyCount(askingId: string): number {
-  const { bootPhase, projects, sessions } = useSessions.getState();
-  // A put-away session keeps the status it was stopped with, so it must not
-  // count against the cap as if it were still running.
-  const parked = parkedProjectIds(projects);
+  const { bootPhase, sessions } = useSessions.getState();
   return Object.values(sessions).filter(
     (s) =>
       s.id !== askingId &&
-      !isPutAway(s, parked) &&
+      // A put-away session keeps the status it was stopped with, so it must
+      // not count against the cap as if it were still running.
+      !isPutAway(s) &&
       (s.status === "running" ||
         s.status === "waiting" ||
         isStarting(bootPhase[s.id]))
@@ -238,14 +237,13 @@ let lastAsked = "";
  *  lead is still open and that nothing is starting already. */
 function nextHeldBack(): SessionProposal | undefined {
   const { proposals, starting } = useSessionProposals.getState();
-  const { projects, sessions } = useSessions.getState();
-  const parked = parkedProjectIds(projects);
+  const { sessions } = useSessions.getState();
   return proposals.find((p) => {
     const lead = sessions[p.leadSessionId];
     return (
       p.request.initiation === "user_asked" &&
       lead !== undefined &&
-      !isPutAway(lead, parked) &&
+      !isPutAway(lead) &&
       !starting.includes(p.request.requestId)
     );
   });

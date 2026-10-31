@@ -133,7 +133,6 @@ describe("stopCostOfAll", () => {
       },
       bootPhase: {},
       exited: {},
-      projects: [],
       sessions: {
         a: session("a", { status: "running" }),
         b: session("b", { status: "running" }),
@@ -148,24 +147,14 @@ describe("stopCostOfAll", () => {
     });
   });
 
-  it("skips sessions of a parked project", () => {
+  it("skips parked sessions", () => {
     const view = {
       activity: {},
       bootPhase: {},
       exited: {},
-      projects: [
-        {
-          color: null,
-          id: "pk",
-          name: "pk",
-          parkedAt: 10,
-          path: "/pk",
-          setupCommand: null,
-        },
-      ],
       sessions: {
-        a: session("a", { projectId: "p1", status: "running" }),
-        parked: session("parked", { projectId: "pk", status: "running" }),
+        a: session("a", { status: "running" }),
+        parked: session("parked", { parkedAt: 5, status: "running" }),
       },
     };
     expect(stopCostOfAll(view).working).toBe(1);
@@ -176,7 +165,6 @@ describe("stopCostOfAll", () => {
       activity: {},
       bootPhase: {},
       exited: {},
-      projects: [],
       sessions: { a: session("a"), b: session("b", { status: "done" }) },
     });
     expect(total).toEqual({ commands: [], starting: 0, working: 0 });
@@ -240,7 +228,6 @@ describe("sessionEngagement", () => {
       activity: {},
       bootPhase: { a: "booting", b: "booting" },
       exited: {},
-      projects: [],
       sessions: {
         a: session("a", { status: "running" }),
         b: session("b", { status: "idle" }),

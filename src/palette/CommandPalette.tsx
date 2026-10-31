@@ -85,17 +85,8 @@ function buildItems(
   projects: ReturnType<typeof useSessions.getState>["projects"],
   setActiveSession: (id: string) => void
 ): PaletteItem[] {
-  // A [Parked project]'s sessions stay findable here, marked; opening one
-  // unparks the project (see `setActiveSession`).
-  const projectName = (id: string) => {
-    const project = projects.find((p) => p.id === id);
-    if (!project) {
-      return "";
-    }
-    return project.parkedAt === null
-      ? project.name
-      : `${project.name} · Parked`;
-  };
+  const projectName = (id: string) =>
+    projects.find((project) => project.id === id)?.name ?? "";
 
   const sessionItems: PaletteItem[] = Object.values(sessions)
     .sort((a, b) => a.createdAt - b.createdAt)
@@ -112,7 +103,12 @@ function buildItems(
         // behind whatever full view was up.
         useLayout.getState().revealSessionView();
       },
-      sub: projectName(session.projectId),
+      // A parked session stays findable here, marked; opening it brings it
+      // back (see `setActiveSession`).
+      sub:
+        (session.parkedAt ?? null) === null
+          ? projectName(session.projectId)
+          : `${projectName(session.projectId)} · Parked`,
     }));
 
   const commandItems: PaletteItem[] = [

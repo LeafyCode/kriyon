@@ -34,8 +34,13 @@ an auto-archive that killed running work with no way back.
 
 ## Decision
 
-- **A project can be parked.** *Park project* in the project menu sets
-  `parked_at` on the project row in the Rust store. *Unpark* clears it. The
+- **Parking is per session; *Park project* parks them all.** *Park project*
+  in the project menu sets `parked_at` on every session row still on the
+  project's rail group. *Unpark* clears it on all of them. Opening one parked
+  session clears it on that one only (and on its leads, if it is nested), so
+  picking one session back up doesn't bring a whole project's sidebar back.
+  A flag on the project row was tried first; it made opening one session
+  bring back dozens. The
   word is "park" because it is short and plain for people who read English as
   a second language.
 - **Parking stops everything the project runs.** Every session in the project
@@ -43,34 +48,36 @@ an auto-archive that killed running work with no way back.
   tree stop of its PTY daemon). Archived sessions are already stopped.
 - **Parking keeps everything about the project.** Session rows, titles, order,
   nesting, archived state, transcripts, worktrees and the terminal tab layout
-  are unchanged. Parking is not archiving and not closing: it writes one
-  timestamp.
+  are unchanged. Parking is not archiving and not closing: it writes a
+  timestamp on each session it parks.
 - **Parking never kills work silently.** Before stopping, Kriyon reads the
   existing Stop cost for every session in the project and the busy state of
   every project terminal. If anything is mid-turn, running a background shell
   or subagent, holding unsent text, or running a busy terminal, a Confirm
   dialog names it. Nothing busy means no dialog.
 - **Parking is the person's choice and only the person undoes it.** No timer
-  and no activity brings a parked project back. Three actions unpark it: the
-  Unpark control, starting a new session in the project, and opening one of its
-  sessions from anywhere (the Parked section, ⌘K, a notification). Opening a
-  session is what launches it, so the store's `setActiveSession` unparks — one
-  place, so no path can run a session inside a project that stays hidden.
+  and no activity brings a parked session back. The Unpark control brings all
+  of a project's back; opening one from anywhere (the Parked section, ⌘K, a
+  notification) brings back that one. Opening a session is what launches it,
+  so the store's `setActiveSession` unparks it — one place, so no path can run
+  a session that stays hidden. A new session in the project simply joins the
+  rail; the parked ones stay parked.
 - **Unparking is lazy.** The group returns as it was. Each session resumes
   with `claude --resume` only when it is opened, and each terminal pane opens
   a fresh shell when shown. Restarting all of them at once would bring back
   the cost parking removed.
 - **Parked sessions are not live sessions.** They are excluded from the
-  Command center, the Needs-you rail, notifications, auto-sleep and daemon
-  adoption. The orphan-daemon sweep treats them like archived rows, so a
-  daemon that outlives a park is reaped.
+  Command center, the Needs-you rail, the quit warning and the nested-session
+  cap. The orphan-daemon sweep treats them like archived rows, and treats the
+  terminal panes of a project with no session left on the rail as unowned, so
+  anything that outlives a park is reaped.
 - **Parked sessions stay findable.** The Parked section lists each project's
-  sessions, and ⌘K still lists them, marked "Parked". Opening one unparks the
-  project. A read-only view that doesn't unpark was considered and left out:
+  parked sessions as its rail group showed them (same order, folds and
+  nesting), and ⌘K still lists them, marked "Parked". Opening one brings back
+  only it. A read-only view that doesn't unpark was considered and left out:
   it would need a session view with no terminal, which Kriyon doesn't have.
-- **One "put away" check.** Archived sessions and sessions of a parked project
-  are both "put away" (`isPutAway` in the frontend, `SessionRow::is_put_away`
-  in Rust). Every surface that means "skip what is not live" asks it, so a
+- **One "put away" check.** Archived and parked sessions are both "put away"
+  (`isPutAway` in the frontend, `SessionRow::is_put_away` in Rust). Every surface that means "skip what is not live" asks it, so a
   later surface can't skip archived sessions and forget parked ones.
 
 ## Consequences
@@ -82,5 +89,5 @@ an auto-archive that killed running work with no way back.
 - Processes Kriyon did not start (Docker containers, services started outside
   Kriyon) keep running. A per-project "on park" command, like the existing
   setup command, could stop them; it is left for later.
-- `projects` gains one nullable column, added through the existing
+- `sessions` gains one nullable column, added through the existing
   `migrate_column`, so older stores read as "not parked".

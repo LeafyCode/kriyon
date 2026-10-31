@@ -361,7 +361,6 @@ mod tray_command_tests {
                 path: "/tmp".to_string(),
                 color: None,
                 setup_command: None,
-                parked_at: None,
             })
             .expect("project");
         store
@@ -378,6 +377,7 @@ mod tray_command_tests {
                 title_locked: false,
                 parent_session_id: None,
                 nested_under: None,
+                parked_at: None,
             })
             .expect("session");
         let store = StoreState(Mutex::new(store));

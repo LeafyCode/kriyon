@@ -1,6 +1,6 @@
 import type { CSSProperties } from "react";
 import { useLayout } from "../state/layout.ts";
-import { parkedProjectIds, useSessions } from "../state/sessions.ts";
+import { fullyParkedProjectIds, useSessions } from "../state/sessions.ts";
 import { useTerminals } from "../state/terminals.ts";
 import { TerminalWorkspace } from "../terminal/TerminalWorkspace.tsx";
 import { tokens } from "../theme/tokens.ts";
@@ -50,7 +50,7 @@ export function TerminalDock() {
   // down — and blanks — a running terminal. A [Parked project]'s terminals are
   // stopped, so its workspace unmounts too: a mounted pane would start a fresh
   // shell behind the person's back.
-  const parked = parkedProjectIds(projects);
+  const parked = fullyParkedProjectIds(sessions);
   const mountedProjectIds = Array.from(
     new Set([
       ...Object.keys(byProject),

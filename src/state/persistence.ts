@@ -30,7 +30,6 @@ import { usePromptLibrary } from "./promptLibrary.ts";
 import {
   idleSession,
   isPutAway,
-  parkedProjectIds,
   sessionRow,
   type UiSession,
   useSessions,
@@ -402,13 +401,12 @@ export async function hydrate(): Promise<void> {
   ]);
 
   const sessions: Record<string, UiSession> = {};
-  const parked = parkedProjectIds(projects);
   let newest: SessionRow | undefined;
   for (const row of sessionRows) {
     const session = idleSession(row);
     sessions[row.id] = session;
     // A put-away session would boot on open, undoing the park or archive.
-    if (isPutAway(session, parked)) {
+    if (isPutAway(session)) {
       continue;
     }
     if (!newest || row.createdAt > newest.createdAt) {
@@ -475,8 +473,7 @@ function fieldToken(
  * into one fingerprint line, keyed in sorted-field order rather than the
  * object's own insertion order — so a field added to either row later joins
  * {@link persistKey}'s fingerprint automatically, without this function
- * having to be told about it. (A project's `parkedAt` once nearly missed a
- * hand-listed key: parking would never have been saved.)
+ * having to be told about it.
  */
 function rowKey(row: SessionRow | ProjectRow): string {
   return Object.entries(row)

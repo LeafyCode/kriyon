@@ -2,12 +2,22 @@
 
 **Date:** 2026-10-31 · **Branch:** `feat/park-project` · **Decision:** [ADR-0052](../../adr/0052-park-a-project.md)
 
-> **As built (2026-10-31).** Differences from the design below: opening a
-> parked session unparks the project instead of showing a read-only view (no
-> session view without a terminal exists); the "Parked" toast has no Undo (the
-> app's toast has no action button); the confirm stops whatever the project
-> holds when it is confirmed rather than a snapshot; and no new IPC commands —
-> `parkedAt` rides on the existing `upsert_project`, saved at once on park.
+> **As built (2026-10-31).** Differences from the design below, several from
+> hand-testing the smoke build:
+> - **Parking is per session.** `parkedAt` lives on each session row, not the
+>   project. *Park project* parks every session on the group; opening one
+>   parked session brings back only it (plus its leads if nested), so the rail
+>   isn't cluttered with the rest. A new session in the project leaves the
+>   parked ones parked.
+> - Opening a parked session brings it back rather than showing a read-only
+>   view (no session view without a terminal exists).
+> - The Parked list uses the rail group's own ordering, folds ("N done",
+>   "N older") and nesting.
+> - The project header's hover row is now new worktree, new session, ⋯ (last);
+>   colour and sort moved into the ⋯ menu, which right-click also opens.
+> - The toast has no Undo (the app's toast has no action button), and the
+>   confirm stops whatever is on the rail when confirmed.
+> - No new IPC commands: `parkedAt` rides on `upsert_session`, saved at once.
 
 ## Goal
 

@@ -591,6 +591,7 @@ mod tests {
             title_locked: false,
             parent_session_id: None,
             nested_under: None,
+            parked_at: None,
         }
     }
 
@@ -601,7 +602,6 @@ mod tests {
             path: "/tmp".to_string(),
             color: None,
             setup_command: None,
-            parked_at: None,
         }
     }
 

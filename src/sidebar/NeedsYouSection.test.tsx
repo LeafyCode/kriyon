@@ -38,14 +38,7 @@ beforeEach(() => {
     activity: { s1: asking("Merge or rebase?") },
     appendSeq: {},
     projects: [
-      {
-        color: null,
-        id: "p1",
-        name: "P1",
-        path: "/x",
-        parkedAt: null,
-        setupCommand: null,
-      },
+      { color: null, id: "p1", name: "P1", path: "/x", setupCommand: null },
     ],
     sessions: { s1: session("s1"), s2: session("s2") },
     statusOrigin: {},

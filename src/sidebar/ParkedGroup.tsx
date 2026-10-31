@@ -3,7 +3,7 @@ import { type CSSProperties, memo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useCommandCenter } from "../state/commandCenter.ts";
 import { effectiveSessionSort, useLayout } from "../state/layout.ts";
-import { useSessions } from "../state/sessions.ts";
+import { isParked, useSessions } from "../state/sessions.ts";
 import { projectColor } from "../theme/projectColor.ts";
 import { button } from "../theme/recipes.ts";
 import { tokens } from "../theme/tokens.ts";
@@ -79,7 +79,17 @@ const sessionListStyle: CSSProperties = {
 
 // Spaced like a rail row (a 28px target), but one line and muted: these are
 // stopped sessions to pick from, not live ones to watch.
-const sessionButtonStyle: CSSProperties = {
+/** Each nesting level indents a nested session under its lead, as on the rail. */
+const NEST_INDENT_PX = 14;
+
+function sessionButtonStyle(depth: number): CSSProperties {
+  return {
+    ...sessionButtonBase,
+    paddingLeft: `${30 + depth * NEST_INDENT_PX}px`,
+  };
+}
+
+const sessionButtonBase: CSSProperties = {
   alignItems: "center",
   background: "transparent",
   border: "none",
@@ -141,9 +151,9 @@ function dotStyle(project: ProjectRow): CSSProperties {
   };
 }
 
-/** Open one of a parked project's sessions. Opening unparks the project (see
- *  `setActiveSession`) and resumes the session (`claude --resume`), exactly as
- *  after an un-archive. */
+/** Open one parked session. Opening brings back only it (and its leads, if
+ *  nested — see `setActiveSession`) and resumes it (`claude --resume`); the
+ *  rest of the project stays parked. */
 function openParkedSession(sessionId: string): void {
   useSessions.getState().setActiveSession(sessionId);
   useLayout.getState().revealSessionView();
@@ -160,10 +170,9 @@ const ParkedProject = memo(function ParkedProject({
   nowMinute: number;
   project: ProjectRow;
 }) {
-  // Exactly what the project's group showed on the rail, in its order, with
-  // the same folds: unparking brings that group back, so this is a preview of
-  // it — not every session the project ever had. The same ordering function
-  // the group uses, so the two can't disagree.
+  // The project's parked sessions, ordered, folded and nested by the same
+  // function its rail group uses, so this previews exactly the rows unparking
+  // brings back — not every session the project ever had.
   const mode = useLayout((state) => state.layout.sidebarMode);
   const sort = useLayout((state) =>
     effectiveSessionSort(state.layout, project.id)
@@ -173,27 +182,29 @@ const ParkedProject = memo(function ParkedProject({
   );
   const hideOlderThan = useLayout((state) => state.layout.hideOlderThan);
   const lastChangeMs = useCommandCenter((state) => state.lastChangeMs);
-  const { collapsedDone, collapsedOld, rows } = useSessions((state) =>
-    orderMatched(
-      {
-        appendSeq: state.appendSeq,
-        sessions: state.sessions,
-        statusOrigin: state.statusOrigin,
-        viewed: state.viewed,
-      },
-      project,
-      "",
-      false,
-      mode,
-      sort,
-      manual,
-      {
-        activeSessionId: null,
-        lastChangeMs,
-        now: nowMinute,
-        threshold: hideOlderThan,
-      }
-    )
+  const { collapsedDone, collapsedOld, nestDepth, rows } = useSessions(
+    (state) =>
+      orderMatched(
+        {
+          appendSeq: state.appendSeq,
+          sessions: state.sessions,
+          statusOrigin: state.statusOrigin,
+          viewed: state.viewed,
+        },
+        project,
+        "",
+        false,
+        mode,
+        sort,
+        manual,
+        {
+          activeSessionId: null,
+          lastChangeMs,
+          now: nowMinute,
+          threshold: hideOlderThan,
+        },
+        "parked"
+      )
   );
   const titles = useSessions(
     useShallow((state) => rows.map((id) => state.sessions[id]?.title ?? ""))
@@ -225,7 +236,7 @@ const ParkedProject = memo(function ParkedProject({
           className="kr-hover-surface"
           onClick={() => useSessions.getState().unparkProject(project.id)}
           style={unparkButtonStyle}
-          title="Bring it back to the sidebar. Sessions resume when you open them."
+          title="Bring every parked session back. Each resumes when you open it."
           type="button"
         >
           Unpark
@@ -238,8 +249,8 @@ const ParkedProject = memo(function ParkedProject({
               className="kr-hover-surface"
               key={id}
               onClick={() => openParkedSession(id)}
-              style={sessionButtonStyle}
-              title="Unpark and open this session"
+              style={sessionButtonStyle(nestDepth[id] ?? 0)}
+              title="Bring back and open only this session"
               type="button"
             >
               <span style={stoppedRingStyle} />
@@ -256,8 +267,8 @@ const ParkedProject = memo(function ParkedProject({
 });
 
 /**
- * Every [Parked project], in a collapsed-by-default section at the foot of the
- * rail (ADR-0052). Kept apart from the "N inactive projects" fold on purpose:
+ * Every project with parked sessions, in a collapsed-by-default section at the
+ * foot of the rail (ADR-0052). Kept apart from the "N inactive projects" fold on purpose:
  * that fold is automatic and undoes itself; parking is the person's choice and
  * only they undo it. Most recently parked first.
  */
@@ -267,12 +278,29 @@ const ParkedGroup = memo(function ParkedGroup({
   /** The rail's minute tick, so the "older" fold here matches the rail's. */
   nowMinute: number;
 }) {
+  // Projects with a parked session, most recently parked first. A project
+  // can sit here and on the rail at once: opening one parked session brings
+  // back only that one.
   const parked = useSessions(
-    useShallow((state) =>
-      state.projects
-        .filter((p) => p.parkedAt !== null)
-        .sort((a, b) => (b.parkedAt ?? 0) - (a.parkedAt ?? 0))
-    )
+    useShallow((state) => {
+      const newestPark = new Map<string, number>();
+      for (const session of Object.values(state.sessions)) {
+        if (isParked(session)) {
+          newestPark.set(
+            session.projectId,
+            Math.max(
+              newestPark.get(session.projectId) ?? 0,
+              session.parkedAt ?? 0
+            )
+          );
+        }
+      }
+      return state.projects
+        .filter((p) => newestPark.has(p.id))
+        .sort(
+          (a, b) => (newestPark.get(b.id) ?? 0) - (newestPark.get(a.id) ?? 0)
+        );
+    })
   );
   const [open, setOpen] = useState(false);
   if (parked.length === 0) {

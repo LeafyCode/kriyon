@@ -8,7 +8,7 @@ import { type CSSProperties, useEffect, useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useCommandCenter } from "../state/commandCenter.ts";
 import { useLayout } from "../state/layout.ts";
-import { type UiSession, useSessions } from "../state/sessions.ts";
+import { isPutAway, type UiSession, useSessions } from "../state/sessions.ts";
 import { iconButton, sectionLabel } from "../theme/recipes.ts";
 import { tokens } from "../theme/tokens.ts";
 import type { ProjectRow } from "../types.ts";
@@ -190,7 +190,7 @@ export function Sidebar({
     useShallow((state) => {
       const byProject = new Map<string, UiSession[]>();
       for (const session of Object.values(state.sessions)) {
-        if (session.archivedAt !== null) {
+        if (isPutAway(session)) {
           continue;
         }
         const bucket = byProject.get(session.projectId);
@@ -202,10 +202,10 @@ export function Sidebar({
       }
       // Archived sessions do not hold a group open: a project whose every
       // session has been archived would otherwise sit on the rail forever as
-      // an empty header with a `0` count. A parked project lives in the
-      // Parked section instead.
-      const included = state.projects.filter(
-        (project) => byProject.has(project.id) && project.parkedAt === null
+      // an empty header with a `0` count. Parked sessions don't either:
+      // they wait in the Parked section.
+      const included = state.projects.filter((project) =>
+        byProject.has(project.id)
       );
       return sortProjects(included, byProject, mode, manualProjectOrder);
     })

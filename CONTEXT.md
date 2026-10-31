@@ -11,7 +11,7 @@ file and its name in the list below. `[Term]` in an entry refers to another glos
 
 What a session is, where it runs, and how it is resumed, handed off and archived.
 
-Session, Claude session id, Session title, Project (Workspace), Worktree, Session identity, Merge outcome, Preferred session view, Clear project, Inactive project, Parked project, Past session, Follow-up session, Handoff link, Handoff file, Handoff card, Handoff prompt, Worktree bootstrap, Install command, Setup command, Branch collision, Archived session, Nested session, Lead session, Session request, Session proposal, Nested session cap, Split off.
+Session, Claude session id, Session title, Project (Workspace), Worktree, Session identity, Merge outcome, Preferred session view, Clear project, Inactive project, Parked project, Parked session, Past session, Follow-up session, Handoff link, Handoff file, Handoff card, Handoff prompt, Worktree bootstrap, Install command, Setup command, Branch collision, Archived session, Nested session, Lead session, Session request, Session proposal, Nested session cap, Split off.
 
 ## [Terminals and the PTY daemon](docs/context/terminal.md)
 

@@ -35,7 +35,6 @@ beforeEach(() => {
         id: "p1",
         name: "acme-web",
         path: "/repo",
-        parkedAt: null,
         setupCommand: null,
       },
     ],

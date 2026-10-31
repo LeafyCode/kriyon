@@ -1,7 +1,7 @@
 import { ChevronRight } from "lucide-react";
 import { type CSSProperties, memo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { parkedProjectIds, useSessions } from "../state/sessions.ts";
+import { useSessions } from "../state/sessions.ts";
 import { button } from "../theme/recipes.ts";
 import { tokens } from "../theme/tokens.ts";
 
@@ -55,15 +55,10 @@ const unarchiveButtonStyle: CSSProperties = {
  * left their {@link ProjectGroup}.
  */
 const ArchivedGroup = memo(function ArchivedGroup() {
-  // A [Parked project]'s archived sessions go with it: restoring one here
-  // would put it back into a project that is still out of sight.
   const archived = useSessions(
-    useShallow((state) => {
-      const parked = parkedProjectIds(state.projects);
-      return Object.values(state.sessions).filter(
-        (s) => s.archivedAt !== null && !parked.has(s.projectId)
-      );
-    })
+    useShallow((state) =>
+      Object.values(state.sessions).filter((s) => s.archivedAt !== null)
+    )
   );
   const [open, setOpen] = useState(false);
   if (archived.length === 0) {

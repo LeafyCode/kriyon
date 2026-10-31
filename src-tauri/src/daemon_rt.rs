@@ -262,8 +262,8 @@ pub(crate) fn recover_unreachable_daemon(
     Ok(None)
 }
 
-/// Every id something owns: session rows that are not put away (archived, or in
-/// a [Parked project]), persisted [Terminal pane]s outside parked projects, and
+/// Every id something owns: session rows that are not put away (archived or
+/// parked), persisted [Terminal pane]s outside a fully [Parked project], and
 /// whatever this run is attached to. `None` when ownership cannot
 /// be established — the store or the terminals blob is unreadable — and the
 /// caller must then reap nothing.
@@ -272,29 +272,41 @@ pub(crate) fn recover_unreachable_daemon(
 /// hydration leaves the frontend store empty, and "nothing is owned" would reap
 /// every live session.
 fn owned_ids<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Option<HashSet<String>> {
-    let (projects, rows, terminals) = {
+    let (rows, terminals) = {
         let store = app.state::<StoreState>();
         let store = store.0.lock();
         (
-            store.list_projects().ok()?,
             store.list_sessions().ok()?,
             store.load_layout(TERMINALS_KEY).ok()?,
         )
     };
-    let parked: HashSet<String> = projects
-        .into_iter()
-        .filter(|project| project.parked_at.is_some())
-        .map(|project| project.id)
-        .collect();
+    let parked = fully_parked_projects(&rows);
     let mut owned: HashSet<String> = rows
         .into_iter()
-        .filter(|row| !row.is_put_away(&parked))
+        .filter(|row| !row.is_put_away())
         .map(|row| row.id)
         .collect();
     owned.extend(terminal_pane_ids(terminals.as_deref(), &parked)?);
     let state = app.state::<AppState>();
     owned.extend(state.sessions.lock().keys().map(|id| id.0.clone()));
     Some(owned)
+}
+
+/// Projects every one of whose open sessions is parked (and that has at least
+/// one): parking a project stops its [Project terminal]s too, and they stay
+/// stopped until one of its sessions comes back.
+fn fully_parked_projects(rows: &[crate::store::SessionRow]) -> HashSet<String> {
+    let mut parked = HashSet::new();
+    let mut live = HashSet::new();
+    for row in rows.iter().filter(|row| row.archived_at.is_none()) {
+        if row.parked_at.is_some() {
+            parked.insert(row.project_id.clone());
+        } else {
+            live.insert(row.project_id.clone());
+        }
+    }
+    parked.retain(|project| !live.contains(project));
+    parked
 }
 
 pub(crate) fn resolve_run_dir<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Option<PathBuf> {
@@ -554,6 +566,7 @@ mod tests {
             title_locked: false,
             parent_session_id: None,
             nested_under: None,
+            parked_at: None,
         }
     }
 
@@ -568,13 +581,12 @@ mod tests {
                 path: "/x".to_string(),
                 color: None,
                 setup_command: None,
-                parked_at: None,
             })
             .expect("project");
     }
 
     #[test]
-    fn a_parked_projects_rows_and_panes_are_not_owned() {
+    fn parked_sessions_and_a_fully_parked_projects_panes_are_not_owned() {
         let app = mock_app();
         seed_project(&app);
         {
@@ -587,15 +599,21 @@ mod tests {
                     path: "/y".to_string(),
                     color: None,
                     setup_command: None,
-                    parked_at: Some(1),
                 })
-                .expect("parked project");
+                .expect("second project");
             store
                 .upsert_session(&session_row("live", None))
                 .expect("row");
             store
                 .upsert_session(&crate::store::SessionRow {
+                    parked_at: Some(5),
+                    ..session_row("parked-in-live-project", None)
+                })
+                .expect("row");
+            store
+                .upsert_session(&crate::store::SessionRow {
                     project_id: "p2".to_string(),
+                    parked_at: Some(5),
                     ..session_row("parked-session", None)
                 })
                 .expect("row");
@@ -610,10 +628,12 @@ mod tests {
         let owned = owned_ids(app.handle()).expect("readable ownership");
 
         assert!(owned.contains("live"));
+        // p1 still has a live session, so its terminal is still in use.
         assert!(owned.contains("pane-1"));
-        // Parking stops everything in a project, so a daemon still serving one
-        // of its sessions or terminals is a leftover.
+        // A parked session is stopped, so a daemon still serving it is a leftover.
+        assert!(!owned.contains("parked-in-live-project"));
         assert!(!owned.contains("parked-session"));
+        // Every session of p2 is parked: its terminals were stopped too.
         assert!(!owned.contains("pane-2"));
     }
 

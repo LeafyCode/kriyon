@@ -23,7 +23,6 @@ function seed(): void {
         id: "p1",
         name: "demo",
         path: "/p1",
-        parkedAt: null,
         setupCommand: null,
       },
     ],

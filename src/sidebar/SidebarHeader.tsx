@@ -9,7 +9,7 @@ import {
 import { type CSSProperties, type ReactNode, useMemo } from "react";
 import { TOP_BAND_HEIGHT, TRAFFIC_LIGHT_CLEARANCE } from "../layout/topBand.ts";
 import { useLayout } from "../state/layout.ts";
-import { isPutAway, parkedProjectIds, useSessions } from "../state/sessions.ts";
+import { isPutAway, useSessions } from "../state/sessions.ts";
 import { useUi } from "../state/ui.ts";
 import { iconButton, inputBox, kbd, row30 } from "../theme/recipes.ts";
 import { tokens } from "../theme/tokens.ts";
@@ -172,12 +172,11 @@ export function SidebarHeader({ query, setQuery }: SidebarHeaderProps) {
   const toggleSidebar = useLayout((state) => state.toggleSidebarCollapsed);
   const openPalette = useUi((state) => state.openPalette);
 
-  const openSessions = useSessions((state) => {
-    const parked = parkedProjectIds(state.projects);
-    return Object.values(state.sessions).filter(
-      (session) => !isPutAway(session, parked)
-    ).length;
-  });
+  const openSessions = useSessions(
+    (state) =>
+      Object.values(state.sessions).filter((session) => !isPutAway(session))
+        .length
+  );
   // The Command centre's count is the same "how many want me" number the
   // needs-you section renders, so the two can never disagree. The selector
   // returns the *length*, not the list: `needsYouSectionItems` builds fresh

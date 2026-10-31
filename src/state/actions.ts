@@ -27,7 +27,13 @@ import { showToast } from "../ui/Toast.tsx";
 import { markBootLive, markBootStart } from "./bootTiming.ts";
 import { useCompletions } from "./completions.ts";
 import { useLayout } from "./layout.ts";
-import { idleSession, type UiSession, useSessions } from "./sessions.ts";
+import {
+  idleSession,
+  isPutAway,
+  sessionRow,
+  type UiSession,
+  useSessions,
+} from "./sessions.ts";
 import { freedMemoryNote, stopCostFor } from "./stopCost.ts";
 import { projectPaneIds, useTerminals } from "./terminals.ts";
 import { sessionPaneMounts } from "./warmPanes.ts";
@@ -62,7 +68,7 @@ export interface ParkCost {
   busyTerminals: number;
   /** Background commands the project's sessions are running, by name. */
   commands: string[];
-  /** The sessions parking stops (every one not already archived). */
+  /** The sessions parking stops (every one still on the rail). */
   sessionIds: string[];
   /** Sessions still starting Claude up. */
   starting: number;
@@ -85,7 +91,7 @@ export function projectParkCost(projectId: string): ParkCost {
     working: 0,
   };
   for (const session of Object.values(state.sessions)) {
-    if (session.projectId !== projectId || session.archivedAt !== null) {
+    if (session.projectId !== projectId || isPutAway(session)) {
       continue;
     }
     cost.sessionIds.push(session.id);
@@ -120,15 +126,15 @@ function plural(count: number, noun: string): string {
 
 /**
  * Park a project: put it away and stop everything it runs (ADR-0052). Every
- * session not already archived and every [Project terminal] is stopped; rows,
- * titles, order, transcripts, worktrees and terminal tabs all stay. The flag is
- * saved at once, before the stops, so a crash mid-stop still leaves the project
- * parked and the orphan sweep finishes the job.
+ * session still on the rail is parked and stopped, and so is every [Project
+ * terminal]; rows, titles, order, transcripts, worktrees and terminal tabs all
+ * stay. The parked rows are saved at once, before the stops, so a crash
+ * mid-stop still leaves them parked and the orphan sweep finishes the job.
  */
 export function parkProjectAndStop(projectId: string): void {
   const state = useSessions.getState();
   const project = state.projects.find((p) => p.id === projectId);
-  if (!project || project.parkedAt !== null) {
+  if (!project) {
     return;
   }
   const { sessionIds } = projectParkCost(projectId);
@@ -136,12 +142,18 @@ export function parkProjectAndStop(projectId: string): void {
     useTerminals.getState().byProject,
     projectId
   ).length;
+  if (sessionIds.length === 0 && paneCount === 0) {
+    return;
+  }
   state.parkProject(projectId);
-  const parked = useSessions
-    .getState()
-    .projects.find((p) => p.id === projectId);
-  if (parked && isTauriRuntime()) {
-    ignore(upsertProject(parked));
+  if (isTauriRuntime()) {
+    const { sessions } = useSessions.getState();
+    for (const id of sessionIds) {
+      const session = sessions[id];
+      if (session) {
+        ignore(upsertSession(sessionRow(session)));
+      }
+    }
   }
   for (const id of sessionIds) {
     ignore(disposeSession(id));
@@ -252,16 +264,14 @@ function persistThenWarm(project: ProjectRow, session: SessionRow): void {
  * launches/resumes a session the first time it is viewed).
  */
 /**
- * Make sure `project` is in the store and on the rail, returning the store's
- * row for it. Starting a session in a [Parked project] means the person wants
- * to work there, so it unparks it. The store's row is what gets persisted: the
- * caller's copy may be a fresh one (a folder pick) or a stale one (parked).
+ * Make sure `project` is in the store, returning the store's row for it — the
+ * row that gets persisted, since the caller's copy may be a fresh one built
+ * from a folder pick.
  */
 function ensureProject(project: ProjectRow): ProjectRow {
   const state = useSessions.getState();
   // `addProject` is a no-op if the project id already exists.
   state.addProject(project);
-  state.unparkProject(project.id);
   return (
     useSessions.getState().projects.find((p) => p.id === project.id) ?? project
   );
@@ -368,7 +378,6 @@ export function createSessionInDefaultProject(): void {
       id: "default",
       name: "Home",
       path: defaultCwd,
-      parkedAt: null,
       setupCommand: null,
     },
     defaultCwd,
@@ -384,7 +393,7 @@ export function createSessionInDefaultProject(): void {
 export function createSessionInFolder(path: string): void {
   const name = basename(path);
   createSession(
-    { color: null, id: path, name, path, parkedAt: null, setupCommand: null },
+    { color: null, id: path, name, path, setupCommand: null },
     path,
     name
   );
@@ -416,7 +425,6 @@ export function resumePastSession(past: PastSession): void {
     id: cwd,
     name,
     path: cwd,
-    parkedAt: null,
     setupCommand: null,
   };
   const stored = ensureProject(project);

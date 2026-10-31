@@ -67,14 +67,13 @@ export function standingState(
 /** Derive a flat standing per session from the store and watcher liveness. */
 export function buildStandings(
   sessions: Record<string, UiSession>,
-  parked: ReadonlySet<string>,
   lastSeen: Record<string, number>,
   lastChange: Record<string, number>,
   nowMs: number,
   hooksOff: Record<string, HooksOffScope> = {}
 ): SessionStanding[] {
   return Object.values(sessions)
-    .filter((s) => !isPutAway(s, parked))
+    .filter((s) => !isPutAway(s))
     .map((s) => ({
       sessionId: s.id,
       projectId: s.projectId,

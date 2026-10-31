@@ -45,7 +45,6 @@ function project(id: string, path: string) {
     id,
     name: id,
     path,
-    parkedAt: null,
     setupCommand: null,
   };
 }
@@ -127,14 +126,17 @@ describe("TerminalDock", () => {
     );
   });
 
-  it("unmounts a parked project's terminals so no shell restarts behind its back", () => {
+  it("unmounts a fully parked project's terminals so no shell restarts behind its back", () => {
     useLayout.setState({
       layout: { ...DEFAULT_LAYOUT, terminalDockOpen: true },
     });
     useSessions.setState({
       activeSessionId: "s1",
-      projects: [project("p1", "/a"), { ...project("p2", "/b"), parkedAt: 10 }],
-      sessions: { s1: session("s1", "p1"), s2: session("s2", "p2") },
+      projects: [project("p1", "/a"), project("p2", "/b")],
+      sessions: {
+        s1: session("s1", "p1"),
+        s2: { ...session("s2", "p2"), parkedAt: 10 },
+      },
     });
     useTerminals.getState().openTab("p1", "/a");
     useTerminals.getState().openTab("p2", "/b");

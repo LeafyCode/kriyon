@@ -403,7 +403,6 @@ test("picking a session from a full view returns to the session view", () => {
         id: "p1",
         name: "kriyon",
         path: "/tmp/kriyon",
-        parkedAt: null,
         setupCommand: null,
       },
     ],

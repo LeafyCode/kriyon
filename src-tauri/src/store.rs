@@ -27,10 +27,6 @@ pub struct ProjectRow {
     /// The project's optional per-worktree [Setup command], run at the end of a
     /// [Worktree bootstrap]. `None` = no custom step.
     pub setup_command: Option<String>,
-    /// When the project was parked (ms since epoch), or `None` while it is on
-    /// the rail. A [Parked project] has every session and terminal stopped.
-    #[serde(default)]
-    pub parked_at: Option<i64>,
 }
 
 /// A persisted session belonging to a project.
@@ -68,17 +64,19 @@ pub struct SessionRow {
     /// `None` for a top-level one. Nests the row under it in the sidebar.
     #[serde(default)]
     pub nested_under: Option<String>,
+    /// When the session was parked (ms since epoch), or `None`. A parked
+    /// session is stopped and kept off the rail until it is opened again
+    /// (ADR-0052).
+    #[serde(default)]
+    pub parked_at: Option<i64>,
 }
 
 impl SessionRow {
-    /// Whether the session is put away — an [Archived session], or one in a
-    /// [Parked project] (ids in `parked`). Both are stopped, so neither is live.
+    /// Whether the session is put away — an [Archived session] or a parked
+    /// one. Both are stopped, so neither is live.
     #[must_use]
-    pub fn is_put_away<S: std::hash::BuildHasher>(
-        &self,
-        parked: &std::collections::HashSet<String, S>,
-    ) -> bool {
-        self.archived_at.is_some() || parked.contains(&self.project_id)
+    pub fn is_put_away(&self) -> bool {
+        self.archived_at.is_some() || self.parked_at.is_some()
     }
 }
 
@@ -189,8 +187,7 @@ impl Store {
                  name          TEXT NOT NULL,
                  path          TEXT NOT NULL,
                  color         TEXT,
-                 setup_command TEXT,
-                 parked_at     INTEGER
+                 setup_command TEXT
              );
              CREATE TABLE IF NOT EXISTS sessions (
                  id                TEXT PRIMARY KEY,
@@ -205,6 +202,7 @@ impl Store {
                  title_locked      INTEGER NOT NULL DEFAULT 0,
                  parent_session_id TEXT,
                  nested_under TEXT,
+                 parked_at INTEGER,
                  FOREIGN KEY(project_id) REFERENCES projects(id)
              );
              CREATE TABLE IF NOT EXISTS app_state (
@@ -225,7 +223,6 @@ impl Store {
         )?;
         self.migrate_claude_session_id()?;
         self.migrate_column("projects", "setup_command", "TEXT")?;
-        self.migrate_column("projects", "parked_at", "INTEGER")?;
         self.migrate_column("sessions", "archived_at", "INTEGER")?;
         self.migrate_column("sessions", "baseline_oid", "TEXT")?;
         // The [Sleeping session] mark, so a session Kriyon stopped is restored
@@ -234,6 +231,7 @@ impl Store {
         self.migrate_column("sessions", "title_locked", "INTEGER NOT NULL DEFAULT 0")?;
         self.migrate_column("sessions", "parent_session_id", "TEXT")?;
         self.migrate_column("sessions", "nested_under", "TEXT")?;
+        self.migrate_column("sessions", "parked_at", "INTEGER")?;
         Ok(())
     }
 
@@ -267,13 +265,12 @@ impl Store {
     /// Returns [`StoreError::Sqlite`] if the statement fails.
     pub fn upsert_project(&self, p: &ProjectRow) -> Result<(), StoreError> {
         self.conn.execute(
-            "INSERT INTO projects (id, name, path, color, setup_command, parked_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+            "INSERT INTO projects (id, name, path, color, setup_command)
+             VALUES (?1, ?2, ?3, ?4, ?5)
              ON CONFLICT(id) DO UPDATE SET
                  name = excluded.name, path = excluded.path,
-                 color = excluded.color, setup_command = excluded.setup_command,
-                 parked_at = excluded.parked_at",
-            rusqlite::params![p.id, p.name, p.path, p.color, p.setup_command, p.parked_at],
+                 color = excluded.color, setup_command = excluded.setup_command",
+            rusqlite::params![p.id, p.name, p.path, p.color, p.setup_command],
         )?;
         Ok(())
     }
@@ -283,9 +280,9 @@ impl Store {
     /// # Errors
     /// Returns [`StoreError::Sqlite`] if the query fails.
     pub fn list_projects(&self) -> Result<Vec<ProjectRow>, StoreError> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, name, path, color, setup_command, parked_at FROM projects ORDER BY name",
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, name, path, color, setup_command FROM projects ORDER BY name")?;
         let rows = stmt.query_map([], |row| {
             Ok(ProjectRow {
                 id: row.get(0)?,
@@ -293,7 +290,6 @@ impl Store {
                 path: row.get(2)?,
                 color: row.get(3)?,
                 setup_command: row.get(4)?,
-                parked_at: row.get(5)?,
             })
         })?;
         let projects = rows.collect::<Result<Vec<_>, _>>()?;
@@ -307,8 +303,8 @@ impl Store {
     pub fn upsert_session(&self, s: &SessionRow) -> Result<(), StoreError> {
         self.conn.execute(
             "INSERT INTO sessions
-                 (id, project_id, title, cwd, worktree_path, created_at, claude_session_id, archived_at, baseline_oid, title_locked, parent_session_id, nested_under)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+                 (id, project_id, title, cwd, worktree_path, created_at, claude_session_id, archived_at, baseline_oid, title_locked, parent_session_id, nested_under, parked_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
              ON CONFLICT(id) DO UPDATE SET
                  project_id = excluded.project_id, title = excluded.title,
                  cwd = excluded.cwd, worktree_path = excluded.worktree_path,
@@ -316,7 +312,8 @@ impl Store {
                  archived_at = excluded.archived_at, baseline_oid = excluded.baseline_oid,
                  title_locked = excluded.title_locked,
                  parent_session_id = excluded.parent_session_id,
-                 nested_under = excluded.nested_under",
+                 nested_under = excluded.nested_under,
+                 parked_at = excluded.parked_at",
             rusqlite::params![
                 s.id,
                 s.project_id,
@@ -329,7 +326,8 @@ impl Store {
                 s.baseline_oid,
                 s.title_locked,
                 s.parent_session_id,
-                s.nested_under
+                s.nested_under,
+                s.parked_at
             ],
         )?;
         Ok(())
@@ -341,7 +339,7 @@ impl Store {
     /// Returns [`StoreError::Sqlite`] if the query fails.
     pub fn list_sessions(&self) -> Result<Vec<SessionRow>, StoreError> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, project_id, title, cwd, worktree_path, created_at, claude_session_id, archived_at, baseline_oid, title_locked, parent_session_id, nested_under
+            "SELECT id, project_id, title, cwd, worktree_path, created_at, claude_session_id, archived_at, baseline_oid, title_locked, parent_session_id, nested_under, parked_at
              FROM sessions ORDER BY created_at",
         )?;
         let rows = stmt.query_map([], |row| {
@@ -358,6 +356,7 @@ impl Store {
                 title_locked: row.get::<_, Option<i64>>(9)?.unwrap_or(0) != 0,
                 parent_session_id: row.get(10)?,
                 nested_under: row.get(11)?,
+                parked_at: row.get(12)?,
             })
         })?;
         let sessions = rows.collect::<Result<Vec<_>, _>>()?;
@@ -533,7 +532,7 @@ impl Store {
         let row = self
             .conn
             .query_row(
-                "SELECT id, project_id, title, cwd, worktree_path, created_at, claude_session_id, archived_at, baseline_oid, title_locked, parent_session_id, nested_under
+                "SELECT id, project_id, title, cwd, worktree_path, created_at, claude_session_id, archived_at, baseline_oid, title_locked, parent_session_id, nested_under, parked_at
                  FROM sessions WHERE id = ?1",
                 rusqlite::params![id],
                 |row| {
@@ -550,6 +549,7 @@ impl Store {
                         title_locked: row.get::<_, Option<i64>>(9)?.unwrap_or(0) != 0,
                 parent_session_id: row.get(10)?,
                         nested_under: row.get(11)?,
+                        parked_at: row.get(12)?,
                     })
                 },
             )
@@ -562,7 +562,7 @@ impl Store {
         let row = self
             .conn
             .query_row(
-                "SELECT id, name, path, color, setup_command, parked_at FROM projects WHERE id = ?1",
+                "SELECT id, name, path, color, setup_command FROM projects WHERE id = ?1",
                 rusqlite::params![id],
                 |row| {
                     Ok(ProjectRow {
@@ -571,7 +571,6 @@ impl Store {
                         path: row.get(2)?,
                         color: row.get(3)?,
                         setup_command: row.get(4)?,
-                        parked_at: row.get(5)?,
                     })
                 },
             )
@@ -612,7 +611,6 @@ mod tests {
             path: "/Users/dev/Projects/kriyon".to_string(),
             color: Some("#ff8800".to_string()),
             setup_command: None,
-            parked_at: None,
         }
     }
 
@@ -630,6 +628,7 @@ mod tests {
             title_locked: false,
             parent_session_id: None,
             nested_under: None,
+            parked_at: None,
         }
     }
 
@@ -810,11 +809,31 @@ mod tests {
             title_locked: false,
             parent_session_id: None,
             nested_under: None,
+            parked_at: None,
         };
         store.upsert_session(&updated).expect("update session");
 
         let sessions = store.list_sessions().expect("list sessions");
         assert_eq!(sessions, vec![updated]);
+    }
+
+    #[test]
+    fn session_round_trips_parked_at() {
+        let store = Store::open_in_memory().expect("open");
+        store.upsert_project(&sample_project()).expect("project");
+        let parked = SessionRow {
+            parked_at: Some(1_730_000_000_000),
+            ..sample_session()
+        };
+        store.upsert_session(&parked).expect("park");
+        assert_eq!(store.list_sessions().expect("list"), vec![parked.clone()]);
+        assert!(parked.is_put_away());
+        let unparked = SessionRow {
+            parked_at: None,
+            ..parked
+        };
+        store.upsert_session(&unparked).expect("unpark");
+        assert_eq!(store.list_sessions().expect("list"), vec![unparked]);
     }
 
     #[test]
@@ -900,23 +919,6 @@ mod tests {
     }
 
     #[test]
-    fn project_round_trips_parked_at() {
-        let store = Store::open_in_memory().expect("open");
-        let project = ProjectRow {
-            parked_at: Some(1_730_000_000_000),
-            ..sample_project()
-        };
-        store.upsert_project(&project).expect("park");
-        assert_eq!(store.list_projects().expect("list"), vec![project.clone()]);
-        let unparked = ProjectRow {
-            parked_at: None,
-            ..project
-        };
-        store.upsert_project(&unparked).expect("unpark");
-        assert_eq!(store.list_projects().expect("list"), vec![unparked]);
-    }
-
-    #[test]
     fn migrates_tables_missing_the_new_columns() {
         let conn = Connection::open_in_memory().expect("open");
         conn.execute_batch(
@@ -932,7 +934,7 @@ mod tests {
         let store = Store::from_connection(conn).expect("migrate on open");
         assert_eq!(store.list_sessions().expect("list")[0].archived_at, None);
         assert_eq!(store.list_sessions().expect("list")[0].baseline_oid, None);
-        assert_eq!(store.list_projects().expect("list")[0].parked_at, None);
+        assert_eq!(store.list_sessions().expect("list")[0].parked_at, None);
         assert_eq!(
             store.list_sessions().expect("list")[0].parent_session_id,
             None
