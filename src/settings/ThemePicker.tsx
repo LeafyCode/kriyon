@@ -1,7 +1,8 @@
 import type { CSSProperties } from "react";
 import { useLayout } from "../state/layout.ts";
+import { pickerOption } from "../theme/recipes.ts";
 import { THEMES, type Theme } from "../theme/themes/index.ts";
-import { accentAlpha, tokens } from "../theme/tokens.ts";
+import { tokens } from "../theme/tokens.ts";
 
 const gridStyle: CSSProperties = {
   border: "none",
@@ -15,17 +16,11 @@ const gridStyle: CSSProperties = {
 
 function optionStyle(picked: boolean): CSSProperties {
   return {
-    background: picked ? accentAlpha(0.16) : tokens.color.blockWell,
-    border: `1px solid ${picked ? tokens.color.accent : tokens.color.line.base}`,
-    borderRadius: tokens.radius.lg,
-    color: picked ? tokens.color.ink.bright : tokens.color.ink.secondary,
-    cursor: "pointer",
+    ...pickerOption(picked),
     display: "flex",
     flexDirection: "column",
-    fontFamily: tokens.font.sans,
-    fontSize: "11.5px",
-    gap: "6px",
-    padding: "6px",
+    gap: tokens.space.xs,
+    padding: tokens.space.xs,
     textAlign: "left",
   };
 }
@@ -39,7 +34,7 @@ function Preview({ theme }: { theme: Theme }) {
   const { colors } = theme;
   const line = (width: string, color: string): CSSProperties => ({
     background: color,
-    borderRadius: "2px",
+    borderRadius: tokens.radius.sm,
     height: "3px",
     width,
   });
@@ -61,13 +56,13 @@ function Preview({ theme }: { theme: Theme }) {
           display: "flex",
           flex: 1,
           flexDirection: "column",
-          gap: "4px",
-          padding: "7px 6px",
+          gap: tokens.space.xs,
+          padding: tokens.space.xs,
         }}
       >
         <span style={line("70%", colors.inkPrimary)} />
         <span style={line("50%", colors.inkMuted)} />
-        <span style={{ display: "flex", gap: "3px" }}>
+        <span style={{ display: "flex", gap: tokens.space.xs }}>
           <span style={line("30%", colors.syntaxKeyword)} />
           <span style={line("40%", colors.syntaxString)} />
         </span>
