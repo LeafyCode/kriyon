@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type {
   DirEntry,
+  FileBlame,
   FileContent,
   FileWriteResult,
   HooksOffScope,
@@ -984,6 +985,32 @@ export function readBaseline(
   path: string
 ): Promise<BaselineContent> {
   return invoke("read_baseline", { cwd, path });
+}
+
+/**
+ * One file as it was when the session started — its [Session baseline]
+ * snapshot — for the editor's session-change highlight (Rust
+ * `git_cmd::read_session_baseline`). Same sandbox and outcomes as
+ * {@link readBaseline}; `untracked` means the session created the file.
+ */
+export function readSessionBaseline(
+  cwd: string,
+  baselineOid: string,
+  path: string
+): Promise<BaselineContent> {
+  return invoke("read_session_baseline", { baselineOid, cwd, path });
+}
+
+/**
+ * Who last touched each line of one file, as it is on disk (Rust
+ * `git_cmd::blame_file`). `null` when there is nothing to blame: not a repo,
+ * never committed, or too large to open.
+ */
+export function blameFile(
+  cwd: string,
+  path: string
+): Promise<FileBlame | null> {
+  return invoke("blame_file", { cwd, path });
 }
 
 /**

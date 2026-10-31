@@ -63,7 +63,7 @@ const LF_GLOBAL = /\n/g;
  *
  * The `eol` recorded by {@link detectEol} is what puts it back on save.
  */
-function toLf(text: string): string {
+export function toLf(text: string): string {
   return text.replace(CRLF_GLOBAL, "\n");
 }
 

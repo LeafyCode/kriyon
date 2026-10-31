@@ -10,6 +10,7 @@ import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../ipc/bridge.ts", () => ({
+  blameFile: vi.fn().mockResolvedValue(null),
   diffSessionChanges: vi.fn(),
   diffWorkingTree: vi.fn(),
   discardFileChanges: vi.fn().mockResolvedValue(undefined),
@@ -17,6 +18,7 @@ vi.mock("../ipc/bridge.ts", () => ({
   openPath: vi.fn().mockResolvedValue(undefined),
   readBaseline: vi.fn().mockResolvedValue({ content: null, state: "tracked" }),
   readFile: vi.fn(),
+  readSessionBaseline: vi.fn().mockResolvedValue({ state: "notARepo" }),
   writeFile: vi.fn(),
 }));
 // Only the save trigger is stubbed; the rest of the coordinator stays real so
@@ -43,15 +45,18 @@ vi.mock("./highlighter.ts", () => ({
 vi.mock("./CodeEditor.tsx", () => ({
   CodeEditor: ({
     baseline,
+    blame,
     onChange,
     value,
   }: {
     baseline?: string;
+    blame?: unknown;
     onChange: (next: string) => void;
     value: string;
   }) => (
     <textarea
       data-baseline={baseline}
+      data-blame={blame ? "on" : "off"}
       onChange={(e) => onChange(e.target.value)}
       value={value}
     />
@@ -59,6 +64,7 @@ vi.mock("./CodeEditor.tsx", () => ({
 }));
 
 import {
+  blameFile,
   discardFileChanges,
   openInEditor,
   openPath,
@@ -1520,5 +1526,20 @@ describe("FileViewer", () => {
 
       expect(shownBanners()).toEqual(["missingOnDisk"]);
     });
+  });
+});
+
+describe("blame in the file viewer", () => {
+  it("shows blame while the file matches disk, and hides it once edited", async () => {
+    vi.mocked(blameFile).mockResolvedValue({ commits: [], lines: [] });
+    mockedReadFile.mockResolvedValue(content({ content: "original" }));
+    renderViewer();
+
+    const textbox = await screen.findByRole("textbox");
+    await waitFor(() => expect(textbox).toHaveAttribute("data-blame", "on"));
+
+    typeInto(textbox, "changed");
+
+    expect(screen.getByRole("textbox")).toHaveAttribute("data-blame", "off");
   });
 });

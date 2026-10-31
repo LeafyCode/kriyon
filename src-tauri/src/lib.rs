@@ -429,6 +429,8 @@ pub fn run() {
             git_cmd::diff_session_changes,
             git_cmd::repo_toplevel,
             git_cmd::read_baseline,
+            git_cmd::read_session_baseline,
+            git_cmd::blame_file,
             git_cmd::discard_file_changes,
             entry_cmd::create_file,
             entry_cmd::create_dir,

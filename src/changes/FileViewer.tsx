@@ -18,6 +18,7 @@ import {
   type FileViewerNotice,
   useFileEditorSession,
 } from "./useFileEditorSession.ts";
+import { useGitAnnotations } from "./useGitAnnotations.ts";
 
 const rootStyle: CSSProperties = {
   display: "flex",
@@ -621,6 +622,14 @@ export function FileViewer({
     state,
     target,
   } = useFileEditorSession(cwd, path, onClose, sessionId);
+  // Session tint and blame — decorations, fetched beside the file, never
+  // blocking it.
+  const { blame, sessionStart } = useGitAnnotations(
+    target.cwd,
+    target.path,
+    sessionId,
+    dirty
+  );
 
   // `ReadOnlyFileView` owns its own virtualizer and highlight effect, so none
   // of that runs while an editable file is open — this shell only picks which
@@ -790,6 +799,7 @@ export function FileViewer({
         <div data-testid="file-viewer-editor" style={editorWrapStyle}>
           <CodeEditor
             baseline={baseline}
+            blame={blame}
             key={target.path}
             language={lang}
             onChange={(next) => {
@@ -798,6 +808,7 @@ export function FileViewer({
               );
             }}
             onSave={save}
+            sessionStart={sessionStart}
             value={edit.draft}
           />
         </div>

@@ -3,6 +3,7 @@ pub mod activity_log;
 pub mod ask;
 pub mod attachment;
 pub mod backpressure;
+pub mod blame;
 pub mod bootstrap;
 pub mod bridge;
 pub mod completion;

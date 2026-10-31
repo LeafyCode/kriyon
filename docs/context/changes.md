@@ -205,6 +205,19 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
   chunk, and themed from `src/theme/tokens.ts` like every other surface. An unknown or
   failed-to-load grammar degrades to a plain, still-editable editor — never a broken view (ADR
   0016). _Avoid_: editor (generic), IDE.
+- **Session highlight** (`sessionHighlight`, `read_session_baseline`) — the [Code editor]'s
+  faint accent tint on lines that differ from the file as it was when the session started (its
+  [Session baseline] snapshot): what changed during this session, at line precision, whoever
+  typed it. A file the session created is tinted whole. _Avoid_: AI blame (it does not know
+  who typed a line, only when).
+- **Blame note** (`blameAnnotation`, `blame_file`) — a quiet note at the end of the cursor's
+  line: "Changed in this session", "Not committed yet", or the author, age and summary of the
+  commit that last touched it. Hidden while the buffer has unsaved edits, since git's line
+  numbers then no longer match.
+- **Change peek** (`changePeek`, `revertChangeAt`) — clicking a git-gutter marker shows what the
+  lines were in the last commit, with **Revert change** to put back just that change. An
+  ordinary edit: the buffer turns dirty and ⌘Z undoes it. _Avoid_: discard hunk (nothing is
+  written until Save).
 - **File draft** (`EditState`, `stashFileDraft`/`takeFileDraft`) — one file's unsaved editor buffer:
   the `draft` text, the `baseline` it was read as, and the [Save conflict guard] signature that
   baseline was read at. Lives in the [File viewer] while it is mounted, and is stashed in the

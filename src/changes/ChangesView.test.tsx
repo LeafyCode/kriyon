@@ -9,6 +9,8 @@ import {
 import { afterEach, beforeEach, describe, expect, it, test, vi } from "vitest";
 
 vi.mock("../ipc/bridge.ts", () => ({
+  blameFile: vi.fn().mockResolvedValue(null),
+  readSessionBaseline: vi.fn().mockResolvedValue({ state: "notARepo" }),
   defaultBranch: vi.fn(),
   diffSessionChanges: vi.fn(),
   diffWorkingTree: vi.fn(),

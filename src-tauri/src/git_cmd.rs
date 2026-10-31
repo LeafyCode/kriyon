@@ -19,6 +19,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
+use kriyon_core::blame::{parse_blame_porcelain, FileBlame};
 use kriyon_core::failure::tagged_failure;
 use kriyon_core::git::{
     parse_diff, parse_status, plan_untracked_reads, untracked_as_diff, BudgetExceeded,
@@ -1375,6 +1376,15 @@ const BASELINE_BINARY_SNIFF_BYTES: usize = 8192;
 /// [`GitRun::outcome`]: a spawn failure (git missing, fork pressure) is still
 /// an error and must not be silently laundered into "untracked".
 fn read_baseline_sync(root: &SandboxRoot, path: &str) -> Result<BaselineContent, String> {
+    read_blob_at_sync(root, path, "HEAD")
+}
+
+/// [`read_baseline_sync`] against any tree-ish `rev`: `HEAD`, or a session's
+/// start snapshot (a `snapshot_tree` oid). The caller validates `rev`; every
+/// other rule — the sandbox, the one-resolution read, the size and binary
+/// gates — is shared, so the two reads cannot drift apart. "Untracked" here
+/// means "absent from `rev`": for a snapshot, a file created since.
+fn read_blob_at_sync(root: &SandboxRoot, path: &str, rev: &str) -> Result<BaselineContent, String> {
     let resolved = root.resolve(path, "read")?;
     // Same refusal `file_cmd::read_file_sync` makes, and now literally the same
     // call: a directory (or any other non-file) target would otherwise reach
@@ -1394,7 +1404,7 @@ fn read_baseline_sync(root: &SandboxRoot, path: &str) -> Result<BaselineContent,
     // revision, the same reason `git show HEAD:./foo` is the safe spelling —
     // without it, a `rel` that happens to look like a ref could be
     // misparsed.
-    let spec = format!("HEAD:./{rel}");
+    let spec = format!("{rev}:./{rel}");
     let probe = GitRun::new(repo)
         .args(["rev-parse", "--verify", "--quiet", &spec])
         .outcome()?;
@@ -1464,6 +1474,79 @@ pub fn read_baseline(
     path: String,
 ) -> Result<BaselineContent, String> {
     read_baseline_sync(&SandboxRoot::validate(store.inner(), &cwd)?, &path)
+}
+
+/// A session's start-snapshot version of one file (relative to `cwd`), for
+/// the editor's session-change highlight: the lines that differ from it are
+/// the ones changed during the session. Same sandbox and outcomes as
+/// [`read_baseline`]; `baseline_oid` must be a git object id (it is always a
+/// `snapshot_tree` output — anything else crossed the boundary wrong).
+///
+/// # Errors
+/// See [`read_baseline_sync`], plus: an error string if `cwd` is not a known
+/// root or `baseline_oid` is not an object id.
+#[allow(clippy::needless_pass_by_value)]
+#[tauri::command(async)]
+pub fn read_session_baseline(
+    store: tauri::State<'_, StoreState>,
+    cwd: String,
+    baseline_oid: String,
+    path: String,
+) -> Result<BaselineContent, String> {
+    read_session_baseline_for(store.inner(), &cwd, &baseline_oid, &path)
+}
+
+fn read_session_baseline_for(
+    store: &StoreState,
+    cwd: &str,
+    baseline_oid: &str,
+    path: &str,
+) -> Result<BaselineContent, String> {
+    reject_flag_like("baseline_oid", baseline_oid)?;
+    if !is_object_id(baseline_oid) {
+        return Err("baseline_oid must be a git object id".to_string());
+    }
+    read_blob_at_sync(&SandboxRoot::validate(store, cwd)?, path, baseline_oid)
+}
+
+/// Who last touched each line of one working-tree file, for the editor's
+/// blame annotation — `git blame --porcelain` over the file as it is on
+/// disk, so a line not committed yet comes back as such.
+///
+/// `None` when there is nothing to blame: not a repo, a file git has never
+/// committed, or a file over [`crate::file_cmd::MAX_READ_BYTES`] (the editor
+/// won't open one anyway). Sandboxed like [`read_baseline`].
+///
+/// # Errors
+/// An error string if `cwd` is not a known root, `path` escapes it, or git
+/// fails on a file it does know.
+#[allow(clippy::needless_pass_by_value)]
+#[tauri::command(async)]
+pub fn blame_file(
+    store: tauri::State<'_, StoreState>,
+    cwd: String,
+    path: String,
+) -> Result<Option<FileBlame>, String> {
+    blame_file_sync(&SandboxRoot::validate(store.inner(), &cwd)?, &path)
+}
+
+fn blame_file_sync(root: &SandboxRoot, path: &str) -> Result<Option<FileBlame>, String> {
+    let resolved = root.resolve(path, "read")?;
+    if resolved.file_metadata()?.len() > crate::file_cmd::MAX_READ_BYTES {
+        return Ok(None);
+    }
+    let repo = root.as_str();
+    let rel = resolved.relative_to(root)?;
+    let committed = GitRun::new(repo)
+        .args(["rev-parse", "--verify", "--quiet", &format!("HEAD:./{rel}")])
+        .outcome()?;
+    if !committed.success {
+        return Ok(None);
+    }
+    let raw = GitRun::new(repo)
+        .args(["blame", "--porcelain", "--", &format!("./{rel}")])
+        .text()?;
+    Ok(Some(parse_blame_porcelain(&raw)))
 }
 
 /// Refusal when `path` has no HEAD blob to restore from. A plain string, not a
@@ -3490,6 +3573,93 @@ mod tests {
 
     /// A real `snapshot_tree` oid (40 hex chars for sha1, this repo's
     /// default) must still be accepted by the same guard.
+    #[test]
+    fn read_session_baseline_returns_the_file_as_it_was_when_the_session_started() {
+        if !git_available() {
+            return;
+        }
+        let dir = init_repo_with_commit(); // commits f.txt = "one\n"
+        let repo = dir.path().canonicalize().expect("canonicalize");
+        let repo_str = repo.to_str().expect("utf8");
+        let store = store_with_project_root(repo_str);
+        std::fs::write(repo.join("f.txt"), "session start\n").expect("write");
+        let baseline = snapshot_tree(repo_str, Budget::DEFAULT).expect("snapshot");
+        std::fs::write(repo.join("f.txt"), "edited later\n").expect("write");
+        std::fs::write(repo.join("new.txt"), "made later\n").expect("write");
+
+        let start = read_session_baseline_for(&store, repo_str, &baseline, "f.txt")
+            .expect("read session baseline");
+        assert_eq!(
+            start,
+            BaselineContent::Tracked {
+                content: Some("session start\n".to_string())
+            }
+        );
+        // A file created after the snapshot is absent from it.
+        let created = read_session_baseline_for(&store, repo_str, &baseline, "new.txt")
+            .expect("read session baseline");
+        assert_eq!(created, BaselineContent::Untracked);
+    }
+
+    #[test]
+    fn read_session_baseline_rejects_a_baseline_that_is_not_an_oid() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path().canonicalize().expect("canonicalize");
+        let store = store_with_project_root(&root.to_string_lossy());
+        for bad in ["HEAD", "--output=x", "main~1"] {
+            let err = read_session_baseline_for(&store, root.to_str().unwrap(), bad, "f.txt")
+                .expect_err("non-oid baseline must be refused");
+            assert!(err.contains("baseline_oid"), "{bad}: {err}");
+        }
+    }
+
+    #[test]
+    fn blame_file_names_the_commit_of_each_line_and_flags_uncommitted_ones() {
+        if !git_available() {
+            return;
+        }
+        let dir = init_repo_with_commit(); // commits f.txt = "one\n"
+        let root = dir.path().canonicalize().expect("canonicalize");
+        let store = store_with_project_root(&root.to_string_lossy());
+        std::fs::write(root.join("f.txt"), "one\ntwo\n").expect("write");
+
+        let blame = blame_file_sync(&sandbox_root(&store, root.to_str().unwrap()), "f.txt")
+            .expect("blame")
+            .expect("a committed file has a blame");
+        assert_eq!(blame.lines.len(), 2);
+        let first = &blame.commits[blame.lines[0] as usize];
+        let second = &blame.commits[blame.lines[1] as usize];
+        assert!(!first.uncommitted);
+        assert!(second.uncommitted);
+    }
+
+    #[test]
+    fn blame_file_has_nothing_to_say_about_a_file_git_never_committed() {
+        if !git_available() {
+            return;
+        }
+        let dir = init_repo_with_commit();
+        let root = dir.path().canonicalize().expect("canonicalize");
+        let store = store_with_project_root(&root.to_string_lossy());
+        std::fs::write(root.join("new.txt"), "fresh\n").expect("write");
+
+        let blame = blame_file_sync(&sandbox_root(&store, root.to_str().unwrap()), "new.txt")
+            .expect("blame");
+        assert_eq!(blame, None);
+    }
+
+    #[test]
+    fn blame_file_refuses_paths_outside_the_root() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path().canonicalize().expect("canonicalize");
+        let store = store_with_project_root(&root.to_string_lossy());
+        assert!(blame_file_sync(
+            &sandbox_root(&store, root.to_str().unwrap()),
+            "../etc/passwd"
+        )
+        .is_err());
+    }
+
     #[test]
     fn diff_session_changes_accepts_a_real_oid_baseline() {
         if !git_available() {
