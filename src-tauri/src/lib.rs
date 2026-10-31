@@ -25,6 +25,7 @@ pub mod quit;
 pub mod sandbox;
 pub mod session_registry;
 pub mod settings_cmd;
+pub mod shell_path;
 pub mod sleep_rt;
 pub mod status_rt;
 pub mod store;
@@ -318,6 +319,10 @@ pub fn run() {
             // overrides before the first event is dispatched, so an AppKit
             // assertion failure costs one event instead of the whole app.
             crate::appkit_guard::install();
+
+            // Read the person's shell PATH now, off the main thread, so the
+            // first git call or worktree setup does not wait for their shell.
+            crate::shell_path::warm();
 
             // The app launches with the main window frontmost; seed the flag so
             // the very first notification decision is correct even before any

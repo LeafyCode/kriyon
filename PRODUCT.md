@@ -36,4 +36,4 @@ Precise, calm, native. The voice of a first-party macOS developer tool, not a fl
 - WCAG AA contrast for body and UI text against its actual surface.
 - `prefers-reduced-motion` honored for every animation (already enforced globally).
 - Keyboard-first: command palette (⌘K) and full keyboard reach for primary flows.
-- Dark-only by design (a focused, low-light developer surface); contrast carries hierarchy, not color alone.
+- Dark by default (a focused, low-light developer surface), with light themes too; every theme passes the same contrast tests, and contrast carries hierarchy, not color alone.

@@ -1,7 +1,8 @@
 import type { CSSProperties } from "react";
 import { type MascotId, useLayout } from "../state/layout.ts";
 import { MASCOT_HUES, MASCOTS, Mascot } from "../structured/Mascot.tsx";
-import { accentAlpha, tokens } from "../theme/tokens.ts";
+import { pickerOption } from "../theme/recipes.ts";
+import { tokens } from "../theme/tokens.ts";
 
 const rowStyle: CSSProperties = {
   border: "none",
@@ -14,17 +15,11 @@ const rowStyle: CSSProperties = {
 
 function optionStyle(picked: boolean): CSSProperties {
   return {
+    ...pickerOption(picked),
     alignItems: "center",
-    background: picked ? accentAlpha(0.16) : tokens.color.blockWell,
-    border: `1px solid ${picked ? tokens.color.accent : tokens.color.line.base}`,
-    borderRadius: tokens.radius.lg,
-    color: picked ? tokens.color.ink.bright : tokens.color.ink.secondary,
-    cursor: "pointer",
     display: "flex",
     flexDirection: "column",
-    fontFamily: tokens.font.sans,
-    fontSize: "11.5px",
-    gap: "4px",
+    gap: tokens.space.xs,
     justifyContent: "center",
     minHeight: "76px",
     padding: "8px 10px",
