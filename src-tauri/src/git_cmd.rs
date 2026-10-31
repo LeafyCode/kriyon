@@ -56,16 +56,49 @@ pub fn repo_status(repo_path: &str) -> Result<RepoStatus, String> {
 
 /// Create a new worktree at `path` on a freshly-created branch `branch`.
 ///
+/// `git worktree add` also exits non-zero when only the repo's post-checkout
+/// hook failed (say, git-lfs is not installed), after the worktree was made.
+/// That counts as created — git's docs say the hook cannot change the
+/// checkout's outcome — so the caller opens it rather than retrying onto a
+/// branch that is now taken.
+///
 /// # Errors
-/// Returns an error string if the git invocation fails.
+/// Returns an error string if git did not create the worktree.
 #[tauri::command(async)]
 pub fn create_worktree(repo_path: &str, branch: &str, path: &str) -> Result<(), String> {
     reject_flag_like("repo_path", repo_path)?;
     reject_flag_like("branch", branch)?;
     reject_flag_like("path", path)?;
     // `--` terminates option parsing so `path` is always treated as positional.
-    run_git(repo_path, &["worktree", "add", "-b", branch, "--", path])?;
-    Ok(())
+    match run_git(repo_path, &["worktree", "add", "-b", branch, "--", path]) {
+        Ok(_) => Ok(()),
+        Err(e) if is_worktree_on(path, branch) => {
+            eprintln!("kriyon: worktree {path} created, but a git hook failed: {e}");
+            Ok(())
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// True when `path` is the root of a git worktree checked out on `branch`.
+fn is_worktree_on(path: &str, branch: &str) -> bool {
+    let Ok(out) = run_git(
+        path,
+        &["rev-parse", "--show-toplevel", "--abbrev-ref", "HEAD"],
+    ) else {
+        return false;
+    };
+    let mut lines = out.lines();
+    let (Some(top), Some(head)) = (lines.next(), lines.next()) else {
+        return false;
+    };
+    // Canonical on both sides: `rev-parse` walks up to a parent repo when
+    // `path` is not a worktree, and macOS's `/tmp` is `/private/tmp`.
+    let same_dir = match (std::fs::canonicalize(top), std::fs::canonicalize(path)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    };
+    same_dir && head == branch
 }
 
 /// Remove the worktree at `path`. Git refuses a worktree with uncommitted or
@@ -821,6 +854,7 @@ fn diff_working_tree_for(
 pub fn merge_worktree(repo_path: &str, branch: &str) -> Result<MergeOutcome, String> {
     reject_flag_like("repo_path", repo_path)?;
     reject_flag_like("branch", branch)?;
+    let was_merging = is_merging(repo_path);
     // `outcome`, not `text`: a conflicted merge exits non-zero and that is the
     // answer this command returns, not a failure to report.
     let merge = GitRun::new(repo_path)
@@ -834,6 +868,12 @@ pub fn merge_worktree(repo_path: &str, branch: &str) -> Result<MergeOutcome, Str
         run_git(repo_path, &["diff", "--name-only", "--diff-filter=U"]).unwrap_or_default();
     let files: Vec<String> = conflicted.lines().map(str::to_string).collect();
     if files.is_empty() {
+        // A hook (commit-msg, pre-merge-commit) refused the merge commit and
+        // git stopped mid-merge. Put the base checkout back rather than leave
+        // it half-merged — unless that merge was the person's own.
+        if !was_merging && is_merging(repo_path) {
+            let _ = run_git(repo_path, &["merge", "--abort"]);
+        }
         // Surface a non-empty message even when git wrote nothing to stderr.
         return Err(if merge.stderr.is_empty() {
             "git merge failed".to_string()
@@ -842,6 +882,11 @@ pub fn merge_worktree(repo_path: &str, branch: &str) -> Result<MergeOutcome, Str
         });
     }
     Ok(MergeOutcome::Conflicted { files })
+}
+
+/// True while the repo is in the middle of a merge (`MERGE_HEAD` exists).
+fn is_merging(repo_path: &str) -> bool {
+    run_git(repo_path, &["rev-parse", "-q", "--verify", "MERGE_HEAD"]).is_ok()
 }
 
 /// The scratch-index path for `repo_path`: a file **inside the repo's own git
@@ -3625,5 +3670,153 @@ mod tests {
             }
             MergeOutcome::Clean => panic!("expected a conflict"),
         }
+    }
+
+    /// Write an executable git hook into `repo`.
+    #[cfg(unix)]
+    fn write_hook(repo: &std::path::Path, name: &str, body: &str) {
+        use std::os::unix::fs::PermissionsExt;
+        let hook = repo.join(".git/hooks").join(name);
+        std::fs::write(&hook, format!("#!/bin/sh\n{body}\n")).expect("write hook");
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    }
+
+    /// Make `main` and `feature` diverge (no conflict), so merging needs a
+    /// merge commit — the case that runs the commit hooks.
+    fn diverge_feature(dir: &std::path::Path) {
+        let repo = dir.to_str().expect("utf8");
+        git_setup(repo, &["checkout", "-b", "feature"]);
+        std::fs::write(dir.join("g.txt"), "feature\n").expect("write");
+        git_setup(repo, &["add", "."]);
+        git_setup(repo, &["commit", "-m", "feature"]);
+        git_setup(repo, &["checkout", "main"]);
+        std::fs::write(dir.join("h.txt"), "main\n").expect("write");
+        git_setup(repo, &["add", "."]);
+        git_setup(repo, &["commit", "-m", "main"]);
+    }
+
+    /// A hook that calls `pnpm` must find it even when the app was opened from
+    /// the Dock: git runs with the person's [Shell PATH].
+    #[test]
+    #[cfg(unix)]
+    fn git_hooks_run_with_the_shell_path() {
+        if !git_available() {
+            return;
+        }
+        let Some(want) = crate::shell_path::user_path() else {
+            return; // No readable shell here (e.g. a bare CI box): nothing to assert.
+        };
+        let dir = init_repo_with_commit();
+        diverge_feature(dir.path());
+        write_hook(
+            dir.path(),
+            "commit-msg",
+            "printf %s \"$PATH\" > \"$(git rev-parse --git-dir)/hook-path\"",
+        );
+
+        merge_worktree(dir.path().to_str().unwrap(), "feature").expect("merge");
+
+        let got = std::fs::read_to_string(dir.path().join(".git/hook-path")).expect("hook ran");
+        // git puts its own exec-path in front; the rest is the shell's PATH.
+        assert!(
+            got.ends_with(want),
+            "hook PATH {got:?} lacks the shell PATH {want:?}"
+        );
+    }
+
+    /// A merge a hook rejects leaves git mid-merge; the base checkout must be
+    /// put back, not left half-merged for the person to untangle.
+    #[test]
+    #[cfg(unix)]
+    fn a_merge_a_hook_rejects_is_undone() {
+        if !git_available() {
+            return;
+        }
+        let dir = init_repo_with_commit();
+        let repo = dir.path().to_str().unwrap();
+        diverge_feature(dir.path());
+        write_hook(
+            dir.path(),
+            "commit-msg",
+            "echo 'commitlint: not found' >&2; exit 1",
+        );
+
+        let err = merge_worktree(repo, "feature").expect_err("hook rejects the merge");
+        assert!(
+            err.contains("commitlint"),
+            "the hook's error is shown: {err}"
+        );
+        assert!(!dir.path().join(".git/MERGE_HEAD").exists(), "merge undone");
+        assert!(
+            !dir.path().join("g.txt").exists(),
+            "feature's file not left behind"
+        );
+        assert_eq!(
+            run_git(repo, &["status", "--porcelain"]).unwrap(),
+            "",
+            "clean"
+        );
+    }
+
+    /// A merge the person already had open is theirs: Kriyon's refused merge
+    /// must not abort it.
+    #[test]
+    fn a_merge_already_in_progress_is_left_alone() {
+        if !git_available() {
+            return;
+        }
+        let dir = init_repo_with_commit();
+        let repo = dir.path().to_str().unwrap();
+        git_setup(repo, &["checkout", "-b", "conflict"]);
+        std::fs::write(dir.path().join("f.txt"), "theirs\n").expect("write");
+        git_setup(repo, &["commit", "-am", "theirs"]);
+        git_setup(repo, &["checkout", "main"]);
+        std::fs::write(dir.path().join("f.txt"), "ours\n").expect("write");
+        git_setup(repo, &["commit", "-am", "ours"]);
+        let _ = GitRun::new(repo).args(["merge", "conflict"]).outcome();
+        assert!(
+            dir.path().join(".git/MERGE_HEAD").exists(),
+            "setup: mid-merge"
+        );
+
+        let _ = merge_worktree(repo, "conflict");
+        assert!(
+            dir.path().join(".git/MERGE_HEAD").exists(),
+            "their merge kept"
+        );
+    }
+
+    /// `git worktree add` exits non-zero when a post-checkout hook fails (a
+    /// missing git-lfs), yet the worktree exists. Reporting that as "not
+    /// created" makes the retry fail on the now-taken branch.
+    #[test]
+    #[cfg(unix)]
+    fn a_worktree_whose_checkout_hook_fails_still_counts_as_created() {
+        if !git_available() {
+            return;
+        }
+        let dir = init_repo_with_commit();
+        let repo = dir.path().to_str().unwrap();
+        write_hook(dir.path(), "post-checkout", "exit 1");
+        let parent = tempfile::tempdir().expect("parent");
+        let wt = parent.path().join("wt");
+        let wt_path = wt.to_str().unwrap();
+
+        create_worktree(repo, "feat/hooked", wt_path).expect("worktree is there");
+        assert!(wt.join("f.txt").exists(), "checked out");
+    }
+
+    /// A real failure (the branch is already taken) is still an error.
+    #[test]
+    fn a_worktree_on_a_taken_branch_is_still_an_error() {
+        if !git_available() {
+            return;
+        }
+        let dir = init_repo_with_commit();
+        let repo = dir.path().to_str().unwrap();
+        git_setup(repo, &["branch", "taken"]);
+        let parent = tempfile::tempdir().expect("parent");
+        let wt = parent.path().join("wt");
+        assert!(create_worktree(repo, "taken", wt.to_str().unwrap()).is_err());
     }
 }
