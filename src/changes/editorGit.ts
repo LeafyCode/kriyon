@@ -120,8 +120,7 @@ interface Peek {
 const openPeek = StateEffect.define<Peek>();
 const closePeek = StateEffect.define<null>();
 
-/** The open peek, or `null`. Any edit closes it: the change it described may
- * no longer be the one under that line. */
+/** The open peek, or `null`. */
 const peekField = StateField.define<Peek | null>({
   create: () => null,
   provide: (field) =>
@@ -143,11 +142,26 @@ const peekField = StateField.define<Peek | null>({
         return null;
       }
     }
+    // An edit, or the last commit moving under it (a commit or checkout
+    // swaps the gutter's baseline with no edit), makes it describe a change
+    // that may no longer be the one under that line.
+    if (tr.startState.facet(headBaseline) !== tr.state.facet(headBaseline)) {
+      return null;
+    }
     return tr.docChanged ? null : peek;
   },
 });
 
 const TRAILING_NEWLINE = /\n$/;
+
+/** What the peek says the lines were. */
+function peekText(change: LineChange | undefined): string {
+  if (!change || change.kind === "added") {
+    return "Nothing here before — reverting removes these lines.";
+  }
+  const old = change.oldText.replace(TRAILING_NEWLINE, "");
+  return old === "" ? "A blank line was here." : old;
+}
 
 function peekDom(view: EditorView, line: number): HTMLElement {
   const baseline = view.state.facet(headBaseline);
@@ -194,11 +208,7 @@ function peekDom(view: EditorView, line: number): HTMLElement {
 
   const body = document.createElement("pre");
   body.className = "cm-changePeek-old";
-  const old = change?.oldText.replace(TRAILING_NEWLINE, "") ?? "";
-  body.textContent =
-    change?.kind === "added" || old === ""
-      ? "Nothing here before — reverting removes these lines."
-      : old;
+  body.textContent = peekText(change);
   dom.append(body);
   return dom;
 }
@@ -407,7 +417,12 @@ const blamePlugin = ViewPlugin.fromClass(
       if (
         update.selectionSet ||
         update.docChanged ||
-        update.startState.facet(blameFacet) !== update.state.facet(blameFacet)
+        update.startState.facet(blameFacet) !==
+          update.state.facet(blameFacet) ||
+        // The session highlight landing (or rebuilding) changes which lines
+        // read "Changed in this session"; blame and it arrive apart.
+        update.startState.field(sessionTracker.field, false) !==
+          update.state.field(sessionTracker.field, false)
       ) {
         this.decorations = blameDecorations(update.state);
       }

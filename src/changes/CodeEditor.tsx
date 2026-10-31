@@ -395,7 +395,7 @@ function buildEditorTheme(
         fontFamily: font.sans,
         fontSize: "11.5px",
         fontStyle: "italic",
-        marginLeft: "28px",
+        marginLeft: tokens.space.xl,
         whiteSpace: "pre",
       },
       // The gutter's change peek: what the lines were, and a revert.
@@ -413,8 +413,8 @@ function buildEditorTheme(
         borderBottom: `1px solid ${color.line.soft}`,
         color: color.ink.muted,
         display: "flex",
-        gap: "8px",
-        padding: "6px 6px 6px 10px",
+        gap: tokens.space.sm,
+        padding: `${tokens.space.xs} ${tokens.space.xs} ${tokens.space.xs} ${tokens.space.sm}`,
       },
       ".cm-changePeek-head > span": { flex: 1 },
       ".cm-changePeek-revert": {
@@ -425,7 +425,7 @@ function buildEditorTheme(
         cursor: "pointer",
         fontFamily: font.sans,
         fontSize: "11.5px",
-        padding: "2px 8px",
+        padding: `${tokens.space.xs} ${tokens.space.sm}`,
       },
       ".cm-changePeek-close": {
         background: "transparent",
@@ -433,7 +433,7 @@ function buildEditorTheme(
         color: color.ink.muted,
         cursor: "pointer",
         fontSize: "14px",
-        padding: "0 4px",
+        padding: `0 ${tokens.space.xs}`,
       },
       ".cm-changePeek-old": {
         background: color.delSoft,
@@ -443,7 +443,7 @@ function buildEditorTheme(
         margin: 0,
         maxHeight: "240px",
         overflow: "auto",
-        padding: "6px 10px",
+        padding: `${tokens.space.xs} ${tokens.space.sm}`,
         whiteSpace: "pre",
       },
       ".cm-gitAdded": { background: color.add },

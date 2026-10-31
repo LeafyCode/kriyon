@@ -1,4 +1,4 @@
-import { EditorState } from "@codemirror/state";
+import { Compartment, EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { afterEach, describe, expect, it } from "vitest";
 import type { FileBlame } from "../types.ts";
@@ -6,10 +6,13 @@ import {
   blameAnnotation,
   blameText,
   changeAtLine,
+  changePeek,
+  onMarkerClick,
   revertChangeAt,
   sessionHighlight,
   sessionLines,
 } from "./editorGit.ts";
+import { gitGutter } from "./gitGutter.ts";
 
 describe("changeAtLine", () => {
   it("finds the change a modified line belongs to, with the old text", () => {
@@ -146,6 +149,121 @@ describe("the blame annotation", () => {
     const notes = v.dom.querySelectorAll(".cm-blameNote");
     expect(notes).toHaveLength(1);
     expect(notes[0].closest(".cm-line")?.textContent).toContain("two");
+    v.destroy();
+  });
+});
+
+describe("the change peek", () => {
+  const views: EditorView[] = [];
+  afterEach(() => {
+    for (const v of views.splice(0)) {
+      v.destroy();
+    }
+  });
+
+  function editor(doc: string, baseline: string) {
+    const gutterSlot = new Compartment();
+    const v = new EditorView({
+      parent: document.body,
+      state: EditorState.create({
+        doc,
+        extensions: [
+          gutterSlot.of(gitGutter(baseline, onMarkerClick)),
+          changePeek,
+        ],
+      }),
+    });
+    views.push(v);
+    return { gutterSlot, v };
+  }
+
+  const peek = (v: EditorView) => v.dom.querySelector(".cm-changePeek");
+
+  it("opens on a changed line, shows the old text, and a second click closes it", () => {
+    const { v } = editor("a\nB\nc\n", "a\nb\nc\n");
+    expect(onMarkerClick(v, v.state.doc.line(2).from)).toBe(true);
+    expect(peek(v)?.textContent).toContain("b");
+    onMarkerClick(v, v.state.doc.line(2).from);
+    expect(peek(v)).toBeNull();
+  });
+
+  it("does nothing on an unchanged line", () => {
+    const { v } = editor("a\nB\nc\n", "a\nb\nc\n");
+    expect(onMarkerClick(v, v.state.doc.line(1).from)).toBe(false);
+    expect(peek(v)).toBeNull();
+  });
+
+  it("Revert change puts the line back and closes the peek", () => {
+    const { v } = editor("a\nB\nc\n", "a\nb\nc\n");
+    onMarkerClick(v, v.state.doc.line(2).from);
+    const revert = v.dom.querySelector<HTMLButtonElement>(
+      ".cm-changePeek-revert"
+    );
+    revert?.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    expect(v.state.doc.toString()).toBe("a\nb\nc\n");
+    expect(peek(v)).toBeNull();
+  });
+
+  it("Escape closes it", () => {
+    const { v } = editor("a\nB\nc\n", "a\nb\nc\n");
+    onMarkerClick(v, v.state.doc.line(2).from);
+    v.contentDOM.dispatchEvent(
+      new KeyboardEvent("keydown", { bubbles: true, key: "Escape" })
+    );
+    expect(peek(v)).toBeNull();
+  });
+
+  it("closes when the last commit moves under it", () => {
+    const { gutterSlot, v } = editor("a\nB\nc\n", "a\nb\nc\n");
+    onMarkerClick(v, v.state.doc.line(2).from);
+    v.dispatch({
+      effects: gutterSlot.reconfigure(gitGutter("a\nB\nc\n", onMarkerClick)),
+    });
+    expect(peek(v)).toBeNull();
+  });
+
+  it("says a blank line was there when the change removed one", () => {
+    const { v } = editor("a\nb\n", "a\n\nb\n");
+    onMarkerClick(v, v.state.doc.line(2).from);
+    expect(peek(v)?.textContent).toContain("A blank line was here.");
+  });
+});
+
+describe("blame and the session highlight arriving apart", () => {
+  it("the note switches to the session's answer when the highlight lands after blame", () => {
+    const blame: FileBlame = {
+      commits: [
+        {
+          author: "Ada",
+          authorTime: 1_700_000_000,
+          sha: "1".repeat(40),
+          summary: "First",
+          uncommitted: false,
+        },
+      ],
+      lines: [0, 0],
+    };
+    const slot = new Compartment();
+    const v = new EditorView({
+      parent: document.body,
+      state: EditorState.create({
+        doc: "one\nchanged by claude",
+        extensions: [slot.of(blameAnnotation(blame))],
+        selection: { anchor: 6 },
+      }),
+    });
+    expect(v.dom.querySelector(".cm-blameNote")?.textContent).toContain("Ada");
+
+    v.dispatch({
+      effects: slot.reconfigure([
+        sessionHighlight("one\ntwo"),
+        blameAnnotation(blame),
+      ]),
+    });
+
+    expect(v.dom.querySelector(".cm-blameNote")?.textContent).toBe(
+      "Changed in this session"
+    );
     v.destroy();
   });
 });
