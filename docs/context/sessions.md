@@ -49,6 +49,22 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
   a row visible (the active session, running/waiting/error work, an unread finish) each
   keep the group visible too, and a filter turns the fold off. _Avoid_: hidden project,
   stale project.
+- **Parked project** — a [Project (Workspace)] the user has put away for now with *Park
+  project*: every [Session] still on its rail group is parked and stopped, and so is every
+  [Project terminal] it owns (the same stop archiving uses). Rows, titles, order, [Archived
+  session]s, [Transcript]s, [Worktree]s and terminal tabs all stay. While none of its sessions
+  is on the rail it is *fully parked* (`fullyParkedProjectIds`): its terminals stay stopped and
+  unmounted, and come back with fresh shells once one session returns. Its parked sessions wait in a
+  "Parked" section at the bottom of the sidebar (`ParkedGroup`), ordered, folded and nested as
+  the group would show them. *Unpark* brings every parked session back; each resumes (`claude
+  --resume`) only when opened. Opening one parked session from anywhere (the Parked section, ⌘K,
+  a notification) brings back only that one, with its leads if it is a [Nested session] — the
+  rest stay parked, out of the way. Unlike an [Inactive project], parking is the user's choice
+  and never undoes itself; unlike [Clear project], nothing is closed. _Avoid_: shelved, hidden,
+  archived project, sleeping project.
+- **Parked session** (`parkedAt`) — one [Session] of a [Parked project], stopped and off the
+  rail until opened. Put away like an [Archived session] (`isPutAway`), so no surface that
+  skips what isn't live — Needs-you, the [Command center], the quit's [Stop cost] — counts it.
 - **Past session** (`PastSession`) — a session discovered from a folder's
   on-disk Claude history (`~/.claude/projects/<encoded-cwd>/<id>.jsonl`) that
   Kriyon does not yet track. Carries the [Claude session id] (the file stem),

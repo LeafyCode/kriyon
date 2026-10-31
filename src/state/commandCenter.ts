@@ -6,7 +6,7 @@ import type {
   SessionStatus,
   StandingState,
 } from "../types.ts";
-import type { UiSession } from "./sessions.ts";
+import { isPutAway, type UiSession } from "./sessions.ts";
 
 /**
  * How long a session's watcher may go unheard-from before the command center
@@ -73,7 +73,7 @@ export function buildStandings(
   hooksOff: Record<string, HooksOffScope> = {}
 ): SessionStanding[] {
   return Object.values(sessions)
-    .filter((s) => s.archivedAt === null)
+    .filter((s) => !isPutAway(s))
     .map((s) => ({
       sessionId: s.id,
       projectId: s.projectId,

@@ -27,8 +27,21 @@ import { showToast } from "../ui/Toast.tsx";
 import { markBootLive, markBootStart } from "./bootTiming.ts";
 import { useCompletions } from "./completions.ts";
 import { useLayout } from "./layout.ts";
-import { idleSession, type UiSession, useSessions } from "./sessions.ts";
-import { freedMemoryNote } from "./stopCost.ts";
+import {
+  idleSession,
+  isPutAway,
+  sessionRow,
+  type UiSession,
+  useSessions,
+} from "./sessions.ts";
+import {
+  freedMemoryNote,
+  hasTotalStopCost,
+  plural,
+  stopCostOfAll,
+  type TotalStopCost,
+} from "./stopCost.ts";
+import { projectPaneIds, useTerminals } from "./terminals.ts";
 import { sessionPaneMounts } from "./warmPanes.ts";
 
 /**
@@ -53,6 +66,83 @@ export function archiveSessionAndStop(sessionId: string): void {
   if (freed) {
     showToast(freed);
   }
+}
+
+/**
+ * What parking a project would stop — read by its confirm and its toast: the
+ * same [Stop cost] the quit gate adds up, over the project's sessions still on
+ * the rail, plus its busy terminals. Built from `stopCostOfAll` and
+ * `hasTotalStopCost`, so parking can never warn about less than quitting would.
+ */
+export interface ParkCost extends TotalStopCost {
+  /** Terminal panes with a command running. */
+  busyTerminals: number;
+  /** The sessions parking stops (every one still on the rail). */
+  sessionIds: string[];
+}
+
+export function projectParkCost(projectId: string): ParkCost {
+  const state = useSessions.getState();
+  const sessions = Object.fromEntries(
+    Object.entries(state.sessions).filter(
+      ([, session]) => session.projectId === projectId && !isPutAway(session)
+    )
+  );
+  const terminals = useTerminals.getState();
+  return {
+    ...stopCostOfAll({ ...state, sessions }),
+    busyTerminals: projectPaneIds(terminals.byProject, projectId).filter((id) =>
+      terminals.isPaneBusy(id)
+    ).length,
+    sessionIds: Object.keys(sessions),
+  };
+}
+
+/** Whether parking would stop any work in flight — when its confirm is owed. */
+export function hasParkCost(cost: ParkCost): boolean {
+  return hasTotalStopCost(cost) || cost.busyTerminals > 0;
+}
+
+/**
+ * Park a project: put it away and stop everything it runs (ADR-0052). Every
+ * session still on the rail is parked and stopped, and so is every [Project
+ * terminal]; rows, titles, order, transcripts, worktrees and terminal tabs all
+ * stay. The parked rows are saved at once, before the stops, so a crash
+ * mid-stop still leaves them parked and the orphan sweep finishes the job.
+ */
+export function parkProjectAndStop(projectId: string): void {
+  const state = useSessions.getState();
+  const project = state.projects.find((p) => p.id === projectId);
+  if (!project) {
+    return;
+  }
+  const { sessionIds } = projectParkCost(projectId);
+  const paneCount = projectPaneIds(
+    useTerminals.getState().byProject,
+    projectId
+  ).length;
+  if (sessionIds.length === 0 && paneCount === 0) {
+    return;
+  }
+  state.parkProject(projectId);
+  if (isTauriRuntime()) {
+    const { sessions } = useSessions.getState();
+    for (const id of sessionIds) {
+      const session = sessions[id];
+      if (session) {
+        ignore(upsertSession(sessionRow(session)));
+      }
+    }
+  }
+  for (const id of sessionIds) {
+    ignore(disposeSession(id));
+  }
+  useTerminals.getState().stopProject(projectId);
+  const stopped =
+    paneCount > 0
+      ? `${plural(sessionIds.length, "session")} and ${plural(paneCount, "terminal")}`
+      : plural(sessionIds.length, "session");
+  showToast(`Parked ${project.name} · ${stopped} stopped`);
 }
 
 /**
@@ -146,6 +236,20 @@ function persistThenWarm(project: ProjectRow, session: SessionRow): void {
 }
 
 /**
+ * Make sure `project` is in the store, returning the store's row for it — the
+ * row that gets persisted, since the caller's copy may be a fresh one built
+ * from a folder pick.
+ */
+function ensureProject(project: ProjectRow): ProjectRow {
+  const state = useSessions.getState();
+  // `addProject` is a no-op if the project id already exists.
+  state.addProject(project);
+  return (
+    useSessions.getState().projects.find((p) => p.id === project.id) ?? project
+  );
+}
+
+/**
  * Open a new session in `project` (created if absent), with `cwd` and `title`.
  * The one intake transaction: ensure the project, build the row, add it, and make
  * it active — all in one place so a new field or side effect has a single home.
@@ -169,8 +273,7 @@ export function createSession(
   }
 ): string {
   const state = useSessions.getState();
-  // `addProject` is a no-op if the project id already exists.
-  state.addProject(project);
+  const stored = ensureProject(project);
   const id = crypto.randomUUID();
   const row: SessionRow = {
     archivedAt: null,
@@ -197,7 +300,7 @@ export function createSession(
     // Mounted out of sight, then launched: the activation effect that starts
     // a shown session never runs for it.
     state.warmSession(id);
-    persistThenWarm(project, row);
+    persistThenWarm(stored, row);
     // Its [Boot phase] reads `launching` from this call on, so a second
     // request in the same batch counts it against the [Nested session cap].
     ignore(launchActiveSession(id));
@@ -213,7 +316,7 @@ export function createSession(
   useLayout.getState().revealSessionView();
   // Persist the row, then warm the composer's slash-command catalog for this
   // cwd so it's ready before the user's first `/`.
-  persistThenWarm(project, row);
+  persistThenWarm(stored, row);
   // Fire-and-forget: capture a git baseline for the Changes view to diff
   // against later. Must never block session creation or throw — `ignore`
   // swallows a rejection (cwd isn't a git repo, capture failed), leaving
@@ -303,7 +406,7 @@ export function resumePastSession(past: PastSession): void {
     path: cwd,
     setupCommand: null,
   };
-  state.addProject(project);
+  const stored = ensureProject(project);
   const id = crypto.randomUUID();
   const row: SessionRow = {
     archivedAt: null,
@@ -325,7 +428,7 @@ export function resumePastSession(past: PastSession): void {
   useLayout.getState().revealSessionView();
   // Persist + warm so the composer's completions validate against a known root
   // and are ready before the first `/`, the same as a fresh session.
-  persistThenWarm(project, row);
+  persistThenWarm(stored, row);
 }
 
 /**

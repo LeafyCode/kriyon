@@ -13,7 +13,9 @@ use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use kriyon_core::orphan::{orphan_daemons, terminal_pane_ids, OrphanDaemon, ReapStep};
+use kriyon_core::orphan::{
+    fully_parked_projects, orphan_daemons, terminal_pane_ids, OrphanDaemon, ReapStep,
+};
 use kriyon_core::proc::ProcessTree;
 use kriyon_core::session::SessionId;
 use kriyon_core::tree_stop::may_signal;
@@ -281,8 +283,9 @@ pub(crate) fn recover_unreachable_daemon(
     Ok(None)
 }
 
-/// Every id something owns: non-archived session rows, persisted [Terminal
-/// pane]s, and whatever this run is attached to. `None` when ownership cannot
+/// Every id something owns: session rows that are not put away (archived or
+/// parked), persisted [Terminal pane]s outside a fully [Parked project], and
+/// whatever this run is attached to. `None` when ownership cannot
 /// be established — the store or the terminals blob is unreadable — and the
 /// caller must then reap nothing.
 ///
@@ -298,12 +301,17 @@ fn owned_ids<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Option<HashSet<Str
             store.load_layout(TERMINALS_KEY).ok()?,
         )
     };
+    let parked = fully_parked_projects(
+        rows.iter()
+            .filter(|row| row.archived_at.is_none())
+            .map(|row| (row.project_id.as_str(), row.parked_at.is_some())),
+    );
     let mut owned: HashSet<String> = rows
         .into_iter()
-        .filter(|row| row.archived_at.is_none())
+        .filter(|row| !row.is_put_away())
         .map(|row| row.id)
         .collect();
-    owned.extend(terminal_pane_ids(terminals.as_deref())?);
+    owned.extend(terminal_pane_ids(terminals.as_deref(), &parked)?);
     let state = app.state::<AppState>();
     owned.extend(state.sessions.lock().keys().map(|id| id.0.clone()));
     Some(owned)
@@ -566,6 +574,7 @@ mod tests {
             title_locked: false,
             parent_session_id: None,
             nested_under: None,
+            parked_at: None,
         }
     }
 
@@ -582,6 +591,58 @@ mod tests {
                 setup_command: None,
             })
             .expect("project");
+    }
+
+    #[test]
+    fn parked_sessions_and_a_fully_parked_projects_panes_are_not_owned() {
+        let app = mock_app();
+        seed_project(&app);
+        {
+            let store = app.state::<StoreState>();
+            let store = store.0.lock();
+            store
+                .upsert_project(&crate::store::ProjectRow {
+                    id: "p2".to_string(),
+                    name: "parked".to_string(),
+                    path: "/y".to_string(),
+                    color: None,
+                    setup_command: None,
+                })
+                .expect("second project");
+            store
+                .upsert_session(&session_row("live", None))
+                .expect("row");
+            store
+                .upsert_session(&crate::store::SessionRow {
+                    parked_at: Some(5),
+                    ..session_row("parked-in-live-project", None)
+                })
+                .expect("row");
+            store
+                .upsert_session(&crate::store::SessionRow {
+                    project_id: "p2".to_string(),
+                    parked_at: Some(5),
+                    ..session_row("parked-session", None)
+                })
+                .expect("row");
+            store
+                .save_layout(
+                    TERMINALS_KEY,
+                    r#"{"p1": {"tabs": [{"panes": [{"id": "pane-1"}]}]}, "p2": {"tabs": [{"panes": [{"id": "pane-2"}]}]}}"#,
+                )
+                .expect("layout");
+        }
+
+        let owned = owned_ids(app.handle()).expect("readable ownership");
+
+        assert!(owned.contains("live"));
+        // p1 still has a live session, so its terminal is still in use.
+        assert!(owned.contains("pane-1"));
+        // A parked session is stopped, so a daemon still serving it is a leftover.
+        assert!(!owned.contains("parked-in-live-project"));
+        assert!(!owned.contains("parked-session"));
+        // Every session of p2 is parked: its terminals were stopped too.
+        assert!(!owned.contains("pane-2"));
     }
 
     #[test]

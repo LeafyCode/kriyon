@@ -13,19 +13,27 @@ import {
   GitBranch,
   GripVertical,
   MoreHorizontal,
-  Palette,
   Plus,
 } from "lucide-react";
 import { type CSSProperties, memo, useState } from "react";
-import { createSessionInProject } from "../state/actions.ts";
+import {
+  createSessionInProject,
+  hasParkCost,
+  type ParkCost,
+  parkProjectAndStop,
+  projectParkCost,
+} from "../state/actions.ts";
 import { useCommandCenter } from "../state/commandCenter.ts";
 import {
-  effectiveSessionSort,
   type SessionSort,
   type SidebarMode,
   useLayout,
 } from "../state/layout.ts";
-import { isWorktreeSession, useSessions } from "../state/sessions.ts";
+import {
+  isPutAway,
+  isWorktreeSession,
+  useSessions,
+} from "../state/sessions.ts";
 import { useUi } from "../state/ui.ts";
 import { projectColor } from "../theme/projectColor.ts";
 import { tokens } from "../theme/tokens.ts";
@@ -40,29 +48,13 @@ import { EarlierSessions } from "./EarlierSessions.tsx";
 import { HeaderAction } from "./HeaderAction.tsx";
 import { InlineRename } from "./InlineRename.tsx";
 import { PaletteMenu } from "./PaletteMenu.tsx";
+import { ParkProjectConfirm } from "./ParkProjectConfirm.tsx";
 import { ProjectMenu } from "./ProjectMenu.tsx";
 import { compactAge } from "./pastSessionTime.ts";
 import type { ProjectLabel } from "./projectLabel.ts";
 import { SessionRow } from "./SessionRow.tsx";
 import { SortMenu } from "./SortMenu.tsx";
-import {
-  EMPTY_ORDER,
-  type HideInputs,
-  type OrderInputs,
-  orderMatched,
-} from "./sessionOrder.ts";
-
-/** The session-store slices the ordering cache reads, in one place. */
-function orderInputs(
-  state: ReturnType<typeof useSessions.getState>
-): OrderInputs {
-  return {
-    appendSeq: state.appendSeq,
-    sessions: state.sessions,
-    statusOrigin: state.statusOrigin,
-    viewed: state.viewed,
-  };
-}
+import { useOrderedSessions } from "./useOrderedSessions.ts";
 
 const projectHeaderStyle: CSSProperties = {
   alignItems: "center",
@@ -369,6 +361,8 @@ interface ProjectHeaderProps {
   label: ProjectLabel;
   /** Ask to close every session in this project — the group owns the confirm. */
   onRequestClear: () => void;
+  /** Ask to park this project — the group owns the confirm. */
+  onRequestPark: () => void;
   onToggleCollapsed: () => void;
   override: SessionSort | undefined;
   project: ProjectRow;
@@ -429,6 +423,7 @@ function ProjectHeader({
   expandedLook,
   label,
   onRequestClear,
+  onRequestPark,
   onToggleCollapsed,
   override,
   project,
@@ -440,6 +435,13 @@ function ProjectHeader({
   const sortMenu = useAnchoredMenu<HTMLDivElement>();
   const actionsMenu = useAnchoredMenu<HTMLDivElement>();
   const [editing, setEditing] = useState(false);
+  // The header popovers share one anchor — opening one must close the others
+  // or they'd stack at the identical spot.
+  const toggleActions = () => {
+    sortMenu.close();
+    picker.close();
+    actionsMenu.toggle();
+  };
   const commitRename = (next: string) => {
     setEditing(false);
     useSessions.getState().renameProject(project.id, next);
@@ -484,6 +486,16 @@ function ProjectHeader({
         // rename; the Rename hover action is the equivalent explicit path.
         data-testid={`project-header-${project.id}`}
         onClick={onToggleCollapsed}
+        // Right-click opens the same menu as ⋯ — where people look for
+        // "what can I do with this" on a desktop app.
+        onContextMenu={(event) => {
+          event.preventDefault();
+          sortMenu.close();
+          picker.close();
+          if (!actionsMenu.open) {
+            actionsMenu.toggle();
+          }
+        }}
         onDoubleClick={() => setEditing(true)}
         style={projectRowStyle}
         // The qualifier is the shortest thing that separates two twins; the
@@ -543,50 +555,6 @@ function ProjectHeader({
       </button>
       <span className="kr-reveal-cluster" style={headerActionsStyle}>
         <HeaderAction
-          ariaLabel={`More actions for ${project.name}`}
-          onClick={() => {
-            sortMenu.close();
-            picker.close();
-            actionsMenu.toggle();
-          }}
-          reveal={false}
-          title="Rename or clear this project"
-          triggerAria={actionsMenu.triggerAria}
-        >
-          <MoreHorizontal size={13} />
-        </HeaderAction>
-        <HeaderAction
-          ariaLabel={`Sort sessions in ${project.name}`}
-          onClick={() => {
-            // The header popovers share one anchor — opening one must close
-            // the others or they'd stack at the identical spot.
-            picker.close();
-            actionsMenu.close();
-            sortMenu.toggle();
-          }}
-          reveal={false}
-          title={
-            override
-              ? `Sorted by ${override} (overrides global)`
-              : "Sort this project's sessions"
-          }
-          triggerAria={sortMenu.triggerAria}
-        >
-          <ArrowUpDown size={12} />
-        </HeaderAction>
-        <HeaderAction
-          ariaLabel={`Change color of ${project.name}`}
-          onClick={() => {
-            sortMenu.close();
-            actionsMenu.close();
-            picker.toggle();
-          }}
-          reveal={false}
-          triggerAria={picker.triggerAria}
-        >
-          <Palette size={12} />
-        </HeaderAction>
-        <HeaderAction
           ariaLabel={`New worktree session in ${project.name}`}
           onClick={() =>
             useUi
@@ -605,6 +573,21 @@ function ProjectHeader({
           title="New session here (current branch)"
         >
           <Plus size={13} />
+        </HeaderAction>
+        {/* Last, on the solid end of the cluster's fade: first in line it sat
+            over the project name, half see-through. It owns every menu it
+            leads to, so it reads expanded while colour or sort is up too. */}
+        <HeaderAction
+          ariaLabel={`More actions for ${project.name}`}
+          onClick={toggleActions}
+          reveal={false}
+          title="Park, rename, colour, sort or close"
+          triggerAria={{
+            "aria-expanded": actionsMenu.open || picker.open || sortMenu.open,
+            "aria-haspopup": "menu",
+          }}
+        >
+          <MoreHorizontal size={13} />
         </HeaderAction>
       </span>
       {sortMenu.open ? (
@@ -625,6 +608,10 @@ function ProjectHeader({
       ) : null}
       {actionsMenu.open ? (
         <ProjectMenu
+          onColour={() => {
+            actionsMenu.close();
+            picker.toggle();
+          }}
           onRename={() => {
             actionsMenu.close();
             setEditing(true);
@@ -632,6 +619,14 @@ function ProjectHeader({
           onRequestClear={() => {
             actionsMenu.close();
             onRequestClear();
+          }}
+          onRequestPark={() => {
+            actionsMenu.close();
+            onRequestPark();
+          }}
+          onSort={() => {
+            actionsMenu.close();
+            sortMenu.toggle();
           }}
           projectId={project.id}
         />
@@ -744,63 +739,38 @@ const ProjectGroup = memo(function ProjectGroup({
   sortable,
 }: ProjectGroupProps) {
   const sortableGroup = useSortable({ disabled: !sortable, id: project.id });
-  // A query matching the project name keeps the whole group; otherwise it
-  // narrows to sessions whose title matches.
-  const nameMatch =
-    filter !== "" && project.name.toLowerCase().includes(filter);
-  const filtering = filter !== "";
-  const mode = useLayout((state) => state.layout.sidebarMode);
-  // A filtered rail shows every match as a row (no Done fold), so its ordering
-  // stays `calm` even in triage — otherwise a searched-for finished session
-  // would hide inside the summary.
-  const listMode: SidebarMode = filtering ? "calm" : mode;
-  const sort = useLayout((state) =>
-    effectiveSessionSort(state.layout, project.id)
-  );
-  const manual = useLayout(
-    (state) => state.layout.manualSessionOrder[project.id] ?? EMPTY_ORDER
-  );
-  const hideOlderThan = useLayout((state) => state.layout.hideOlderThan);
+  const {
+    collapsedDone,
+    collapsedOld,
+    filtering,
+    mode,
+    nestDepth,
+    rows,
+    sort,
+  } = useOrderedSessions(project, { dormant, filter, nowMinute });
   const lastChangeMs = useCommandCenter((state) => state.lastChangeMs);
-  // Filtering shows every match (no fold), same guard as drag. A dormant
-  // group turns the threshold off too: its sessions are all stale by
-  // definition (that is what put it in the fold), so keeping the threshold on
-  // would hide every one of them behind a second "N older" fold inside the
-  // fold the user just opened.
-  const hide: HideInputs = {
-    activeSessionId: null, // set inside the selector from live store state
-    lastChangeMs,
-    now: nowMinute,
-    threshold: filtering || dormant ? "off" : hideOlderThan,
-  };
-  // One subscription for the whole ordering result: orderMatched's memo cache
-  // returns the same OrderedSessions identity while its inputs are unchanged,
-  // so plain equality suffices — no useShallow, and no second selector asking
-  // the same question for the other half of the answer.
-  const { collapsedDone, collapsedOld, nestDepth, rows } = useSessions(
-    (state) =>
-      orderMatched(
-        orderInputs(state),
-        project,
-        filter,
-        nameMatch,
-        listMode,
-        sort,
-        manual,
-        { ...hide, activeSessionId: state.activeSessionId }
-      )
-  );
   const [showDone, setShowDone] = useState(false);
   // The sessions the pending clear was asked about; null when no confirm is
   // up. The ids, not a count — see {@link ClearProjectConfirm}.
   const [clearing, setClearing] = useState<string[] | null>(null);
   const closeClearConfirm = () => setClearing(null);
+  // What the pending park would stop; null when no confirm is up. Parking
+  // with nothing in flight skips the confirm entirely.
+  const [parking, setParking] = useState<ParkCost | null>(null);
+  const requestPark = () => {
+    const cost = projectParkCost(project.id);
+    if (hasParkCost(cost)) {
+      setParking(cost);
+    } else {
+      parkProjectAndStop(project.id);
+    }
+  };
   const attention = useSessions((state) =>
     Object.values(state.sessions).some(
       (session) =>
         session.projectId === project.id &&
         (session.status === "waiting" || session.status === "error") &&
-        session.archivedAt === null
+        !isPutAway(session)
     )
   );
   // How many of this project's open sessions run in their own [Worktree] —
@@ -810,7 +780,7 @@ const ProjectGroup = memo(function ProjectGroup({
       Object.values(state.sessions).filter(
         (session) =>
           session.projectId === project.id &&
-          session.archivedAt === null &&
+          !isPutAway(session) &&
           isWorktreeSession(session)
       ).length
   );
@@ -834,7 +804,7 @@ const ProjectGroup = memo(function ProjectGroup({
   const lastActive = useSessions((state) => {
     let newest = 0;
     for (const session of Object.values(state.sessions)) {
-      if (session.projectId !== project.id || session.archivedAt !== null) {
+      if (session.projectId !== project.id || isPutAway(session)) {
         continue;
       }
       newest = Math.max(newest, lastChangeMs[session.id] ?? session.createdAt);
@@ -881,6 +851,7 @@ const ProjectGroup = memo(function ProjectGroup({
         expandedLook={filtering || !collapsed}
         label={label}
         onRequestClear={() => setClearing(projectSessionIds(project.id))}
+        onRequestPark={requestPark}
         onToggleCollapsed={toggleCollapsed}
         override={override}
         project={project}
@@ -963,6 +934,11 @@ const ProjectGroup = memo(function ProjectGroup({
         onCloseSession={onCloseSession}
         project={project}
         sessionIds={clearing}
+      />
+      <ParkProjectConfirm
+        cost={parking}
+        onCancel={() => setParking(null)}
+        project={project}
       />
     </div>
   );

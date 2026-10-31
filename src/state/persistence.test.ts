@@ -67,7 +67,13 @@ afterEach(() => {
 });
 
 function project(id: string): ProjectRow {
-  return { color: null, id, name: id, path: `/${id}`, setupCommand: null };
+  return {
+    color: null,
+    id,
+    name: id,
+    path: `/${id}`,
+    setupCommand: null,
+  };
 }
 
 function session(
@@ -113,7 +119,13 @@ beforeEach(() => {
 
 test("hydrate populates the store from the bridge", async () => {
   mockedListProjects.mockResolvedValue([
-    { color: null, id: "p1", name: "Proj", path: "/p", setupCommand: null },
+    {
+      color: null,
+      id: "p1",
+      name: "Proj",
+      path: "/p",
+      setupCommand: null,
+    },
   ]);
   mockedListSessions.mockResolvedValue([
     {
@@ -429,6 +441,40 @@ test("persistKey changes when any single SessionRow field is perturbed", () => {
   }
 });
 
+test("persistKey changes when any single ProjectRow field is perturbed", () => {
+  const base: ProjectRow = {
+    color: "#fff",
+    id: "p1",
+    name: "Proj",
+    path: "/p",
+    setupCommand: "make",
+  };
+  useSessions.setState({ projects: [base], sessions: {} });
+  const baseKey = persistKeyForTest(useSessions.getState());
+  for (const key of Object.keys(base) as (keyof ProjectRow)[]) {
+    useSessions.setState({
+      projects: [{ ...base, [key]: perturbField(base[key]) }],
+      sessions: {},
+    });
+    expect(
+      persistKeyForTest(useSessions.getState()),
+      `persistKey should change when ${key} changes`
+    ).not.toBe(baseKey);
+  }
+});
+
+test("hydrate never selects a parked session", async () => {
+  mockedListProjects.mockResolvedValue([project("p1")]);
+  mockedListSessions.mockResolvedValue([
+    sessionRow({ ...session("old", "p1"), createdAt: 1 }),
+    sessionRow({ ...session("newer", "p1"), createdAt: 9, parkedAt: 10 }),
+  ]);
+
+  await hydrate();
+
+  expect(useSessions.getState().activeSessionId).toBe("old");
+});
+
 test("hydrate restores a persisted sidebar width, defaulting when absent", async () => {
   mockedListProjects.mockResolvedValue([]);
   mockedListSessions.mockResolvedValue([]);
@@ -446,7 +492,13 @@ test("hydrate restores a persisted sidebar width, defaulting when absent", async
 
 test("hydrate does not block core hydration when listPrompts rejects", async () => {
   mockedListProjects.mockResolvedValue([
-    { color: null, id: "p1", name: "Proj", path: "/p", setupCommand: null },
+    {
+      color: null,
+      id: "p1",
+      name: "Proj",
+      path: "/p",
+      setupCommand: null,
+    },
   ]);
   mockedListSessions.mockResolvedValue([
     {

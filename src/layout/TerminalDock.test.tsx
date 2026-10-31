@@ -40,7 +40,13 @@ function session(id: string, projectId: string) {
 }
 
 function project(id: string, path: string) {
-  return { color: null, id, name: id, path, setupCommand: null };
+  return {
+    color: null,
+    id,
+    name: id,
+    path,
+    setupCommand: null,
+  };
 }
 
 beforeEach(() => {
@@ -118,6 +124,27 @@ describe("TerminalDock", () => {
     expect(screen.getByTestId("project-pane-p1").style.display).not.toBe(
       "none"
     );
+  });
+
+  it("unmounts a fully parked project's terminals so no shell restarts behind its back", () => {
+    useLayout.setState({
+      layout: { ...DEFAULT_LAYOUT, terminalDockOpen: true },
+    });
+    useSessions.setState({
+      activeSessionId: "s1",
+      projects: [project("p1", "/a"), project("p2", "/b")],
+      sessions: {
+        s1: session("s1", "p1"),
+        s2: { ...session("s2", "p2"), parkedAt: 10 },
+      },
+    });
+    useTerminals.getState().openTab("p1", "/a");
+    useTerminals.getState().openTab("p2", "/b");
+
+    render(<TerminalDock />);
+
+    expect(screen.getByTestId("project-pane-p1")).toBeTruthy();
+    expect(screen.queryByTestId("project-pane-p2")).toBeNull();
   });
 
   it("mounts the active project's workspace even before it has any tabs", () => {

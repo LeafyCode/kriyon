@@ -103,7 +103,12 @@ function buildItems(
         // behind whatever full view was up.
         useLayout.getState().revealSessionView();
       },
-      sub: projectName(session.projectId),
+      // A parked session stays findable here, marked; opening it brings it
+      // back (see `setActiveSession`).
+      sub:
+        (session.parkedAt ?? null) === null
+          ? projectName(session.projectId)
+          : `${projectName(session.projectId)} · Parked`,
     }));
 
   const commandItems: PaletteItem[] = [

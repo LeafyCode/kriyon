@@ -5,7 +5,8 @@ vi.mock("../terminal/sessionHost.ts", () => ({
   disposeSession: (id: string) => dispose(id),
 }));
 
-import { useTerminals } from "./terminals.ts";
+import { useSessions } from "./sessions.ts";
+import { installParkedTerminalStops, useTerminals } from "./terminals.ts";
 
 function reset() {
   useTerminals.setState({
@@ -237,5 +238,94 @@ describe("useTerminals", () => {
     useTerminals.getState().setPaneBusy(p2, true);
     useTerminals.getState().closeTab("proj", tabId);
     expect(useTerminals.getState().hasBusyPanes()).toBe(false);
+  });
+});
+
+describe("installParkedTerminalStops", () => {
+  const pane = (id: string) => ({ cwd: "/x", id });
+  function session(id: string, projectId: string, parkedAt?: number) {
+    return {
+      archivedAt: null,
+      baselineOid: null,
+      claudeSessionId: null,
+      createdAt: 1,
+      cwd: "/x",
+      id,
+      parkedAt: parkedAt ?? null,
+      projectId,
+      status: "idle" as const,
+      summary: "",
+      title: id,
+      titleLocked: false,
+      worktreePath: null,
+    };
+  }
+
+  beforeEach(() => {
+    reset();
+    dispose.mockClear();
+  });
+
+  it("stops a project's terminals when its last rail session leaves", () => {
+    useSessions.setState({
+      sessions: { live: session("live", "p"), old: session("old", "p", 5) },
+    });
+    useTerminals.setState({
+      busyPanes: { "pane-1": true },
+      byProject: {
+        p: {
+          activeTabId: "t",
+          tabs: [
+            {
+              activePaneId: "pane-1",
+              direction: "row",
+              id: "t",
+              layout: [],
+              panes: [pane("pane-1")],
+              title: "dev",
+            },
+          ],
+        },
+      },
+    });
+    const stop = installParkedTerminalStops();
+
+    // Archiving (or closing) the one session still on the rail leaves the
+    // project fully parked: its dock workspace unmounts, so a dev server
+    // left running there would be out of reach.
+    useSessions.getState().archiveSession("live");
+
+    expect(dispose).toHaveBeenCalledWith("pane-1");
+    expect(useTerminals.getState().hasBusyPanes()).toBe(false);
+    stop();
+  });
+
+  it("leaves a project with a rail session alone", () => {
+    useSessions.setState({
+      sessions: { a: session("a", "p"), b: session("b", "p") },
+    });
+    useTerminals.setState({
+      byProject: {
+        p: {
+          activeTabId: "t",
+          tabs: [
+            {
+              activePaneId: "pane-1",
+              direction: "row",
+              id: "t",
+              layout: [],
+              panes: [pane("pane-1")],
+              title: "dev",
+            },
+          ],
+        },
+      },
+    });
+    const stop = installParkedTerminalStops();
+
+    useSessions.getState().archiveSession("a");
+
+    expect(dispose).not.toHaveBeenCalled();
+    stop();
   });
 });

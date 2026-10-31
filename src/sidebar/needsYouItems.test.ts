@@ -182,6 +182,15 @@ test("running, idle, and archived sessions never qualify", () => {
   expect(items).toEqual([]);
 });
 
+test("a parked session never qualifies", () => {
+  const items = needsYouSectionItems({
+    ...EMPTY,
+    sessions: { s1: { ...session("s1", "waiting", 1), parkedAt: 5 } },
+  });
+
+  expect(items).toEqual([]);
+});
+
 test("orders questions first, then errors, waiting, done — oldest first within a kind", () => {
   const items = needsYouSectionItems({
     ...EMPTY,
