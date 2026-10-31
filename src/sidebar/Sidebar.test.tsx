@@ -3357,3 +3357,51 @@ test("right-clicking a project header opens its menu", () => {
 
   expect(screen.getByTestId("park-project-p1")).toBeInTheDocument();
 });
+
+test("a parked project lists what its group showed, with older sessions folded", () => {
+  useLayout.setState({
+    layout: { ...DEFAULT_LAYOUT, hideOlderThan: "1d" },
+  });
+  const now = Date.now();
+  const base = {
+    archivedAt: null,
+    baselineOid: null,
+    claudeSessionId: null,
+    cwd: "",
+    projectId: "pk",
+    status: "idle" as const,
+    summary: "",
+    titleLocked: false,
+    worktreePath: null,
+  };
+  useSessions.setState({
+    activeSessionId: null,
+    projects: [{ ...makeProject("pk"), parkedAt: now }],
+    sessions: {
+      fresh: { ...base, createdAt: now - 1000, id: "fresh", title: "Fresh" },
+      stale1: {
+        ...base,
+        createdAt: now - 5 * 86_400_000,
+        id: "stale1",
+        title: "Stale one",
+      },
+      stale2: {
+        ...base,
+        createdAt: now - 6 * 86_400_000,
+        id: "stale2",
+        title: "Stale two",
+      },
+    },
+  });
+  renderSidebar();
+
+  fireEvent.click(screen.getByText("Parked (1)"));
+  const parked = screen.getByTestId("parked-group");
+  // The header counts what unparking brings back on the rail.
+  expect(within(parked).getByText("1 session")).toBeInTheDocument();
+
+  fireEvent.click(within(parked).getByLabelText("Expand Project pk"));
+  expect(within(parked).getByText("Fresh")).toBeInTheDocument();
+  expect(within(parked).queryByText("Stale one")).toBeNull();
+  expect(within(parked).getByText("2 older")).toBeInTheDocument();
+});

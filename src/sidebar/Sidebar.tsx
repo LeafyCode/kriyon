@@ -415,7 +415,7 @@ export function Sidebar({
             ) : null}
           </>
         ) : null}
-        <ParkedGroup />
+        <ParkedGroup nowMinute={nowMinute} />
         <ArchivedGroup />
       </div>
       <SidebarFooter onShowAbout={onShowAbout} />
