@@ -255,7 +255,10 @@ test("a failed install names the install step, not the setup command, and says w
     expect(dialog.textContent).toContain("install (pnpm install) failed");
   });
   expect(dialog.textContent).not.toContain("Setup command failed");
-  expect(dialog.textContent).toContain("press Close");
+  // The dialog covers the terminal, so Close comes first.
+  expect(dialog.textContent).toContain(
+    "Press Close, then fix it in the session's terminal."
+  );
   expect(dialog.textContent).toContain("os error 2");
 });
 
