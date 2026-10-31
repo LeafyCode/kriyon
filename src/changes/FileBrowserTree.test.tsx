@@ -1123,6 +1123,58 @@ describe("FileBrowserTree", () => {
    * the same `parentDir`. With one shared `key`, React would keep the very
    * same (uncontrolled) `<input>` and its stale typed name, and Enter would
    * rename the file to a name typed for a different purpose entirely. */
+  it("a create that fails late keeps its error off a rename opened meanwhile", async () => {
+    mockedListDir.mockResolvedValue(oneFile);
+    let failCreate: (e: Error) => void = () => undefined;
+    mockedCreateFile.mockImplementationOnce(
+      () =>
+        new Promise((_resolve, reject) => {
+          failCreate = reject;
+        })
+    );
+    render(<FileBrowserTree cwd="/repo" sessionId="s1" />);
+    fireEvent.contextMenu(await screen.findByTestId("file-browser-empty-area"));
+    fireEvent.click(screen.getByRole("menuitem", { name: NEW_FILE_ITEM_RE }));
+    fireEvent.change(await screen.findByTestId("file-browser-draft"), {
+      target: { value: "taken.ts" },
+    });
+    // Right-clicking blurs the row, which commits the create — in flight.
+    await runMenuItem("a.ts", RENAME_ITEM_RE);
+
+    await act(async () => {
+      failCreate(new Error("already exists"));
+      await Promise.resolve();
+    });
+
+    expect(screen.getByTestId("file-browser-draft")).toHaveValue("a.ts");
+    expect(screen.queryByText(ALREADY_EXISTS_RE)).not.toBeInTheDocument();
+  });
+
+  it("a rename that resolves late leaves a New file row opened meanwhile", async () => {
+    mockedListDir.mockResolvedValue(oneFile);
+    let finishRename: () => void = () => undefined;
+    mockedRenameEntry.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishRename = () => resolve(undefined);
+        })
+    );
+    render(<FileBrowserTree cwd="/repo" sessionId="s1" />);
+    await runMenuItem("a.ts", RENAME_ITEM_RE);
+    const rename = await screen.findByTestId("file-browser-draft");
+    fireEvent.change(rename, { target: { value: "b.ts" } });
+    fireEvent.keyDown(rename, { key: "Enter" });
+    // While the rename is in flight, the toolbar opens a New file row.
+    fireEvent.click(screen.getByRole("button", { name: "New file" }));
+
+    await act(async () => {
+      finishRename();
+      await Promise.resolve();
+    });
+
+    expect(screen.getByTestId("file-browser-draft")).toHaveValue("");
+  });
+
   it("Rename re-seeds the row even when a create draft was already open in that folder", async () => {
     mockedListDir.mockResolvedValue(oneFile);
     render(<FileBrowserTree cwd="/repo" sessionId="s1" />);
@@ -2054,5 +2106,27 @@ describe("FileBrowserTree", () => {
 
       expect(resultPaths()).toEqual(["new.ts"]);
     });
+  });
+  it("scrolls a file into view when its folders reopen from cache", async () => {
+    mockNestedTree();
+    const scrolled: string[] = [];
+    const original = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = function (this: Element) {
+      scrolled.push(this.textContent ?? "");
+    };
+    try {
+      render(<FileBrowserTree cwd="/repo" sessionId="s1" />);
+      fireEvent.click(await screen.findByText("src"));
+      fireEvent.click(await screen.findByText("deep"));
+      await screen.findByText("nested.ts");
+      // Listings are cached now; close everything.
+      fireEvent.click(screen.getByRole("button", { name: "Collapse folders" }));
+
+      act(() => useChanges.getState().selectFile("s1", "src/deep/nested.ts"));
+
+      await waitFor(() => expect(scrolled).toContain("nested.ts"));
+    } finally {
+      Element.prototype.scrollIntoView = original;
+    }
   });
 });

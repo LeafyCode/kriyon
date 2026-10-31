@@ -9,10 +9,11 @@ import {
 import { FILE_TREE_WIDTH_DEFAULT, useLayout } from "../state/layout.ts";
 import { treeRow } from "../theme/recipes.ts";
 import { tokens } from "../theme/tokens.ts";
-import type { FileChange, FileDiff } from "../types.ts";
+import type { FileDiff } from "../types.ts";
 import { ColumnResizeHandle } from "../ui/ColumnResizeHandle.tsx";
 import { Segmented, type SegmentedOption } from "../ui/Segmented.tsx";
 import { DirIcon, FileIcon } from "./fileIcon.tsx";
+import { GIT_INK } from "./gitStatus.ts";
 
 /** Stable empty default for the optional `dirtyPaths` prop — a fresh `new
  * Set()` per render would be a new identity every time, which is exactly
@@ -111,7 +112,7 @@ function rootStyle(width: number): CSSProperties {
 }
 
 /** The tree column's own 46px header, on the app-wide header rhythm, holding
- * nothing but the two tabs. */
+ * nothing but the three scope tabs. */
 const tabsRowStyle: CSSProperties = {
   alignItems: "center",
   borderBottom: `1px solid ${tokens.color.line.soft}`,
@@ -122,7 +123,7 @@ const tabsRowStyle: CSSProperties = {
 };
 
 /**
- * The tree column's two tabs, on the shared `Segmented` primitive so they
+ * The tree column's three scope tabs, on the shared `Segmented` primitive so they
  * keep its keyboard contract and test ids.
  */
 const TREE_TABS = [
@@ -154,10 +155,11 @@ const listStyle: CSSProperties = {
   padding: "6px 4px",
 };
 
-/** Toggles one of this pane's two sub-panes (the "Changes" grouped list vs.
+/** Toggles one of this pane's two sub-panes (the grouped changes list, shared
+ * by AI changes and All changes, vs.
  * the "All files" tree passed in as `children`) without removing it from the
  * tree: a flex column that fills the pane while visible, `"none"` while
- * hidden. Keeping `FileBrowserTree` mounted while "Changes" is showing (and
+ * hidden. Keeping `FileBrowserTree` mounted while a changes list is showing (and
  * vice versa) is what lets its listings cache survive a tab flip instead of
  * refetching everything on remount. */
 function subPaneStyle(hidden: boolean): CSSProperties {
@@ -186,9 +188,8 @@ const dirLabelTextStyle: CSSProperties = {
   whiteSpace: "nowrap",
 };
 
-/** One file's row: the jump button and the edit button side by side (a
- * button inside a button is invalid HTML and would swallow the edit click
- * as a jump click too). The row wears the hover, so the whole width lights. */
+/** One file's row. The row wears the hover, so the whole width lights; the
+ * button inside it is what opens the file. */
 function rowWrapStyle(nested: boolean, selected: boolean): CSSProperties {
   return {
     ...treeRow(selected),
@@ -197,7 +198,7 @@ function rowWrapStyle(nested: boolean, selected: boolean): CSSProperties {
   };
 }
 
-const jumpButtonStyle: CSSProperties = {
+const openButtonStyle: CSSProperties = {
   alignItems: "center",
   background: "transparent",
   border: "none",
@@ -246,15 +247,6 @@ const delCountStyle: CSSProperties = {
   fontSize: "10.5px",
 };
 
-/** How each kind of change colours a name — the All-files tab's colours, so
- * a file looks the same in both tabs. */
-const GIT_INK: Record<FileChange, string> = {
-  added: tokens.color.add,
-  deleted: tokens.color.del,
-  modified: tokens.color.mod,
-  renamed: tokens.color.mod,
-};
-
 // Neutral (non-add/del) informational tag for the binary/empty buckets —
 // the same vocabulary `DiffFileCard` and `ChangedFilesList` use for the same
 // files, sized down for this column's rows.
@@ -275,11 +267,11 @@ const kindTagStyle: CSSProperties = {
  * The Code Changes View's left column: a directory-grouped tree of changed
  * files, each row showing its +/− counts — or, for a file with no lines to
  * count, the same binary/empty tag and `old → new` rename display the other
- * two file surfaces use (see {@link fileKind}). Clicking a row asks the caller to
- * jump the feed to that file's card — this pane owns no scrolling itself,
- * it only reports *which* file was picked (`onJumpToFile`), so the caller
- * can drive `DiffFeed`'s `scrollToFile` jump handle, the virtualizer-aware
- * mechanism it already exposes.
+ * two file surfaces use (see {@link fileKind}). Clicking a row opens that file
+ * beside the list (`onOpenFile`), as an editor's git panel does; a deleted
+ * file, with nothing to open, asks the caller to jump the diff to its card
+ * instead (`onJumpToFile`). This pane owns neither the viewer nor any
+ * scrolling — it only reports which file was picked.
  *
  * There is deliberately no "N unchanged files hidden" count: the only
  * source available in Phase 1 (`listFiles`, the capped `@`-mention
@@ -287,12 +279,13 @@ const kindTagStyle: CSSProperties = {
  * count derived from it can be confidently wrong. An honest project-wide
  * count is backend work for a later phase.
  *
- * Which tab is active — "Changes" (this pane's own directory-grouped diff
- * list) or "All files" (Task 5's `list_dir`-backed browser) — is owned by
+ * Which tab is active — AI changes or All changes (this pane's own
+ * directory-grouped list, fed the scope's files) or Files (the `list_dir`-backed
+ * browser) — is owned by
  * the `changes` store and passed in via `tab`/`onTabChange` rather than
  * local state, so a session switch or a jump from a sibling pane (the
  * Inspector) sees the same tab this pane shows. This pane always owns the
- * tabs row itself (so both tabs stay reachable no matter which is active).
+ * tabs row itself (so every tab stays reachable no matter which is active).
  * Both sub-panes — this pane's own grouped list, and `children` (the
  * caller's `FileBrowserTree`) — are always rendered and merely
  * display-toggled by `tab` (see `subPaneStyle`), never swapped out via a
@@ -397,7 +390,7 @@ export function FileTreePane({
                         ? onOpenFile(file.path)
                         : onJumpToFile(file.path)
                     }
-                    style={{ ...jumpButtonStyle, color: GIT_INK[file.status] }}
+                    style={{ ...openButtonStyle, color: GIT_INK[file.status] }}
                     type="button"
                   >
                     <FileIcon path={file.path} />

@@ -33,6 +33,7 @@ import { banner } from "./banner.ts";
 import { copyPath } from "./copyPath.ts";
 import { FileSearch } from "./FileSearch.tsx";
 import { DirChevron, DirIcon, FileIcon } from "./fileIcon.tsx";
+import { GIT_INK, GIT_LABEL, GIT_LETTER } from "./gitStatus.ts";
 
 /** How far one level of nesting shifts a row: one chevron slot plus the
  * small gap after it, so a child's chevron sits just right of its parent's. */
@@ -206,29 +207,6 @@ const nameStyle: CSSProperties = {
 
 /** A gitignored entry: one ink stop quieter, still legible. */
 const ignoredInk = tokens.color.ink.muted;
-
-/** How each kind of change colours a row — the git colours every editor's
- * explorer uses. A deleted file has no row here (it is gone from disk). */
-const GIT_INK: Record<FileChange, string> = {
-  added: tokens.color.add,
-  deleted: tokens.color.del,
-  modified: tokens.color.mod,
-  renamed: tokens.color.mod,
-};
-
-const GIT_LETTER: Record<FileChange, string> = {
-  added: "A",
-  deleted: "D",
-  modified: "M",
-  renamed: "R",
-};
-
-const GIT_LABEL: Record<FileChange, string> = {
-  added: "Added",
-  deleted: "Deleted",
-  modified: "Modified",
-  renamed: "Renamed",
-};
 
 function gitLetterStyle(change: FileChange): CSSProperties {
   return {
@@ -561,7 +539,7 @@ export function FileBrowserTree({
     setRefusal(undefined);
   }, [cwd, sessionId]);
 
-  // A file opened from anywhere (the Changes list's edit button, the
+  // A file opened from anywhere (a click in the changes list, the
   // Inspector, the toolbar's New file) is shown in the tree the way an
   // editor's explorer follows the open file: its folders open and its row
   // scrolls into view. Only on a *change* of selection, so a folder the user
@@ -838,7 +816,9 @@ export function FileBrowserTree({
       })
       .catch((error: unknown) => {
         committingRef.current = false;
-        setDraft((d) => (d ? { ...d, error: errorMessage(error) } : d));
+        setDraft((d) =>
+          d === draft ? { ...d, error: errorMessage(error) } : d
+        );
       });
   }
 
@@ -1008,7 +988,8 @@ export function FileBrowserTree({
         // session's viewer open on a path a *later* switch's rename had
         // already moved. If you're tempted to restore this guard: don't —
         // that regression is exactly what removing it fixed.
-        setDraft(undefined);
+        // Only the row this rename came from — see `commitDraft`.
+        setDraft((d) => (d === draft ? undefined : d));
         fetchDir(parentDir, gen);
         requestRefresh(sessionId, "manual");
         // MINOR 2: the old path is gone under its old name — drop whatever
@@ -1032,7 +1013,9 @@ export function FileBrowserTree({
       })
       .catch((error: unknown) => {
         committingRef.current = false;
-        setDraft((d) => (d ? { ...d, error: errorMessage(error) } : d));
+        setDraft((d) =>
+          d === draft ? { ...d, error: errorMessage(error) } : d
+        );
       });
   }
 
@@ -1282,7 +1265,7 @@ export function FileBrowserTree({
 
   // Scroll a pending selection's row into view once it exists. `nearest`, so
   // a row already on screen never moves.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: `listings` is the re-run trigger — a landed folder may be the one holding the row.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `listings` and `expandedDirs` are the re-run triggers — a landed or reopened folder may be the one holding the row.
   useEffect(() => {
     const target = pendingScrollRef.current;
     if (target === undefined) {
@@ -1295,7 +1278,7 @@ export function FileBrowserTree({
       pendingScrollRef.current = undefined;
       row.scrollIntoView?.({ block: "nearest" });
     }
-  }, [listings, selectedFile]);
+  }, [expandedDirs, listings, selectedFile]);
 
   // The toolbar's New file / New folder land where an editor's do: beside
   // the open file, or at the root when nothing is open.
