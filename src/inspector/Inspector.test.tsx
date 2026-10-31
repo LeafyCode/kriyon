@@ -328,6 +328,21 @@ test("totals and the file list follow the My-edits-only filter", () => {
   expect(within(section).queryByText("b.ts")).not.toBeInTheDocument();
 });
 
+test("with the filter on but Claude's files unknown, the Inspector lists everything, as the centre does", () => {
+  seedSessionWithDiff("s1", ["src/a.ts", "src/b.ts"]);
+  useChanges.setState({ ui: { s1: { myEditsOnly: true } } });
+  useSessions.setState({
+    repoToplevel: { s1: "/work" },
+    // Claude wrote only outside the repo, so none of its files match it.
+    touchedFiles: { s1: ["/Users/you/notes/plan.md"] },
+  });
+  renderInspector("s1");
+
+  const section = screen.getByTestId("inspector-changes-section");
+  expect(within(section).getByText("a.ts")).toBeInTheDocument();
+  expect(within(section).getByText("b.ts")).toBeInTheDocument();
+});
+
 test("the Activity tab swaps the Details body for the session's activity log", async () => {
   seedSessionWithDiff("s1", ["a.ts"]);
   renderInspector("s1");

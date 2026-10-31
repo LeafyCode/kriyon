@@ -376,8 +376,11 @@ export function computeChangesView(input: ChangesViewInput): ChangesViewModel {
   // A file open in the editor covers the diff column on every tab: the list
   // on the left stays, as an editor's git panel does.
   const showViewer = Boolean(selectedFile);
-  const editsFilterActive =
-    myEditsOnly && tab === "changes" && input.touchedRelative !== null;
+  const editsFilterActive = aiFilterApplies(
+    myEditsOnly,
+    tab,
+    input.touchedRelative
+  );
   // Both memoized on their inputs' identity rather than rebuilt per call —
   // `DiffFeed` reads a new `files` array as "a refresh landed". See
   // {@link visibleFilesCache}.
@@ -438,6 +441,21 @@ function emptySessionMessage(entry: SessionChanges | undefined): string {
   return entry?.comparedTo
     ? `No changes ${entry.comparedTo}.`
     : `No changes vs ${entry?.baselineLabel}.`;
+}
+
+/**
+ * Whether "Only Claude's edits" narrows what is listed: switched on, on the
+ * AI changes tab, and with Claude's files actually known (`null` is "can't
+ * tell yet", and the filter stands down rather than hide everything). The
+ * one statement of the rule — the view model and the header's file count
+ * both ask it, so they cannot drift apart.
+ */
+export function aiFilterApplies(
+  on: boolean,
+  tab: FileTreeTab,
+  claudeFiles: Set<string> | null
+): claudeFiles is Set<string> {
+  return on && tab === "changes" && claudeFiles !== null;
 }
 
 /** The diff behind the open file. The open file is cwd-relative (what the
@@ -647,9 +665,9 @@ export function changedFileCount(
 ): number {
   const entry = state.bySession[sessionId];
   const ui = state.ui[sessionId];
-  const editsFilterActive =
-    myEditsOnlyOf(ui) && (ui?.tab ?? "changes") === "changes";
-  if (!(editsFilterActive && touchedRelative)) {
+  if (
+    !aiFilterApplies(myEditsOnlyOf(ui), ui?.tab ?? "changes", touchedRelative)
+  ) {
     return entry?.totals?.files ?? 0;
   }
   const files = memoFilteredFiles(

@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import type { DiffLine, FileDiff, SessionDiff } from "../types.ts";
 import { type EditState, type SessionChanges, useChanges } from "./changes.ts";
 import {
+  aiFilterApplies,
   type ChangesViewInput,
   type ChangesViewState,
   changedFileCount,
@@ -973,5 +974,16 @@ describe("the open file in a session rooted in a subfolder", () => {
       })
     );
     expect(view.selectedFileDiff?.path).toBe("app/src/a.ts");
+  });
+});
+
+describe("aiFilterApplies", () => {
+  it("applies only when on, on AI changes, with Claude's files known", () => {
+    const known = new Set(["a.ts"]);
+    expect(aiFilterApplies(true, "changes", known)).toBe(true);
+    expect(aiFilterApplies(false, "changes", known)).toBe(false);
+    expect(aiFilterApplies(true, "uncommitted", known)).toBe(false);
+    expect(aiFilterApplies(true, "all", known)).toBe(false);
+    expect(aiFilterApplies(true, "changes", null)).toBe(false);
   });
 });

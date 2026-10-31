@@ -11,7 +11,7 @@ import { homeRelative } from "../state/homeRelative.ts";
 import { type InspectorTab, useLayout } from "../state/layout.ts";
 import { usePlanLimitsView } from "../state/planLimits.ts";
 import {
-  sessionTouchedRelative,
+  sessionClaudeFiles,
   sessionWorkingDir,
   useSessions,
 } from "../state/sessions.ts";
@@ -395,7 +395,7 @@ export function Inspector() {
   // `SummaryBar` — so it has to describe the same population the centre does
   // (I5: totals follow the filter), or the two contradict each other in one
   // glance. Read through the same exported helpers `ChangesView` uses rather
-  // than re-deriving the touched set here; `sessionTouchedRelative` returns a
+  // than re-deriving the touched set here; `sessionClaudeFiles` returns a
   // stable `Set` until `touchedFiles`/`repoToplevel` actually change, so
   // subscribing through `useSessions` re-renders exactly then and never on an
   // unrelated store update (see its doc comment in `state/sessions.ts`).
@@ -409,23 +409,25 @@ export function Inspector() {
   const myEditsOnly = useChanges(
     (state) => state.ui[activeSessionId ?? ""]?.myEditsOnly === true
   );
-  const touchedRelative = useSessions(() =>
-    sessionTouchedRelative(activeSessionId ?? "")
+  // `null` while Claude's files can't be known — the filter then stands
+  // down, exactly as it does in the centre (`sessionClaudeFiles`).
+  const claudeFiles = useSessions(() =>
+    sessionClaudeFiles(activeSessionId ?? "")
   );
+  const filtering = myEditsOnly && claudeFiles !== null;
   const displayFiles = useMemo(() => {
-    if (!myEditsOnly) {
+    if (!(myEditsOnly && claudeFiles)) {
       return changedFiles;
     }
-    return changedFiles.filter((f) => touchedRelative.has(f.path));
-  }, [changedFiles, myEditsOnly, touchedRelative]);
+    return changedFiles.filter((f) => claudeFiles.has(f.path));
+  }, [changedFiles, myEditsOnly, claudeFiles]);
   // Falls back to the store's unfiltered `totals` with the filter off, and
   // stays `null` until a diff has actually landed — recomputing over an empty
   // `displayFiles` before then would print a confident "0 files +0 −0" where
   // the header's neutral "…" placeholder belongs.
   const displayTotals = useMemo(
-    () =>
-      myEditsOnly && totals ? computeTotalsFromFiles(displayFiles) : totals,
-    [displayFiles, myEditsOnly, totals]
+    () => (filtering && totals ? computeTotalsFromFiles(displayFiles) : totals),
+    [displayFiles, filtering, totals]
   );
   const setTranscriptView = useLayout((state) => state.setTranscriptView);
   const requestJump = useChanges((state) => state.requestJump);
