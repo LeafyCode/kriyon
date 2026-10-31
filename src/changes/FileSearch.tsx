@@ -110,6 +110,7 @@ type SearchState =
       query: string;
       status: "done";
       truncated: boolean;
+      walkStopped: boolean;
     };
 
 function splitPath(path: string): { dir: string; name: string } {
@@ -225,6 +226,7 @@ export function FileSearch({
             query: trimmed,
             status: "done",
             truncated: found.truncated,
+            walkStopped: found.walkStopped,
           });
         })
         .catch((error: unknown) => {
@@ -346,8 +348,21 @@ function SearchResults({
   if (state.status !== "done") {
     return <div style={noteStyle}>Searching…</div>;
   }
+  // Said first, and even with nothing found: here "No files match" alone
+  // would be wrong — the file may be in the part never searched.
+  const notAllSearched = state.walkStopped ? (
+    <div style={noteStyle}>
+      This folder is too large to search completely, so some files were not
+      searched.
+    </div>
+  ) : null;
   if (state.entries.length === 0) {
-    return <div style={noteStyle}>No files match.</div>;
+    return (
+      <>
+        <div style={noteStyle}>No files match.</div>
+        {notAllSearched}
+      </>
+    );
   }
   return (
     <>
@@ -382,9 +397,10 @@ function SearchResults({
       })}
       {state.truncated ? (
         <div style={noteStyle}>
-          There may be more matches. Keep typing to narrow it down.
+          More files match. Keep typing to narrow it down.
         </div>
       ) : null}
+      {notAllSearched}
     </>
   );
 }

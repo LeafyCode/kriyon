@@ -1411,10 +1411,14 @@ export function listSlashCommands(cwd: string): Promise<CommandCatalog> {
 }
 
 /** The Files search's answer (Rust `completion_cmd::FoundFiles`): the best
- * matches by name, ranked over every match, and whether more matched. */
+ * matches by name, ranked over every match. */
 export interface FoundFiles {
   entries: FileEntry[];
+  /** More matched than were returned: a longer query narrows it down. */
   truncated: boolean;
+  /** The walk stopped before seeing the whole folder, so a file that exists
+   * may be missing whatever the query. */
+  walkStopped: boolean;
 }
 
 /** Find files anywhere under `cwd` by name, for the Files view's search box

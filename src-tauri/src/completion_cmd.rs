@@ -439,10 +439,12 @@ mod tests {
         // the answer may be missing files that exist.
         let found = find_matches_within(root, "zzz", 5);
         assert!(found.entries.is_empty());
-        assert!(found.truncated);
+        assert!(found.walk_stopped);
+        // Not "more than 50 matched" — a different fact, with different advice.
+        assert!(!found.truncated);
 
         let whole = find_matches_within(root, "zzz", 1_000);
-        assert!(!whole.truncated);
+        assert!(!whole.walk_stopped);
     }
 
     #[test]
@@ -465,6 +467,7 @@ mod tests {
 
         let few = find_matches(root, "zz");
         assert!(!few.truncated);
+        assert!(!few.walk_stopped);
     }
 
     #[test]
@@ -654,14 +657,17 @@ fn walk_matches(root: &Path, query: &str, visit_cap: usize) -> (Vec<FileEntry>, 
     (entries, visited > visit_cap)
 }
 
-/// The Files search's answer: the best [`FILE_CAP`] matches by name, and
-/// whether the answer may be incomplete — more matched than that, or the
-/// walk stopped at [`WALK_VISIT_CAP`] before seeing the whole tree.
+/// The Files search's answer: the best [`FILE_CAP`] matches by name, plus the
+/// two different ways it can be incomplete — they call for different advice.
 #[derive(Clone, Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FoundFiles {
     pub entries: Vec<FileEntry>,
+    /// More than [`FILE_CAP`] matched: a longer query narrows it down.
     pub truncated: bool,
+    /// The walk stopped at [`WALK_VISIT_CAP`] before seeing the whole tree,
+    /// so a file that exists may not be here — whatever the query.
+    pub walk_stopped: bool,
 }
 
 /// Rank every match by name ([`kriyon_core::file_search::compare_matches`])
@@ -672,11 +678,15 @@ fn find_matches(root: &Path, query: &str) -> FoundFiles {
 }
 
 fn find_matches_within(root: &Path, query: &str, visit_cap: usize) -> FoundFiles {
-    let (mut entries, walk_capped) = walk_matches(root, query, visit_cap);
+    let (mut entries, walk_stopped) = walk_matches(root, query, visit_cap);
     entries.sort_by(|a, b| kriyon_core::file_search::compare_matches(&a.path, &b.path, query));
-    let truncated = walk_capped || entries.len() > FILE_CAP;
+    let truncated = entries.len() > FILE_CAP;
     entries.truncate(FILE_CAP);
-    FoundFiles { entries, truncated }
+    FoundFiles {
+        entries,
+        truncated,
+        walk_stopped,
+    }
 }
 
 /// Find files anywhere under a session's `cwd` by name, for the Files view's

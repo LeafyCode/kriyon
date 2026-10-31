@@ -29,6 +29,7 @@ import {
   createDir,
   createFile,
   deleteEntry,
+  type FoundFiles,
   findFiles,
   listDir,
   openInEditor,
@@ -68,7 +69,8 @@ const CANCEL_RE = /^cancel$/i;
 const UNSAVED_RE = /unsaved/i;
 const ANOTHER_SESSION_RE = /another session/i;
 const PATH_SEPARATOR_RE = /must not contain a path separator/i;
-const MORE_MATCHES_RE = /may be more matches/i;
+const MORE_MATCHES_RE = /more files match/i;
+const NOT_ALL_SEARCHED_RE = /too large to search completely/i;
 
 /** A `bySession` entry whose only interesting field is `fetchedAt` — the
  * "a diff refresh just landed" signal the tree revalidates off. */
@@ -1950,6 +1952,7 @@ describe("FileBrowserTree", () => {
           { isDir: false, path: "src/ui/Button.tsx" },
         ],
         truncated: false,
+        walkStopped: false,
       });
       render(<FileBrowserTree cwd="/repo" sessionId="s1" />);
       await screen.findByText("src");
@@ -1970,6 +1973,7 @@ describe("FileBrowserTree", () => {
       mockedFindFiles.mockResolvedValue({
         entries: [{ isDir: false, path: "README.md" }],
         truncated: false,
+        walkStopped: false,
       });
       render(<FileBrowserTree cwd="/repo" sessionId="s1" />);
       await screen.findByText("src");
@@ -1990,6 +1994,7 @@ describe("FileBrowserTree", () => {
           { isDir: false, path: "a/deep/main.ts" },
         ],
         truncated: false,
+        walkStopped: false,
       });
       render(<FileBrowserTree cwd="/repo" sessionId="s1" />);
       await screen.findByText("src");
@@ -2006,6 +2011,7 @@ describe("FileBrowserTree", () => {
       mockedFindFiles.mockResolvedValue({
         entries: [{ isDir: true, path: "src" }],
         truncated: false,
+        walkStopped: false,
       });
       render(<FileBrowserTree cwd="/repo" sessionId="s1" />);
       await screen.findByText("README.md");
@@ -2019,7 +2025,11 @@ describe("FileBrowserTree", () => {
 
     it("Escape clears the search", async () => {
       mockedListDir.mockResolvedValue(rootEntries);
-      mockedFindFiles.mockResolvedValue({ entries: [], truncated: false });
+      mockedFindFiles.mockResolvedValue({
+        entries: [],
+        truncated: false,
+        walkStopped: false,
+      });
       render(<FileBrowserTree cwd="/repo" sessionId="s1" />);
       await screen.findByText("src");
 
@@ -2036,6 +2046,7 @@ describe("FileBrowserTree", () => {
       mockedFindFiles.mockResolvedValue({
         entries: [{ isDir: false, path: "f.ts" }],
         truncated: true,
+        walkStopped: false,
       });
       render(<FileBrowserTree cwd="/repo" sessionId="s1" />);
       await screen.findByText("src");
@@ -2045,12 +2056,28 @@ describe("FileBrowserTree", () => {
       expect(await screen.findByText(MORE_MATCHES_RE)).toBeInTheDocument();
     });
 
+    it("says the folder was too large to search completely, even when nothing matched", async () => {
+      mockedListDir.mockResolvedValue(rootEntries);
+      mockedFindFiles.mockResolvedValue({
+        entries: [],
+        truncated: false,
+        walkStopped: true,
+      });
+      render(<FileBrowserTree cwd="/repo" sessionId="s1" />);
+      await screen.findByText("src");
+
+      fireEvent.change(searchBox(), { target: { value: "deep" } });
+
+      expect(await screen.findByText(NOT_ALL_SEARCHED_RE)).toBeInTheDocument();
+    });
+
     it("Enter pressed before the new answer lands opens the new query's top match, not the old one's", async () => {
       mockedListDir.mockResolvedValue(rootEntries);
       mockedFindFiles.mockImplementation((_cwd, query) =>
         Promise.resolve({
           entries: [{ isDir: false, path: `${query}.ts` }],
           truncated: false,
+          walkStopped: false,
         })
       );
       render(<FileBrowserTree cwd="/repo" sessionId="s1" />);
@@ -2069,10 +2096,7 @@ describe("FileBrowserTree", () => {
 
     it("a slow answer for an older query never replaces a newer one", async () => {
       mockedListDir.mockResolvedValue(rootEntries);
-      let answerOld: (v: {
-        entries: { isDir: boolean; path: string }[];
-        truncated: boolean;
-      }) => void = () => undefined;
+      let answerOld: (v: FoundFiles) => void = () => undefined;
       mockedFindFiles.mockImplementation((_cwd, query) =>
         query === "ol"
           ? new Promise((resolve) => {
@@ -2081,6 +2105,7 @@ describe("FileBrowserTree", () => {
           : Promise.resolve({
               entries: [{ isDir: false, path: "new.ts" }],
               truncated: false,
+              walkStopped: false,
             })
       );
       render(<FileBrowserTree cwd="/repo" sessionId="s1" />);
@@ -2100,6 +2125,7 @@ describe("FileBrowserTree", () => {
         answerOld({
           entries: [{ isDir: false, path: "old.ts" }],
           truncated: false,
+          walkStopped: false,
         });
         await Promise.resolve();
       });
