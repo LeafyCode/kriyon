@@ -1,12 +1,12 @@
-import { definePalette } from "./define.ts";
-import type { Theme } from "./types.ts";
+import { defineTheme } from "./define.ts";
 
-/** Solarized Light (MIT, https://ethanschoonover.com/solarized), blue accent. */
-export const solarizedLight: Theme = {
+/** Solarized Light (MIT, https://ethanschoonover.com/solarized), blue accent.
+ * The terminal's white and bright white are darker than upstream so white
+ * output still reads on the light plane (ADR-0051). */
+export const solarizedLight = defineTheme({
   id: "solarized-light",
   label: "Solarized Light",
-  appearance: "light",
-  colors: definePalette({
+  palette: {
     appearance: "light",
     accent: {
       bright: "#268bd2",
@@ -59,7 +59,7 @@ export const solarizedLight: Theme = {
       type: "#b58900",
       variable: "#4c6169",
     },
-  }),
+  },
   terminal: {
     black: "#073642",
     blue: "#268bd2",
@@ -69,13 +69,13 @@ export const solarizedLight: Theme = {
     brightGreen: "#586e75",
     brightMagenta: "#6c71c4",
     brightRed: "#cb4b16",
-    brightWhite: "#fdf6e3",
+    brightWhite: "#586e75",
     brightYellow: "#657b83",
     cyan: "#2aa198",
     green: "#859900",
     magenta: "#d33682",
     red: "#dc322f",
-    white: "#eee8d5",
+    white: "#657b83",
     yellow: "#b58900",
   },
-};
+});

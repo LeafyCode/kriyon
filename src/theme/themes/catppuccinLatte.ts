@@ -1,12 +1,12 @@
-import { definePalette } from "./define.ts";
-import type { Theme } from "./types.ts";
+import { defineTheme } from "./define.ts";
 
-/** Catppuccin Latte (MIT, https://github.com/catppuccin/catppuccin), mauve accent. */
-export const catppuccinLatte: Theme = {
+/** Catppuccin Latte (MIT, https://github.com/catppuccin/catppuccin), mauve accent.
+ * The terminal's white and bright white are darker than upstream so white
+ * output still reads on the light plane (ADR-0051). */
+export const catppuccinLatte = defineTheme({
   id: "catppuccin-latte",
   label: "Catppuccin Latte",
-  appearance: "light",
-  colors: definePalette({
+  palette: {
     appearance: "light",
     accent: {
       bright: "#8839ef",
@@ -59,7 +59,7 @@ export const catppuccinLatte: Theme = {
       type: "#df8e1d",
       variable: "#4c4f69",
     },
-  }),
+  },
   terminal: {
     black: "#5c5f77",
     blue: "#1e66f5",
@@ -69,13 +69,13 @@ export const catppuccinLatte: Theme = {
     brightGreen: "#40a02b",
     brightMagenta: "#ea76cb",
     brightRed: "#d20f39",
-    brightWhite: "#bcc0cc",
+    brightWhite: "#7c7f93",
     brightYellow: "#df8e1d",
     cyan: "#179299",
     green: "#40a02b",
     magenta: "#ea76cb",
     red: "#d20f39",
-    white: "#acb0be",
+    white: "#6c6f85",
     yellow: "#df8e1d",
   },
-};
+});

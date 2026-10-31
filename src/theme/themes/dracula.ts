@@ -1,12 +1,10 @@
-import { definePalette } from "./define.ts";
-import type { Theme } from "./types.ts";
+import { defineTheme } from "./define.ts";
 
 /** Dracula (MIT, https://draculatheme.com), purple accent. */
-export const dracula: Theme = {
+export const dracula = defineTheme({
   id: "dracula",
   label: "Dracula",
-  appearance: "dark",
-  colors: definePalette({
+  palette: {
     appearance: "dark",
     accent: {
       bright: "#caa9fa",
@@ -59,7 +57,7 @@ export const dracula: Theme = {
       type: "#8be9fd",
       variable: "#f8f8f2",
     },
-  }),
+  },
   terminal: {
     black: "#21222c",
     blue: "#bd93f9",
@@ -78,4 +76,4 @@ export const dracula: Theme = {
     white: "#f8f8f2",
     yellow: "#f1fa8c",
   },
-};
+});

@@ -1,5 +1,5 @@
 import { hexAlpha } from "../hex.ts";
-import type { ThemeColors } from "./types.ts";
+import type { TerminalPalette, Theme, ThemeColors } from "./types.ts";
 
 /**
  * The few colours a full theme actually chooses. Everything else in
@@ -87,18 +87,45 @@ export interface PaletteSpec {
   };
 }
 
+type Appearance = PaletteSpec["appearance"];
+
+/*
+ * The alpha rules every theme's derived fills follow — the Steel family's
+ * `darkChrome` included — so retuning one moves every theme together.
+ */
+
+/** An ink-side wash: white over a dark plane, black over a light one. A light
+ *  plane needs a touch more alpha for the same visible step. */
+export function inkWash(appearance: Appearance, alpha: number): string {
+  return appearance === "light"
+    ? `rgba(0, 0, 0, ${Math.round(alpha * 1.25 * 1000) / 1000})`
+    : `rgba(255, 255, 255, ${alpha})`;
+}
+
+/** A status hue's tinted pill fill. */
+export function softFill(appearance: Appearance, hex: string): string {
+  return hexAlpha(hex, appearance === "light" ? 0.14 : 0.12);
+}
+
+/** A status hue's fainter whole-row wash. */
+export function faintFill(appearance: Appearance, hex: string): string {
+  return hexAlpha(hex, appearance === "light" ? 0.1 : 0.08);
+}
+
+/** The scrim behind every modal. */
+export function scrimFor(appearance: Appearance): string {
+  return appearance === "light"
+    ? "rgba(15, 20, 30, 0.32)"
+    : "rgba(5, 7, 12, 0.6)";
+}
+
 /** Expand a {@link PaletteSpec} into every colour the app reads. */
-export function definePalette(spec: PaletteSpec): ThemeColors {
-  const { accent, editor, ink, lines, planes, status, syntax } = spec;
-  const light = spec.appearance === "light";
-  // Ink-side washes: white over a dark plane, black over a light one. A light
-  // plane needs a touch more alpha for the same visible step.
-  const wash = (alpha: number): string =>
-    light
-      ? `rgba(0, 0, 0, ${Math.round(alpha * 1.25 * 1000) / 1000})`
-      : `rgba(255, 255, 255, ${alpha})`;
-  const soft = (hex: string): string => hexAlpha(hex, light ? 0.14 : 0.12);
-  const faint = (hex: string): string => hexAlpha(hex, light ? 0.1 : 0.08);
+function definePalette(spec: PaletteSpec): ThemeColors {
+  const { accent, appearance, editor, ink, lines, planes, status, syntax } =
+    spec;
+  const wash = (alpha: number): string => inkWash(appearance, alpha);
+  const soft = (hex: string): string => softFill(appearance, hex);
+  const faint = (hex: string): string => faintFill(appearance, hex);
   const editorBase = editor.ink.slice(0, 7);
 
   return {
@@ -169,7 +196,8 @@ export function definePalette(spec: PaletteSpec): ThemeColors {
     editorInk: editor.ink,
     editorSelection: editor.selection,
 
-    scrim: light ? "rgba(15, 20, 30, 0.32)" : "rgba(5, 7, 12, 0.6)",
+    scrim: scrimFor(appearance),
+    mascotThought: appearance === "light" ? ink[3] : "#e9edf8",
 
     syntaxAttribute: syntax.attribute,
     syntaxComment: syntax.comment,
@@ -186,5 +214,25 @@ export function definePalette(spec: PaletteSpec): ThemeColors {
     syntaxTag: syntax.tag,
     syntaxType: syntax.type,
     syntaxVariable: syntax.variable,
+  };
+}
+
+/**
+ * A full [Theme] from its palette spec. The theme's `appearance` is the
+ * spec's, so light-or-dark is stated once and the washes can never disagree
+ * with the `color-scheme` `applyTheme` sets from it.
+ */
+export function defineTheme(input: {
+  id: string;
+  label: string;
+  palette: PaletteSpec;
+  terminal: TerminalPalette;
+}): Theme {
+  return {
+    appearance: input.palette.appearance,
+    colors: definePalette(input.palette),
+    id: input.id,
+    label: input.label,
+    terminal: input.terminal,
   };
 }

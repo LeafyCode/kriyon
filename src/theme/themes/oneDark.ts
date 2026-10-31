@@ -1,12 +1,10 @@
-import { definePalette } from "./define.ts";
-import type { Theme } from "./types.ts";
+import { defineTheme } from "./define.ts";
 
 /** Atom One Dark (MIT, https://github.com/atom/atom), blue accent. */
-export const oneDark: Theme = {
+export const oneDark = defineTheme({
   id: "one-dark",
   label: "One Dark",
-  appearance: "dark",
-  colors: definePalette({
+  palette: {
     appearance: "dark",
     accent: {
       bright: "#74b9f0",
@@ -59,7 +57,7 @@ export const oneDark: Theme = {
       type: "#e5c07b",
       variable: "#abb2bf",
     },
-  }),
+  },
   terminal: {
     black: "#282c34",
     blue: "#61afef",
@@ -78,4 +76,4 @@ export const oneDark: Theme = {
     white: "#abb2bf",
     yellow: "#e5c07b",
   },
-};
+});

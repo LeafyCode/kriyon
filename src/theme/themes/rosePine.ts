@@ -1,12 +1,10 @@
-import { definePalette } from "./define.ts";
-import type { Theme } from "./types.ts";
+import { defineTheme } from "./define.ts";
 
 /** Rosé Pine (MIT, https://rosepinetheme.com), iris accent. Rosé Pine has no green, so running and added use its foam, as its own git colours do. */
-export const rosePine: Theme = {
+export const rosePine = defineTheme({
   id: "rose-pine",
   label: "Rosé Pine",
-  appearance: "dark",
-  colors: definePalette({
+  palette: {
     appearance: "dark",
     accent: {
       bright: "#d0b8ec",
@@ -59,7 +57,7 @@ export const rosePine: Theme = {
       type: "#9ccfd8",
       variable: "#e0def4",
     },
-  }),
+  },
   terminal: {
     black: "#26233a",
     blue: "#9ccfd8",
@@ -78,4 +76,4 @@ export const rosePine: Theme = {
     white: "#e0def4",
     yellow: "#f6c177",
   },
-};
+});

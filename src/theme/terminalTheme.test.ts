@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { contrast } from "./contrast.ts";
 import { terminalTheme } from "./terminalTheme.ts";
 import { THEMES, themeById } from "./themes/index.ts";
 
@@ -48,8 +49,22 @@ describe("terminalTheme", () => {
     const xterm = terminalTheme(light);
     expect(xterm.background).toBe(light.colors.chromeWindow);
     expect(xterm.foreground).toBe(light.colors.inkPrimary);
-    // xterm's default black is #000000 and its default white #e5e5e5 —
-    // invisible on white; a light theme must ship its own palette.
-    expect(xterm.white).toBeDefined();
+  });
+
+  it("keeps a light theme's white and bright white readable on its plane", () => {
+    // xterm's default white is #e5e5e5, and Solarized's canonical bright
+    // white *is* its background — both invisible on a light plane. Programs
+    // that assume a dark terminal print in white, so it must still read.
+    for (const theme of THEMES.filter((t) => t.appearance === "light")) {
+      const xterm = terminalTheme(theme);
+      for (const key of ["white", "brightWhite"] as const) {
+        const ink = xterm[key];
+        expect(ink, `${theme.id}.${key}`).toBeDefined();
+        expect(
+          contrast(ink ?? "", theme.colors.chromeWindow),
+          `${theme.id}.${key}`
+        ).toBeGreaterThanOrEqual(3);
+      }
+    }
   });
 });

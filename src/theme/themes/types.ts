@@ -4,9 +4,11 @@
  * property and `tokens.ts` references those properties, so switching themes
  * restyles the whole app without any component re-rendering.
  *
- * To add a theme: copy an existing file in this folder, change the values,
- * and add it to the registry in `index.ts`. The type keeps you honest — a
- * missing key fails the type check.
+ * To add a theme: copy a full theme such as `nord.ts` (a palette spec passed
+ * to `defineTheme` in `define.ts`), change the values, and add it to the
+ * registry in `index.ts`. The spec's type keeps you honest — a missing key
+ * fails the type check. The Steel-family files instead layer an accent over
+ * `darkChrome` in `base.ts`.
  */
 export interface ThemeColors {
   /** The brand color: primary buttons, the logo mark, selection highlights. */
@@ -18,7 +20,7 @@ export interface ThemeColors {
    *  `:hover`, so this publishes through the seam and `.kr-hover-accent` in
    *  `App.css` reads it — the one hover an accent button has. */
   accentHover: string;
-  /** Accent-tinted text/links readable on dark chrome. */
+  /** Accent-tinted text/links readable on the theme's plane. */
   accentInk: string;
 
   /* Git / diff semantics. */
@@ -65,7 +67,8 @@ export interface ThemeColors {
   /** Text-selection fill in the code editor (`editor.selectionBackground`). */
   editorSelection: string;
 
-  /* Text ramp, brightest to faintest. */
+  /* Text ramp, strongest to faintest: brightest-first on a dark theme,
+   * darkest-first on a light one. */
   inkBright: string;
   inkDim: string;
   inkFaint: string;
@@ -81,6 +84,10 @@ export interface ThemeColors {
   /* Hairlines. */
   lineSoft: string;
   lineStrong: string;
+  /** The [Mascot]'s thought bubbles. They float beside the mascot on its
+   *  tile rather than on its body, so unlike the rest of the mascot they
+   *  follow the plane: near-white on a dark theme, grey on a light one. */
+  mascotThought: string;
   /** The git-gutter "modified" marker — VSCode-family blue, sitting between
    *  `add` (green) and `del` (red). */
   mod: string;

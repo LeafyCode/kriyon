@@ -1,12 +1,10 @@
-import { definePalette } from "./define.ts";
-import type { Theme } from "./types.ts";
+import { defineTheme } from "./define.ts";
 
 /** Tokyo Night (MIT, https://github.com/folke/tokyonight.nvim), blue accent. */
-export const tokyoNight: Theme = {
+export const tokyoNight = defineTheme({
   id: "tokyo-night",
   label: "Tokyo Night",
-  appearance: "dark",
-  colors: definePalette({
+  palette: {
     appearance: "dark",
     accent: {
       bright: "#89b0fa",
@@ -59,7 +57,7 @@ export const tokyoNight: Theme = {
       type: "#2ac3de",
       variable: "#c0caf5",
     },
-  }),
+  },
   terminal: {
     black: "#15161e",
     blue: "#7aa2f7",
@@ -78,4 +76,4 @@ export const tokyoNight: Theme = {
     white: "#a9b1d6",
     yellow: "#e0af68",
   },
-};
+});

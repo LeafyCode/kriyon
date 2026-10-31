@@ -1,12 +1,10 @@
-import { definePalette } from "./define.ts";
-import type { Theme } from "./types.ts";
+import { defineTheme } from "./define.ts";
 
 /** Nord (MIT, https://www.nordtheme.com), frost accent. */
-export const nord: Theme = {
+export const nord = defineTheme({
   id: "nord",
   label: "Nord",
-  appearance: "dark",
-  colors: definePalette({
+  palette: {
     appearance: "dark",
     accent: {
       bright: "#8fbcbb",
@@ -59,7 +57,7 @@ export const nord: Theme = {
       type: "#8fbcbb",
       variable: "#d8dee9",
     },
-  }),
+  },
   terminal: {
     black: "#3b4252",
     blue: "#81a1c1",
@@ -78,4 +76,4 @@ export const nord: Theme = {
     white: "#e5e9f0",
     yellow: "#ebcb8b",
   },
-};
+});

@@ -50,7 +50,7 @@ export const tokens = {
       faint: themed("inkFaint"),
     },
 
-    // Translucent surface stops (white over the dark stage).
+    // Translucent surface stops: white over a dark plane, black over a light one.
     surface: {
       s1: themed("surface1"),
       s2: themed("surface2"),
@@ -108,9 +108,9 @@ export const tokens = {
      * before this they each carried their own hand-written colour map, and a
      * file changed colour depending on whether you were editing it.
      *
-     * Theme-independent (it lives in `darkChrome`, not the accent block) —
-     * see `themes/types.ts` for why highlighting deliberately doesn't follow
-     * the accent.
+     * Accent-independent: the Steel family shares one palette through
+     * `darkChrome`, while a full theme brings its own — see `themes/types.ts`
+     * for why highlighting deliberately doesn't follow the accent.
      */
     syntax: {
       attribute: themed("syntaxAttribute"),
@@ -131,7 +131,7 @@ export const tokens = {
     },
     /** A card's fill — composer, diff file, settings group, dialog. */
     raised: themed("raisedTop"),
-    // Dark wells for code / bash / diff blocks, and the prompt card fill.
+    // Wells for code / bash / diff blocks, and the prompt card fill.
     codeWell: themed("codeWell"),
     blockWell: themed("blockWell"),
     /** Sunken fill: search boxes, progress tracks, switch tracks. */
@@ -153,7 +153,7 @@ export const tokens = {
     scrim: themed("scrim"),
     // Ink for text/icons sitting on the accent fill (primary buttons).
     onAccent: themed("onAccent"),
-    // The faint white fill behind keycap chips and inline shortcut hints.
+    // The faint fill behind keycap chips and inline shortcut hints.
     chip: themed("chip"),
     // Composer inline highlight pills, one tint per token kind — indigo for a
     // leading `/command`, teal for an `@file` mention, amber for an
@@ -220,15 +220,17 @@ export const tokens = {
   },
   /**
    * The [Mascot]s' own colours: illustration, not chrome, so they stay the
-   * same in every theme. Named for scripts/mascots.py, which draws with
-   * them. The body's colours come from the hue the user picks
+   * same in every theme — except `thought`, which sits on the plane. Named for
+   * scripts/mascots.py, which draws with them. The body's colours come from the hue the user picks
    * (`layout.mascotHue`), set on the drawing as `--kr-m-*` variables.
    */
   mascot: {
     glint: "#ffffff",
     light: "#eef1ff",
-    /** The thought bubbles beside a thinking mascot, and its "aha" spark. */
-    thought: "#e9edf8",
+    /** The thought bubbles beside a thinking mascot. The one mascot colour
+     *  that follows the theme: the bubbles sit on the plane, not the body. */
+    thought: themed("mascotThought"),
+    /** Its "aha" spark. */
     spark: "#ffd45c",
     mouth: "#7a1f3d",
     tongue: "#ff6f8e",

@@ -1,12 +1,10 @@
-import { definePalette } from "./define.ts";
-import type { Theme } from "./types.ts";
+import { defineTheme } from "./define.ts";
 
 /** Gruvbox Dark, medium contrast (MIT, https://github.com/morhetz/gruvbox), orange accent. */
-export const gruvboxDark: Theme = {
+export const gruvboxDark = defineTheme({
   id: "gruvbox-dark",
   label: "Gruvbox Dark",
-  appearance: "dark",
-  colors: definePalette({
+  palette: {
     appearance: "dark",
     accent: {
       bright: "#fe9a4a",
@@ -59,7 +57,7 @@ export const gruvboxDark: Theme = {
       type: "#fabd2f",
       variable: "#ebdbb2",
     },
-  }),
+  },
   terminal: {
     black: "#282828",
     blue: "#458588",
@@ -78,4 +76,4 @@ export const gruvboxDark: Theme = {
     white: "#a89984",
     yellow: "#d79921",
   },
-};
+});

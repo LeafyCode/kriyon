@@ -1,12 +1,10 @@
-import { definePalette } from "./define.ts";
-import type { Theme } from "./types.ts";
+import { defineTheme } from "./define.ts";
 
 /** Catppuccin Mocha (MIT, https://github.com/catppuccin/catppuccin), mauve accent. */
-export const catppuccinMocha: Theme = {
+export const catppuccinMocha = defineTheme({
   id: "catppuccin-mocha",
   label: "Catppuccin Mocha",
-  appearance: "dark",
-  colors: definePalette({
+  palette: {
     appearance: "dark",
     accent: {
       bright: "#d6b9f9",
@@ -59,7 +57,7 @@ export const catppuccinMocha: Theme = {
       type: "#f9e2af",
       variable: "#cdd6f4",
     },
-  }),
+  },
   terminal: {
     black: "#45475a",
     blue: "#89b4fa",
@@ -78,4 +76,4 @@ export const catppuccinMocha: Theme = {
     white: "#bac2de",
     yellow: "#f9e2af",
   },
-};
+});

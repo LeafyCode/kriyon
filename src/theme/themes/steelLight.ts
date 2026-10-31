@@ -1,5 +1,4 @@
-import { definePalette } from "./define.ts";
-import type { Theme } from "./types.ts";
+import { defineTheme } from "./define.ts";
 
 /**
  * The light side of the BisBig direction (ADR-0023), from BisBig's own light
@@ -7,11 +6,10 @@ import type { Theme } from "./types.ts";
  * deepened status family (`#1f883d` / `#b47d0e` / `#c2413f`) and the Steel
  * accent at its fill stop. Code and terminal colours follow GitHub Light.
  */
-export const steelLight: Theme = {
+export const steelLight = defineTheme({
   id: "steel-light",
   label: "Steel Light",
-  appearance: "light",
-  colors: definePalette({
+  palette: {
     appearance: "light",
     accent: {
       bright: "#0a8cb3",
@@ -64,7 +62,7 @@ export const steelLight: Theme = {
       type: "#953800",
       variable: "#1f2328",
     },
-  }),
+  },
   terminal: {
     black: "#24292f",
     blue: "#0969da",
@@ -74,7 +72,7 @@ export const steelLight: Theme = {
     brightGreen: "#1a7f37",
     brightMagenta: "#a475f9",
     brightRed: "#a40e26",
-    brightWhite: "#8c959f",
+    brightWhite: "#7d8590",
     brightYellow: "#633c01",
     cyan: "#1b7c83",
     green: "#116329",
@@ -83,4 +81,4 @@ export const steelLight: Theme = {
     white: "#6e7781",
     yellow: "#4d2d00",
   },
-};
+});
