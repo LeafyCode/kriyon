@@ -25,10 +25,7 @@ impl SpawnPlan {
         } else {
             cwd.to_string()
         };
-        let shell = shell_env
-            .filter(|s| !s.is_empty())
-            .unwrap_or("/bin/zsh")
-            .to_string();
+        let shell = user_shell(shell_env);
         let needs_zdotdir = is_zsh(&shell);
         Self {
             cwd,
@@ -36,6 +33,16 @@ impl SpawnPlan {
             needs_zdotdir,
         }
     }
+}
+
+/// The person's shell: `$SHELL`, or `/bin/zsh` (the macOS default) when it is
+/// unset or empty. Session shells and the [Worktree bootstrap] both use it.
+#[must_use]
+pub fn user_shell(shell_env: Option<&str>) -> String {
+    shell_env
+        .filter(|s| !s.is_empty())
+        .unwrap_or("/bin/zsh")
+        .to_string()
 }
 
 /// True when the shell path's basename ends with `zsh` (`zsh`, `/bin/zsh`, …).

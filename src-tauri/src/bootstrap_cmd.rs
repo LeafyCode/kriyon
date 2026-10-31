@@ -1,7 +1,11 @@
 //! Thin shell-out for a [Worktree bootstrap]: copy the repo's untracked
 //! top-level `.env*` files into a fresh worktree, run the lockfile-detected
 //! install, then the project's optional setup command — all inside the
-//! worktree. Best-effort: each step is recorded and the next still runs; a
+//! worktree, through the person's own shell. A Mac app opened from the Dock
+//! gets only the system PATH, so tools their shell config adds (pnpm, nvm's
+//! node, Homebrew) are found only by running the step the way their terminal
+//! does: an interactive login shell (`-ilc`), as VS Code and Tauri's
+//! `fix-path-env` do. Best-effort: each step is recorded and the next still runs; a
 //! failing step sets `ok = false` but never panics. Kept Tauri-free so it is
 //! unit-testable. Pairs with the pure decisions in `kriyon_core::bootstrap`.
 
@@ -30,12 +34,13 @@ pub struct BootstrapReport {
 }
 
 /// Copy `.env*`, run the detected install, then the optional setup command,
-/// inside `worktree_path`. Best-effort and total.
+/// inside `worktree_path`, each through `shell`. Best-effort and total.
 #[must_use]
 pub fn bootstrap_worktree(
     repo_root: &str,
     worktree_path: &str,
     setup_cmd: Option<&str>,
+    shell: &str,
 ) -> BootstrapReport {
     let mut steps: Vec<BootstrapStep> = Vec::new();
     let mut output = String::new();
@@ -75,17 +80,18 @@ pub fn bootstrap_worktree(
     // 2. Install dependencies, if a lockfile says how.
     let present: Vec<&str> = listing.iter().map(String::as_str).collect();
     if let Some(argv) = detect_install(&present) {
-        let (ok, out) = run_in(worktree_path, argv);
+        let cmd = argv.join(" ");
+        let (ok, out) = run_in(worktree_path, shell, &cmd);
         output.push_str(&out);
         steps.push(BootstrapStep {
-            label: format!("install ({})", argv.join(" ")),
+            label: format!("install ({cmd})"),
             ok,
         });
     }
 
-    // 3. The project's optional setup command, via `sh -c` in the worktree.
+    // 3. The project's optional setup command.
     if let Some(cmd) = setup_cmd.filter(|c| !c.trim().is_empty()) {
-        let (ok, out) = run_in(worktree_path, &["sh", "-c", cmd]);
+        let (ok, out) = run_in(worktree_path, shell, cmd);
         output.push_str(&out);
         steps.push(BootstrapStep {
             label: format!("setup ({cmd})"),
@@ -100,19 +106,23 @@ pub fn bootstrap_worktree(
     }
 }
 
-/// Run `argv` in `dir`, returning (success, combined stdout+stderr). A spawn
-/// failure (e.g. the tool is not installed) is a failed step, not a panic.
-fn run_in(dir: &str, argv: &[&str]) -> (bool, String) {
-    let Some((program, rest)) = argv.split_first() else {
-        return (true, String::new());
-    };
-    match Command::new(program).args(rest).current_dir(dir).output() {
+/// Run `cmd` in `dir` through `shell -ilc`, returning (success, combined
+/// stdout+stderr). A spawn failure (e.g. a missing shell) is a failed step,
+/// not a panic. stdin is closed, so nothing can wait on input.
+fn run_in(dir: &str, shell: &str, cmd: &str) -> (bool, String) {
+    let result = Command::new(shell)
+        .args(["-ilc", cmd])
+        .current_dir(dir)
+        // Oh My Zsh's update prompt would otherwise stall an interactive shell.
+        .env("DISABLE_AUTO_UPDATE", "true")
+        .output();
+    match result {
         Ok(out) => {
             let mut combined = String::from_utf8_lossy(&out.stdout).into_owned();
             combined.push_str(&String::from_utf8_lossy(&out.stderr));
             (out.status.success(), combined)
         }
-        Err(e) => (false, format!("{}: {e}\n", argv.join(" "))),
+        Err(e) => (false, format!("{cmd}: {e}\n")),
     }
 }
 
@@ -131,6 +141,7 @@ mod tests {
             repo.path().to_str().unwrap(),
             wt.path().to_str().unwrap(),
             Some("printf ok > setup-ran.txt"),
+            "/bin/sh",
         );
 
         assert!(report.ok, "report: {report:?}");
@@ -144,6 +155,55 @@ mod tests {
         );
     }
 
+    /// A Mac app opened from the Dock gets only the system PATH, so a tool the
+    /// person's shell config adds (`~/Library/pnpm/bin`) is invisible to a bare
+    /// spawn. The install must run through their shell, like the terminal does.
+    #[test]
+    #[cfg(unix)]
+    fn install_finds_a_tool_only_the_users_shell_puts_on_path() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let repo = tempfile::tempdir().expect("repo dir");
+        let wt = tempfile::tempdir().expect("worktree dir");
+        let tools = tempfile::tempdir().expect("tools dir");
+        std::fs::write(repo.path().join("pnpm-lock.yaml"), "").expect("write lockfile");
+
+        // A `pnpm` that exists only on the shell's PATH.
+        let bin = tools.path().join("bin");
+        std::fs::create_dir(&bin).expect("bin dir");
+        let pnpm = bin.join("pnpm");
+        std::fs::write(&pnpm, "#!/bin/sh\nprintf \"$*\" > installed.txt\n").expect("fake pnpm");
+        std::fs::set_permissions(&pnpm, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+
+        // A stand-in for the person's shell: its config adds `bin` to PATH.
+        let shell = tools.path().join("shell");
+        std::fs::write(
+            &shell,
+            format!(
+                "#!/bin/sh\n[ \"$1\" = -ilc ] || exit 9\nPATH=\"{}:$PATH\" exec /bin/sh -c \"$2\"\n",
+                bin.display()
+            ),
+        )
+        .expect("fake shell");
+        std::fs::set_permissions(&shell, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+
+        let report = bootstrap_worktree(
+            repo.path().to_str().unwrap(),
+            wt.path().to_str().unwrap(),
+            None,
+            shell.to_str().unwrap(),
+        );
+
+        assert!(report.ok, "report: {report:?}");
+        assert_eq!(
+            std::fs::read_to_string(wt.path().join("installed.txt"))
+                .ok()
+                .as_deref(),
+            Some("install"),
+            "the shell's pnpm ran in the worktree"
+        );
+    }
+
     #[test]
     fn a_failing_setup_command_is_reported_not_panicked() {
         let repo = tempfile::tempdir().expect("repo dir");
@@ -152,6 +212,7 @@ mod tests {
             repo.path().to_str().unwrap(),
             wt.path().to_str().unwrap(),
             Some("exit 3"),
+            "/bin/sh",
         );
         assert!(!report.ok, "a non-zero setup command fails the report");
         assert!(
@@ -171,6 +232,7 @@ mod tests {
             repo.path().to_str().unwrap(),
             wt.path().to_str().unwrap(),
             None,
+            "/bin/sh",
         );
         assert!(report.ok, "no env, no lockfile, no setup → clean no-op");
         assert!(report.steps.iter().all(|s| s.ok));
@@ -187,6 +249,7 @@ mod tests {
             repo.path().to_str().unwrap(),
             wt.path().to_str().unwrap(),
             None,
+            "/bin/sh",
         );
 
         assert!(report.ok, "report: {report:?}");
@@ -210,6 +273,7 @@ mod tests {
             repo.path().to_str().unwrap(),
             wt.path().to_str().unwrap(),
             None,
+            "/bin/sh",
         );
 
         // Restore permissions so `tempfile` can clean up the dir afterwards.

@@ -899,7 +899,8 @@ pub async fn bootstrap_worktree(
     setup_cmd: Option<String>,
 ) -> Result<BootstrapReport, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        run_bootstrap(&repo_path, &worktree_path, setup_cmd.as_deref())
+        let shell = kriyon_core::shellinit::user_shell(std::env::var("SHELL").ok().as_deref());
+        run_bootstrap(&repo_path, &worktree_path, setup_cmd.as_deref(), &shell)
     })
     .await
     .map_err(|e| e.to_string())

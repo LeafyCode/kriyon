@@ -88,8 +88,9 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
 - **Worktree bootstrap** — the one-time setup that makes a freshly created [Worktree]
   ready to work in: copying the project root's untracked top-level `.env*` files into it,
   running the [Install command] detected from the lockfile, then running the project's
-  optional [Setup command]. Best-effort — a failed step warns but never blocks the
-  Session from opening. _Avoid_: provisioning, worktree init.
+  optional [Setup command]. Both commands run through the person's own shell as an
+  interactive login shell, so they see the same PATH as the terminal. Best-effort — a
+  failed step warns but never blocks the Session from opening. _Avoid_: provisioning, worktree init.
 - **Install command** — the dependency-install command a [Worktree bootstrap] infers from
   which lockfile is present (`pnpm-lock.yaml`→`pnpm install`, `package-lock.json`→`npm
   install`, `yarn.lock`→`yarn`, `bun.lockb`→`bun install`), or none. Purely a function of
