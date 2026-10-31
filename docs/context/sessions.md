@@ -96,7 +96,7 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
   `.zshrc` counts) with a 10-second timeout. A Mac app opened from the Dock gets only the
   system PATH, so without it a [Worktree bootstrap] cannot find pnpm and a git hook cannot
   find node. Every [Git run] uses it once it is known, without waiting; the [Worktree
-  bootstrap], creating a worktree and merging one back wait for it. If it can't be read,
+  bootstrap], creating a worktree, merging one back and Discard wait for it. If it can't be read,
   they keep the app's own PATH. _Avoid_: login env, fix-path.
 - **Install command** — the dependency-install command a [Worktree bootstrap] infers from
   which lockfile is present (`pnpm-lock.yaml`→`pnpm install`, `package-lock.json`→`npm

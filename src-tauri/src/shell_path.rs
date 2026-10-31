@@ -12,7 +12,8 @@
 //! read too) and take its PATH. Every git run uses it once it is known
 //! ([`ready`], which never waits), so hooks and LFS filters find the person's
 //! tools. The commands that must have it wait for it ([`user_path`]) and pass
-//! it in: the [Worktree bootstrap], creating a worktree and merging one back.
+//! it in: the [Worktree bootstrap], creating a worktree, merging one back,
+//! and Discard (its checkout fires post-checkout and the LFS filter).
 //!
 //! A slow or broken shell config must never wedge the app, so the probe has a
 //! timeout and a failure falls back to the app's own PATH.

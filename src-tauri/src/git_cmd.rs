@@ -1500,7 +1500,14 @@ const NO_COMMITTED_VERSION_ERROR: &str = "file has no committed version to resto
 /// Returns an error string if `path` doesn't resolve inside `root`, is under
 /// `.git/`, isn't a file, has no HEAD blob ([`NO_COMMITTED_VERSION_ERROR`]),
 /// or if a git invocation fails.
-fn discard_file_changes_sync(root: &SandboxRoot, path: &str) -> Result<(), String> {
+///
+/// `shell_path` is the PATH the checkout runs with (`None` keeps the app's
+/// own): the checkout fires the repo's post-checkout hook and the LFS filter.
+fn discard_file_changes_sync(
+    root: &SandboxRoot,
+    path: &str,
+    shell_path: Option<&str>,
+) -> Result<(), String> {
     let resolved = root.resolve(path, "write")?;
     // Same refusal as `read_baseline_sync`: a directory target would otherwise
     // reach git and check out an entire subtree.
@@ -1528,10 +1535,12 @@ fn discard_file_changes_sync(root: &SandboxRoot, path: &str) -> Result<(), Strin
     // `[`, `*` or `?` restores more files than the one the user confirmed.
     // `--` still terminates option parsing and `./` still keeps a leading `-`
     // from reading as a flag; the magic prefix does not replace either.
-    run_git(
-        repo,
-        &["checkout", "HEAD", "--", &format!(":(literal)./{rel}")],
-    )?;
+    let mut checkout =
+        GitRun::new(repo).args(["checkout", "HEAD", "--", &format!(":(literal)./{rel}")]);
+    if let Some(shell_path) = shell_path {
+        checkout = checkout.env("PATH", shell_path);
+    }
+    checkout.text()?;
     Ok(())
 }
 
@@ -1546,7 +1555,9 @@ fn discard_file_changes_sync(root: &SandboxRoot, path: &str) -> Result<(), Strin
 /// afterwards. The frontend confirms with the user before calling this.
 ///
 /// `(async)` for the same reason as [`read_baseline`]: this shells out to git
-/// and must never run on the main thread.
+/// and must never run on the main thread. It waits for the [Shell PATH], as
+/// merging does, so a Discard right after launch still finds the person's
+/// tools.
 ///
 /// # Errors
 /// See [`discard_file_changes_sync`], plus: an error string if `cwd` is not a
@@ -1558,7 +1569,11 @@ pub fn discard_file_changes(
     cwd: String,
     path: String,
 ) -> Result<(), String> {
-    discard_file_changes_sync(&SandboxRoot::validate(store.inner(), &cwd)?, &path)
+    discard_file_changes_sync(
+        &SandboxRoot::validate(store.inner(), &cwd)?,
+        &path,
+        crate::shell_path::user_path(),
+    )
 }
 
 /// Start (or join) the [Working-tree watch] on the repo containing `cwd`, held
@@ -3240,13 +3255,43 @@ mod tests {
         let root = dir.path().canonicalize().expect("canonicalize");
         let store = store_with_project_root(&root.to_string_lossy());
 
-        discard_file_changes_sync(&sandbox_root(&store, root.to_str().unwrap()), "f.txt")
+        discard_file_changes_sync(&sandbox_root(&store, root.to_str().unwrap()), "f.txt", None)
             .expect("discard");
 
         assert_eq!(
             std::fs::read_to_string(root.join("f.txt")).expect("read"),
             "one\n"
         );
+    }
+
+    /// Discard's checkout fires the repo's post-checkout hook (and the LFS
+    /// filter), so it runs with the [Shell PATH] it is given, like merge.
+    #[test]
+    #[cfg(unix)]
+    fn discard_runs_its_checkout_hook_with_the_shell_path() {
+        if !git_available() {
+            return;
+        }
+        let (_tools, path) = shell_only_tool();
+        let dir = init_repo_with_commit(); // commits f.txt = "one\n"
+        let marker = dir.path().join("hook-ran");
+        write_hook(
+            dir.path(),
+            "post-checkout",
+            &format!("kriyon-hook-tool '{}'", marker.display()),
+        );
+        std::fs::write(dir.path().join("f.txt"), "scribbled over\n").expect("write");
+        let root = dir.path().canonicalize().expect("canonicalize");
+        let store = store_with_project_root(&root.to_string_lossy());
+
+        discard_file_changes_sync(
+            &sandbox_root(&store, root.to_str().unwrap()),
+            "f.txt",
+            Some(&path),
+        )
+        .expect("the hook found its tool, so discard succeeded");
+
+        assert!(marker.exists(), "the hook ran its tool");
     }
 
     /// An untracked file has no committed version, so there is nothing to
@@ -3263,9 +3308,12 @@ mod tests {
         let root = dir.path().canonicalize().expect("canonicalize");
         let store = store_with_project_root(&root.to_string_lossy());
 
-        let err =
-            discard_file_changes_sync(&sandbox_root(&store, root.to_str().unwrap()), "new.txt")
-                .unwrap_err();
+        let err = discard_file_changes_sync(
+            &sandbox_root(&store, root.to_str().unwrap()),
+            "new.txt",
+            None,
+        )
+        .unwrap_err();
 
         assert_eq!(err, "file has no committed version to restore");
         assert!(
@@ -3288,6 +3336,7 @@ mod tests {
         let err = discard_file_changes_sync(
             &sandbox_root(&store, cwd.to_str().unwrap()),
             "../secret.txt",
+            None,
         )
         .unwrap_err();
 
@@ -3311,6 +3360,7 @@ mod tests {
         let err = discard_file_changes_sync(
             &sandbox_root(&store, cwd.path().to_str().unwrap()),
             ".git/config",
+            None,
         )
         .unwrap_err();
 
@@ -3344,6 +3394,7 @@ mod tests {
         discard_file_changes_sync(
             &sandbox_root(&store, root.to_str().unwrap()),
             "app/[slug]/page.tsx",
+            None,
         )
         .expect("discard");
 
@@ -3396,6 +3447,7 @@ mod tests {
         discard_file_changes_sync(
             &sandbox_root(&store, cwd.to_str().unwrap()),
             "short/../../outside.txt",
+            None,
         )
         .expect("the path resolves inside the root, so it is a legitimate call");
 

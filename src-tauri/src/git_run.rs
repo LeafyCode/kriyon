@@ -128,8 +128,9 @@ impl GitRun {
     /// [`Self::command`] with the [Shell PATH] given: git, and any hook or
     /// LFS filter it fires, runs with the person's tools once the PATH is
     /// known. Never waits for it, so a launch with a slow shell config does
-    /// not stall git; a caller that must have it (merging, which runs commit
-    /// hooks) sets `PATH` itself, and that wins.
+    /// not stall git; a caller that must have it (merging, creating a
+    /// worktree, Discard — they fire repo hooks) sets `PATH` itself, and that
+    /// wins.
     fn command_with(&self, shell_path: Option<&str>) -> Command {
         let mut cmd = Command::new("git");
         cmd.arg("-C").arg(&self.repo).args(&self.args);
