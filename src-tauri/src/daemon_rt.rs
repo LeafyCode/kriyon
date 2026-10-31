@@ -29,8 +29,9 @@ const TERMINALS_KEY: &str = "terminals";
 /// the daemon is wedged, and the caller falls back to a signal.
 const SHUTDOWN_WRITE_TIMEOUT: Duration = Duration::from_secs(1);
 
-/// Send `signal` to `pid` if the [Signal gate] allows it. The one door every
-/// signal the app sends goes through. Best-effort: a vanished pid is fine.
+/// Send `signal` to `pid` if the [Signal gate] allows it. With
+/// [`signal_group_gated`], the only ways the app sends a signal, so every one
+/// passes the gate. Best-effort: a vanished pid is fine.
 #[cfg(unix)]
 pub(crate) fn signal_gated(pid: i32, signal: libc::c_int) {
     let own_pid = i32::try_from(std::process::id()).unwrap_or(0);

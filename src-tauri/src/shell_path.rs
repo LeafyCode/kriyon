@@ -9,9 +9,10 @@
 //!
 //! The fix most desktop apps use (VS Code, Tauri's `fix-path-env`): run the
 //! person's shell once as an interactive login shell (`-ilc`, so `.zshrc` is
-//! read too) and take its PATH. The commands that run the person's own tools
-//! get it as an argument: the [Worktree bootstrap], and the git commands
-//! that fire repo hooks (creating a worktree, merging one back).
+//! read too) and take its PATH. Every git run uses it once it is known
+//! ([`ready`], which never waits), so hooks and LFS filters find the person's
+//! tools. The commands that must have it wait for it ([`user_path`]) and pass
+//! it in: the [Worktree bootstrap], creating a worktree and merging one back.
 //!
 //! A slow or broken shell config must never wedge the app, so the probe has a
 //! timeout and a failure falls back to the app's own PATH.
@@ -28,11 +29,20 @@ use kriyon_core::shellinit::{parse_path_probe, user_shell, PATH_PROBE};
 /// a shell config that needs more than this is treated as broken.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// The read [Shell PATH]: unset until the first [`user_path`] call finishes.
+static PATH: OnceLock<Option<String>> = OnceLock::new();
+
+/// The shell PATH if it has already been read, without waiting for it or
+/// starting the read. Every git run uses this; tests never start a read, so
+/// they never run the developer's own shell.
+pub fn ready() -> Option<&'static str> {
+    PATH.get().and_then(Option::as_deref)
+}
+
 /// The person's shell PATH, or `None` when it could not be read (the caller
 /// then keeps the app's own PATH). Resolved once per app run; the first caller
 /// waits for it, so [`warm`] starts it at launch.
 pub fn user_path() -> Option<&'static str> {
-    static PATH: OnceLock<Option<String>> = OnceLock::new();
     PATH.get_or_init(|| {
         let shell = user_shell(std::env::var("SHELL").ok().as_deref());
         let path = probe(&shell, PROBE_TIMEOUT);
