@@ -20,14 +20,20 @@ it off by default. The record behind it, `touchedFiles`, was not good enough to 
   vanished.
 
 The [Activity log] has since started recording, in SQLite, every step of every session —
-subagents included — with the target of each edit and write, and the files each command changed.
+subagents included — with the target of each edit and write, and the files each command changed
+(the hook keeps the first 20 per command).
 
 ## Decision
 
-- **Source.** On every refresh, the files the Activity log saw Claude change in the session
-  (`activity_changed_paths`: finished edits and writes, plus each command's changed files) are
-  merged into `touchedFiles` (`mergeTouchedFiles`). The live stream still adds edits as they
-  happen; the log fills in subagents, Bash and everything from before a restart.
+- **Source.** The Activity log owns the answer. On every refresh, the files it saw Claude change
+  in the session (`activity_changed_paths`: finished edits and writes, plus each command's
+  changed files) replace `touchedFiles` (`setTouchedFromActivity`). The live stream still adds
+  edits as they happen, as a stopgap until the next sync; a failed or denied edit it counted is
+  dropped then, since the log counts only finished steps.
+- **Unknown is not empty.** `sessionClaudeFiles` returns `null` while the answer can't be known —
+  no repo toplevel yet, the log not answered yet, or recorded paths none of which match the repo
+  (a symlinked project path) — and the filter stands down, so "can't tell" never reads as
+  "Claude changed nothing".
 - **Paths.** `relativizeTouchedPath` compares both sides through `canonicalDir`, the same
   firmlink rule `cwdRelativePath` uses, so `/tmp` sessions keep their files.
 - **Default.** **Only Claude's edits** is on unless the user turns it off (`myEditsOnlyOf`). The
@@ -41,6 +47,9 @@ subagents included — with the target of each edit and write, and the files eac
 - The attribution is per **file**, not per line. A file both Claude and the user edited shows
   under AI changes with both people's lines. The editor's session highlight marks changed lines
   but cannot say who typed them either.
+- The hook records at most 20 changed files per command. A command that changes more (a
+  formatter over the whole tree, a code generator) is attributed only those 20; the rest show
+  under All changes, and under AI changes with the filter off.
 - A change made outside any recorded step — a file watcher, a background process Claude started
   and left running — isn't attributed, so it shows only under All changes. With the filter off,
   AI changes shows everything since the session started, as before.

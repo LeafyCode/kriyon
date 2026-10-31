@@ -3571,8 +3571,6 @@ mod tests {
         }
     }
 
-    /// A real `snapshot_tree` oid (40 hex chars for sha1, this repo's
-    /// default) must still be accepted by the same guard.
     #[test]
     fn read_session_baseline_returns_the_file_as_it_was_when_the_session_started() {
         if !git_available() {
@@ -3660,6 +3658,8 @@ mod tests {
         .is_err());
     }
 
+    /// A real `snapshot_tree` oid (40 hex chars for sha1, this repo's
+    /// default) must still be accepted by the same guard.
     #[test]
     fn diff_session_changes_accepts_a_real_oid_baseline() {
         if !git_available() {

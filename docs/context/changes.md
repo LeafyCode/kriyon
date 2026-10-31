@@ -139,11 +139,12 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
   as a pure function, not in a render body. Memoized per session on exactly the fields it reads,
   so the scroll-rate writes it ignores (`activeFile`, the [Jump rail]'s `viewed`) cost an O(1)
   cache hit and no re-render. _Avoid_: changes selector, view state.
-- **Touched files** (`touchedFiles`, `sessionTouchedRelative`, `mergeTouchedFiles`) — the files
-  Claude changed in a [Session]: its edits and writes as they happen, plus everything the
-  [Activity log] recorded (`activity_changed_paths`: subagents' edits, the files a command
-  changed, and edits from before a restart), merged in on every refresh. Per file, not per
-  line, and attribution only: it never decides whether a change exists. It gives the "✎ this
+- **Touched files** (`touchedFiles`, `sessionTouchedRelative`, `setTouchedFromActivity`,
+  `sessionClaudeFiles`) — the files Claude changed in a [Session], as the [Activity log] records
+  them (`activity_changed_paths`: finished edits and writes, subagents' included, the files a
+  command changed — at most 20 per command — and edits from before a restart), which replaces
+  the record on every refresh; the live stream's own additions only bridge the gap until then.
+  `sessionClaudeFiles` is `null` while the answer can't be known. Per file, not per line, and attribution only: it never decides whether a change exists. It gives the "✎ this
   session" badge and backs **Only Claude's edits**, which is on by default in AI changes
   (ADR 0050, superseding ADR 0015's default-off). _Avoid_: edited files, session files.
 - **Summary bar** — the [Changes view]'s one-line header strip: the [Diff totals] ("No changes"
