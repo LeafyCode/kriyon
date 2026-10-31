@@ -366,7 +366,11 @@ export interface SessionsState {
    * command changed and everything from before a restart. The live stream's
    * own additions are a stopgap until the next sync replaces them. A session
    * no longer in the store is ignored. */
-  setTouchedFromActivity: (id: string, paths: readonly string[]) => void;
+  setTouchedFromActivity: (
+    id: string,
+    paths: readonly string[],
+    now?: number
+  ) => void;
   /**
    * [Sleeping session]s: id → the phase while Kriyon has its `claude` stopped.
    * Absent means awake. `stuck` means the resume kept failing, so the row must
@@ -407,6 +411,11 @@ export interface SessionsState {
    * live-refresh trigger.
    */
   touchedFiles: Record<string, string[]>;
+  /** sessionId → path → when the live stream recorded Claude editing it. The
+   * [Activity log] takes hook events in every few seconds, so a sync right
+   * after an edit may not have it yet; these keep it for
+   * {@link LIVE_TOUCH_GRACE_MS} until the log confirms or the grace runs out. */
+  touchedLive: Record<string, Record<string, number>>;
   /** Sessions whose `touchedFiles` the [Activity log] has answered for at
    * least once — so an empty list means "Claude changed nothing", not "not
    * known yet". See {@link sessionClaudeFiles}. */
@@ -716,6 +725,10 @@ export function sessionClaudeFiles(sessionId: string): Set<string> | null {
   return relative.size > 0 ? relative : null;
 }
 
+/** How long a live-recorded edit outlives an [Activity log] sync that hasn't
+ * seen it — well past the log's ingest interval (a few seconds). */
+export const LIVE_TOUCH_GRACE_MS = 10_000;
+
 /** Every {@link SessionsState} slice keyed by session id, so
  *  {@link pruneById} can never drift from the store's shape. */
 const PER_SESSION_KEYS = [
@@ -735,6 +748,7 @@ const PER_SESSION_KEYS = [
   "statusOrigin",
   "touchedFiles",
   "touchedSynced",
+  "touchedLive",
   "usage",
   "viewed",
 ] as const satisfies readonly (keyof SessionsState)[];
@@ -782,6 +796,7 @@ export const useSessions = create<SessionsState>((set, get) => ({
   sessions: {},
   touchedFiles: {},
   touchedSynced: {},
+  touchedLive: {},
   repoToplevel: {},
   repoToplevelCwd: {},
 
@@ -1187,28 +1202,41 @@ export const useSessions = create<SessionsState>((set, get) => ({
         touchedFiles: completedTarget
           ? withTouchedFile(state.touchedFiles, id, completedTarget)
           : state.touchedFiles,
+        touchedLive: completedTarget
+          ? {
+              ...state.touchedLive,
+              [id]: { ...state.touchedLive[id], [completedTarget]: Date.now() },
+            }
+          : state.touchedLive,
       };
     }),
 
-  setTouchedFromActivity: (id, paths) =>
+  setTouchedFromActivity: (id, paths, now = Date.now()) =>
     set((state) => {
       if (!state.sessions[id]) {
         return state;
       }
+      // The log's answer, plus live edits it hasn't taken in yet — within
+      // the grace. Confirmed or expired live entries are dropped.
+      const logged = new Set(paths);
+      const live: Record<string, number> = {};
+      for (const [path, at] of Object.entries(state.touchedLive[id] ?? {})) {
+        if (!logged.has(path) && now - at < LIVE_TOUCH_GRACE_MS) {
+          live[path] = at;
+        }
+      }
+      const next = [...paths, ...Object.keys(live)];
       const prev = state.touchedFiles[id] ?? [];
       const unchanged =
-        prev.length === paths.length &&
-        new Set(prev).size === paths.length &&
-        paths.every((p) => prev.includes(p));
-      const synced = state.touchedSynced[id] === true;
-      if (unchanged && synced) {
-        return state;
-      }
+        prev.length === next.length && next.every((p) => prev.includes(p));
       return {
         touchedFiles: unchanged
           ? state.touchedFiles
-          : { ...state.touchedFiles, [id]: [...paths] },
-        touchedSynced: { ...state.touchedSynced, [id]: true },
+          : { ...state.touchedFiles, [id]: next },
+        touchedLive: { ...state.touchedLive, [id]: live },
+        touchedSynced: state.touchedSynced[id]
+          ? state.touchedSynced
+          : { ...state.touchedSynced, [id]: true },
       };
     }),
 

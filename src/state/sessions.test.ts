@@ -22,6 +22,7 @@ import {
   badgeCount,
   idleSession,
   isWorktreeSession,
+  LIVE_TOUCH_GRACE_MS,
   relativizeTouchedPath,
   sessionClaudeFiles,
   sessionRow,
@@ -145,6 +146,8 @@ beforeEach(() => {
     sessions: {},
     statusOrigin: {},
     touchedFiles: {},
+    touchedLive: {},
+    touchedSynced: {},
     repoToplevel: {},
     repoToplevelCwd: {},
   });
@@ -1210,3 +1213,25 @@ function base(id: string) {
     worktreePath: null,
   };
 }
+
+test("a live edit the Activity log hasn't taken in yet survives a sync, for a short grace", () => {
+  const now = 1_000_000;
+  useSessions.setState({
+    sessions: { s1: idleSession(base("s1")) },
+    touchedFiles: { s1: ["/repo/fresh.ts"] },
+    touchedLive: { s1: { "/repo/fresh.ts": now } },
+    touchedSynced: {},
+  });
+  // The log ingests every few seconds; a sync half a second later doesn't
+  // have the edit yet.
+  useSessions.getState().setTouchedFromActivity("s1", [], now + 500);
+  expect(useSessions.getState().touchedFiles.s1).toEqual(["/repo/fresh.ts"]);
+
+  // Past the grace, the log's answer stands: an edit it never recorded (a
+  // denied one) is dropped.
+  useSessions
+    .getState()
+    .setTouchedFromActivity("s1", [], now + LIVE_TOUCH_GRACE_MS + 1);
+  expect(useSessions.getState().touchedFiles.s1).toEqual([]);
+  expect(useSessions.getState().touchedLive.s1).toEqual({});
+});

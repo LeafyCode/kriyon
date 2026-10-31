@@ -2148,6 +2148,8 @@ describe("ChangesView", () => {
         repoToplevel: { s1: "/repo" },
         touchedFiles: { s1: ["/repo/a.ts"] },
       });
+      // The Activity log, which owns this record, agrees with it.
+      vi.mocked(activityChangedPaths).mockResolvedValue(["/repo/a.ts"]);
 
       renderChangesView("s1");
       fireEvent.click(screen.getByRole("switch", { name: MY_EDITS_ONLY_NAME }));
