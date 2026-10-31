@@ -403,8 +403,11 @@ export function Inspector() {
   // Changes view's tab and selection (see `ChangesState`), and zustand
   // compares a selector's output — so a tab flip over there re-renders
   // nothing here.
+  // Only when the user turned it on explicitly: the Inspector lists the
+  // whole session for review, so the Files view's on-by-default AI scope
+  // (`myEditsOnlyOf`) doesn't narrow it.
   const myEditsOnly = useChanges(
-    (state) => state.ui[activeSessionId ?? ""]?.myEditsOnly ?? false
+    (state) => state.ui[activeSessionId ?? ""]?.myEditsOnly === true
   );
   const touchedRelative = useSessions(() =>
     sessionTouchedRelative(activeSessionId ?? "")

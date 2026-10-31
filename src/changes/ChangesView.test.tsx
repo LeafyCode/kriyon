@@ -9,6 +9,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, test, vi } from "vitest";
 
 vi.mock("../ipc/bridge.ts", () => ({
+  activityChangedPaths: vi.fn().mockResolvedValue([]),
   blameFile: vi.fn().mockResolvedValue(null),
   readSessionBaseline: vi.fn().mockResolvedValue({ state: "notARepo" }),
   defaultBranch: vi.fn(),
@@ -92,7 +93,8 @@ const mockedRepoToplevel = vi.mocked(repoToplevel);
 // attribution describe block below.
 const THIS_SESSION_LABEL = /this session/i;
 const MY_EDITS_ONLY_NAME = /only claude's edits/i;
-const NO_FILES_TOUCHED_TEXT = /no files touched/i;
+const NO_FILES_TOUCHED_TEXT =
+  "Claude hasn't changed any files in this session.";
 const EDIT_FILE_BUTTON_RE = /edit file/i;
 
 /** The store's real `refresh` action, captured before any test overwrites it
@@ -278,7 +280,11 @@ describe("ChangesView", () => {
       bySession: {},
       expandedDirs: {},
       refresh: REAL_REFRESH,
-      ui: {},
+      // Most of this file is about the view, not attribution, and seeds no
+      // touched files — so "Only Claude's edits" (on by default, ADR 0050)
+      // starts off here. The filter's own tests clear this back to the
+      // default.
+      ui: { s1: { myEditsOnly: false } },
     });
     useLayout.setState({ layout: DEFAULT_LAYOUT });
     // @tanstack/react-virtual measures via offsetHeight/offsetWidth in jsdom
@@ -1754,15 +1760,20 @@ describe("ChangesView", () => {
       expect(screen.queryByLabelText(THIS_SESSION_LABEL)).toBeNull();
     });
 
-    it('the "My edits only" switch defaults off, rendering every file', () => {
+    it("AI changes starts with \"Only Claude's edits\" on, leaving the user's own edits out", () => {
       seedWithTouched(threeFiles, ["a.ts"]);
+      act(() => useChanges.setState({ ui: {} }));
 
       renderChangesView("s1");
 
-      expect(getMyEditsToggle()).toHaveAttribute("aria-checked", "false");
+      expect(getMyEditsToggle()).toHaveAttribute("aria-checked", "true");
       expect(findDiffCard("a.ts")).not.toBeNull();
+      expect(findDiffCard("b.ts")).toBeNull();
+      expect(findDiffCard("c.ts")).toBeNull();
+
+      // Off shows everything that changed since the session started.
+      fireEvent.click(getMyEditsToggle());
       expect(findDiffCard("b.ts")).not.toBeNull();
-      expect(findDiffCard("c.ts")).not.toBeNull();
     });
 
     it("filters the file list down to this session's touched files once toggled on", () => {

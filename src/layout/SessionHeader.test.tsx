@@ -101,12 +101,49 @@ test("the Files tab shows the session's own file count when it has one", () => {
         viewed: {},
       },
     },
+    // With "Only Claude's edits" off, the count is the whole session diff.
+    ui: { s1: { myEditsOnly: false } },
   });
 
   render(<SessionHeader />);
 
   expect(screen.getByRole("tab", { name: CHANGES_TAB })).toHaveTextContent(
     "Files3"
+  );
+});
+
+test("by default the Files tab counts only the files Claude changed", () => {
+  const f = (path: string) => ({
+    binary: false,
+    hunks: [{ header: "@@", lines: [{ kind: "added" as const, text: "x" }] }],
+    oldPath: null,
+    path,
+    status: "modified" as const,
+  });
+  useChanges.setState({
+    bySession: {
+      s1: {
+        baselineLabel: "HEAD",
+        collapsed: {},
+        diff: { base: "HEAD", files: [f("claude.ts"), f("mine.ts")] },
+        fetchedAt: Date.now(),
+        hunkHashes: {},
+        status: "ready",
+        totals: { additions: 2, deletions: 0, files: 2 },
+        viewed: {},
+      },
+    },
+    ui: {},
+  });
+  useSessions.setState({
+    repoToplevel: { s1: "/repo" },
+    touchedFiles: { s1: ["/repo/claude.ts"] },
+  });
+
+  render(<SessionHeader />);
+
+  expect(screen.getByRole("tab", { name: CHANGES_TAB })).toHaveTextContent(
+    "Files1"
   );
 });
 

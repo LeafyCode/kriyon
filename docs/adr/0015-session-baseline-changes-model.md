@@ -1,7 +1,7 @@
 # ADR 0015 — Per-session git baseline, not touched-file intersection, anchors the Code Changes View
 
 **Date:** 2026-07-22
-**Status:** Accepted
+**Status:** Accepted. Its default-off "My edits only" is superseded by [ADR 0050](0050-ai-changes-keeps-to-claudes-files.md).
 
 ## Context
 

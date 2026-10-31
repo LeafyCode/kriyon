@@ -22,6 +22,7 @@ import {
   badgeCount,
   idleSession,
   isWorktreeSession,
+  relativizeTouchedPath,
   sessionRow,
   sessionTouchedRelative,
   sessionWorkingDir,
@@ -1125,4 +1126,33 @@ test("applyHooksOff ignores ids that are not sessions", () => {
   // claude and is never removed through `removeSession`.
   useSessions.getState().applyHooksOff("pane-1", "user");
   expect(useSessions.getState().hooksOff["pane-1"]).toBeUndefined();
+});
+
+test("mergeTouchedFiles adds the files the Activity log saw Claude change, once each", () => {
+  const store = useSessions.getState();
+  useSessions.setState({ touchedFiles: { s1: ["/repo/a.ts"] } });
+  store.mergeTouchedFiles("s1", ["/repo/a.ts", "/repo/gen.ts"]);
+  expect(useSessions.getState().touchedFiles.s1).toEqual([
+    "/repo/a.ts",
+    "/repo/gen.ts",
+  ]);
+});
+
+test("mergeTouchedFiles keeps the same array when it learns nothing new", () => {
+  useSessions.setState({ touchedFiles: { s1: ["/repo/a.ts"] } });
+  const before = useSessions.getState().touchedFiles.s1;
+  useSessions.getState().mergeTouchedFiles("s1", ["/repo/a.ts"]);
+  expect(useSessions.getState().touchedFiles.s1).toBe(before);
+});
+
+test("relativizeTouchedPath sees through macOS's /private firmlink either way", () => {
+  expect(relativizeTouchedPath("/tmp/repo/a.ts", "/private/tmp/repo")).toBe(
+    "a.ts"
+  );
+  expect(relativizeTouchedPath("/private/tmp/repo/a.ts", "/tmp/repo")).toBe(
+    "a.ts"
+  );
+  expect(relativizeTouchedPath("/elsewhere/a.ts", "/private/tmp/repo")).toBe(
+    null
+  );
 });

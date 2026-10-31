@@ -139,13 +139,13 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
   as a pure function, not in a render body. Memoized per session on exactly the fields it reads,
   so the scroll-rate writes it ignores (`activeFile`, the [Jump rail]'s `viewed`) cost an O(1)
   cache hit and no re-render. _Avoid_: changes selector, view state.
-- **Touched files** (`touchedFiles`, `sessionTouchedRelative`) — the paths a [Session]'s own
-  `Edit`/`Write` tool calls hit, reconstructed from hook events. Attribution only: a file the
-  [Session baseline] diff already found gets a "✎ this session" badge, and the opt-in,
-  default-off **My edits only** filter narrows the on-screen list to that set. Cumulative and
-  incomplete by construction (a `Bash`-driven edit leaves no trace, a revert never clears) — so
-  it labels *who* plausibly changed a file, and never gates whether a change exists (ADR 0015).
-  _Avoid_: edited files, session files.
+- **Touched files** (`touchedFiles`, `sessionTouchedRelative`, `mergeTouchedFiles`) — the files
+  Claude changed in a [Session]: its edits and writes as they happen, plus everything the
+  [Activity log] recorded (`activity_changed_paths`: subagents' edits, the files a command
+  changed, and edits from before a restart), merged in on every refresh. Per file, not per
+  line, and attribution only: it never decides whether a change exists. It gives the "✎ this
+  session" badge and backs **Only Claude's edits**, which is on by default in AI changes
+  (ADR 0050, superseding ADR 0015's default-off). _Avoid_: edited files, session files.
 - **Summary bar** — the [Changes view]'s header strip: the baseline label, the [Diff totals],
   and a refresh control with an "updated Xs ago" staleness hint. The baseline label is the
   view's trust anchor and may never imply an anchor it can't name — `"HEAD · uncommitted"` for
@@ -165,7 +165,8 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
   hunks actually changed, so refreshing never wipes the user's progress through a review.
   _Avoid_: minimap, scrollbar. Distinct from the [Viewed marker].
 - **File tree pane** — the [Changes view]'s left column, three scope tabs: **AI changes** (the
-  [Session diff]'s files, grouped by directory, with the "Only Claude's edits" filter), **All
+  [Session diff]'s files Claude changed — the [Touched files] — grouped by directory; turning
+  "Only Claude's edits" off shows everything since the session started), **All
   changes** (the [Uncommitted diff]'s files, laid out the same way) and **Files** (the
   [All-files browser]). All stay mounted across a flip. Selecting a file either jumps the [Diff
   feed] to it or opens it in the [File viewer].

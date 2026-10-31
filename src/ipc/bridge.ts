@@ -1417,6 +1417,13 @@ export function listFiles(cwd: string, query: string): Promise<FileEntry[]> {
 
 // --- Activity log (mirrors Rust `activity_store`) ---
 
+/** Every file Claude changed in a session — its edits, writes and the files
+ * its commands changed, subagents included — as absolute paths (Rust
+ * `activity_rt::activity_changed_paths`). */
+export function activityChangedPaths(sessionId: string): Promise<string[]> {
+  return invoke("activity_changed_paths", { sessionId });
+}
+
 /** What kind of tool an [Activity step] ran (Rust `StepKind`). */
 export type StepKind =
   | "read"

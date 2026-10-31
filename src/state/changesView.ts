@@ -9,10 +9,12 @@ import {
   computeTotalsFromFiles,
   type EditState,
   type FileTreeTab,
+  myEditsOnlyOf,
   type SessionChanges,
   type SessionChangesUi,
   visibleFiles,
 } from "./changes.ts";
+import { canonicalDir } from "./paths.ts";
 
 /**
  * The [Changes view model]: the single resolved answer for "what should the
@@ -152,29 +154,6 @@ export interface ChangesViewModel {
    * avoid. `null` until a diff has landed, so the bar shows its neutral
    * placeholder rather than a confident zero. */
   totals: DiffTotals | null;
-}
-
-/** `path` without a trailing slash, so `/repo` and `/repo/` compare equal
- * and joining never produces a doubled separator. */
-function withoutTrailingSlash(path: string): string {
-  return path.endsWith("/") ? path.slice(0, -1) : path;
-}
-
-/** macOS firmlinks `/tmp`, `/var` and `/etc` into `/private`, so one
- * directory has two equally-real spellings — and the two operands below
- * reliably disagree about which to use: `repo_toplevel` is git's
- * `rev-parse --show-toplevel`, which canonicalizes, while the session cwd is
- * whatever raw path the project row carries. Anchored, and with the boundary
- * asserted, so `/private/variables` and `/private/mine` (ordinary
- * directories, not firmlink twins) are left alone. */
-const MACOS_FIRMLINK_PREFIX = /^\/private(?=\/(?:etc|tmp|var)(?:\/|$))/;
-
-/** One spelling per directory, so the prefix arithmetic in
- * {@link cwdRelativePath} compares like with like. Collapses toward the short
- * form, which makes it direction-agnostic: either operand may be the
- * canonicalized one. */
-function canonicalDir(path: string): string {
-  return withoutTrailingSlash(path).replace(MACOS_FIRMLINK_PREFIX, "");
 }
 
 /**
@@ -490,7 +469,7 @@ function scopeOf(
     // "nothing changed" — the baseline-scoped message would be a lie.
     emptyMessage: (hiddenByFilter) =>
       editsFilterActive && hiddenByFilter
-        ? "No files touched by this session."
+        ? "Claude hasn't changed any files in this session. Your own edits are under All changes."
         : `No changes vs ${entry?.baselineLabel}.`,
     error: hasError ? entry?.error : undefined,
     label: entry?.baselineLabel ?? "",
@@ -623,7 +602,7 @@ export function changedFileCount(
   const entry = state.bySession[sessionId];
   const ui = state.ui[sessionId];
   const editsFilterActive =
-    (ui?.myEditsOnly ?? false) && (ui?.tab ?? "changes") === "changes";
+    myEditsOnlyOf(ui) && (ui?.tab ?? "changes") === "changes";
   if (!editsFilterActive) {
     return entry?.totals?.files ?? 0;
   }
@@ -651,7 +630,7 @@ export function changesView(
     dirtyPath: state.dirtyFiles[sessionId],
     drafts: state.fileDrafts[sessionId],
     entry,
-    myEditsOnly: ui?.myEditsOnly ?? false,
+    myEditsOnly: myEditsOnlyOf(ui),
     pendingJump: ui?.pendingJump,
     repoToplevel: deps.repoToplevel,
     selectedFile: ui?.selectedFile,

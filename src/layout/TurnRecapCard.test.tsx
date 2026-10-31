@@ -126,15 +126,29 @@ test("Review changes shows when Claude changed files through the shell, not its 
   ).not.toBeInTheDocument();
 
   cleanup();
+  const shellFile = {
+    binary: false,
+    hunks: [{ header: "@@", lines: [{ kind: "added" as const, text: "x" }] }],
+    oldPath: null,
+    path: "src/math.js",
+    status: "added" as const,
+  };
   useChanges.setState((state) => ({
     bySession: {
       ...state.bySession,
       s1: {
         ...state.bySession.s1,
-        totals: { additions: 8, deletions: 0, files: 2 },
+        diff: { base: "HEAD", files: [shellFile] },
+        totals: { additions: 1, deletions: 0, files: 1 },
       },
     },
   }));
+  // The Activity log records the files a command changed, so the shell's
+  // file counts as Claude's.
+  useSessions.setState({
+    repoToplevel: { s1: "/repo" },
+    touchedFiles: { s1: ["/repo/src/math.js"] },
+  });
   render(<TurnRecapCard />);
   expect(screen.getByRole("button", { name: "Review changes" })).toBeVisible();
 });

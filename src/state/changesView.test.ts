@@ -335,7 +335,9 @@ describe("computeChangesView — the 'My edits only' filter", () => {
       input({ entry, myEditsOnly: true, touchedRelative: NO_TOUCHED })
     );
     expect(view.pane).toBe("empty");
-    expect(view.emptyMessage).toBe("No files touched by this session.");
+    expect(view.emptyMessage).toBe(
+      "Claude hasn't changed any files in this session. Your own edits are under All changes."
+    );
   });
 
   it("still names the baseline when the diff itself is empty and the filter is on", () => {
@@ -565,7 +567,8 @@ describe("changesView — memoized per session on its actual inputs", () => {
   it("reads the store's per-session defaults", () => {
     const view = changesView(state(), "s1", deps);
     expect(view.tab).toBe("changes");
-    expect(view.myEditsOnly).toBe(false);
+    // AI changes keeps to Claude's files unless turned off (ADR 0050).
+    expect(view.myEditsOnly).toBe(true);
     expect(view.selectedFile).toBeUndefined();
     expect(view.pendingJump).toBeUndefined();
   });
@@ -712,7 +715,8 @@ describe("changedFileCount — the number the Changes tab prints", () => {
   }
 
   it("counts the whole diff when no filter is biting", () => {
-    expect(changedFileCount(state(), "s1", NO_TOUCHED)).toBe(3);
+    const off = { s1: { myEditsOnly: false } };
+    expect(changedFileCount(state(off), "s1", NO_TOUCHED)).toBe(3);
   });
 
   it("counts what the feed shows once My edits only bites", () => {
@@ -886,5 +890,54 @@ describe("the All changes scope", () => {
     const view = allChanges({ tab: "changes" });
     expect(view.baselineLabel).toBe("session start");
     expect(view.displayFiles.map((f) => f.path)).toEqual(["src/claude.ts"]);
+  });
+});
+
+describe("AI changes keeps to Claude's files by default", () => {
+  beforeEach(() => {
+    forgetChangesView("s1");
+    useChanges.setState({
+      bySession: {},
+      dirtyFiles: {},
+      fileDrafts: {},
+      ui: {},
+    });
+  });
+
+  it("filters to the files Claude changed until the switch is turned off", () => {
+    useChanges.setState({
+      bySession: { s1: readyEntry(diff([file("claude.ts"), file("mine.ts")])) },
+    });
+    const deps = {
+      cwd: "/repo",
+      repoToplevel: "/repo",
+      touchedRelative: new Set(["claude.ts"]),
+    };
+
+    const before = changesView(useChanges.getState(), "s1", deps);
+    expect(before.myEditsOnly).toBe(true);
+    expect(before.displayFiles.map((f) => f.path)).toEqual(["claude.ts"]);
+    expect(
+      changedFileCount(useChanges.getState(), "s1", deps.touchedRelative)
+    ).toBe(1);
+
+    useChanges.getState().toggleMyEditsOnly("s1");
+    const after = changesView(useChanges.getState(), "s1", deps);
+    expect(after.displayFiles).toHaveLength(2);
+  });
+
+  it("says Claude changed nothing, rather than nothing changed", () => {
+    useChanges.setState({
+      bySession: { s1: readyEntry(diff([file("mine.ts")])) },
+    });
+    const view = changesView(useChanges.getState(), "s1", {
+      cwd: "/repo",
+      repoToplevel: "/repo",
+      touchedRelative: new Set(),
+    });
+    expect(view.pane).toBe("empty");
+    expect(view.emptyMessage).toBe(
+      "Claude hasn't changed any files in this session. Your own edits are under All changes."
+    );
   });
 });

@@ -399,6 +399,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             greet,
             activity_rt::activity_turns,
+            activity_rt::activity_changed_paths,
             activity_rt::activity_step,
             activity_rt::activity_stats,
             activity_rt::activity_delete_session,

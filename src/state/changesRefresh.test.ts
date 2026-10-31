@@ -2,6 +2,7 @@ import { act, renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
 vi.mock("../ipc/bridge.ts", () => ({
+  activityChangedPaths: vi.fn(),
   defaultBranch: vi.fn(),
   diffSessionChanges: vi.fn(),
   diffWorkingTree: vi.fn(),
@@ -12,6 +13,7 @@ vi.mock("../ipc/bridge.ts", () => ({
 }));
 
 import {
+  activityChangedPaths,
   defaultBranch,
   diffSessionChanges,
   diffWorkingTree,
@@ -34,6 +36,7 @@ import { DEFAULT_LAYOUT, useLayout } from "./layout.ts";
 import { type UiSession, useSessions } from "./sessions.ts";
 
 const mockedDefaultBranch = vi.mocked(defaultBranch);
+const mockedActivityChangedPaths = vi.mocked(activityChangedPaths);
 const mockedDiffWorkingTree = vi.mocked(diffWorkingTree);
 const mockedDiffSessionChanges = vi.mocked(diffSessionChanges);
 const mockedRepoToplevel = vi.mocked(repoToplevel);
@@ -163,6 +166,7 @@ beforeEach(() => {
   useLayout.setState({ layout: DEFAULT_LAYOUT });
   useChanges.setState({ bySession: {}, refresh: REAL_REFRESH, ui: {} });
   mockedDefaultBranch.mockReset().mockResolvedValue("main");
+  mockedActivityChangedPaths.mockReset().mockResolvedValue([]);
   mockedDiffSessionChanges.mockReset().mockResolvedValue(emptyDiff());
   mockedDiffWorkingTree.mockReset().mockResolvedValue(emptyDiff());
   mockedRepoToplevel.mockReset().mockResolvedValue("/repo");
@@ -1580,4 +1584,25 @@ describe("the All changes scope (uncommitted work)", () => {
     expect(entry?.diff).toBe(sessionDiff);
     expect(entry?.uncommitted?.error).toBe("git broke");
   });
+});
+
+test("a refresh learns from the Activity log which files Claude changed, Bash and subagents included", async () => {
+  seedActiveSession();
+  mockedActivityChangedPaths.mockResolvedValue(["/repo/gen.ts"]);
+
+  await refreshSessionChanges("s1");
+
+  await vi.waitFor(() =>
+    expect(useSessions.getState().touchedFiles.s1).toEqual(["/repo/gen.ts"])
+  );
+  expect(mockedActivityChangedPaths).toHaveBeenCalledWith("s1");
+});
+
+test("an unavailable Activity log never fails the refresh", async () => {
+  seedActiveSession();
+  mockedActivityChangedPaths.mockRejectedValue(new Error("no store"));
+
+  await refreshSessionChanges("s1");
+
+  expect(useChanges.getState().bySession.s1?.status).toBe("ready");
 });

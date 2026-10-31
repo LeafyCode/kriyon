@@ -78,6 +78,17 @@ export const EMPTY_VIEWED: Record<string, boolean> = {};
 export const EMPTY_EXPANDED_DIRS: Record<string, boolean> = {};
 
 /**
+ * Whether the AI changes tab keeps to the files Claude changed — on unless
+ * the user turned it off. The record behind it is the [Activity log]
+ * (edits, writes and the files a command changed, subagents included), so it
+ * is trusted by default; the user's own edits are under All changes. See ADR
+ * 0050, which supersedes ADR 0015's default-off.
+ */
+export function myEditsOnlyOf(ui: SessionChangesUi | undefined): boolean {
+  return ui?.myEditsOnly ?? true;
+}
+
+/**
  * Which scope the Files view's left column is showing:
  * - `"changes"` — **AI changes**: what changed since the session started
  *   (the [Session diff]), with the optional "only Claude's files" filter.
@@ -828,7 +839,7 @@ export const useChanges = create<ChangesState>((set, get) => ({
   toggleMyEditsOnly: (sessionId) =>
     set((state) =>
       patchUi(state, sessionId, {
-        myEditsOnly: !(state.ui[sessionId]?.myEditsOnly ?? false),
+        myEditsOnly: !myEditsOnlyOf(state.ui[sessionId]),
       })
     ),
 }));

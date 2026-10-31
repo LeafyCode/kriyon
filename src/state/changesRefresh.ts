@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import {
+  activityChangedPaths,
   defaultBranch,
   diffSessionChanges,
   diffWorkingTree,
@@ -165,6 +166,23 @@ function ensureRepoToplevel(sessionId: string, cwd: string): void {
     // tool calls, becoming active, and the manual button — just not on
     // changes nothing in the hook stream accounts for.
   });
+}
+
+/**
+ * Fold the [Activity log]'s record of what Claude changed in this session
+ * into its `touchedFiles` — subagents' edits, files a command changed, and
+ * edits from before a restart, none of which the live activity stream sees.
+ * One indexed SQLite read; never awaited, and a failure (no store outside
+ * Tauri) leaves the session's record as it was.
+ */
+function syncChangedPaths(sessionId: string): void {
+  activityChangedPaths(sessionId)
+    .then((paths) => {
+      useSessions.getState().mergeTouchedFiles(sessionId, paths);
+    })
+    .catch(() => {
+      // Best-effort: the live record still stands.
+    });
 }
 
 /** Resolved default branch per project root. The value changes about as often
@@ -526,6 +544,7 @@ export async function refreshSessionChanges(sessionId: string): Promise<void> {
   // Never awaited — a slow or failing lookup must not hold up the diff
   // fetch below, which is the trust-anchored part of this refresh.
   ensureRepoToplevel(sessionId, cwd);
+  syncChangedPaths(sessionId);
   const onBaselineInvalid = () => {
     useSessions.getState().setBaseline(sessionId, null);
   };

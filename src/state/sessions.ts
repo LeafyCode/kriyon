@@ -29,6 +29,7 @@ import {
   requestRefresh,
   // biome-ignore lint/suspicious/noImportCycles: deliberate and inert — see above.
 } from "./changesRefresh.ts";
+import { canonicalDir } from "./paths.ts";
 import { useUsageCards } from "./usageCards.ts";
 import {
   completedTasks,
@@ -264,6 +265,11 @@ export interface SessionsState {
    * here — no sidebar surface renders it (the tray reads its own snapshot).
    */
   memory: Record<string, number>;
+  /** Add the files the [Activity log] saw Claude change in `id` (absolute
+   * paths) to its `touchedFiles` — the log records what the live activity
+   * stream can't: subagents' edits, the files a command changed, and
+   * everything from before a restart. */
+  mergeTouchedFiles: (id: string, paths: readonly string[]) => void;
   /**
    * Record that a session's `claude` exited underneath the app. Ignores ids the
    * store does not know (the host's exit signal is shared with Project terminal
@@ -604,24 +610,25 @@ export const EMPTY_TOUCHED_RELATIVE: Set<string> = new Set();
  * `../elsewhere/x.ts`), since {@link FileDiff.path} is always repo-relative
  * and such an entry could never match one anyway.
  *
- * Known gap: the Rust `repo_toplevel` command canonicalizes `cwd` (realpath),
- * so `toplevel` is always a realpath, while `touchedFiles` holds whatever
- * (possibly symlinked) path the edit tool actually used. Under a symlinked
- * project path — macOS's `/tmp` → `/private/tmp`, or a symlinked home
- * directory — every prefix test here fails and every badge for that session
- * silently vanishes. This fails safe (no file is ever mis-attributed to the
- * wrong session), so it's left as-is rather than special-cased.
+ * macOS's `/tmp` → `/private/tmp` firmlink is seen through (see
+ * `canonicalDir`). Known gap: any other symlinked project path (a symlinked
+ * home directory) still fails the prefix test, since the Rust
+ * `repo_toplevel` is a realpath and `touchedFiles` holds whatever path the
+ * tool used. That fails safe — no file is ever mis-attributed to the wrong
+ * session.
  */
 export function relativizeTouchedPath(
   absPath: string,
   toplevel: string
 ): string | null {
-  const root = toplevel.endsWith("/") ? toplevel.slice(0, -1) : toplevel;
-  const prefix = `${root}/`;
-  if (!absPath.startsWith(prefix)) {
+  // Both sides through one spelling: git canonicalizes the toplevel
+  // (`/private/tmp/…`) while a tool names the path it was given (`/tmp/…`).
+  const prefix = `${canonicalDir(toplevel)}/`;
+  const path = canonicalDir(absPath);
+  if (!path.startsWith(prefix)) {
     return null;
   }
-  return absPath.slice(prefix.length);
+  return path.slice(prefix.length);
 }
 
 /**
@@ -1152,6 +1159,15 @@ export const useSessions = create<SessionsState>((set, get) => ({
           ? withTouchedFile(state.touchedFiles, id, completedTarget)
           : state.touchedFiles,
       };
+    }),
+
+  mergeTouchedFiles: (id, paths) =>
+    set((state) => {
+      let touched = state.touchedFiles;
+      for (const path of paths) {
+        touched = withTouchedFile(touched, id, path);
+      }
+      return touched === state.touchedFiles ? state : { touchedFiles: touched };
     }),
 
   setPendingSeedPrompt: (id, text) =>

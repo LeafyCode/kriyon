@@ -460,6 +460,37 @@ impl ActivityStore {
         Ok(())
     }
 
+    /// Every file Claude changed in `session_id`, as absolute paths, each
+    /// once: the targets of its finished edits and writes, and the files its
+    /// commands changed — the main agent's and every subagent's. A failed or
+    /// still-running step changed nothing it can be held to.
+    ///
+    /// # Errors
+    /// On a database error.
+    pub fn changed_paths(&self, session_id: &str) -> Result<Vec<String>, ActivityError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT kind, target, changed_files FROM steps
+             WHERE session_id = ?1 AND status = 'ok'
+               AND (kind IN ('edit', 'write') OR changed_files IS NOT NULL)",
+        )?;
+        let rows = stmt.query_map([session_id], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, Option<String>>(1)?,
+                r.get::<_, Option<String>>(2)?,
+            ))
+        })?;
+        let mut paths = std::collections::BTreeSet::new();
+        for row in rows {
+            let (kind, target, changed) = row?;
+            if matches!(kind.as_str(), "edit" | "write") {
+                paths.extend(target);
+            }
+            paths.extend(changed.iter().flat_map(|c| c.lines().map(str::to_string)));
+        }
+        Ok(paths.into_iter().filter(|p| !p.is_empty()).collect())
+    }
+
     /// The newest `limit` turns of a session, newest first, with their steps.
     ///
     /// # Errors
@@ -1651,6 +1682,59 @@ mod tests {
         assert_eq!(step.kind, StepKind::Command);
         assert_ne!(step.flags & flags::INSTALLED, 0);
         assert_eq!((step.started_ms, step.duration_ms), (2000, Some(1000)));
+    }
+
+    #[test]
+    fn changed_paths_lists_every_file_claude_changed_and_nothing_it_only_tried() {
+        let mut store = ActivityStore::open_in_memory().expect("opens");
+        let post = |id: &str, tool: &str, extra: serde_json::Value| {
+            let mut ev = serde_json::json!({
+                "event": "PostToolUse", "tool_name": tool, "tool_use_id": id,
+                "prompt_id": "p1", "ts": at(2),
+            });
+            for (k, v) in extra.as_object().expect("object") {
+                ev[k] = v.clone();
+            }
+            line(&ev)
+        };
+        ingest(
+            &mut store,
+            &[
+                prompt("p1", "go", 1),
+                post("t1", "Edit", serde_json::json!({"target": "/w/a.ts"})),
+                post("t2", "Write", serde_json::json!({"target": "/w/new.ts"})),
+                // A subagent's edit is Claude's too.
+                post(
+                    "t3",
+                    "MultiEdit",
+                    serde_json::json!({"target": "/w/b.ts", "agent_id": "x1"}),
+                ),
+                post(
+                    "t4",
+                    "Bash",
+                    serde_json::json!({"changed_files": ["/w/gen.ts", "/w/a.ts"]}),
+                ),
+                // Read-only and failed steps changed nothing.
+                post("t5", "Read", serde_json::json!({"target": "/w/readme.md"})),
+                line(&serde_json::json!({
+                    "event": "PostToolUseFailure", "tool_name": "Edit", "tool_use_id": "t6",
+                    "prompt_id": "p1", "target": "/w/failed.ts", "error": "no match", "ts": at(2),
+                })),
+            ],
+        );
+        // Another session's edits are not this one's.
+        store
+            .ingest(
+                "s2",
+                &[post("t9", "Edit", serde_json::json!({"target": "/w/other.ts"})).as_str()],
+                CUR,
+                0,
+            )
+            .expect("ingests");
+
+        let mut paths = store.changed_paths("s1").expect("reads");
+        paths.sort();
+        assert_eq!(paths, ["/w/a.ts", "/w/b.ts", "/w/gen.ts", "/w/new.ts"]);
     }
 
     #[test]

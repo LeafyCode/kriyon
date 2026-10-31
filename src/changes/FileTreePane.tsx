@@ -131,7 +131,7 @@ const TREE_TABS = [
   {
     label: "AI changes",
     testId: "file-tree-tab-changes",
-    title: "What changed since this session started",
+    title: "Files Claude changed in this session",
     value: "changes",
   },
   {
