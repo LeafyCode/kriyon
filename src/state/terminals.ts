@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { disposeSession } from "../terminal/sessionHost.ts";
+import { fullyParkedProjectIds, useSessions } from "./sessions.ts";
 
 /**
  * What an intercepted quit would destroy, so the confirmation can name it: a
@@ -408,4 +409,30 @@ export function projectPaneIds(
       tab.panes.map((pane) => pane.id)
     ) ?? []
   );
+}
+
+/**
+ * Stop a project's [Project terminal]s the moment it becomes fully parked —
+ * whichever way it got there: *Park project*, or closing or archiving the one
+ * session still on the rail after the rest were parked. The dock unmounts a
+ * fully parked project's workspace, so a command left running there would be
+ * out of sight and out of reach. Keyed on the state, not on the actions that
+ * reach it, so a new way to get there can't forget. Returns the unsubscribe.
+ */
+export function installParkedTerminalStops(): () => void {
+  let parked = fullyParkedProjectIds(useSessions.getState().sessions);
+  let seen = useSessions.getState().sessions;
+  return useSessions.subscribe((state) => {
+    if (state.sessions === seen) {
+      return;
+    }
+    seen = state.sessions;
+    const next = fullyParkedProjectIds(state.sessions);
+    for (const projectId of next) {
+      if (!parked.has(projectId)) {
+        useTerminals.getState().stopProject(projectId);
+      }
+    }
+    parked = next;
+  });
 }
