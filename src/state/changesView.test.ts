@@ -797,3 +797,94 @@ describe("treeDecorations", () => {
     );
   });
 });
+
+describe("the All changes scope", () => {
+  const sessionFiles = [file("src/claude.ts")];
+  const uncommittedFiles = [file("src/claude.ts"), file("src/mine.ts", 2, 1)];
+
+  function allChanges(overrides: Partial<ChangesViewInput> = {}) {
+    return computeChangesView(
+      input({
+        entry: readyEntry(diff(sessionFiles), {
+          baselineLabel: "session start",
+          uncommitted: {
+            diff: diff(uncommittedFiles),
+            label: "HEAD · uncommitted",
+          },
+        }),
+        tab: "uncommitted",
+        ...overrides,
+      })
+    );
+  }
+
+  it("lists every uncommitted file, not just the session's, with its own totals and label", () => {
+    const view = allChanges();
+    expect(view.displayFiles.map((f) => f.path)).toEqual([
+      "src/claude.ts",
+      "src/mine.ts",
+    ]);
+    expect(view.totals).toEqual({ additions: 3, deletions: 1, files: 2 });
+    expect(view.baselineLabel).toBe("HEAD · uncommitted");
+    expect(view.pane).toBe("feed");
+    // The session's own list is untouched — the Inspector reads it.
+    expect(view.files.map((f) => f.path)).toEqual(["src/claude.ts"]);
+  });
+
+  it("is loading until the uncommitted diff first lands", () => {
+    const view = computeChangesView(
+      input({ entry: readyEntry(diff(sessionFiles)), tab: "uncommitted" })
+    );
+    expect(view.pane).toBe("loading");
+    expect(view.feedMounted).toBe(false);
+  });
+
+  it("ignores the only-Claude's-files filter, which belongs to AI changes", () => {
+    const view = allChanges({ myEditsOnly: true });
+    expect(view.editsFilterActive).toBe(false);
+    expect(view.showEditsToggle).toBe(false);
+    expect(view.displayFiles).toHaveLength(2);
+  });
+
+  it("says so plainly when nothing is uncommitted", () => {
+    const view = computeChangesView(
+      input({
+        entry: readyEntry(diff(sessionFiles), {
+          uncommitted: { diff: diff([]), label: "HEAD · uncommitted" },
+        }),
+        tab: "uncommitted",
+      })
+    );
+    expect(view.pane).toBe("empty");
+    expect(view.emptyMessage).toBe("No uncommitted changes.");
+  });
+
+  it("shows its own fetch error", () => {
+    const view = allChanges({});
+    const failed = computeChangesView(
+      input({
+        entry: readyEntry(diff(sessionFiles), {
+          uncommitted: { diff: null, error: "git broke", label: "" },
+        }),
+        tab: "uncommitted",
+      })
+    );
+    expect(view.error).toBeUndefined();
+    expect(failed.error).toBe("git broke");
+    expect(failed.pane).toBe("error");
+  });
+
+  it("colours the Files tree from uncommitted work once it is loaded", () => {
+    const view = allChanges({ tab: "all" });
+    expect([...view.decorations.files.keys()].sort()).toEqual([
+      "src/claude.ts",
+      "src/mine.ts",
+    ]);
+  });
+
+  it("the AI changes tab keeps the session's own label", () => {
+    const view = allChanges({ tab: "changes" });
+    expect(view.baselineLabel).toBe("session start");
+    expect(view.displayFiles.map((f) => f.path)).toEqual(["src/claude.ts"]);
+  });
+});

@@ -83,6 +83,10 @@ export interface ChangesViewInput {
 
 /** One session's resolved Code Changes View — see the module doc. */
 export interface ChangesViewModel {
+  /** What the [Summary bar] says the active scope is measured against —
+   * the session start for AI changes, HEAD (or the base branch) for All
+   * changes. */
+  baselineLabel: string;
   /** The All-files tree's git marks — see {@link TreeDecorations}. Built
    * from the unfiltered `files`: that tab ignores the filter. */
   decorations: TreeDecorations;
@@ -385,53 +389,112 @@ function computePane(params: {
  * decision surface, with no store and no React in it. {@link changesView} is
  * the memoized store-reading wrapper every consumer actually calls. */
 export function computeChangesView(input: ChangesViewInput): ChangesViewModel {
-  const { entry, myEditsOnly, selectedFile, tab, touchedRelative } = input;
+  const { entry, myEditsOnly, selectedFile, tab } = input;
   const showViewer = tab === "all" && Boolean(selectedFile);
   const editsFilterActive = myEditsOnly && tab === "changes";
   // Both memoized on their inputs' identity rather than rebuilt per call —
   // `DiffFeed` reads a new `files` array as "a refresh landed". See
   // {@link visibleFilesCache}.
   const files = memoVisibleFiles(entry?.diff);
-  const displayFiles = editsFilterActive
-    ? memoFilteredFiles(files, touchedRelative)
-    : files;
+  const uncommitted = entry?.uncommitted;
+  const uncommittedFiles = uncommitted?.diff
+    ? memoVisibleFiles(uncommitted.diff)
+    : undefined;
+  const scope = scopeOf(input, files, uncommittedFiles, editsFilterActive);
+  const { displayFiles, scopeLoaded } = scope;
   const loadedOnce = entry !== undefined && entry.diff !== null;
-  const isEmpty = loadedOnce && displayFiles.length === 0;
-  const overBudget = Boolean(entry?.diff?.budgetExceeded);
-  const hasError = entry?.status === "error" && Boolean(entry.error);
-  // "Changes exist, the filter hid every one of them" must not read as
-  // "nothing changed" — the baseline-scoped message would be a lie.
-  const hiddenByMyEditsFilter =
-    editsFilterActive && files.length > 0 && isEmpty;
+  const isEmpty = scopeLoaded && displayFiles.length === 0;
   return {
-    decorations: treeDecorations(files, input.repoToplevel, input.cwd),
-    diff: entry?.diff ?? null,
+    baselineLabel: scope.label,
+    decorations: treeDecorations(
+      uncommittedFiles ?? files,
+      input.repoToplevel,
+      input.cwd
+    ),
+    diff: scope.diff,
     displayFiles,
     dirtyPaths: computeDirtyPaths(displayFiles, input),
     editsFilterActive,
-    emptyMessage: hiddenByMyEditsFilter
-      ? "No files touched by this session."
-      : `No changes vs ${entry?.baselineLabel}.`,
-    error: hasError ? entry?.error : undefined,
-    feedMounted: loadedOnce && !isEmpty,
+    emptyMessage: scope.emptyMessage(files.length > 0 && isEmpty),
+    error: scope.error,
+    feedMounted: scopeLoaded && !isEmpty,
     files,
     loadedOnce,
     myEditsOnly,
     pane: computePane({
-      hasError,
+      hasError: Boolean(scope.error),
       isEmpty,
-      loadedOnce,
-      overBudget,
+      loadedOnce: scopeLoaded,
+      overBudget: Boolean(scope.diff?.budgetExceeded),
       showViewer,
     }),
     pendingJump: input.pendingJump,
     selectedFile,
     selectedFileDiff: selectedFile
-      ? files.find((f) => f.path === selectedFile)
+      ? (files.find((f) => f.path === selectedFile) ??
+        uncommittedFiles?.find((f) => f.path === selectedFile))
       : undefined,
     showEditsToggle: tab === "changes" && loadedOnce,
     showViewer,
     tab,
+    totals: scope.totals,
+  };
+}
+
+/** What the diff column lists for the active scope — see {@link scopeOf}. */
+interface Scope {
+  diff: SessionDiff | null;
+  displayFiles: FileDiff[];
+  emptyMessage: (hiddenByFilter: boolean) => string;
+  error: string | undefined;
+  label: string;
+  scopeLoaded: boolean;
+  totals: DiffTotals | null;
+}
+
+/**
+ * The diff the active scope lists. All changes reads the uncommitted diff;
+ * AI changes and Files read the session diff (Files only shows it once the
+ * user goes back to a diff tab, but its pane rules are the session's). Kept
+ * apart from {@link computeChangesView} so each scope's rules read on their
+ * own, and the view stays within the complexity budget.
+ */
+function scopeOf(
+  input: ChangesViewInput,
+  files: FileDiff[],
+  uncommittedFiles: FileDiff[] | undefined,
+  editsFilterActive: boolean
+): Scope {
+  const { entry } = input;
+  if (input.tab === "uncommitted") {
+    const uncommitted = entry?.uncommitted;
+    const shown = uncommittedFiles ?? NO_FILES;
+    return {
+      diff: uncommitted?.diff ?? null,
+      displayFiles: shown,
+      emptyMessage: () => "No uncommitted changes.",
+      error: uncommitted?.error,
+      label: uncommitted?.label ?? "",
+      scopeLoaded: uncommittedFiles !== undefined,
+      totals: uncommittedFiles ? computeTotalsFromFiles(shown) : null,
+    };
+  }
+  const displayFiles = editsFilterActive
+    ? memoFilteredFiles(files, input.touchedRelative)
+    : files;
+  const hasError = entry?.status === "error" && Boolean(entry.error);
+  return {
+    diff: entry?.diff ?? null,
+    displayFiles,
+    // "Changes exist, the filter hid every one of them" must not read as
+    // "nothing changed" — the baseline-scoped message would be a lie.
+    emptyMessage: (hiddenByFilter) =>
+      editsFilterActive && hiddenByFilter
+        ? "No files touched by this session."
+        : `No changes vs ${entry?.baselineLabel}.`,
+    error: hasError ? entry?.error : undefined,
+    label: entry?.baselineLabel ?? "",
+    scopeLoaded: entry !== undefined && entry.diff !== null,
     totals: editsFilterActive
       ? computeTotalsFromFiles(displayFiles)
       : (entry?.totals ?? null),
@@ -482,6 +545,7 @@ interface ChangesViewKey {
    * store keeps them in one object that changes exactly when this view has to
    * be recomputed. */
   ui: SessionChangesUi | undefined;
+  uncommitted: SessionChanges["uncommitted"];
 }
 
 function sameKey(a: ChangesViewKey, b: ChangesViewKey): boolean {
@@ -496,7 +560,8 @@ function sameKey(a: ChangesViewKey, b: ChangesViewKey): boolean {
     a.status === b.status &&
     a.totals === b.totals &&
     a.touchedRelative === b.touchedRelative &&
-    a.ui === b.ui
+    a.ui === b.ui &&
+    a.uncommitted === b.uncommitted
   );
 }
 
@@ -605,6 +670,7 @@ export function changesView(
     totals: entry?.totals,
     touchedRelative: input.touchedRelative,
     ui,
+    uncommitted: entry?.uncommitted,
   };
   const cached = memo.get(sessionId);
   if (cached && sameKey(cached.key, key)) {

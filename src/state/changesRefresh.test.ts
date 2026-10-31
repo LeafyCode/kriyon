@@ -59,6 +59,7 @@ const IMMEDIATE_REASONS: RefreshReason[] = [
   "fs-change",
   "manual",
   "saved",
+  "scope",
 ];
 
 /** The reasons the [Working-tree budget] refusal suppresses — the two the
@@ -160,7 +161,7 @@ beforeEach(() => {
     warmPanes: [],
   });
   useLayout.setState({ layout: DEFAULT_LAYOUT });
-  useChanges.setState({ bySession: {}, refresh: REAL_REFRESH });
+  useChanges.setState({ bySession: {}, refresh: REAL_REFRESH, ui: {} });
   mockedDefaultBranch.mockReset().mockResolvedValue("main");
   mockedDiffSessionChanges.mockReset().mockResolvedValue(emptyDiff());
   mockedDiffWorkingTree.mockReset().mockResolvedValue(emptyDiff());
@@ -1476,5 +1477,107 @@ describe("useRevalidateOn", () => {
 
     expect(first).not.toHaveBeenCalled();
     expect(latest).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("the All changes scope (uncommitted work)", () => {
+  const sessionDiff: SessionDiff = {
+    base: "HEAD",
+    files: [
+      {
+        binary: false,
+        hunks: [],
+        oldPath: null,
+        path: "session.ts",
+        status: "added",
+      },
+    ],
+  };
+  const workingDiff: SessionDiff = {
+    base: "HEAD",
+    files: [
+      {
+        binary: false,
+        hunks: [],
+        oldPath: null,
+        path: "older.ts",
+        status: "modified",
+      },
+    ],
+  };
+
+  test("with a session snapshot, it fetches the uncommitted diff too while All changes is showing", async () => {
+    useSessions
+      .getState()
+      .addSession(locatedSession("s1", { baselineOid: "cafe" }));
+    useSessions.getState().setActiveSession("s1");
+    useChanges.getState().setTab("s1", "uncommitted");
+    mockedDiffSessionChanges.mockResolvedValue(sessionDiff);
+    mockedDiffWorkingTree.mockResolvedValue(workingDiff);
+
+    await refreshSessionChanges("s1");
+
+    const entry = useChanges.getState().bySession.s1;
+    expect(entry?.diff).toBe(sessionDiff);
+    expect(entry?.uncommitted?.diff).toBe(workingDiff);
+    expect(entry?.uncommitted?.label).toBe("HEAD · uncommitted");
+    expect(mockedDiffWorkingTree).toHaveBeenCalledWith("/repo", undefined);
+  });
+
+  test("the Files tab wants it too, for the tree's git colours", async () => {
+    useSessions
+      .getState()
+      .addSession(locatedSession("s1", { baselineOid: "cafe" }));
+    useSessions.getState().setActiveSession("s1");
+    useChanges.getState().setTab("s1", "all");
+    mockedDiffWorkingTree.mockResolvedValue(workingDiff);
+
+    await refreshSessionChanges("s1");
+
+    expect(useChanges.getState().bySession.s1?.uncommitted?.diff).toBe(
+      workingDiff
+    );
+  });
+
+  test("on the AI changes tab it costs nothing extra", async () => {
+    useSessions
+      .getState()
+      .addSession(locatedSession("s1", { baselineOid: "cafe" }));
+    useSessions.getState().setActiveSession("s1");
+
+    await refreshSessionChanges("s1");
+
+    expect(mockedDiffWorkingTree).not.toHaveBeenCalled();
+    expect(useChanges.getState().bySession.s1?.uncommitted).toBeUndefined();
+  });
+
+  test("without a snapshot the one diff already is the uncommitted one, fetched once", async () => {
+    seedActiveSession();
+    useChanges.getState().setTab("s1", "uncommitted");
+    mockedDiffWorkingTree.mockResolvedValue(workingDiff);
+
+    await refreshSessionChanges("s1");
+
+    expect(mockedDiffWorkingTree).toHaveBeenCalledTimes(1);
+    expect(useChanges.getState().bySession.s1?.uncommitted?.diff).toBe(
+      workingDiff
+    );
+  });
+
+  test("a failed uncommitted fetch is reported on its own and leaves the session diff alone", async () => {
+    useSessions
+      .getState()
+      .addSession(locatedSession("s1", { baselineOid: "cafe" }));
+    useSessions.getState().setActiveSession("s1");
+    useChanges.getState().setTab("s1", "uncommitted");
+    mockedDiffSessionChanges.mockResolvedValue(sessionDiff);
+    mockedDiffWorkingTree.mockRejectedValue(new Error("git broke"));
+
+    await refreshSessionChanges("s1");
+
+    const entry = useChanges.getState().bySession.s1;
+    expect(entry?.status).toBe("ready");
+    expect(entry?.diff).toBe(sessionDiff);
+    expect(entry?.uncommitted?.error).toBe("git broke");
   });
 });

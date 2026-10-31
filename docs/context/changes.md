@@ -164,10 +164,17 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
   scrolled-past file marked `viewed`. A `viewed` flag survives a refresh unless that file's
   hunks actually changed, so refreshing never wipes the user's progress through a review.
   _Avoid_: minimap, scrollbar. Distinct from the [Viewed marker].
-- **File tree pane** — the [Changes view]'s left column, two tabs: **Changes** (this diff's
-  files, grouped by directory) and **All files** (the [All-files browser]). Both stay mounted
-  across a flip. Selecting a file either jumps the [Diff feed] to it or opens it in the [File
-  viewer].
+- **File tree pane** — the [Changes view]'s left column, three scope tabs: **AI changes** (the
+  [Session diff]'s files, grouped by directory, with the "Only Claude's edits" filter), **All
+  changes** (the [Uncommitted diff]'s files, laid out the same way) and **Files** (the
+  [All-files browser]). All stay mounted across a flip. Selecting a file either jumps the [Diff
+  feed] to it or opens it in the [File viewer].
+- **Uncommitted diff** (`UncommittedChanges`, `SessionChanges.uncommitted`) — everything not yet
+  committed (or, in a worktree, not yet on the default branch), whoever made it: what an
+  editor's git panel shows, beside the [Session diff] rather than in place of it, so the
+  Inspector and the header count keep meaning "this session". Fetched only while All changes or
+  Files is showing (`scopeWantsUncommitted`); a session without a snapshot reuses its one diff.
+  _Avoid_: working changes, git changes.
 - **All-files browser** (`FileBrowserTree`, `list_dir`) — the lazy, directory-at-a-time tree of
   the whole repo under the [File tree pane]'s "All files" tab. Children are fetched on expand
   and never re-fetched behind a stale cwd. _Avoid_: file explorer, finder.

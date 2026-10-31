@@ -143,7 +143,8 @@ export const SIDEBAR_WIDTH_MIN = 220;
 export const SIDEBAR_WIDTH_MAX = 420;
 
 export const FILE_TREE_WIDTH_DEFAULT = 260;
-export const FILE_TREE_WIDTH_MIN = 180;
+// Wide enough for the three scope tabs (AI changes · All changes · Files).
+export const FILE_TREE_WIDTH_MIN = 240;
 export const FILE_TREE_WIDTH_MAX = 520;
 
 export const TERMINAL_DOCK_HEIGHT_DEFAULT = 260;

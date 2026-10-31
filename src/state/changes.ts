@@ -37,6 +37,9 @@ export interface SessionChanges {
   hunkHashes: Record<string, string>;
   status: ChangesFetchStatus;
   totals: DiffTotals | null;
+  /** The All changes scope's diff, fetched only while a scope wants it (see
+   * {@link scopeWantsUncommitted}); absent until then. */
+  uncommitted?: UncommittedChanges;
   /** File path → the jump rail's "already looked at" flag (Task 10). Set by
    * `markViewed` when a file's card intersects the viewport; reset by
    * `refresh` only for a path whose hunk content actually changed (compared
@@ -74,8 +77,34 @@ export const EMPTY_VIEWED: Record<string, boolean> = {};
  * forever off a fresh `?? {}`. */
 export const EMPTY_EXPANDED_DIRS: Record<string, boolean> = {};
 
-/** Which tab the Changes view's left column is showing. */
-export type FileTreeTab = "all" | "changes";
+/**
+ * Which scope the Files view's left column is showing:
+ * - `"changes"` — **AI changes**: what changed since the session started
+ *   (the [Session diff]), with the optional "only Claude's files" filter.
+ * - `"uncommitted"` — **All changes**: everything not yet committed (or, in
+ *   a worktree, not yet on the default branch), whoever made it — what an
+ *   editor's git panel shows.
+ * - `"all"` — **Files**: the whole tree.
+ */
+export type FileTreeTab = "all" | "changes" | "uncommitted";
+
+/** Whether `tab` needs the uncommitted diff: All changes lists it, and Files
+ * colours the tree from it. AI changes doesn't, so a session sitting there
+ * pays for one diff per refresh, not two. */
+export function scopeWantsUncommitted(tab: FileTreeTab | undefined): boolean {
+  return tab === "uncommitted" || tab === "all";
+}
+
+/** The All changes scope's diff — everything uncommitted — kept beside the
+ * session diff rather than in place of it, so the Inspector and the header
+ * count keep meaning "this session". */
+export interface UncommittedChanges {
+  diff: SessionDiff | null;
+  /** Why the last fetch failed, over whatever `diff` still holds. */
+  error?: string;
+  /** The summary bar's label for it, e.g. `uncommitted · vs HEAD`. */
+  label: string;
+}
 
 /** A file's `(mtime, len)` signature at the moment it was last read from
  * disk — what `writeFile`'s [Save conflict guard] compares against. Adopted

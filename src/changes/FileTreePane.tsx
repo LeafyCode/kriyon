@@ -128,8 +128,24 @@ const tabsRowStyle: CSSProperties = {
  * keep its keyboard contract and test ids.
  */
 const TREE_TABS = [
-  { label: "Changes", testId: "file-tree-tab-changes", value: "changes" },
-  { label: "All files", testId: "file-tree-tab-all", value: "all" },
+  {
+    label: "AI changes",
+    testId: "file-tree-tab-changes",
+    title: "What changed since this session started",
+    value: "changes",
+  },
+  {
+    label: "All changes",
+    testId: "file-tree-tab-uncommitted",
+    title: "Everything not committed yet, whoever changed it",
+    value: "uncommitted",
+  },
+  {
+    label: "Files",
+    testId: "file-tree-tab-all",
+    title: "Every file in the project",
+    value: "all",
+  },
 ] as const satisfies readonly SegmentedOption<FileTreeTab>[];
 
 /** The Changes tab's scrolling list. */
@@ -352,7 +368,7 @@ export function FileTreePane({
       </div>
       <div
         data-testid="file-tree-pane-changes"
-        style={subPaneStyle(tab !== "changes")}
+        style={subPaneStyle(tab === "all")}
       >
         <div style={listStyle}>
           {groups.map((group) => (

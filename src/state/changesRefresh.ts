@@ -23,6 +23,8 @@ import {
   isMissingBaselineObjectError,
   isWorkingTreeTooLargeError,
   nextViewedState,
+  scopeWantsUncommitted,
+  type UncommittedChanges,
   useChanges,
   // biome-ignore lint/suspicious/noImportCycles: deliberate and inert — see above.
 } from "./changes.ts";
@@ -117,7 +119,8 @@ export type RefreshReason =
   | "fs-change"
   | "live-edit"
   | "manual"
-  | "saved";
+  | "saved"
+  | "scope";
 
 /**
  * Resolve and cache `sessionId`'s git repo toplevel, once per distinct
@@ -367,6 +370,12 @@ async function doRefresh(
     const baselineLabel = anchoredToBaseline
       ? computeSessionBaselineLabel(diff.baseSha)
       : computeBaselineLabel(options.base, diff.baseSha);
+    const uncommitted = await fetchUncommitted(
+      sessionId,
+      cwd,
+      options.base,
+      anchoredToBaseline ? undefined : diff
+    );
     useChanges.setState((s) => ({
       bySession: {
         ...s.bySession,
@@ -379,6 +388,7 @@ async function doRefresh(
           hunkHashes,
           status: "ready",
           totals: computeTotals(diff),
+          uncommitted,
           viewed,
         },
       },
@@ -404,6 +414,45 @@ async function doRefresh(
         },
       },
     }));
+  }
+}
+
+/**
+ * The All changes scope's diff for this refresh, or `undefined` when no
+ * scope on screen wants it (see {@link scopeWantsUncommitted}).
+ *
+ * `sameAsSession` is the session diff when that diff was itself taken
+ * against `base` rather than a session snapshot — then it already *is* the
+ * uncommitted diff, and a second fetch would only repeat it. A failure is
+ * kept on the scope (`error`) rather than failing the refresh: the session
+ * diff it rode along with is fine.
+ */
+async function fetchUncommitted(
+  sessionId: string,
+  cwd: string,
+  base: string | undefined,
+  sameAsSession: SessionDiff | undefined
+): Promise<UncommittedChanges | undefined> {
+  const tab = useChanges.getState().ui[sessionId]?.tab;
+  if (!scopeWantsUncommitted(tab)) {
+    return;
+  }
+  if (sameAsSession) {
+    return {
+      diff: sameAsSession,
+      label: computeBaselineLabel(base, sameAsSession.baseSha),
+    };
+  }
+  const prev = useChanges.getState().bySession[sessionId]?.uncommitted;
+  try {
+    const diff = await diffWorkingTree(cwd, base);
+    return { diff, label: computeBaselineLabel(base, diff.baseSha) };
+  } catch (err) {
+    return {
+      diff: prev?.diff ?? null,
+      error: failureMessage(err),
+      label: prev?.label ?? computeBaselineLabel(base, null),
+    };
   }
 }
 

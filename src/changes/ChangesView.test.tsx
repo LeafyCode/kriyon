@@ -89,7 +89,7 @@ const mockedRepoToplevel = vi.mocked(repoToplevel);
 // Hoisted per Biome's `useTopLevelRegex` — reused by the touched-file
 // attribution describe block below.
 const THIS_SESSION_LABEL = /this session/i;
-const MY_EDITS_ONLY_NAME = /my edits only/i;
+const MY_EDITS_ONLY_NAME = /only claude's edits/i;
 const NO_FILES_TOUCHED_TEXT = /no files touched/i;
 const EDIT_FILE_BUTTON_RE = /edit file/i;
 
@@ -2001,7 +2001,7 @@ describe("ChangesView", () => {
       const toggle = screen.getByRole("switch", { name: MY_EDITS_ONLY_NAME });
       expect(toggle).toHaveAttribute("aria-checked", "false");
 
-      fireEvent.click(screen.getByText("My edits only"));
+      fireEvent.click(screen.getByText("Only Claude's edits"));
 
       expect(toggle).toHaveAttribute("aria-checked", "true");
       expect(findDiffCard("b.ts")).toBeNull();
@@ -2107,6 +2107,63 @@ describe("ChangesView", () => {
         screen.getByRole("switch", { name: MY_EDITS_ONLY_NAME })
       ).toHaveAttribute("aria-checked", "true");
       expect(findDiffCard("b.ts")).toBeNull();
+    });
+  });
+
+  describe("the three scopes", () => {
+    it("switching to All changes fetches the uncommitted work", () => {
+      seedReadySession("s1", [fileDiff("a.ts")]);
+      plainSession();
+      renderChangesView("s1");
+      const refresh = useChanges.getState().refresh as ReturnType<typeof vi.fn>;
+      const before = refresh.mock.calls.length;
+
+      fireEvent.click(screen.getByTestId("file-tree-tab-uncommitted"));
+
+      expect(refresh.mock.calls.length).toBe(before + 1);
+    });
+
+    it("shows the uncommitted files and what they are measured against", () => {
+      seedReadySession("s1", [fileDiff("a.ts")]);
+      plainSession();
+      useChanges.setState((s) => ({
+        bySession: {
+          s1: {
+            ...s.bySession.s1,
+            uncommitted: {
+              diff: {
+                base: "HEAD",
+                files: [fileDiff("a.ts"), fileDiff("b.ts")],
+              },
+              label: "HEAD · uncommitted",
+            },
+          },
+        },
+      }));
+      renderChangesView("s1");
+
+      fireEvent.click(screen.getByTestId("file-tree-tab-uncommitted"));
+
+      expect(
+        screen.getAllByTestId("file-tree-file-row").map((r) => r.title)
+      ).toEqual(["a.ts", "b.ts"]);
+      expect(screen.getByTestId("summary-totals")).toHaveTextContent(
+        "2 files changed"
+      );
+      expect(screen.getByTestId("summary-baseline")).toHaveTextContent(
+        "HEAD · uncommitted"
+      );
+    });
+
+    it("a jump to one of the session's files while All changes shows goes back to AI changes", () => {
+      seedReadySession("s1", [fileDiff("a.ts")]);
+      plainSession();
+      renderChangesView("s1");
+      fireEvent.click(screen.getByTestId("file-tree-tab-uncommitted"));
+
+      act(() => useChanges.getState().requestJump("s1", "a.ts"));
+
+      expect(useChanges.getState().ui.s1?.tab).toBe("changes");
     });
   });
 });

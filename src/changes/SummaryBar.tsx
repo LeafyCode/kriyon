@@ -127,6 +127,7 @@ function filesChangedLabel(files: number): string {
  * filter still gets the honest whole-diff totals (mirroring `isVisible`).
  */
 export function SummaryBar({
+  baselineLabel,
   diffControls = true,
   isVisible = true,
   onRefresh,
@@ -134,6 +135,9 @@ export function SummaryBar({
   sessionId,
   totals: displayTotals,
 }: {
+  /** What the diff on screen is measured against, from the active scope;
+   * falls back to the session diff's own label. */
+  baselineLabel?: string;
   /** Whether the diff feed is what's below — its Collapse all / Expand all
    * only mean something then. With a file open in the editor they are left
    * out rather than offered to do nothing. */
@@ -184,7 +188,7 @@ export function SummaryBar({
         ) : null}
       </span>
       <span data-testid="summary-baseline" style={baselineStyle}>
-        {entry?.baselineLabel}
+        {baselineLabel ?? entry?.baselineLabel}
       </span>
       <span style={spacerStyle} />
       {showStale && entry ? (

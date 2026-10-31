@@ -5,7 +5,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { useChanges } from "../state/changes.ts";
+import { scopeWantsUncommitted, useChanges } from "../state/changes.ts";
 import { type RefreshReason, requestRefresh } from "../state/changesRefresh.ts";
 import {
   type ChangesViewModel,
@@ -68,7 +68,7 @@ type JumpPlan = "clear-filter" | "drop" | "hold" | "scroll" | "show-feed";
  * appearing, the totals moving). */
 type JumpContext = Pick<
   ChangesViewModel,
-  "displayFiles" | "editsFilterActive" | "files" | "loadedOnce" | "showViewer"
+  "displayFiles" | "editsFilterActive" | "files" | "loadedOnce" | "tab"
 >;
 
 /**
@@ -81,10 +81,11 @@ type JumpContext = Pick<
  * a jump target the My-edits-only filter is hiding is still a real file in
  * the diff. The outcomes:
  *
- * - `"show-feed"` — `FileViewer` is what's on screen (All-files tab with a
- *   file selected), so `DiffFeed` is `display:none` and `scrollToFile` on a
- *   hidden virtualizer is a silent no-op. The caller flips the tab back to
- *   "changes" and leaves the request pending for the next run. Deliberately
+ * - `"show-feed"` — another scope is on screen: All changes lists a
+ *   different diff, and on Files `DiffFeed` is hidden behind `FileViewer`
+ *   (`scrollToFile` on a hidden virtualizer is a silent no-op). A jump names
+ *   a file of the session diff, so the caller flips the tab back to AI
+ *   changes ("changes") and leaves the request pending for the next run. Deliberately
  *   never "clear `selectedFile`": both make the feed visible, but
  *   `selectedFile` surviving a tab flip is the documented contract that
  *   keeps the viewer's draft/cursor/scroll alive (see its doc comment in
@@ -108,7 +109,7 @@ function planJump(view: JumpContext, path: string): JumpPlan {
   if (!view.files.some((f) => f.path === path)) {
     return view.loadedOnce ? "drop" : "hold";
   }
-  if (view.showViewer) {
+  if (view.tab !== "changes") {
     return "show-feed";
   }
   if (
@@ -397,15 +398,14 @@ export function ChangesView({ sessionId }: { sessionId: string }) {
   // consuming a jump writes the store and so produces a new view, and
   // re-running this effect on that (or on an unrelated dirty dot) is churn at
   // best and a re-entrant jump at worst.
-  const { displayFiles, editsFilterActive, files, loadedOnce, showViewer } =
-    view;
+  const { displayFiles, editsFilterActive, files, loadedOnce, tab } = view;
   const { pendingJump } = view;
   useEffect(() => {
     if (pendingJump === undefined) {
       return;
     }
     const plan = planJump(
-      { displayFiles, editsFilterActive, files, loadedOnce, showViewer },
+      { displayFiles, editsFilterActive, files, loadedOnce, tab },
       pendingJump
     );
     if (plan === "show-feed") {
@@ -432,13 +432,25 @@ export function ChangesView({ sessionId }: { sessionId: string }) {
     pendingJump,
     sessionId,
     setTab,
-    showViewer,
+    tab,
     toggleMyEditsOnly,
   ]);
+
+  // Opening a scope that lists uncommitted work (All changes, or Files for
+  // its git colours) fetches it now rather than at the next refresh — the
+  // routine refresh skips it while nobody is looking. Only on the switch
+  // itself, so a failed fetch is not retried in a loop.
+  const wantsUncommitted = scopeWantsUncommitted(tab);
+  useEffect(() => {
+    if (wantsUncommitted && isActiveSession) {
+      requestRefresh(sessionId, "scope");
+    }
+  }, [wantsUncommitted, isActiveSession, sessionId]);
 
   return (
     <div data-testid="changes-view" style={rootStyle}>
       <SummaryBar
+        baselineLabel={view.baselineLabel}
         diffControls={!view.showViewer}
         isVisible={isVisible}
         onRefresh={() => doRefresh("manual")}
@@ -447,7 +459,7 @@ export function ChangesView({ sessionId }: { sessionId: string }) {
         totals={view.totals}
       />
       {view.showEditsToggle ? (
-        // A `<label>` (not a bare row div) so the visible "My edits only"
+        // A `<label>` (not a bare row div) so the visible "Only Claude's edits"
         // text is the switch's one accessible name — no separate
         // `aria-label` duplicating it — and clicking the text itself
         // toggles the switch (the label's native click-forwarding to its
@@ -464,7 +476,7 @@ export function ChangesView({ sessionId }: { sessionId: string }) {
           >
             <span style={switchThumbStyle(view.myEditsOnly)} />
           </button>
-          <span style={editsToggleLabelStyle}>My edits only</span>
+          <span style={editsToggleLabelStyle}>Only Claude's edits</span>
         </label>
       ) : null}
       {view.error ? (

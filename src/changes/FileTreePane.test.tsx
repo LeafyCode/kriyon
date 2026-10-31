@@ -411,3 +411,34 @@ test("each changed file shows how it changed", () => {
   expect(rows[0]).toHaveAttribute("data-git", "added");
   expect(rows[1]).toHaveAttribute("data-git", "modified");
 });
+
+test("the column offers three scopes: AI changes, All changes, Files", () => {
+  render(
+    <FileTreePane
+      files={[]}
+      onJumpToFile={vi.fn()}
+      onTabChange={vi.fn()}
+      tab="changes"
+    />
+  );
+  expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual([
+    "AI changes",
+    "All changes",
+    "Files",
+  ]);
+});
+
+test("All changes lists its files in the same list as AI changes", () => {
+  render(
+    <FileTreePane
+      files={[file("src/mine.ts")]}
+      onJumpToFile={vi.fn()}
+      onTabChange={vi.fn()}
+      tab="uncommitted"
+    />
+  );
+  expect(screen.getByTestId("file-tree-pane-changes")).not.toHaveStyle({
+    display: "none",
+  });
+  expect(screen.getByText("mine.ts")).toBeInTheDocument();
+});
