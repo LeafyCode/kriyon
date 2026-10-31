@@ -358,13 +358,15 @@ function SessionTitleLine({
   return (
     <span style={titleLineStyle}>
       <span style={sessionTitleStyle(color, emphasis)}>{title}</span>
+      {/* No `title`: the row's content is click-through, so a tooltip here
+          never shows, and making the mark hoverable would swallow clicks
+          meant for the row. The branch name is on the line below. */}
       {branchLabel ? (
         <span
           aria-label={`Runs in its own worktree: ${branchLabel}`}
           data-testid={`worktree-mark-${sessionId}`}
           role="img"
           style={worktreeMarkStyle}
-          title={`Runs in its own worktree: ${branchLabel}`}
         >
           <GitBranch size={11} />
         </span>
