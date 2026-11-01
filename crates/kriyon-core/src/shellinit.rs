@@ -398,6 +398,17 @@ mod tests {
         assert!(!is_zsh(""));
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn windows_always_hosts_powershell() {
+        let plan = SpawnPlan::new("", Path::new(r"C:\Users\me"), Some("/usr/bin/bash"));
+        assert_eq!(plan.shell, WINDOWS_SHELL);
+        assert_eq!(plan.cwd, r"C:\Users\me");
+        assert!(!plan.needs_zdotdir);
+    }
+
+    // The macOS shell rule; Windows always hosts PowerShell (tested above).
+    #[cfg(not(windows))]
     #[test]
     fn spawn_plan_resolves_empty_cwd_to_home() {
         let plan = SpawnPlan::new("", Path::new("/Users/me"), Some("/bin/zsh"));
@@ -406,6 +417,8 @@ mod tests {
         assert!(plan.needs_zdotdir);
     }
 
+    // The macOS shell rule; Windows always hosts PowerShell (tested above).
+    #[cfg(not(windows))]
     #[test]
     fn spawn_plan_keeps_a_non_empty_cwd() {
         let plan = SpawnPlan::new("/work/proj", Path::new("/Users/me"), Some("/bin/bash"));
@@ -414,6 +427,8 @@ mod tests {
         assert!(!plan.needs_zdotdir);
     }
 
+    // The macOS shell rule; Windows always hosts PowerShell (tested above).
+    #[cfg(not(windows))]
     #[test]
     fn spawn_plan_defaults_shell_when_unset_or_empty() {
         assert_eq!(

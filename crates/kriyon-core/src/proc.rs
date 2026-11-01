@@ -1030,6 +1030,8 @@ mod tests {
         )
     }
 
+    // POSIX run-dir fixture; see `a_windows_daemon_is_found_by_its_session_socket`.
+    #[cfg(unix)]
     #[test]
     fn a_daemon_in_the_run_dir_yields_its_session_id() {
         let row = proc(100, 1, &daemon_cmd(RUN_DIR, "0e8f9a2b-1c3d"));
@@ -1097,6 +1099,8 @@ mod tests {
         assert_eq!(rows[0].tpgid, -1);
     }
 
+    // POSIX run-dir fixture; see `a_windows_daemon_is_found_by_its_session_socket`.
+    #[cfg(unix)]
     #[test]
     fn a_run_dir_containing_spaces_still_matches() {
         let run_dir = "/Users/first last/.claude/kriyon/run";

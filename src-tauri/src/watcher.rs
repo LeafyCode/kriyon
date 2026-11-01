@@ -1024,6 +1024,10 @@ mod tests {
         fs::write(&path, r#"{"usedPercentage":10.0}"#).expect("write");
         assert!(src.poll().is_some(), "first snapshot emits");
         assert!(src.poll().is_none(), "unchanged snapshot is suppressed");
+        // Past one mtime tick (Windows advances file times every few ms), as
+        // statusLine ticks always are: a same-length rewrite inside one tick is
+        // the documented blind spot of the gate.
+        std::thread::sleep(std::time::Duration::from_millis(30));
         fs::write(&path, r#"{"usedPercentage":20.0}"#).expect("write2");
         assert!(src.poll().is_some(), "changed snapshot emits");
     }

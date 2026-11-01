@@ -8,6 +8,7 @@ import {
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { CommandCatalog } from "../ipc/bridge.ts";
 import { promptHistory, submitPrompt, writeStdin } from "../ipc/bridge.ts";
+import { shortcutLabel } from "../platform/shortcut.ts";
 import { useAttachments } from "../state/attachments.ts";
 import { useCompletions } from "../state/completions.ts";
 import { useDrafts } from "../state/drafts.ts";
@@ -374,7 +375,7 @@ test("keeps separate drafts per session when switching", () => {
 test("the Prompts button opens the picker and shows the ⌘⇧P shortcut", () => {
   render(<PromptBar />);
   const btn = screen.getByRole("button", { name: "Open prompt library" });
-  expect(btn).toHaveTextContent("⌘⇧P");
+  expect(btn).toHaveTextContent(shortcutLabel("⌘⇧P"));
   fireEvent.click(btn);
   expect(useUi.getState().promptPickerOpen).toBe(true);
 });
@@ -821,7 +822,7 @@ test("a narrow composer gives up its spare parts until its tools fit", () => {
   const restore = layOutTools(120);
   try {
     render(<PromptBar />);
-    expect(screen.queryByText("⌘⇧P")).toBeNull();
+    expect(screen.queryByText(shortcutLabel("⌘⇧P"))).toBeNull();
     expect(screen.queryByText("Session")).toBeNull();
     expect(screen.getByLabelText("Save as prompt").textContent).toBe("✦");
     // "✦" and "Prompts" fit in 120px, so Prompts keeps its label.
@@ -881,7 +882,7 @@ test("a composer that widens gets its parts back", () => {
       }
     });
     expect(screen.getByText("Session")).toBeTruthy();
-    expect(screen.getByText("⌘⇧P")).toBeTruthy();
+    expect(screen.getByText(shortcutLabel("⌘⇧P"))).toBeTruthy();
   } finally {
     globalThis.ResizeObserver = original;
     restore();
