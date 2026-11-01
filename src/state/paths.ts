@@ -1,3 +1,5 @@
+import { isWindowsPath } from "../platform/path.ts";
+
 /** `path` without a trailing slash, so `/repo` and `/repo/` compare equal
  * and joining never produces a doubled separator. */
 function withoutTrailingSlash(path: string): string {
@@ -23,18 +25,21 @@ export function canonicalDir(path: string): string {
   );
 }
 
-/** A Windows drive path (`C:\` or `c:/`) — the shape Windows names a folder. */
-const WINDOWS_DRIVE_PATH = /^([A-Za-z]):[\\/]/;
+/** A drive letter written in lower case (`c:`). */
+const LOWER_DRIVE = /^[a-z]:/;
 
 /** Windows writes one folder several ways: git's `rev-parse --show-toplevel`
- * says `C:/dev/app`, while Claude and the folder picker say `C:\dev\app`, and
- * the drive letter's case varies. One spelling for a Windows path: `/` between
- * parts and an upper-case drive letter. Any other path is left alone — a
- * backslash is a legal character in a macOS file name. */
+ * says `C:/dev/app` or `//server/share/app`, while Claude and the folder
+ * picker say `C:\dev\app` or `\\server\share\app`, and the drive letter's
+ * case varies. One spelling for a Windows path ({@link isWindowsPath}): `/`
+ * between parts and an upper-case drive letter. Any other path is left alone —
+ * a backslash is a legal character in a macOS file name. */
 function windowsSpelling(path: string): string {
-  const drive = WINDOWS_DRIVE_PATH.exec(path);
-  if (!drive) {
+  if (!isWindowsPath(path)) {
     return path;
   }
-  return `${drive[1].toUpperCase()}${path.slice(1).replace(/\\/g, "/")}`;
+  const slashed = path.replace(/\\/g, "/");
+  return LOWER_DRIVE.test(slashed)
+    ? `${slashed[0].toUpperCase()}${slashed.slice(1)}`
+    : slashed;
 }

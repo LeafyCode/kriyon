@@ -1,15 +1,24 @@
 /**
  * Paths as the OS writes them. On macOS only `/` separates; a Windows path
- * (`C:\dev\app`, `\\server\share`, or the same with `/`) may use either.
+ * ({@link isWindowsPath}) may use either.
  * A backslash is a legal character in a macOS file name, so it only counts as
  * a separator in a path that is recognisably a Windows one.
  */
 
-const WINDOWS_PATH = /^(?:[A-Za-z]:[\\/]|\\\\)/;
+const WINDOWS_PATH = /^(?:[A-Za-z]:[\\/]|\\\\|\/\/(?!\/))/;
 const ANY_SEPARATOR = /[\\/]/;
 
+/**
+ * Whether `path` is a Windows one: a drive path (`C:\`, `c:/`) or a network
+ * share (`\\server\share`, or `//server/share` as git writes it). The one
+ * rule every frontend path helper uses.
+ */
+export function isWindowsPath(path: string): boolean {
+  return WINDOWS_PATH.test(path);
+}
+
 function separators(path: string): RegExp | string {
-  return WINDOWS_PATH.test(path) ? ANY_SEPARATOR : "/";
+  return isWindowsPath(path) ? ANY_SEPARATOR : "/";
 }
 
 /** The path's non-empty segments, outermost first. */
@@ -24,7 +33,7 @@ export function pathBasename(path: string): string {
 
 /** Everything before the last separator, or `""` when there is none. */
 export function pathDirname(path: string): string {
-  const windows = WINDOWS_PATH.test(path);
+  const windows = isWindowsPath(path);
   const cut = windows
     ? Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"))
     : path.lastIndexOf("/");

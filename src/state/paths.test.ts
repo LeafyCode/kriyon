@@ -12,6 +12,11 @@ describe("canonicalDir", () => {
     expect(canonicalDir("C:/dev/my app")).toBe("C:/dev/my app");
   });
 
+  it("gives a network share one spelling too", () => {
+    expect(canonicalDir("\\\\server\\share\\app")).toBe("//server/share/app");
+    expect(canonicalDir("//server/share/app/")).toBe("//server/share/app");
+  });
+
   it("leaves a backslash in a macOS name alone", () => {
     expect(canonicalDir("/Users/me/odd\\name")).toBe("/Users/me/odd\\name");
   });
