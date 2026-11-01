@@ -23,8 +23,9 @@ runs natively on Windows and runs hook commands through Git Bash.
   Everything the shell starts joins it, so stopping the job ends the whole
   tree, and the daemon ending for any reason — `Shutdown`, `TerminateProcess`
   from the app's reaper, a panic — closes the handle and ends it too. There is
-  no sweep and no pid-reuse guard to get wrong. The job also gives the busy
-  signal: more than the shell in it means a command is running.
+  no sweep and no pid-reuse guard to get wrong. Forcing a stuck daemon ends
+  only the daemon: its job takes the tree, and Windows parent pids go stale,
+  so walking "children" by them could end unrelated processes.
 - **The daemon answers ConPTY's opening cursor query.** ConPTY asks the
   terminal where the cursor is (`ESC[6n`) and runs nothing until it hears
   back, and the shell starts before any app is attached. The daemon answers
@@ -33,8 +34,10 @@ runs natively on Windows and runs hook commands through Git Bash.
 - **PowerShell is the session shell.** `powershell.exe` ships with every
   supported Windows; `$SHELL` there is a Git Bash path and is ignored. Launch
   lines (`claude --resume`, a seeded first prompt, a nested session's env) are
-  written in PowerShell, with the seeded prompt escaped for Windows PowerShell's
-  native argument passing.
+  written in PowerShell, with the seeded prompt read as UTF-8 and escaped for
+  Windows PowerShell's native argument passing, and a nested session's env
+  removed again when its `claude` ends. Rust tells the frontend the shell's
+  language with each session, so the launch line always matches the shell.
 - **Daemons run from a per-build copy.** Windows can't replace a running
   program's file, and daemons outlive the app, so a daemon run from the install
   folder would make every update fail while any session is open. The app
@@ -43,20 +46,30 @@ runs natively on Windows and runs hook commands through Git Bash.
 - **The process table comes from the OS, shaped like `ps`.** A Toolhelp
   snapshot plus each process's own command line become the same `ProcRow`s,
   and Windows stands in for the terminal foreground where it matters: a
-  daemon's shell with a child is running that child.
+  daemon's shell with a child is running that child. The daemon's busy signal
+  uses the same rule, read from its job's members, so a process a finished
+  command left behind never holds a session busy.
 - **Hooks need a real Python.** The hook scripts are Python, and Windows ships
   none (`python3` there is a Store stub that fails). Kriyon finds a real
-  `python.exe` (or the `py` launcher) and writes its full path into the hook
-  command; with none, it leaves the hook entries out instead of letting every
-  event print a hook error. The companion module needs no Python and still
-  loads.
+  `python.exe` and writes its full path into the hook command, or else uses
+  the `py` launcher; with neither, it leaves the hook entries out instead of
+  letting every event print a hook error, and each session says its status is
+  unavailable because the hooks need Python. The companion module needs no
+  Python and still loads.
 - **Paths are compared in one spelling.** `canonicalize` goes through `dunce`
   (no `\\?\` verbatim paths, which no event or user path ever matches; clippy
   bans the standard one), repo-relative paths are written with `/`, and the
-  frontend reads `C:\`-style paths by either separator.
+  frontend reads `C:\`-style paths by either separator. A long path `dunce`
+  must keep verbatim is compared in its ordinary form. A file's identity is its
+  volume and file index, as a Unix one is its device and inode.
 - **No menu bar on Windows.** Tauri's default menu would add a Quit that
   skips the close gate, and everything it would hold is in the window or the
-  tray.
+  tray. Shortcuts only the menu bar gives (⌘N) are not shown there, and copy
+  that names the Help menu is marked `{mac:…}` where it is written.
+- **File names Windows would read as something else are refused.** A trailing
+  dot or space, `:` (a file stream), other characters Windows forbids, and
+  device names such as `NUL`; `.git.` would otherwise become `.git`. A delete
+  that can't go to the Recycle Bin asks first rather than deleting for good.
 
 ## Consequences
 
