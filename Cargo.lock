@@ -2285,7 +2285,7 @@ dependencies = [
 
 [[package]]
 name = "kriyon"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "arboard",
  "block2",
@@ -2324,7 +2324,7 @@ dependencies = [
 
 [[package]]
 name = "kriyon-core"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "dunce",
  "regex",
@@ -2339,7 +2339,7 @@ dependencies = [
 
 [[package]]
 name = "kriyon-ptyd"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "kriyon-core",
  "libc",

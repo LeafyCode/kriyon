@@ -48,7 +48,7 @@ function session(id: string, status: UiSession["status"]): UiSession {
 beforeEach(() => {
   useTerminals.setState({
     busyPanes: {},
-    byProject: {},
+    byScope: {},
     deadPanes: {},
     quitConfirm: null,
   });
@@ -81,7 +81,7 @@ describe("handleCloseRequested", () => {
   // one close path with NO confirm, while closing a mere tab asked first.
   it("intercepts the quit and asks when a terminal process is running", async () => {
     useTerminals.getState().openTab("a", "/a");
-    const paneId = useTerminals.getState().byProject.a.tabs[0].panes[0].id;
+    const paneId = useTerminals.getState().byScope.a.tabs[0].panes[0].id;
     useTerminals.getState().setPaneBusy(paneId, true);
     dispose.mockClear();
     const preventDefault = vi.fn();
@@ -145,7 +145,7 @@ describe("handleCloseRequested", () => {
 
   it("names both when a terminal is busy and a session is mid-turn", async () => {
     useTerminals.getState().openTab("a", "/a");
-    const paneId = useTerminals.getState().byProject.a.tabs[0].panes[0].id;
+    const paneId = useTerminals.getState().byScope.a.tabs[0].panes[0].id;
     useTerminals.getState().setPaneBusy(paneId, true);
     useSessions.setState({ sessions: { s1: session("s1", "running") } });
     const preventDefault = vi.fn();

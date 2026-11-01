@@ -92,7 +92,7 @@ export function projectParkCost(projectId: string): ParkCost {
   const terminals = useTerminals.getState();
   return {
     ...stopCostOfAll({ ...state, sessions }),
-    busyTerminals: projectPaneIds(terminals.byProject, projectId).filter((id) =>
+    busyTerminals: projectPaneIds(terminals.byScope, projectId).filter((id) =>
       terminals.isPaneBusy(id)
     ).length,
     sessionIds: Object.keys(sessions),
@@ -119,7 +119,7 @@ export function parkProjectAndStop(projectId: string): void {
   }
   const { sessionIds } = projectParkCost(projectId);
   const paneCount = projectPaneIds(
-    useTerminals.getState().byProject,
+    useTerminals.getState().byScope,
     projectId
   ).length;
   if (sessionIds.length === 0 && paneCount === 0) {

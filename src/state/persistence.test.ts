@@ -630,7 +630,7 @@ test("an unknown persisted notifySound falls back to default", () => {
 });
 
 test("hydrate restores persisted terminals into useTerminals", async () => {
-  useTerminals.setState({ byProject: {} });
+  useTerminals.setState({ byScope: {} });
   mockedListProjects.mockResolvedValue([]);
   mockedListSessions.mockResolvedValue([]);
   const blob = JSON.stringify({
@@ -654,7 +654,7 @@ test("hydrate restores persisted terminals into useTerminals", async () => {
 
   await hydrate();
 
-  expect(useTerminals.getState().byProject.proj.tabs[0].title).toBe("dev");
+  expect(useTerminals.getState().byScope.proj.tabs[0].title).toBe("dev");
 });
 
 test("parseLayout restores session sort, overrides, and manual orders", () => {
