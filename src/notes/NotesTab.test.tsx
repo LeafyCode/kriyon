@@ -39,7 +39,7 @@ function note(over: Partial<ProjectNote>): ProjectNote {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  useProjectNotes.setState({ notes: [], picked: null });
+  useProjectNotes.setState({ notes: [], pickedProjectId: null });
   useSessions.setState({
     projects: [
       { color: null, id: "p1", name: "kriyon", path: "/k", setupCommand: null },

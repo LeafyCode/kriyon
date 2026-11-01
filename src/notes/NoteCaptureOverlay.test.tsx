@@ -25,7 +25,7 @@ function pressCapture(): void {
 beforeEach(() => {
   vi.clearAllMocks();
   useUi.setState({ noteCaptureOpen: false, paletteOpen: false });
-  useProjectNotes.setState({ notes: [], picked: null });
+  useProjectNotes.setState({ notes: [], pickedProjectId: null });
   useSessions.setState({
     activeSessionId: "s2",
     projects: PROJECTS,

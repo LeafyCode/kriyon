@@ -32,6 +32,7 @@ import {
   sessionRequestsReady,
 } from "./state/nestedSessions.ts";
 import { hydrate, installPersistence } from "./state/persistence.ts";
+import { installNotesPickReset } from "./state/projectNotes.ts";
 import { useSessions } from "./state/sessions.ts";
 import { freedMemoryNote } from "./state/stopCost.ts";
 import { installParkedTerminalStops, useTerminals } from "./state/terminals.ts";
@@ -299,6 +300,7 @@ function App() {
     const stopParkedTerminals = installParkedTerminalStops();
     const stopListeners = installSessionListeners();
     const stopHeldBack = installHeldBackStarts();
+    const stopNotesPickReset = installNotesPickReset();
     const stopCommandCenter = installCommandCenterListeners();
     const stopBridgeMirrors = installBridgeMirrors();
     const stopCloseOnQuit = installCloseOnQuit();
@@ -323,6 +325,7 @@ function App() {
       stopParkedTerminals();
       stopListeners();
       stopHeldBack();
+      stopNotesPickReset();
       stopCommandCenter();
       stopBridgeMirrors();
       stopCloseOnQuit();

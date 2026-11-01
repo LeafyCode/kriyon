@@ -3461,14 +3461,14 @@ test("a project header ignores its parked sessions", () => {
 
 test("the project menu opens the project's notes in the inspector", () => {
   seed();
-  useProjectNotes.setState({ notes: [], picked: null });
+  useProjectNotes.setState({ notes: [], pickedProjectId: null });
   renderSidebar();
 
   fireEvent.click(screen.getByLabelText("More actions for Project p2"));
   fireEvent.click(screen.getByRole("menuitem", { name: "Open notes" }));
 
   expect(useLayout.getState().inspectorTab).toBe("notes");
-  expect(useProjectNotes.getState().picked?.projectId).toBe("p2");
+  expect(useProjectNotes.getState().pickedProjectId).toBe("p2");
   expect(screen.queryByRole("menu")).toBeNull();
 });
 
@@ -3489,7 +3489,7 @@ test("a project header counts its open todos, and only those", () => {
       { ...base, doneAt: 5, id: "c", kind: "todo", text: "c" },
       { ...base, id: "d", kind: "idea", text: "d" },
     ],
-    picked: null,
+    pickedProjectId: null,
   });
   renderSidebar();
 

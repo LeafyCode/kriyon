@@ -4,6 +4,7 @@ import type { ProjectNote } from "../types.ts";
 import { showToast } from "../ui/Toast.tsx";
 import { DEFAULT_LAYOUT, useLayout } from "./layout.ts";
 import {
+  installNotesPickReset,
   notesProjectId,
   notesView,
   openProjectNotes,
@@ -94,28 +95,45 @@ describe("openTodoCount", () => {
 
 describe("notesProjectId", () => {
   it("follows the active session's project by default", () => {
-    expect(notesProjectId(null, "s1", "p1")).toBe("p1");
+    expect(notesProjectId(null, "p1")).toBe("p1");
   });
 
-  it("shows a picked project while the same session stays active", () => {
-    const picked = { forSessionId: "s1", projectId: "p2" };
-    expect(notesProjectId(picked, "s1", "p1")).toBe("p2");
-  });
-
-  it("drops the pick once another session becomes active", () => {
-    const picked = { forSessionId: "s1", projectId: "p2" };
-    expect(notesProjectId(picked, "s2", "p1")).toBe("p1");
+  it("shows a picked project instead", () => {
+    expect(notesProjectId("p2", "p1")).toBe("p2");
   });
 
   it("shows a project picked with no session open", () => {
-    const picked = { forSessionId: null, projectId: "p2" };
-    expect(notesProjectId(picked, null, null)).toBe("p2");
+    expect(notesProjectId("p2", null)).toBe("p2");
+  });
+});
+
+describe("installNotesPickReset", () => {
+  it("drops the pick once another session becomes active, for good", () => {
+    useSessions.setState({ activeSessionId: "s1" });
+    const stop = installNotesPickReset();
+    openProjectNotes("p2");
+    expect(useProjectNotes.getState().pickedProjectId).toBe("p2");
+
+    useSessions.setState({ activeSessionId: "s2" });
+    expect(useProjectNotes.getState().pickedProjectId).toBeNull();
+    useSessions.setState({ activeSessionId: "s1" });
+    expect(useProjectNotes.getState().pickedProjectId).toBeNull();
+    stop();
+  });
+
+  it("keeps the pick while the same session stays active", () => {
+    useSessions.setState({ activeSessionId: "s1" });
+    const stop = installNotesPickReset();
+    openProjectNotes("p2");
+    useSessions.setState({ projects: [] });
+    expect(useProjectNotes.getState().pickedProjectId).toBe("p2");
+    stop();
   });
 });
 
 describe("useProjectNotes", () => {
   beforeEach(() => {
-    useProjectNotes.setState({ notes: [], picked: null });
+    useProjectNotes.setState({ notes: [], pickedProjectId: null });
     vi.clearAllMocks();
   });
 
@@ -233,7 +251,7 @@ describe("useProjectNotes, overlapping saves", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    useProjectNotes.setState({ picked: null });
+    useProjectNotes.setState({ pickedProjectId: null });
     useProjectNotes.getState().setNotes([note({})]);
   });
 
@@ -286,7 +304,7 @@ describe("useProjectNotes, overlapping saves", () => {
 
 describe("openProjectNotes", () => {
   beforeEach(() => {
-    useProjectNotes.setState({ notes: [], picked: null });
+    useProjectNotes.setState({ notes: [], pickedProjectId: null });
     useSessions.setState({ activeSessionId: "s1" });
     useLayout.setState({
       inspectorTab: "details",
@@ -300,10 +318,7 @@ describe("openProjectNotes", () => {
     expect(inspectorTab).toBe("notes");
     expect(layout.inspectorCollapsed).toBe(false);
     expect(layout.view).toBe("studio");
-    expect(useProjectNotes.getState().picked).toEqual({
-      forSessionId: "s1",
-      projectId: "p2",
-    });
+    expect(useProjectNotes.getState().pickedProjectId).toBe("p2");
   });
 
   it("leaves an open inspector open", () => {

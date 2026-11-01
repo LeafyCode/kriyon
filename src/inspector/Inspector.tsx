@@ -483,7 +483,13 @@ export function Inspector() {
   if (!session) {
     return (
       <aside data-testid="inspector" style={rootStyle}>
-        <DetailsHeader />
+        {/* With a project's notes to show, keep the strip so they stay one
+            click away; with nothing at all, just the "Details" title. */}
+        {notesProjectId ? (
+          <DetailsHeader onTab={setTab} tab={tab} />
+        ) : (
+          <DetailsHeader />
+        )}
         <div style={emptyBodyStyle}>
           <span>No active session</span>
           <span>—</span>

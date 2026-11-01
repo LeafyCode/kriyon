@@ -41,7 +41,7 @@ beforeEach(() => {
   usePlanLimits.setState({ limits: { fiveHour: null, sevenDay: null } });
   useChanges.setState({ bySession: {}, ui: {} });
   useLayout.setState({ inspectorTab: "details", layout: DEFAULT_LAYOUT });
-  useProjectNotes.setState({ notes: [], picked: null });
+  useProjectNotes.setState({ notes: [], pickedProjectId: null });
 });
 
 const CHANGES_HEADER_NAME = /changes/i;
@@ -409,8 +409,21 @@ test("the Notes tab lists the active session's project notes, its todo count on 
 test("the Notes tab shows a project picked from the sidebar even with no session open", () => {
   useSessions.setState({ projects: [PROJECT] });
   seedNote("Write the ADR");
-  useProjectNotes.setState({ picked: { forSessionId: null, projectId: "p1" } });
+  useProjectNotes.setState({ pickedProjectId: "p1" });
   useLayout.setState({ inspectorTab: "notes" });
   render(<Inspector />);
+  expect(screen.getByText("Write the ADR")).toBeTruthy();
+});
+
+test("with no session open, Details keeps the tab strip so Notes stays reachable", () => {
+  useSessions.setState({ projects: [PROJECT] });
+  seedNote("Write the ADR");
+  useProjectNotes.setState({ pickedProjectId: "p1" });
+  useLayout.setState({ inspectorTab: "notes" });
+  render(<Inspector />);
+
+  fireEvent.click(screen.getByRole("tab", { name: "Details" }));
+  expect(screen.getByText("No active session")).toBeTruthy();
+  fireEvent.click(screen.getByRole("tab", { name: NOTES_TAB_RE }));
   expect(screen.getByText("Write the ADR")).toBeTruthy();
 });

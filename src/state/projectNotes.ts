@@ -23,17 +23,6 @@ export interface NotesView {
   open: ProjectNote[];
 }
 
-/**
- * A project the user chose to see in the Notes tab (the project menu's "Open
- * notes"), and the session that was active when they chose it. The choice
- * holds only while that session stays active; opening another session shows
- * that session's project again.
- */
-export interface NotesPick {
-  forSessionId: string | null;
-  projectId: string;
-}
-
 /** The fields an edit may change. */
 export type NotePatch = Partial<
   Pick<ProjectNote, "body" | "kind" | "pinned" | "text">
@@ -49,10 +38,15 @@ interface ProjectNotesState {
   ) => ProjectNote | null;
   /** Every [Project note] of every project, hydrated at boot. */
   notes: ProjectNote[];
-  picked: NotesPick | null;
+  /**
+   * A project the user chose to see in the Notes tab (the project menu's
+   * "Open notes"), shown instead of the active session's. Cleared when another
+   * session becomes active — see {@link installNotesPickReset}.
+   */
+  pickedProjectId: string | null;
   remove: (id: string) => void;
   setNotes: (notes: ProjectNote[]) => void;
-  setPicked: (picked: NotesPick | null) => void;
+  setPickedProjectId: (projectId: string | null) => void;
   /** Tick a todo off, or back on. Does nothing for an idea or a note. */
   toggleDone: (id: string, nowMs: number) => void;
   update: (id: string, patch: NotePatch, nowMs: number) => void;
@@ -108,7 +102,7 @@ export const useProjectNotes = create<ProjectNotesState>((set, get) => {
 
   return {
     notes: [],
-    picked: null,
+    pickedProjectId: null,
     setNotes: (notes) => {
       stored.clear();
       for (const note of notes) {
@@ -116,7 +110,7 @@ export const useProjectNotes = create<ProjectNotesState>((set, get) => {
       }
       set({ notes });
     },
-    setPicked: (picked) => set({ picked }),
+    setPickedProjectId: (pickedProjectId) => set({ pickedProjectId }),
     add: (projectId, kind, text, nowMs) => {
       const trimmed = text.trim();
       if (!trimmed) {
@@ -222,29 +216,24 @@ export function openTodoCount(
   ).length;
 }
 
-/** The project the Notes tab shows: a pick that still holds, else the
- *  active session's project. */
+/** The project the Notes tab shows: a picked one, else the active
+ *  session's. */
 export function notesProjectId(
-  picked: NotesPick | null,
-  activeSessionId: string | null,
+  pickedProjectId: string | null,
   activeProjectId: string | null
 ): string | null {
-  if (picked && picked.forSessionId === activeSessionId) {
-    return picked.projectId;
-  }
-  return activeProjectId;
+  return pickedProjectId ?? activeProjectId;
 }
 
 /** The project the Notes tab shows right now, or null with nothing to show. */
 export function useNotesProjectId(): string | null {
-  const picked = useProjectNotes((state) => state.picked);
-  const activeSessionId = useSessions((state) => state.activeSessionId);
+  const pickedProjectId = useProjectNotes((state) => state.pickedProjectId);
   const activeProjectId = useSessions((state) =>
     state.activeSessionId
       ? (state.sessions[state.activeSessionId]?.projectId ?? null)
       : null
   );
-  return notesProjectId(picked, activeSessionId, activeProjectId);
+  return notesProjectId(pickedProjectId, activeProjectId);
 }
 
 /**
@@ -254,10 +243,7 @@ export function useNotesProjectId(): string | null {
  * can be read without bringing the project back.
  */
 export function openProjectNotes(projectId: string): void {
-  const { activeSessionId } = useSessions.getState();
-  useProjectNotes
-    .getState()
-    .setPicked({ forSessionId: activeSessionId, projectId });
+  useProjectNotes.getState().setPickedProjectId(projectId);
   const layout = useLayout.getState();
   layout.setInspectorTab("notes");
   if (layout.layout.view !== "studio") {
@@ -266,4 +252,20 @@ export function openProjectNotes(projectId: string): void {
   if (layout.layout.inspectorCollapsed) {
     layout.toggleInspectorCollapsed();
   }
+}
+
+/**
+ * Drop the Notes tab's picked project whenever another session becomes
+ * active, so opening a session always shows that session's notes. Returns the
+ * unsubscribe.
+ */
+export function installNotesPickReset(): () => void {
+  return useSessions.subscribe((state, prev) => {
+    if (
+      state.activeSessionId !== prev.activeSessionId &&
+      useProjectNotes.getState().pickedProjectId !== null
+    ) {
+      useProjectNotes.getState().setPickedProjectId(null);
+    }
+  });
 }
