@@ -92,7 +92,7 @@ mod mach {
         let mut now = unsafe { std::mem::zeroed() };
         // SAFETY: `now` is valid for writes.
         unsafe {
-            windows_sys::Win32::System::SystemInformation::GetSystemTimeAsFileTime(&raw mut now)
+            windows_sys::Win32::System::SystemInformation::GetSystemTimeAsFileTime(&raw mut now);
         };
         super::win::ticks(now)
     }

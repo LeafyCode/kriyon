@@ -1,4 +1,4 @@
-# ADR 0054 — Kriyon on Windows
+# ADR 0055 — Kriyon on Windows
 
 **Date:** 2026-11-02
 **Status:** Accepted
