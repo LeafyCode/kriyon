@@ -81,6 +81,22 @@ pub enum NoteError {
     BadId,
     #[error("invalid project id")]
     BadProjectId,
+    #[error("this note belongs to another project")]
+    OtherProject,
+}
+
+/// Check that a save does not reuse the id of a note kept under another
+/// project. `stored_project_id` is the project the id is stored under, or
+/// `None` for a new note. A note never moves between projects, so a save that
+/// names another project is refused rather than overwriting that note.
+///
+/// # Errors
+/// Returns [`NoteError::OtherProject`] when the id belongs to another project.
+pub fn check_owner(stored_project_id: Option<&str>, note: &ProjectNote) -> Result<(), NoteError> {
+    match stored_project_id {
+        Some(stored) if stored != note.project_id => Err(NoteError::OtherProject),
+        _ => Ok(()),
+    }
 }
 
 /// Check a note that came from the webview and return the copy to store.
@@ -229,6 +245,20 @@ mod tests {
             .expect("valid");
             assert_eq!(checked.done_at, None, "{kind:?}");
         }
+    }
+
+    #[test]
+    fn a_new_note_or_one_in_its_own_project_may_be_saved() {
+        assert_eq!(check_owner(None, &note()), Ok(()));
+        assert_eq!(check_owner(Some("p1"), &note()), Ok(()));
+    }
+
+    #[test]
+    fn a_note_id_kept_under_another_project_is_refused() {
+        assert_eq!(
+            check_owner(Some("p2"), &note()),
+            Err(NoteError::OtherProject)
+        );
     }
 
     #[test]

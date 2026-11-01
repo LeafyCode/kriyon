@@ -31,8 +31,10 @@ What they asked for:
   later as an export.
 - **The Rust core checks every note.** `kriyon_core::project_notes::validate`
   bounds the ids, trims and caps the text (500 characters) and body (20,000),
-  and drops a done mark on anything but a todo. An update never moves a note
-  to another project. The frontend gets back the copy that was stored.
+  and drops a done mark on anything but a todo. A note never moves between
+  projects: a save whose id is already kept under another project is refused,
+  and an update keeps the stored project and creation time. The frontend gets
+  back the row as stored.
 - **Shown in the Details rail, as a Notes tab.** It shows the active session's
   project. The project menu's *Open notes* shows any project's notes without
   opening a session, so a parked project's notes can be read without bringing

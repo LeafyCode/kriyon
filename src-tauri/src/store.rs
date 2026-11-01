@@ -150,6 +150,25 @@ pub struct PromptRow {
     pub updated_ms: i64,
 }
 
+/// The `project_notes` columns, in the order [`project_note_from_row`] reads.
+const PROJECT_NOTE_COLUMNS: &str =
+    "id, project_id, kind, text, body, done_at, pinned, created_ms, updated_ms";
+
+fn project_note_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProjectNote> {
+    let kind: String = row.get(2)?;
+    Ok(ProjectNote {
+        id: row.get(0)?,
+        project_id: row.get(1)?,
+        kind: NoteKind::from_stored(&kind),
+        text: row.get(3)?,
+        body: row.get(4)?,
+        done_at: row.get(5)?,
+        pinned: row.get(6)?,
+        created_ms: row.get(7)?,
+        updated_ms: row.get(8)?,
+    })
+}
+
 /// SQLite-backed persistence wrapping a single [`Connection`].
 pub struct Store {
     conn: Connection,
@@ -547,26 +566,28 @@ impl Store {
     /// # Errors
     /// Returns [`StoreError::Sqlite`] if the query fails.
     pub fn list_project_notes(&self) -> Result<Vec<ProjectNote>, StoreError> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, project_id, kind, text, body, done_at, pinned, created_ms, updated_ms
-             FROM project_notes ORDER BY created_ms, id",
-        )?;
-        let rows = stmt.query_map([], |row| {
-            let kind: String = row.get(2)?;
-            Ok(ProjectNote {
-                id: row.get(0)?,
-                project_id: row.get(1)?,
-                kind: NoteKind::from_stored(&kind),
-                text: row.get(3)?,
-                body: row.get(4)?,
-                done_at: row.get(5)?,
-                pinned: row.get(6)?,
-                created_ms: row.get(7)?,
-                updated_ms: row.get(8)?,
-            })
-        })?;
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT {PROJECT_NOTE_COLUMNS} FROM project_notes ORDER BY created_ms, id"
+        ))?;
+        let rows = stmt.query_map([], project_note_from_row)?;
         let notes = rows.collect::<Result<Vec<_>, _>>()?;
         Ok(notes)
+    }
+
+    /// The [Project note] with the given `id`, or `None`.
+    ///
+    /// # Errors
+    /// Returns [`StoreError::Sqlite`] if the query fails.
+    pub fn project_note(&self, id: &str) -> Result<Option<ProjectNote>, StoreError> {
+        let note = self
+            .conn
+            .query_row(
+                &format!("SELECT {PROJECT_NOTE_COLUMNS} FROM project_notes WHERE id = ?1"),
+                rusqlite::params![id],
+                project_note_from_row,
+            )
+            .optional()?;
+        Ok(note)
     }
 
     /// Delete the [Project note] with the given `id`. No-op if it does not exist.

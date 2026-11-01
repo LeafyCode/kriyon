@@ -2,7 +2,7 @@
 //! A note from the webview is checked by `kriyon_core::project_notes::validate`
 //! before it is written, and the checked copy is what the frontend gets back.
 
-use kriyon_core::project_notes::{validate, ProjectNote};
+use kriyon_core::project_notes::{check_owner, validate, ProjectNote};
 
 use crate::store::Store;
 use crate::StoreState;
@@ -21,11 +21,12 @@ pub fn list_project_notes(store: tauri::State<'_, StoreState>) -> Result<Vec<Pro
         .map_err(|e| e.to_string())
 }
 
-/// Insert or update a [Project note] and return the copy that was stored.
+/// Insert or update a [Project note] and return the row as stored.
 ///
 /// # Errors
-/// Returns an error string for a note that fails validation, a project that
-/// does not exist, or a failed database write.
+/// Returns an error string for a note that fails validation, an id that
+/// belongs to another project's note, a project that does not exist, or a
+/// failed database write.
 #[allow(clippy::needless_pass_by_value)]
 #[tauri::command]
 pub fn upsert_project_note(
@@ -49,13 +50,22 @@ pub fn delete_project_note(store: tauri::State<'_, StoreState>, id: String) -> R
         .map_err(|e| e.to_string())
 }
 
-/// Validate, then write. Split from the command so it is tested without Tauri.
+/// Validate, check the id is not another project's note, write, and read the
+/// row back — an update keeps the stored project and creation time, so the
+/// caller must get the row, not what it sent. Split from the command so it is
+/// tested without Tauri; the caller holds the store lock across all of it.
 fn save_note(store: &Store, note: ProjectNote) -> Result<ProjectNote, String> {
     let checked = validate(note).map_err(|e| e.to_string())?;
+    let stored = store.project_note(&checked.id).map_err(|e| e.to_string())?;
+    check_owner(stored.as_ref().map(|n| n.project_id.as_str()), &checked)
+        .map_err(|e| e.to_string())?;
     store
         .upsert_project_note(&checked)
         .map_err(|e| e.to_string())?;
-    Ok(checked)
+    store
+        .project_note(&checked.id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "note was not saved".to_string())
 }
 
 #[cfg(test)]
@@ -93,7 +103,7 @@ mod tests {
     }
 
     #[test]
-    fn saves_and_returns_the_checked_copy() {
+    fn saves_and_returns_the_stored_row() {
         let store = store_with_project();
         let saved = save_note(&store, note("  Split view  ")).expect("save");
         assert_eq!(saved.text, "Split view");
@@ -107,6 +117,42 @@ mod tests {
         let error = save_note(&store, note("   ")).expect_err("blank text");
         assert_eq!(error, "a note needs some text");
         assert_eq!(store.list_project_notes().expect("list"), vec![]);
+    }
+
+    #[test]
+    fn an_update_returns_the_row_as_stored() {
+        let store = store_with_project();
+        save_note(&store, note("Split view")).expect("insert");
+        let edited = ProjectNote {
+            created_ms: 999,
+            ..note("Split view, side by side")
+        };
+        let saved = save_note(&store, edited).expect("update");
+        assert_eq!(saved.text, "Split view, side by side");
+        assert_eq!(saved.created_ms, 1, "an update never changes created_ms");
+        assert_eq!(store.list_project_notes().expect("list"), vec![saved]);
+    }
+
+    #[test]
+    fn an_id_stored_under_another_project_is_refused() {
+        let store = store_with_project();
+        store
+            .upsert_project(&ProjectRow {
+                id: "p2".to_string(),
+                name: "Other".to_string(),
+                path: "/other".to_string(),
+                color: None,
+                setup_command: None,
+            })
+            .expect("second project");
+        let original = save_note(&store, note("Split view")).expect("insert");
+        let hijack = ProjectNote {
+            project_id: "p2".to_string(),
+            ..note("Overwritten")
+        };
+        let error = save_note(&store, hijack).expect_err("other project's id");
+        assert_eq!(error, "this note belongs to another project");
+        assert_eq!(store.list_project_notes().expect("list"), vec![original]);
     }
 
     #[test]
