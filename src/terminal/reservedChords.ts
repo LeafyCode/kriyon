@@ -34,8 +34,8 @@ function appModifier(event: ChordEvent, mac: boolean): boolean {
 
 /**
  * App-reserved chords that must reach the global `window` keydown listeners
- * (⌘⇧P Prompt picker, ⌘K Command palette, ⌘⇧K Needs-you) rather than be
- * intercepted by a focused xterm. The terminal's custom key handler returns
+ * (⌘⇧P Prompt picker, ⌘K Command palette, ⌘⇧K Needs-you, ⌘⇧N note capture)
+ * rather than be intercepted by a focused xterm. The terminal's custom key handler returns
  * `false` for these so xterm ignores the event entirely and it propagates —
  * fixing the "⌘⇧P doesn't open while a terminal is focused" report.
  *
@@ -58,7 +58,28 @@ export function isReservedAppChord(
     return true;
   }
   // ⌘⇧P — Prompt picker (bare ⌘P is not reserved).
-  return key === "p" && event.shiftKey;
+  if (key === "p" && event.shiftKey) {
+    return true;
+  }
+  return isNoteCaptureChord(event, mac);
+}
+
+/**
+ * ⌘⇧N on mac, Ctrl+Shift+N elsewhere — the [Note capture]. One definition, so
+ * the overlay that opens on it and the terminal that lets it through can never
+ * disagree.
+ */
+export function isNoteCaptureChord(
+  event: ChordEvent,
+  mac: boolean = isMacPlatform()
+): boolean {
+  return (
+    event.type === "keydown" &&
+    appModifier(event, mac) &&
+    event.shiftKey &&
+    !event.altKey &&
+    event.key.toLowerCase() === "n"
+  );
 }
 
 /**

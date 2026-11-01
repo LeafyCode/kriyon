@@ -210,8 +210,9 @@ export const DEFAULT_LAYOUT: Layout = {
   view: "studio",
 };
 
-/** The inspector's two tabs: what the session is, and what Claude did in it. */
-export type InspectorTab = "details" | "activity";
+/** The inspector's tabs: what the session is, what Claude did in it, and the
+ *  project's own [Project note]s. */
+export type InspectorTab = "details" | "activity" | "notes";
 
 interface LayoutState {
   /** The inspector's open tab. Not saved: a launch opens on Details. */

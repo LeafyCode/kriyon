@@ -209,6 +209,17 @@ function buildItems(
     },
   ];
 
+  const noteItems: PaletteItem[] = [
+    {
+      icon: "✎",
+      id: "cmd:add-note",
+      kind: "Notes",
+      label: "Add a note…",
+      run: () => useUi.getState().openNoteCapture(),
+      sub: "⌘⇧N",
+    },
+  ];
+
   const themeItems: PaletteItem[] = THEMES.map((theme) => ({
     icon: "◐",
     id: `theme:${theme.id}`,
@@ -236,6 +247,7 @@ function buildItems(
   return [
     ...sessionItems,
     ...commandItems,
+    ...noteItems,
     ...themeItems,
     ...menuBarItems,
     ...sidebarItems,

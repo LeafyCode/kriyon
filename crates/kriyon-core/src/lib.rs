@@ -29,6 +29,7 @@ pub mod plan_limits;
 pub mod policy;
 pub mod private_fs;
 pub mod proc;
+pub mod project_notes;
 pub mod projection;
 pub mod prompt_files;
 pub mod prompt_history;

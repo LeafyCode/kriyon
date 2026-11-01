@@ -12,6 +12,7 @@ import {
   Clock,
   GitBranch,
   GripVertical,
+  ListTodo,
   MoreHorizontal,
   Plus,
 } from "lucide-react";
@@ -30,12 +31,17 @@ import {
   useLayout,
 } from "../state/layout.ts";
 import {
+  openProjectNotes,
+  openTodoCount,
+  useProjectNotes,
+} from "../state/projectNotes.ts";
+import {
   isPutAway,
   isWorktreeSession,
   useSessions,
 } from "../state/sessions.ts";
 import { useUi } from "../state/ui.ts";
-import { projectColor } from "../theme/projectColor.ts";
+import { projectSquareStyle } from "../theme/projectColor.ts";
 import { tokens } from "../theme/tokens.ts";
 import type { ProjectRow } from "../types.ts";
 import { useAnchoredMenu } from "../ui/AnchoredMenu.tsx";
@@ -314,19 +320,6 @@ function olderHistoryTitle(olderCount: number): string {
   return `${olderCount} stale ${sessions} hidden by your age filter, plus ${history}`;
 }
 
-function colorSquareStyle(project: ProjectRow): CSSProperties {
-  return {
-    background: projectColor(project),
-    borderRadius: "2px",
-    flex: "none",
-    height: "8px",
-    // Full strength on the new chrome. The half-opacity was tuned against the
-    // old warm greys, where a saturated 7px square shouted; on the flat cool
-    // plane it reads as a smudge instead of an identity mark.
-    width: "8px",
-  };
-}
-
 /**
  * dnd-kit's `attributes` include `aria-describedby`, pointing at keyboard-drag
  * instructions that don't apply to the pointer-only project grip. Drop just
@@ -433,6 +426,9 @@ function ProjectHeader({
 }: ProjectHeaderProps) {
   const picker = useAnchoredMenu();
   const sortMenu = useAnchoredMenu<HTMLDivElement>();
+  const openTodos = useProjectNotes((state) =>
+    openTodoCount(state.notes, project.id)
+  );
   const actionsMenu = useAnchoredMenu<HTMLDivElement>();
   const [editing, setEditing] = useState(false);
   // The header popovers share one anchor — opening one must close the others
@@ -454,7 +450,7 @@ function ProjectHeader({
           <span style={{ ...chevronStyle(!collapsed), visibility: "hidden" }}>
             <ChevronRight size={9} strokeWidth={2} />
           </span>
-          <span style={colorSquareStyle(project)} />
+          <span style={projectSquareStyle(project)} />
           <InlineRename
             ariaLabel={`Rename ${project.name}`}
             onCancel={() => setEditing(false)}
@@ -506,7 +502,7 @@ function ProjectHeader({
         <span style={chevronStyle(!collapsed)}>
           <ChevronRight size={9} strokeWidth={2} />
         </span>
-        <span style={colorSquareStyle(project)} />
+        <span style={projectSquareStyle(project)} />
         <span style={projectNameStyle(expandedLook)}>{label.name}</span>
         {label.qualifier ? (
           <span
@@ -532,6 +528,16 @@ function ProjectHeader({
           >
             <GitBranch size={9} />
             {worktreeCount}
+          </span>
+        ) : null}
+        {openTodos > 0 ? (
+          <span
+            data-testid={`open-todos-${project.id}`}
+            style={worktreeCountStyle}
+            title={`${openTodos} open todo${openTodos === 1 ? "" : "s"}`}
+          >
+            <ListTodo aria-hidden="true" size={9} />
+            {openTodos}
           </span>
         ) : null}
         {attention ? (
@@ -611,6 +617,10 @@ function ProjectHeader({
           onColour={() => {
             actionsMenu.close();
             picker.toggle();
+          }}
+          onOpenNotes={() => {
+            actionsMenu.close();
+            openProjectNotes(project.id);
           }}
           onRename={() => {
             actionsMenu.close();

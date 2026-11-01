@@ -17,6 +17,7 @@ pub mod integration;
 pub mod links_cmd;
 pub mod memory;
 pub mod menu;
+pub mod notes_cmd;
 pub mod notify;
 pub mod plan_limits_rt;
 pub mod policy;
@@ -449,6 +450,9 @@ pub fn run() {
             store_cmd::upsert_session,
             store_cmd::list_sessions,
             store_cmd::delete_session,
+            notes_cmd::list_project_notes,
+            notes_cmd::upsert_project_note,
+            notes_cmd::delete_project_note,
             prompt_cmd::upsert_prompt,
             prompt_cmd::list_prompts,
             prompt_cmd::delete_prompt,

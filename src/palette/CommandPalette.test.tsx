@@ -264,3 +264,30 @@ test("sidebar mode commands set the layout mode", () => {
 
   expect(useLayout.getState().layout.sidebarMode).toBe("triage");
 });
+
+test("'Add a note…' opens the note capture", () => {
+  useSessions.setState({
+    projects: [
+      { color: null, id: "p1", name: "kriyon", path: "/k", setupCommand: null },
+    ],
+  });
+  render(<CommandPalette />);
+  fireEvent.keyDown(window, { key: "k", metaKey: true });
+
+  fireEvent.change(screen.getByPlaceholderText(PLACEHOLDER), {
+    target: { value: "note" },
+  });
+  fireEvent.click(screen.getByText("Add a note…"));
+
+  expect(useUi.getState().noteCaptureOpen).toBe(true);
+});
+
+test("'Add a note…' before there is a project explains instead of opening", () => {
+  render(<CommandPalette />);
+  fireEvent.keyDown(window, { key: "k", metaKey: true });
+  fireEvent.change(screen.getByPlaceholderText(PLACEHOLDER), {
+    target: { value: "note" },
+  });
+  fireEvent.click(screen.getByText("Add a note…"));
+  expect(useUi.getState().noteCaptureOpen).toBe(false);
+});

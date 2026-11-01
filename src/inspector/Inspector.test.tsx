@@ -4,6 +4,7 @@ import { repoStatus } from "../ipc/bridge.ts";
 import { useChanges } from "../state/changes.ts";
 import { DEFAULT_LAYOUT, useLayout } from "../state/layout.ts";
 import { usePlanLimits } from "../state/planLimits.ts";
+import { useProjectNotes } from "../state/projectNotes.ts";
 import { useSessions } from "../state/sessions.ts";
 import { LIMIT_NOTE } from "../state/usage.ts";
 import type { FileDiff } from "../types.ts";
@@ -39,7 +40,8 @@ beforeEach(() => {
   });
   usePlanLimits.setState({ limits: { fiveHour: null, sevenDay: null } });
   useChanges.setState({ bySession: {}, ui: {} });
-  useLayout.setState({ layout: DEFAULT_LAYOUT });
+  useLayout.setState({ inspectorTab: "details", layout: DEFAULT_LAYOUT });
+  useProjectNotes.setState({ notes: [], pickedProjectId: null });
 });
 
 const CHANGES_HEADER_NAME = /changes/i;
@@ -357,4 +359,71 @@ test("the Activity tab swaps the Details body for the session's activity log", a
   ).toBeTruthy();
   fireEvent.click(screen.getByRole("tab", { name: "Details" }));
   expect(screen.queryByTestId("activity-tab")).toBeNull();
+});
+
+const NOTES_TAB_RE = /Notes/;
+
+const PROJECT = {
+  color: null,
+  id: "p1",
+  name: "kriyon",
+  path: "/work",
+  setupCommand: null,
+};
+
+function seedNote(text: string, kind: "todo" | "idea" = "todo"): void {
+  useProjectNotes.setState((state) => ({
+    notes: [
+      ...state.notes,
+      {
+        body: "",
+        createdMs: Date.now(),
+        doneAt: null,
+        id: text,
+        kind,
+        pinned: false,
+        projectId: "p1",
+        text,
+        updatedMs: Date.now(),
+      },
+    ],
+  }));
+}
+
+test("the Notes tab lists the active session's project notes, its todo count on the tab", () => {
+  useSessions.setState({ projects: [PROJECT] });
+  seedNote("Write the ADR");
+  seedNote("Ship it");
+  seedNote("Split view", "idea");
+  seedSessionWithDiff("s1", []);
+  renderInspector("s1");
+
+  const tab = screen.getByRole("tab", { name: NOTES_TAB_RE });
+  expect(tab.textContent).toContain("2");
+  fireEvent.click(tab);
+  expect(screen.getByTestId("notes-tab")).toBeTruthy();
+  expect(screen.getByText("Split view")).toBeTruthy();
+  expect(screen.queryByText("Session")).toBeNull();
+});
+
+test("the Notes tab shows a project picked from the sidebar even with no session open", () => {
+  useSessions.setState({ projects: [PROJECT] });
+  seedNote("Write the ADR");
+  useProjectNotes.setState({ pickedProjectId: "p1" });
+  useLayout.setState({ inspectorTab: "notes" });
+  render(<Inspector />);
+  expect(screen.getByText("Write the ADR")).toBeTruthy();
+});
+
+test("with no session open, Details keeps the tab strip so Notes stays reachable", () => {
+  useSessions.setState({ projects: [PROJECT] });
+  seedNote("Write the ADR");
+  useProjectNotes.setState({ pickedProjectId: "p1" });
+  useLayout.setState({ inspectorTab: "notes" });
+  render(<Inspector />);
+
+  fireEvent.click(screen.getByRole("tab", { name: "Details" }));
+  expect(screen.getByText("No active session")).toBeTruthy();
+  fireEvent.click(screen.getByRole("tab", { name: NOTES_TAB_RE }));
+  expect(screen.getByText("Write the ADR")).toBeTruthy();
 });

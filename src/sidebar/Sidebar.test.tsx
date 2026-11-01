@@ -44,6 +44,7 @@ import { useChanges } from "../state/changes.ts";
 import { useDrafts } from "../state/drafts.ts";
 import { DEFAULT_LAYOUT, useLayout } from "../state/layout.ts";
 import { useSessionProposals } from "../state/nestedSessions.ts";
+import { useProjectNotes } from "../state/projectNotes.ts";
 import { type UiSession, useSessions } from "../state/sessions.ts";
 import { useUi } from "../state/ui.ts";
 import { statusMeta } from "../theme/status.ts";
@@ -3353,7 +3354,7 @@ test("a project header's hover row is new worktree, new session, then ⋯ last",
   ]);
 });
 
-test("the project menu leads with Park and holds rename, colour, sort and close", () => {
+test("the project menu leads with Park and holds notes, rename, colour, sort and close", () => {
   seed();
   renderSidebar();
 
@@ -3363,6 +3364,7 @@ test("the project menu leads with Park and holds rename, colour, sort and close"
     screen.getAllByRole("menuitem").map((item) => item.textContent)
   ).toEqual([
     "Park project",
+    "Open notes",
     "Rename",
     "Colour…",
     "Sort sessions…",
@@ -3453,4 +3455,44 @@ test("a project header ignores its parked sessions", () => {
   // worktree must not be counted.
   expect(header).toHaveAttribute("data-needs-attention", "false");
   expect(screen.queryByTestId("worktree-count-p1")).toBeNull();
+});
+
+// --- Project notes ---
+
+test("the project menu opens the project's notes in the inspector", () => {
+  seed();
+  useProjectNotes.setState({ notes: [], pickedProjectId: null });
+  renderSidebar();
+
+  fireEvent.click(screen.getByLabelText("More actions for Project p2"));
+  fireEvent.click(screen.getByRole("menuitem", { name: "Open notes" }));
+
+  expect(useLayout.getState().inspectorTab).toBe("notes");
+  expect(useProjectNotes.getState().pickedProjectId).toBe("p2");
+  expect(screen.queryByRole("menu")).toBeNull();
+});
+
+test("a project header counts its open todos, and only those", () => {
+  seed();
+  const base = {
+    body: "",
+    createdMs: 1,
+    doneAt: null,
+    pinned: false,
+    projectId: "p1",
+    updatedMs: 1,
+  };
+  useProjectNotes.setState({
+    notes: [
+      { ...base, id: "a", kind: "todo", text: "a" },
+      { ...base, id: "b", kind: "todo", text: "b" },
+      { ...base, doneAt: 5, id: "c", kind: "todo", text: "c" },
+      { ...base, id: "d", kind: "idea", text: "d" },
+    ],
+    pickedProjectId: null,
+  });
+  renderSidebar();
+
+  expect(screen.getByTestId("open-todos-p1").textContent).toBe("2");
+  expect(screen.queryByTestId("open-todos-p2")).toBeNull();
 });

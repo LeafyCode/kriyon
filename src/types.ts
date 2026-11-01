@@ -193,6 +193,28 @@ export interface SessionRow {
   worktreePath: string | null;
 }
 
+/** What a [Project note] is (mirrors Rust `NoteKind`). Only a todo can be done. */
+export type NoteKind = "todo" | "idea" | "note";
+
+/**
+ * A [Project note]: one of the user's own todos, ideas or notes for a project
+ * (mirrors Rust `kriyon_core::project_notes::ProjectNote`). Never sent to Claude.
+ */
+export interface ProjectNote {
+  /** Optional longer text; empty when unused. */
+  body: string;
+  createdMs: number;
+  /** When a todo was ticked off; always null for an idea or a note. */
+  doneAt: number | null;
+  id: string;
+  kind: NoteKind;
+  pinned: boolean;
+  projectId: string;
+  /** The one line shown in the list. */
+  text: string;
+  updatedMs: number;
+}
+
 /** A [Saved prompt] in the user's global prompt library (mirrors Rust PromptRow). */
 export interface SavedPrompt {
   body: string;
