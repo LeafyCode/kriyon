@@ -2,6 +2,62 @@
 
 All notable changes to Kriyon are listed here. Dates are YYYY-MM-DD.
 
+## 0.15.0 — 2026-11-01
+
+Kriyon now fits the way you work across many projects. Park the ones you're
+not using today so they stop draining your battery, keep todos and ideas next
+to the work, and read and edit code in a Files view that works like an
+editor. There's a light theme and nine community themes, and a short tour
+shows new people around.
+
+### Added
+
+- **Park a project.** "Park project" in a project's ⋯ menu stops its
+  sessions, terminals and dev servers in one go. Its sessions wait in a
+  Parked section at the bottom of the sidebar, with nothing lost. Open one
+  to bring just that one back, or Unpark to bring them all.
+- **Project notes.** Each project gets its own todos, ideas and notes, in a
+  new Notes tab beside Details and Activity. Every session in the project
+  sees the same list, and nothing in it is sent to Claude. Press ⌘⇧N to jot
+  one down from anywhere, even a terminal.
+- **An editor-style Files view.** The Changes tab is now Files. Switch
+  between Claude's changes, all uncommitted changes and the whole project
+  tree, with search, git colours and keyboard navigation. In the editor,
+  lines changed this session are tinted, the cursor's line shows who last
+  changed it, and you can revert one change at a time.
+- **Light and community themes.** A new light theme, Steel Light, and nine
+  well-known palettes, including Catppuccin, Dracula, Gruvbox, Nord, One
+  Dark, Rosé Pine, Solarized Light and Tokyo Night. Each brings its own code
+  and terminal colours.
+- **Each worktree gets its own terminals.** A terminal you open from a
+  worktree session runs in that worktree, and the terminal dock shows only
+  the terminals for the session you're in. Switching sessions keeps the
+  others running in the background, and removing a worktree closes its
+  terminals.
+- **App tour.** A short walk through every part of the window. It opens once
+  on its own; replay it any time from Help → Kriyon Tour, ⌘K or Settings.
+
+### Changed
+
+- **Easier Settings.** A side menu opens one section at a time, a search
+  box finds any setting, and the page uses the window's width. On/off
+  choices are switches, and the theme picker can show only dark or light
+  themes.
+- **Worktree sessions stand out.** A branch icon sits beside the title, and
+  the branch name leads the row's second line.
+- **Only Claude's edits by default.** The Files view counts only what Claude
+  changed, including edits by subagents and commands, until you switch to
+  all changes.
+
+### Fixed
+
+- **Worktrees work when Kriyon is opened from the Dock.** Kriyon now finds
+  your own tools, such as pnpm, npm, nvm's node and Homebrew, so setting up a
+  worktree and git hooks no longer fail. A failed setup step names the step
+  and the missing tool in plain words.
+- **A merge-back that a git hook rejects is undone,** instead of leaving your
+  checkout half merged.
+
 ## 0.14.0 — 2026-10-30
 
 Parallel sessions are here. Earlier this month Claude Code's desktop app got
