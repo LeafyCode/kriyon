@@ -1,4 +1,4 @@
-import { isMacPlatform } from "../platform/shortcut.ts";
+import { isMacPlatform } from "../platform/os.ts";
 
 interface ChordEvent {
   altKey: boolean;

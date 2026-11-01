@@ -38,6 +38,7 @@
 //! byte-identical string its previous home produced, including the
 //! [`tagged_failure`] `kind:` leader on the missing-path failure.
 
+use kriyon_core::paths::Canonical as _;
 use std::path::{Path, PathBuf};
 
 use kriyon_core::completion::path_within_roots;
@@ -118,7 +119,7 @@ fn canonical_path_to_str(path: &Path) -> Result<&str, String> {
 fn resolve_within(root_canonical: &Path, path: &str) -> Result<PathBuf, String> {
     let joined = root_canonical.join(path);
     let canonical = joined
-        .canonicalize()
+        .canonical()
         .map_err(|_| tagged_failure(FILE_MISSING, WRITE_MISSING_ERROR))?;
     if path_within_roots(
         &canonical,
@@ -389,12 +390,16 @@ impl SandboxedPath {
     /// `path escapes cwd` if this target is somehow not under `root` (it
     /// always is, by construction — the check is kept so the invariant is
     /// enforced rather than assumed), or `path is not valid UTF-8`.
-    pub(crate) fn relative_to(&self, root: &SandboxRoot) -> Result<&str, String> {
-        self.0
+    pub(crate) fn relative_to(&self, root: &SandboxRoot) -> Result<String, String> {
+        let relative = self
+            .0
             .strip_prefix(root.as_path())
-            .map_err(|_| "path escapes cwd".to_string())?
+            .map_err(|_| "path escapes cwd".to_string())?;
+        relative
             .to_str()
-            .ok_or_else(|| "path is not valid UTF-8".to_string())
+            .ok_or_else(|| "path is not valid UTF-8".to_string())?;
+        // Git names repo paths with `/` on every platform.
+        Ok(kriyon_core::paths::slash_path(relative))
     }
 
     pub(crate) fn file_metadata(&self) -> Result<std::fs::Metadata, String> {
@@ -577,7 +582,7 @@ mod tests {
     #[test]
     fn validate_canonicalizes_the_accepted_root() {
         let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().canonicalize().unwrap();
+        let root = dir.path().canonical().unwrap();
         let store = store_with_project_root(&root.to_string_lossy());
 
         let sandbox = SandboxRoot::validate(&store, dir.path().to_str().unwrap()).unwrap();
@@ -711,10 +716,7 @@ mod tests {
 
         assert_eq!(
             target.as_path(),
-            root.path()
-                .canonicalize()
-                .expect("canon")
-                .join("src/new.ts")
+            root.path().canonical().expect("canon").join("src/new.ts")
         );
         assert!(
             !target.exists(),
@@ -772,7 +774,7 @@ mod tests {
             .resolve_new("short/../new.txt", "write")
             .expect("resolve");
 
-        let canonical_root = root.path().canonicalize().expect("canon");
+        let canonical_root = root.path().canonical().expect("canon");
         assert_eq!(target.as_path(), canonical_root.join("a/b/new.txt"));
         assert!(
             target.as_path().starts_with(&canonical_root),
@@ -792,7 +794,7 @@ mod tests {
 
         assert_eq!(
             target.as_path(),
-            root.path().canonicalize().expect("canon").join("top.txt")
+            root.path().canonical().expect("canon").join("top.txt")
         );
     }
 

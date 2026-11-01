@@ -198,14 +198,32 @@ fn is_secret_path(text: &str) -> bool {
 /// An absolute path not under `cwd`. A relative path is inside by definition;
 /// with no `cwd` known nothing is flagged.
 fn is_outside(path: &str, cwd: Option<&str>) -> bool {
-    let Some(cwd) = cwd.filter(|c| c.starts_with('/')) else {
+    let Some(cwd) = cwd.and_then(absolute) else {
         return false;
     };
-    if !path.starts_with('/') {
+    let Some(path) = absolute(path) else {
         return false;
-    }
+    };
     let root = cwd.trim_end_matches('/');
     !(path == root || path.starts_with(&format!("{root}/")))
+}
+
+/// An absolute path in one comparable form, or `None` for a relative one. A
+/// Windows path (`C:\dev\app`, either separator) is written with `/` and in
+/// lower case, since Windows paths ignore case.
+fn absolute(path: &str) -> Option<String> {
+    let bytes = path.as_bytes();
+    if path.starts_with('/') {
+        Some(path.to_string())
+    } else if bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && matches!(bytes[2], b'\\' | b'/')
+    {
+        Some(path.replace('\\', "/").to_lowercase())
+    } else {
+        None
+    }
 }
 
 /// A path a command names in the home folder or the system's own: `~/…`,
@@ -760,6 +778,18 @@ mod tests {
 
     fn ev(json: &str) -> HookEvent {
         parse_hook_line(json).expect("a hook line")
+    }
+
+    #[test]
+    fn a_windows_path_outside_the_project_is_flagged_and_one_inside_is_not() {
+        let cwd = Some(r"C:\dev\app");
+        assert!(is_outside(r"C:\Users\me\.ssh\id_rsa", cwd));
+        assert!(!is_outside(r"C:\dev\app\src\a.ts", cwd));
+        assert!(
+            !is_outside("c:/DEV/app/b.ts", cwd),
+            "Windows paths ignore case"
+        );
+        assert!(!is_outside("src/a.ts", cwd), "a relative path is inside");
     }
 
     #[test]

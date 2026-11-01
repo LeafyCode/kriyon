@@ -3,6 +3,7 @@
 //! `cwd` and a raw path token, and this module re-validates both before any OS
 //! call — the raw string never reaches the opener unchecked.
 
+use kriyon_core::paths::Canonical as _;
 use std::path::{Path, PathBuf};
 
 use kriyon_core::completion::path_within_roots;
@@ -32,7 +33,7 @@ fn resolve_target(
     let home = resolve_home(app)?;
     let lexical = kriyon_core::links::resolve_lexical(&base, &home, path);
     let target = lexical
-        .canonicalize()
+        .canonical()
         .map_err(|_| "path does not exist".to_string())?;
     if !(target.is_file() || (allow_dir && target.is_dir())) {
         return Err("not a file".to_string());
@@ -182,7 +183,40 @@ fn launch_via_open(flags: &[&str], target: &Path) -> bool {
         .is_ok_and(|status| status.success())
 }
 
-#[cfg(not(target_os = "macos"))]
+/// Developer editors' command-line launchers, tried in priority order on
+/// Windows. Each installer puts its launcher (`code.cmd`, `cursor.cmd`, …) on
+/// the PATH, which is how they are found wherever they were installed.
+#[cfg(windows)]
+const EDITOR_COMMANDS: &[&str] = &["cursor", "code", "code-insiders", "windsurf", "zed", "subl"];
+
+/// Launch `target` in the first editor on the PATH from [`EDITOR_COMMANDS`],
+/// else Notepad, which every Windows has.
+#[cfg(windows)]
+fn open_in_code_editor(target: &Path) -> Result<(), String> {
+    use std::os::windows::process::CommandExt as _;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let dirs: Vec<std::path::PathBuf> = std::env::split_paths(&path).collect();
+    let launcher = EDITOR_COMMANDS.iter().find_map(|name| {
+        dirs.iter().find_map(|dir| {
+            [".cmd", ".exe"]
+                .iter()
+                .map(|ext| dir.join(format!("{name}{ext}")))
+                .find(|candidate| candidate.is_file())
+        })
+    });
+    let mut command = std::process::Command::new(
+        launcher.unwrap_or_else(|| std::path::PathBuf::from("notepad.exe")),
+    );
+    // A `.cmd` launcher runs through a console; keep it from flashing one.
+    command.arg(target).creation_flags(CREATE_NO_WINDOW);
+    command
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("no editor available to open the file: {e}"))
+}
+
+#[cfg(not(any(target_os = "macos", windows)))]
 fn open_in_code_editor(_target: &Path) -> Result<(), String> {
-    Err("opening in a code editor is only supported on macOS".to_string())
+    Err("opening in a code editor is only supported on macOS and Windows".to_string())
 }

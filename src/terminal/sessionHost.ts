@@ -6,7 +6,9 @@ import {
   seedPrompt,
   writeStdin,
 } from "../ipc/bridge.ts";
+import { isWindowsPlatform } from "../platform/os.ts";
 import type { NestedReport } from "../types.ts";
+import { type ClaudeLaunch, claudeLaunchCommand } from "./launchCommand.ts";
 
 function ignore(promise: Promise<unknown>): void {
   promise.catch(() => {
@@ -358,22 +360,23 @@ function safeReport(report: NestedReport | undefined): NestedReport | null {
     : null;
 }
 
-/** The env a [Nested session]'s `claude` starts with: where its companion
- *  sends its first answer, which conversation may send it, and whether the
- *  person split it off (ADR-0049). */
-function nestedLaunch(report: NestedReport | undefined): string {
+/** What a [Nested session]'s `claude` starts with: the env saying where its
+ *  companion sends its first answer, which conversation may send it, and
+ *  whether the person split it off (ADR-0049); and the flag starting its
+ *  conversation under the id it reports from. */
+function nestedLaunch(report: NestedReport | undefined): ClaudeLaunch {
   const safe = safeReport(report);
   if (!safe) {
-    return "";
+    return { env: [], flags: "" };
   }
-  const by = safe.splitOff ? "KRIYON_REPORT_BY=person " : "";
-  return `KRIYON_REPORT_TO=${safe.to} KRIYON_REPORT_FROM=${safe.from} ${by}`;
-}
-
-/** Start a [Nested session]'s conversation under the id it reports from. */
-function nestedFlags(report: NestedReport | undefined): string {
-  const safe = safeReport(report);
-  return safe ? ` --session-id ${safe.from}` : "";
+  const env: [string, string][] = [
+    ["KRIYON_REPORT_TO", safe.to],
+    ["KRIYON_REPORT_FROM", safe.from],
+  ];
+  if (safe.splitOff) {
+    env.push(["KRIYON_REPORT_BY", "person"]);
+  }
+  return { env, flags: ` --session-id ${safe.from}` };
 }
 
 export async function launchClaudeOnce(
@@ -411,18 +414,29 @@ export async function launchClaudeOnce(
     // Seed the first prompt as a launch ARGUMENT (not keystroke injection): the
     // prompt lives in a Kriyon-written, path-contained file, so no user text is
     // ever shell-escaped. Read it into a var, remove the file, launch claude.
-    // `$(…)` strips the trailing newline; both the path and the value are quoted.
     const path = await seedPrompt(sessionId, seed).catch(() => null);
     if (path) {
-      command = `p="$(cat "${path}")"; rm -f "${path}"; ${nestedLaunch(report)}claude${nestedFlags(report)} "$p"\r`;
+      command = claudeLaunchCommand(
+        nestedLaunch(report),
+        path,
+        isWindowsPlatform()
+      );
     } else {
       // The seed file write failed: the user's first prompt is gone. Launch a
       // usable session anyway and let the caller surface the loss.
-      command = `${nestedLaunch(report)}claude${nestedFlags(report)}\r`;
+      command = claudeLaunchCommand(
+        nestedLaunch(report),
+        null,
+        isWindowsPlatform()
+      );
       seedDropped = true;
     }
   } else {
-    command = `${nestedLaunch(report)}claude${nestedFlags(report)}\r`;
+    command = claudeLaunchCommand(
+      nestedLaunch(report),
+      null,
+      isWindowsPlatform()
+    );
   }
 
   let wrote = true;

@@ -5,6 +5,7 @@
 //! warmup costs nothing and never sends a message to Claude. Pure merge/parse
 //! logic lives in `kriyon_core::completion`.
 
+use kriyon_core::paths::Canonical as _;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -40,7 +41,10 @@ fn collect_commands(dir: &Path, prefix: &str, out: &mut Vec<(String, Frontmatter
             continue;
         };
         let stem = rel.with_extension("");
-        let name = format!("{prefix}{}", stem.to_string_lossy().replace('/', ":"));
+        let name = format!(
+            "{prefix}{}",
+            kriyon_core::paths::slash_path(&stem).replace('/', ":")
+        );
         let frontmatter = std::fs::read_to_string(path)
             .map(|c| parse_frontmatter(&c))
             .unwrap_or_default();
@@ -220,7 +224,7 @@ pub(crate) fn known_roots(store: &StoreState) -> Vec<PathBuf> {
     };
     roots
         .into_iter()
-        .filter_map(|r| r.canonicalize().ok())
+        .filter_map(|r| r.canonical().ok())
         .collect()
 }
 
@@ -270,7 +274,7 @@ pub fn prompt_history(
 /// outside every registered root.
 pub(crate) fn validate_cwd(store: &StoreState, cwd: &Path) -> Result<PathBuf, String> {
     let canonical = cwd
-        .canonicalize()
+        .canonical()
         .map_err(|_| "cwd is not a directory".to_string())?;
     if !canonical.is_dir() {
         return Err("cwd is not a directory".to_string());
@@ -328,8 +332,8 @@ mod tests {
         std::fs::write(
             home.path().join(".claude/plugins/installed_plugins.json"),
             format!(
-                r#"{{"version":2,"plugins":{{"acme@market":[{{"installPath":"{}"}}]}}}}"#,
-                install.to_string_lossy()
+                r#"{{"version":2,"plugins":{{"acme@market":[{{"installPath":{}}}]}}}}"#,
+                serde_json::Value::String(install.to_string_lossy().into_owned())
             ),
         )
         .unwrap();
@@ -506,14 +510,14 @@ mod tests {
     #[test]
     fn validate_cwd_accepts_a_known_root_and_its_descendants() {
         let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().canonicalize().unwrap();
+        let root = dir.path().canonical().unwrap();
         std::fs::create_dir(root.join("sub")).unwrap();
         let state = store_with_project_root(&root.to_string_lossy());
 
         assert_eq!(validate_cwd(&state, &root).unwrap(), root);
         assert_eq!(
             validate_cwd(&state, &root.join("sub")).unwrap(),
-            root.join("sub").canonicalize().unwrap()
+            root.join("sub").canonical().unwrap()
         );
     }
 
@@ -645,7 +649,7 @@ fn walk_matches(root: &Path, query: &str, visit_cap: usize) -> (Vec<FileEntry>, 
             if rel.as_os_str().is_empty() {
                 return None; // skip the root itself
             }
-            let path = rel.to_string_lossy().to_string();
+            let path = kriyon_core::paths::slash_path(rel);
             if !needle.is_empty() && !path.to_lowercase().contains(&needle) {
                 return None;
             }

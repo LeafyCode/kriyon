@@ -28,6 +28,10 @@ const READ_BUF_LEN: usize = 8192;
 const WRITE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 const ACCEPT_POLL: std::time::Duration = std::time::Duration::from_millis(10);
 
+/// How often a Windows reader wakes to see whether it was told to leave.
+#[cfg(windows)]
+const READER_WAKE: std::time::Duration = std::time::Duration::from_millis(200);
+
 fn io_err<E: std::fmt::Display>(e: E) -> EngineError {
     EngineError::Pty(e.to_string())
 }
@@ -136,6 +140,12 @@ impl DaemonClient {
         H: FnOnce() + Send + 'static,
     {
         let mut reader = stream.try_clone().map_err(io_err)?;
+        // On Windows, shutting down a connection the daemon never accepted (one
+        // still queued behind another instance's client) does not wake a
+        // reader blocked on it, so `disconnect` would wait on it forever. The
+        // reader wakes on its own instead, and leaves once told to.
+        #[cfg(windows)]
+        let _ = reader.set_read_timeout(Some(READER_WAKE));
         // Bounds the writer only: the option lives on the shared socket, but the
         // reader never writes.
         let _ = stream.set_write_timeout(Some(WRITE_TIMEOUT));
@@ -151,6 +161,16 @@ impl DaemonClient {
             let mut buf = [0u8; READ_BUF_LEN];
             loop {
                 match reader.read(&mut buf) {
+                    Err(e)
+                        if matches!(
+                            e.kind(),
+                            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                        ) =>
+                    {
+                        if reader_closing.load(Ordering::Relaxed) {
+                            break;
+                        }
+                    }
                     Ok(0) | Err(_) => break,
                     Ok(n) => {
                         dec.push(&buf[..n]);

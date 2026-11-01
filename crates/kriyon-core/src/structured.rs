@@ -136,7 +136,7 @@ fn step_target(input: &Value) -> Option<String> {
     if let Some(path) =
         input_field(input, "file_path").or_else(|| input_field(input, "notebook_path"))
     {
-        let name = path.rsplit('/').next().filter(|n| !n.is_empty());
+        let name = path.rsplit(['/', '\\']).next().filter(|n| !n.is_empty());
         return Some(name.map_or(path.clone(), str::to_string));
     }
     ["pattern", "query", "url"]

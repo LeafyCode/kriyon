@@ -124,7 +124,10 @@ impl MainSessionLock {
 fn is_lockable(ev: &HookEvent) -> bool {
     match ev.transcript_path.as_deref() {
         None => true,
-        Some(path) => path.contains("/projects/") && !is_temp_dir_slug(path),
+        Some(path) => {
+            (path.contains("/projects/") || path.contains("\\projects\\"))
+                && !is_temp_dir_slug(path)
+        }
     }
 }
 
@@ -132,8 +135,10 @@ fn is_lockable(ev: &HookEvent) -> bool {
 /// fingerprint of a one-shot `claude -p`. macOS temp dirs live under
 /// `/var/folders/…` (slugified to `…-var-folders-…`); Linux/generic temp under
 /// `/tmp/…` (`…-tmp-…`). Kriyon is Mac-first, so `var-folders` is the primary mark.
+/// Windows temp lives in the profile's `AppData\Local\Temp`
+/// (`…-AppData-Local-Temp-…`).
 fn is_temp_dir_slug(path: &str) -> bool {
-    path.contains("var-folders") || path.contains("-tmp-")
+    path.contains("var-folders") || path.contains("-tmp-") || path.contains("AppData-Local-Temp")
 }
 
 #[cfg(test)]
@@ -201,6 +206,27 @@ mod tests {
         assert_eq!(lock.current(), Some("real-main"));
         // The stale session's events are now ignored.
         assert!(!lock.observe(&ev("Stop", Some("stale"))));
+    }
+
+    #[test]
+    fn a_windows_session_locks_and_a_windows_one_shot_does_not() {
+        let mut lock = MainSessionLock::default();
+        let one_shot = HookEvent {
+            transcript_path: Some(
+                r"C:\Users\me\.claude\projects\C--Users-me-AppData-Local-Temp-x\o.jsonl"
+                    .to_string(),
+            ),
+            ..ev("UserPromptSubmit", Some("oneshot"))
+        };
+        assert!(!lock.observe(&one_shot));
+        let main = HookEvent {
+            transcript_path: Some(
+                r"C:\Users\me\.claude\projects\C--dev-app\main.jsonl".to_string(),
+            ),
+            ..ev("UserPromptSubmit", Some("main"))
+        };
+        assert!(lock.observe(&main));
+        assert_eq!(lock.current(), Some("main"));
     }
 
     #[test]

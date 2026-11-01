@@ -1858,8 +1858,8 @@ mod tests {
         )
         .expect("rewrite transcript with title");
         let line = format!(
-            r#"{{"event":"Stop","session_id":"claude-x","transcript_path":"{}"}}"#,
-            transcript.display()
+            r#"{{"event":"Stop","session_id":"claude-x","transcript_path":{}}}"#,
+            serde_json::Value::String(transcript.display().to_string())
         );
         fs::write(events_dir.join("sess-1.jsonl"), format!("{line}\n")).expect("write event");
         // The statusLine wrapper writes a live usage snapshot.

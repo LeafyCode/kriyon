@@ -79,7 +79,7 @@ pub fn bootstrap_worktree(
     // 2. Install dependencies, if a lockfile says how.
     let present: Vec<&str> = listing.iter().map(String::as_str).collect();
     if let Some(argv) = detect_install(&present) {
-        let (ok, out) = run_in(worktree_path, path, argv);
+        let (ok, out) = run_in(worktree_path, path, &install_argv(argv));
         output.push_str(&out);
         steps.push(BootstrapStep {
             label: format!("install ({})", argv.join(" ")),
@@ -87,9 +87,10 @@ pub fn bootstrap_worktree(
         });
     }
 
-    // 3. The project's optional setup command, via `sh -c` in the worktree.
+    // 3. The project's optional setup command, through the session shell's
+    // language, in the worktree.
     if let Some(cmd) = setup_cmd.filter(|c| !c.trim().is_empty()) {
-        let (ok, out) = run_in(worktree_path, path, &["/bin/sh", "-c", cmd]);
+        let (ok, out) = run_in(worktree_path, path, &setup_argv(cmd));
         output.push_str(&out);
         steps.push(BootstrapStep {
             label: format!("setup ({cmd})"),
@@ -104,6 +105,51 @@ pub fn bootstrap_worktree(
     }
 }
 
+/// The install command as run: as detected on macOS. On Windows through
+/// `cmd`, because the package managers there are `.cmd` launchers
+/// (`pnpm.cmd`) that only a shell finds on the PATH.
+fn install_argv<'a>(argv: &[&'a str]) -> Vec<&'a str> {
+    if cfg!(windows) {
+        ["cmd.exe", "/d", "/c"]
+            .into_iter()
+            .chain(argv.iter().copied())
+            .collect()
+    } else {
+        argv.to_vec()
+    }
+}
+
+/// The setup command as run: `sh -c` on macOS, and PowerShell — the shell a
+/// session's terminal runs — on Windows.
+fn setup_argv(cmd: &str) -> Vec<&str> {
+    if cfg!(windows) {
+        vec![
+            "powershell.exe",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            cmd,
+        ]
+    } else {
+        vec!["/bin/sh", "-c", cmd]
+    }
+}
+
+/// Whether `tool` (`pnpm`) is a program `cmd` would find on `path` (or the
+/// app's own PATH): `tool` plus any extension in `PATHEXT`, in any folder.
+fn on_path(tool: &str, path: Option<&str>) -> bool {
+    let search = path.map_or_else(
+        || std::env::var_os("PATH").unwrap_or_default(),
+        std::ffi::OsString::from,
+    );
+    let exts = std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_string());
+    std::env::split_paths(&search).any(|dir| {
+        exts.split(';')
+            .filter(|ext| !ext.is_empty())
+            .any(|ext| dir.join(format!("{tool}{ext}")).is_file())
+    })
+}
+
 /// Run `argv` in `dir` with `path` as its PATH (also used to find
 /// `argv[0]`), returning (success, combined stdout+stderr). A spawn failure is
 /// a failed step, not a panic; a missing tool says so in words. stdin is
@@ -112,7 +158,24 @@ fn run_in(dir: &str, path: Option<&str>, argv: &[&str]) -> (bool, String) {
     let Some((program, rest)) = argv.split_first() else {
         return (true, String::new());
     };
+    // On Windows an install runs through `cmd /c`, which always starts; say in
+    // words when the tool it would run isn't on the PATH, as a direct spawn's
+    // NotFound does on macOS.
+    if *program == "cmd.exe" {
+        if let Some(tool) = argv.get(3) {
+            if !on_path(tool, path) {
+                return (
+                    false,
+                    format!(
+                        "{}: {tool} was not found. Install it, or add its folder to your PATH.\n",
+                        argv[3..].join(" ")
+                    ),
+                );
+            }
+        }
+    }
     let mut cmd = Command::new(program);
+    crate::spawn::no_console(&mut cmd);
     cmd.args(rest)
         .current_dir(dir)
         .stdin(std::process::Stdio::null());
@@ -150,7 +213,11 @@ mod tests {
         let report = bootstrap_worktree(
             repo.path().to_str().unwrap(),
             wt.path().to_str().unwrap(),
-            Some("printf ok > setup-ran.txt"),
+            Some(if cfg!(windows) {
+                "Set-Content setup-ran.txt ok"
+            } else {
+                "printf ok > setup-ran.txt"
+            }),
             None,
         );
 

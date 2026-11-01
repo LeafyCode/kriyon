@@ -30,6 +30,7 @@ pub mod session_registry;
 pub mod settings_cmd;
 pub mod shell_path;
 pub mod sleep_rt;
+pub mod spawn;
 pub mod status_rt;
 pub mod store;
 pub mod store_cmd;
