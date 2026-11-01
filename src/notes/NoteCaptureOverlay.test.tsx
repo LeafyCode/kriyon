@@ -18,12 +18,15 @@ const PROJECTS = [
   { color: null, id: "p2", name: "leafy-site", path: "/l", setupCommand: null },
 ];
 
+/** The capture chord as a Mac sends it; jsdom is not a Mac, so the tests
+ *  say they are (see `isNoteCaptureChord`). */
 function pressCapture(): void {
   fireEvent.keyDown(window, { key: "N", metaKey: true, shiftKey: true });
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
   useUi.setState({ noteCaptureOpen: false, paletteOpen: false });
   useProjectNotes.setState({ notes: [], pickedProjectId: null });
   useSessions.setState({
@@ -33,9 +36,18 @@ beforeEach(() => {
   });
 });
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
 
 describe("NoteCaptureOverlay", () => {
+  it("leaves Ctrl+Shift+N to the shell on a Mac", () => {
+    render(<NoteCaptureOverlay />);
+    fireEvent.keyDown(window, { ctrlKey: true, key: "N", shiftKey: true });
+    expect(useUi.getState().noteCaptureOpen).toBe(false);
+  });
+
   it("opens on ⌘⇧N, closing any other overlay", () => {
     useUi.setState({ paletteOpen: true });
     render(<NoteCaptureOverlay />);

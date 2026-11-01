@@ -57,8 +57,29 @@ export function isReservedAppChord(
   if (key === "k") {
     return true;
   }
-  // ⌘⇧P — Prompt picker, ⌘⇧N — note capture (bare ⌘P / ⌘N are not reserved).
-  return (key === "p" || key === "n") && event.shiftKey;
+  // ⌘⇧P — Prompt picker (bare ⌘P is not reserved).
+  if (key === "p" && event.shiftKey) {
+    return true;
+  }
+  return isNoteCaptureChord(event, mac);
+}
+
+/**
+ * ⌘⇧N on mac, Ctrl+Shift+N elsewhere — the [Note capture]. One definition, so
+ * the overlay that opens on it and the terminal that lets it through can never
+ * disagree.
+ */
+export function isNoteCaptureChord(
+  event: ChordEvent,
+  mac: boolean = isMacPlatform()
+): boolean {
+  return (
+    event.type === "keydown" &&
+    appModifier(event, mac) &&
+    event.shiftKey &&
+    !event.altKey &&
+    event.key.toLowerCase() === "n"
+  );
 }
 
 /**

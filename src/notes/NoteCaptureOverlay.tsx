@@ -6,6 +6,7 @@ import {
 } from "../state/projectNotes.ts";
 import { useSessions } from "../state/sessions.ts";
 import { useUi } from "../state/ui.ts";
+import { isNoteCaptureChord } from "../terminal/reservedChords.ts";
 import {
   button,
   inputBox,
@@ -66,15 +67,6 @@ const hintStyle: CSSProperties = {
 
 const addStyle: CSSProperties = button("primary", "sm");
 
-function isCaptureChord(event: KeyboardEvent): boolean {
-  return (
-    event.key.toLowerCase() === "n" &&
-    (event.metaKey || event.ctrlKey) &&
-    event.shiftKey &&
-    !event.altKey
-  );
-}
-
 /**
  * The ⌘⇧N [Note capture]: write a thought down from anywhere in the app
  * without leaving what you're doing. It files under the project the Notes
@@ -85,14 +77,10 @@ export function NoteCaptureOverlay() {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (!isCaptureChord(event)) {
+      if (!isNoteCaptureChord(event)) {
         return;
       }
       event.preventDefault();
-      if (useSessions.getState().projects.length === 0) {
-        showToast("Add a project first — notes belong to a project", "error");
-        return;
-      }
       useUi.getState().openNoteCapture();
     };
     window.addEventListener("keydown", onKeyDown);

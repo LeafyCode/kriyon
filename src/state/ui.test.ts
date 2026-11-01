@@ -1,5 +1,9 @@
-import { beforeEach, describe, expect, expectTypeOf, test } from "vitest";
+import { beforeEach, describe, expect, expectTypeOf, test, vi } from "vitest";
+import { showToast } from "../ui/Toast.tsx";
+import { useSessions } from "./sessions.ts";
 import { useUi } from "./ui.ts";
+
+vi.mock("../ui/Toast.tsx", () => ({ showToast: vi.fn() }));
 
 beforeEach(() => {
   useUi.setState({
@@ -146,4 +150,24 @@ test("a seeded spawn carries its seed; a plain spawn clears it", () => {
   expect(useUi.getState().spawnSeed).toBe("Read x");
   useUi.getState().openSpawn({ predecessorId: "s1" });
   expect(useUi.getState().spawnSeed).toBeNull();
+});
+
+test("note capture opens only once there is a project, and says why not", () => {
+  useSessions.setState({ projects: [] });
+  useUi.getState().openNoteCapture();
+  expect(useUi.getState().noteCaptureOpen).toBe(false);
+  expect(showToast).toHaveBeenCalledWith(
+    "Add a project first — notes belong to a project",
+    "error"
+  );
+
+  useSessions.setState({
+    projects: [
+      { color: null, id: "p1", name: "kriyon", path: "/k", setupCommand: null },
+    ],
+  });
+  useUi.getState().openPalette();
+  useUi.getState().openNoteCapture();
+  expect(useUi.getState().noteCaptureOpen).toBe(true);
+  expect(useUi.getState().paletteOpen).toBe(false);
 });

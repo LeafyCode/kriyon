@@ -1,4 +1,6 @@
 import { create } from "zustand";
+import { showToast } from "../ui/Toast.tsx";
+import { useSessions } from "./sessions.ts";
 
 /** Prefill for the Prompt editor: no id = creating a new Saved prompt. */
 export interface PromptEditorSeed {
@@ -32,7 +34,10 @@ interface UiState {
   noteCaptureOpen: boolean;
   openAbout: () => void;
   openNeedsYou: () => void;
-  /** Open the [Note capture]. Closes every other overlay in the family. */
+  /**
+   * Open the [Note capture], closing every other overlay in the family. A
+   * note belongs to a project, so with no project yet it says so instead.
+   */
   openNoteCapture: () => void;
   openPalette: () => void;
   /**
@@ -134,7 +139,13 @@ export const useUi = create<UiState>((set) => ({
     ),
   openNeedsYou: () => set(showOnly("needsYou")),
   closeNeedsYou: () => set({ needsYouOpen: false }),
-  openNoteCapture: () => set(showOnly("noteCapture")),
+  openNoteCapture: () => {
+    if (useSessions.getState().projects.length === 0) {
+      showToast("Add a project first — notes belong to a project", "error");
+      return;
+    }
+    set(showOnly("noteCapture"));
+  },
   closeNoteCapture: () => set({ noteCaptureOpen: false }),
   openPromptPicker: () => set(showOnly("promptPicker")),
   closePromptPicker: () => set({ promptPickerOpen: false }),

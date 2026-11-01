@@ -2,6 +2,7 @@ import { expect, test } from "vitest";
 import {
   isCopyChord,
   isNewlineChord,
+  isNoteCaptureChord,
   isReservedAppChord,
 } from "./reservedChords.ts";
 
@@ -132,4 +133,18 @@ test("newline chord requires keydown and the Enter key", () => {
     isNewlineChord(ev({ key: "Enter", shiftKey: true, type: "keyup" }))
   ).toBe(false);
   expect(isNewlineChord(ev({ key: "a", shiftKey: true }))).toBe(false);
+});
+
+test("the note capture chord is the platform's app modifier + Shift + N", () => {
+  expect(
+    isNoteCaptureChord(ev({ key: "N", metaKey: true, shiftKey: true }), true)
+  ).toBe(true);
+  expect(
+    isNoteCaptureChord(ev({ ctrlKey: true, key: "N", shiftKey: true }), false)
+  ).toBe(true);
+  // On mac Ctrl stays with the shell, and bare ⌘N is not capture.
+  expect(
+    isNoteCaptureChord(ev({ ctrlKey: true, key: "N", shiftKey: true }), true)
+  ).toBe(false);
+  expect(isNoteCaptureChord(ev({ key: "n", metaKey: true }), true)).toBe(false);
 });

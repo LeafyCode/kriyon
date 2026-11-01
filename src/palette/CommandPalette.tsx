@@ -209,21 +209,16 @@ function buildItems(
     },
   ];
 
-  // Notes belong to a project, so there is nothing to add one to before the
-  // first project exists.
-  const noteItems: PaletteItem[] =
-    projects.length === 0
-      ? []
-      : [
-          {
-            icon: "✎",
-            id: "cmd:add-note",
-            kind: "Notes",
-            label: "Add a note…",
-            run: () => useUi.getState().openNoteCapture(),
-            sub: "⌘⇧N",
-          },
-        ];
+  const noteItems: PaletteItem[] = [
+    {
+      icon: "✎",
+      id: "cmd:add-note",
+      kind: "Notes",
+      label: "Add a note…",
+      run: () => useUi.getState().openNoteCapture(),
+      sub: "⌘⇧N",
+    },
+  ];
 
   const themeItems: PaletteItem[] = THEMES.map((theme) => ({
     icon: "◐",

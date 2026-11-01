@@ -282,11 +282,12 @@ test("'Add a note…' opens the note capture", () => {
   expect(useUi.getState().noteCaptureOpen).toBe(true);
 });
 
-test("'Add a note…' is not offered before there is a project", () => {
+test("'Add a note…' before there is a project explains instead of opening", () => {
   render(<CommandPalette />);
   fireEvent.keyDown(window, { key: "k", metaKey: true });
   fireEvent.change(screen.getByPlaceholderText(PLACEHOLDER), {
     target: { value: "note" },
   });
-  expect(screen.queryByText("Add a note…")).toBeNull();
+  fireEvent.click(screen.getByText("Add a note…"));
+  expect(useUi.getState().noteCaptureOpen).toBe(false);
 });
