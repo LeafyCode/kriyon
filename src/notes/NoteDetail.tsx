@@ -1,7 +1,11 @@
 import { ChevronLeft, Pin, Trash2 } from "lucide-react";
 import { type CSSProperties, useEffect, useRef, useState } from "react";
 import { relativeTime } from "../sidebar/pastSessionTime.ts";
-import { NOTE_TEXT_MAX, useProjectNotes } from "../state/projectNotes.ts";
+import {
+  NOTE_BODY_MAX,
+  NOTE_TEXT_MAX,
+  useProjectNotes,
+} from "../state/projectNotes.ts";
 import { button, iconButton, inputBox } from "../theme/recipes.ts";
 import { tokens } from "../theme/tokens.ts";
 import type { ProjectNote } from "../types.ts";
@@ -185,6 +189,7 @@ export function NoteDetail({
 
       <textarea
         aria-label="More detail"
+        maxLength={NOTE_BODY_MAX}
         onBlur={commit}
         onChange={(event) => setBody(event.target.value)}
         placeholder="Add more detail…"

@@ -6,8 +6,14 @@ import { showToast } from "../ui/Toast.tsx";
 import { useLayout } from "./layout.ts";
 import { useSessions } from "./sessions.ts";
 
-/** The longest a note's text may be (mirrors Rust `MAX_TEXT_CHARS`). */
+/**
+ * The longest a note's text and body may be, for the inputs' `maxLength`.
+ * Rust (`MAX_TEXT_CHARS`, `MAX_BODY_CHARS` in `kriyon_core::project_notes`)
+ * is the rule; these copies are pinned to it by a test. `maxLength` counts
+ * UTF-16 units, never more than Rust's characters, so it errs short.
+ */
 export const NOTE_TEXT_MAX = 500;
+export const NOTE_BODY_MAX = 20_000;
 
 /** Which notes the Notes tab lists: every kind, or one. */
 export type NotesFilter = "all" | NoteKind;

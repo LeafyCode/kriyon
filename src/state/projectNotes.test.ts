@@ -1,10 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import rustNotes from "../../crates/kriyon-core/src/project_notes.rs?raw";
 import { deleteProjectNote, upsertProjectNote } from "../ipc/bridge.ts";
 import type { ProjectNote } from "../types.ts";
 import { showToast } from "../ui/Toast.tsx";
 import { DEFAULT_LAYOUT, useLayout } from "./layout.ts";
 import {
   installNotesPickReset,
+  NOTE_BODY_MAX,
+  NOTE_TEXT_MAX,
   notesProjectId,
   notesView,
   openProjectNotes,
@@ -42,6 +45,23 @@ function note(over: Partial<ProjectNote>): ProjectNote {
 function flush(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
+
+/** A `pub const NAME: usize = N;` from the Rust notes module. */
+function rustLimit(name: string): number {
+  const match = rustNotes.match(
+    new RegExp(`pub const ${name}: usize = ([\\d_]+);`)
+  );
+  return Number(match?.[1].split("_").join(""));
+}
+
+describe("note limits", () => {
+  // The inputs cap what the backend accepts; if they drift, a typed note is
+  // refused on save and rolled back.
+  it("match the Rust limits", () => {
+    expect(NOTE_TEXT_MAX).toBe(rustLimit("MAX_TEXT_CHARS"));
+    expect(NOTE_BODY_MAX).toBe(rustLimit("MAX_BODY_CHARS"));
+  });
+});
 
 describe("notesView", () => {
   const notes = [
