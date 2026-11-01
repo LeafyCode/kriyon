@@ -65,6 +65,15 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
 - **Parked session** (`parkedAt`) — one [Session] of a [Parked project], stopped and off the
   rail until opened. Put away like an [Archived session] (`isPutAway`), so no surface that
   skips what isn't live — Needs-you, the [Command center], the quit's [Stop cost] — counts it.
+- **Project note** (`ProjectNote`, `useProjectNotes`, `project_notes`) — one of the user's
+  own todos, ideas or notes for a [Project (Workspace)] (`NoteKind`: `todo` | `idea` |
+  `note`). Belongs to the project, not a [Session], so every session in it sees the same
+  list; stored in the app's SQLite store and never sent to Claude (ADR-0053). Only a todo
+  can be done. Shown in the Details rail's Notes tab and counted (open todos only) on the
+  project header. _Avoid_: task (that is Claude's [Task]), memo, ticket.
+- **Note capture** (`NoteCaptureOverlay`) — the ⌘⇧N overlay that adds a [Project note]
+  from anywhere, to the project the Notes tab would show unless pointed at another. Part of
+  the ⌘K overlay family, so opening it closes the others. _Avoid_: quick add, inbox.
 - **Past session** (`PastSession`) — a session discovered from a folder's
   on-disk Claude history (`~/.claude/projects/<encoded-cwd>/<id>.jsonl`) that
   Kriyon does not yet track. Carries the [Claude session id] (the file stem),
