@@ -1,10 +1,12 @@
-//! SQLite-backed persistence for projects, sessions, and UI layout state.
+//! SQLite-backed persistence for projects, sessions, project notes, and UI
+//! layout state.
 //!
 //! The [`Store`] wraps a single [`rusqlite::Connection`] and exposes typed
 //! upsert/list/load helpers. Schema is created idempotently on open.
 
 use std::path::Path;
 
+use kriyon_core::project_notes::{NoteKind, ProjectNote};
 use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json;
@@ -219,7 +221,21 @@ impl Store {
                  last_used_ms INTEGER,
                  created_ms   INTEGER NOT NULL,
                  updated_ms   INTEGER NOT NULL
-             );",
+             );
+             CREATE TABLE IF NOT EXISTS project_notes (
+                 id         TEXT PRIMARY KEY,
+                 project_id TEXT NOT NULL,
+                 kind       TEXT NOT NULL,
+                 text       TEXT NOT NULL,
+                 body       TEXT NOT NULL DEFAULT '',
+                 done_at    INTEGER,
+                 pinned     INTEGER NOT NULL DEFAULT 0,
+                 created_ms INTEGER NOT NULL,
+                 updated_ms INTEGER NOT NULL,
+                 FOREIGN KEY(project_id) REFERENCES projects(id)
+             );
+             CREATE INDEX IF NOT EXISTS project_notes_by_project
+                 ON project_notes(project_id);",
         )?;
         self.migrate_claude_session_id()?;
         self.migrate_column("projects", "setup_command", "TEXT")?;
@@ -492,6 +508,75 @@ impl Store {
         self.conn.execute(
             "UPDATE prompts SET use_count = use_count + 1, last_used_ms = ?2 WHERE id = ?1",
             rusqlite::params![id, now_ms],
+        )?;
+        Ok(())
+    }
+
+    /// Insert a [Project note], or update the one with its `id`. An update
+    /// never changes which project the note belongs to.
+    ///
+    /// # Errors
+    /// Returns [`StoreError::Sqlite`] if the statement fails, including when
+    /// the note's project does not exist (the foreign key).
+    pub fn upsert_project_note(&self, n: &ProjectNote) -> Result<(), StoreError> {
+        self.conn.execute(
+            "INSERT INTO project_notes
+                 (id, project_id, kind, text, body, done_at, pinned, created_ms, updated_ms)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+             ON CONFLICT(id) DO UPDATE SET
+                 kind = excluded.kind, text = excluded.text, body = excluded.body,
+                 done_at = excluded.done_at, pinned = excluded.pinned,
+                 updated_ms = excluded.updated_ms",
+            rusqlite::params![
+                n.id,
+                n.project_id,
+                n.kind.as_str(),
+                n.text,
+                n.body,
+                n.done_at,
+                n.pinned,
+                n.created_ms,
+                n.updated_ms
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// List every [Project note], oldest first.
+    ///
+    /// # Errors
+    /// Returns [`StoreError::Sqlite`] if the query fails.
+    pub fn list_project_notes(&self) -> Result<Vec<ProjectNote>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, project_id, kind, text, body, done_at, pinned, created_ms, updated_ms
+             FROM project_notes ORDER BY created_ms, id",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let kind: String = row.get(2)?;
+            Ok(ProjectNote {
+                id: row.get(0)?,
+                project_id: row.get(1)?,
+                kind: NoteKind::from_stored(&kind),
+                text: row.get(3)?,
+                body: row.get(4)?,
+                done_at: row.get(5)?,
+                pinned: row.get(6)?,
+                created_ms: row.get(7)?,
+                updated_ms: row.get(8)?,
+            })
+        })?;
+        let notes = rows.collect::<Result<Vec<_>, _>>()?;
+        Ok(notes)
+    }
+
+    /// Delete the [Project note] with the given `id`. No-op if it does not exist.
+    ///
+    /// # Errors
+    /// Returns [`StoreError::Sqlite`] if the statement fails.
+    pub fn delete_project_note(&self, id: &str) -> Result<(), StoreError> {
+        self.conn.execute(
+            "DELETE FROM project_notes WHERE id = ?1",
+            rusqlite::params![id],
         )?;
         Ok(())
     }
@@ -1066,6 +1151,108 @@ mod tests {
         assert_eq!(
             store.list_prompts().expect("list")[0].tags,
             Vec::<String>::new()
+        );
+    }
+    fn sample_note() -> ProjectNote {
+        ProjectNote {
+            id: "n1".to_string(),
+            project_id: "p1".to_string(),
+            kind: NoteKind::Todo,
+            text: "Write the ADR".to_string(),
+            body: "Why, then what".to_string(),
+            done_at: None,
+            pinned: false,
+            created_ms: 1_000,
+            updated_ms: 1_000,
+        }
+    }
+
+    #[test]
+    fn project_note_round_trips() {
+        let store = Store::open_in_memory().expect("open");
+        store.upsert_project(&sample_project()).expect("project");
+        store.upsert_project_note(&sample_note()).expect("insert");
+        assert_eq!(
+            store.list_project_notes().expect("list"),
+            vec![sample_note()]
+        );
+    }
+
+    #[test]
+    fn upsert_project_note_updates_in_place_but_never_moves_projects() {
+        let store = Store::open_in_memory().expect("open");
+        store.upsert_project(&sample_project()).expect("project");
+        store
+            .upsert_project(&ProjectRow {
+                id: "p2".to_string(),
+                ..sample_project()
+            })
+            .expect("second project");
+        store.upsert_project_note(&sample_note()).expect("insert");
+        let edited = ProjectNote {
+            kind: NoteKind::Idea,
+            text: "Edited".to_string(),
+            pinned: true,
+            updated_ms: 2_000,
+            ..sample_note()
+        };
+        store
+            .upsert_project_note(&ProjectNote {
+                project_id: "p2".to_string(),
+                ..edited.clone()
+            })
+            .expect("update");
+        assert_eq!(store.list_project_notes().expect("list"), vec![edited]);
+    }
+
+    #[test]
+    fn project_notes_list_oldest_first() {
+        let store = Store::open_in_memory().expect("open");
+        store.upsert_project(&sample_project()).expect("project");
+        let newer = ProjectNote {
+            id: "n2".to_string(),
+            created_ms: 5_000,
+            ..sample_note()
+        };
+        store.upsert_project_note(&newer).expect("newer");
+        store.upsert_project_note(&sample_note()).expect("older");
+        let ids: Vec<String> = store
+            .list_project_notes()
+            .expect("list")
+            .into_iter()
+            .map(|n| n.id)
+            .collect();
+        assert_eq!(ids, ["n1", "n2"]);
+    }
+
+    #[test]
+    fn delete_project_note_removes_it_and_is_a_noop_when_missing() {
+        let store = Store::open_in_memory().expect("open");
+        store.upsert_project(&sample_project()).expect("project");
+        store.upsert_project_note(&sample_note()).expect("insert");
+        store.delete_project_note("n1").expect("delete");
+        store.delete_project_note("n1").expect("delete again");
+        assert_eq!(store.list_project_notes().expect("list"), vec![]);
+    }
+
+    #[test]
+    fn project_note_without_a_project_is_rejected() {
+        let store = Store::open_in_memory().expect("open");
+        assert!(store.upsert_project_note(&sample_note()).is_err());
+    }
+
+    #[test]
+    fn project_note_with_an_unknown_stored_kind_reads_as_a_note() {
+        let store = Store::open_in_memory().expect("open");
+        store.upsert_project(&sample_project()).expect("project");
+        store.upsert_project_note(&sample_note()).expect("insert");
+        store
+            .conn_for_tests()
+            .execute("UPDATE project_notes SET kind = 'checklist'", [])
+            .expect("corrupt");
+        assert_eq!(
+            store.list_project_notes().expect("list")[0].kind,
+            NoteKind::Note
         );
     }
 }
