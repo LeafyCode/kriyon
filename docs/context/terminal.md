@@ -15,11 +15,16 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
   return reattaches instead of rebooting. The active [Session] is always mounted without being a
   warm pane. _Avoid_: activated id (the old unbounded set), kept-alive tab.
 - **Terminal scope** — the folder a set of [Project terminal]s belongs to: a Project's main
-  folder, or one of its [Worktree]s. The [Terminal dock] shows only the active [Session]'s
-  scope, and new terminals open in that folder, so main-folder terminals never show in a
-  worktree and one worktree's never show in another. Keyed by the bare project id for the main
-  folder (`terminalScope`). Parking a project stops every scope it has; removing a worktree
-  closes that worktree's scope. _Avoid_: terminal project, terminal folder.
+  folder, or another folder its [Session]s work in (a [Worktree]). A session's scope is the
+  folder it works in, so a nested session in its lead's worktree shares that worktree's
+  terminals. The [Terminal dock] shows only the active session's scope, and new terminals open
+  in that folder, so main-folder terminals never show in a worktree and one worktree's never
+  show in another. Keyed by the bare project id for the main folder (`terminalScope`, mirrored
+  by `terminal_scope` in Rust). A scope is **dormant** when its project is a [Parked project],
+  or when it is a worktree no session on the rail works in any more: its terminals stop and
+  its tabs stay, so a session back in that folder brings them back with fresh shells.
+  Removing a worktree closes its scope, asking first when a command is running there.
+  _Avoid_: terminal project, terminal folder.
 - **Terminal tab** — a named group of one or more [Terminal pane]s within one [Terminal scope].
 - **Terminal pane** — one [Project terminal] in a split. Backed by its own [PTY daemon], keyed
   by a fresh Kriyon UUID (same id type a [Session] uses as its socket key).

@@ -63,7 +63,7 @@ test("a clean removal archives the session and never confirms", async () => {
 });
 
 test("a removed worktree closes its terminals and keeps the main folder's", async () => {
-  const wt = terminalScope("p1", "/p1-worktrees/feat-x");
+  const wt = terminalScope("p1", "/p1-worktrees/feat-x", "/p1");
   useTerminals.setState({ busyPanes: {}, byScope: {}, deadPanes: {} });
   useTerminals.getState().openTab("p1", "/p1");
   useTerminals.getState().openTab(wt, "/p1-worktrees/feat-x");

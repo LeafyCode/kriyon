@@ -1,7 +1,10 @@
 import { create } from "zustand";
 import { disposeSession } from "../terminal/sessionHost.ts";
+import type { ProjectRow } from "../types.ts";
 import {
   fullyParkedProjectIds,
+  isPutAway,
+  sessionWorkingDir,
   type UiSession,
   useSessions,
 } from "./sessions.ts";
@@ -39,32 +42,96 @@ export interface TerminalTab {
 /** Splits a scope key; a NUL byte can't occur in an id or a path. */
 const SCOPE_SEP = "\u0000";
 
+const TRAILING_SLASHES = /\/+$/;
+
+/** A folder path without its trailing slashes, so `/repo/` and `/repo` match. */
+function trimFolder(folder: string): string {
+  return folder.replace(TRAILING_SLASHES, "") || folder;
+}
+
 /**
- * A [Terminal scope]: the folder a set of [Project terminal]s belongs to. A
+ * A [Terminal scope]: the folder a set of [Project terminal]s belongs to. The
  * project's main folder is keyed by the bare project id (so terminals saved
- * before scopes existed stay in the main folder); a [Worktree] is keyed by the
- * project id and the worktree path. Terminals never show outside their scope.
+ * before scopes existed stay in the main folder); any other folder — a
+ * [Worktree] — by the project id and that folder. Terminals never show outside
+ * their scope. The orphan sweep builds the same key in Rust (`terminal_scope`
+ * in kriyon-core); change both together.
  */
 export function terminalScope(
   projectId: string,
-  worktreePath: string | null | undefined
+  folder: string | null | undefined,
+  projectPath: string | undefined
 ): string {
-  return worktreePath ? `${projectId}${SCOPE_SEP}${worktreePath}` : projectId;
+  if (!folder || trimFolder(folder) === trimFolder(projectPath ?? "")) {
+    return projectId;
+  }
+  return `${projectId}${SCOPE_SEP}${trimFolder(folder)}`;
 }
 
-/** The [Terminal scope] of the folder a [Session] works in; null for none. */
+/**
+ * The [Terminal scope] of the folder a [Session] works in — its worktree, or
+ * the folder it was started in (a nested session runs in its lead's worktree
+ * without one of its own) — or null for no session.
+ */
 export function sessionTerminalScope(
-  session: UiSession | undefined
+  session: UiSession | undefined,
+  projects: readonly ProjectRow[]
 ): string | null {
-  return session
-    ? terminalScope(session.projectId, session.worktreePath)
-    : null;
+  if (!session) {
+    return null;
+  }
+  const projectPath = projects.find((p) => p.id === session.projectId)?.path;
+  return terminalScope(
+    session.projectId,
+    sessionWorkingDir(session),
+    projectPath
+  );
 }
 
 /** The project a [Terminal scope] belongs to. */
 export function scopeProjectId(scope: string): string {
   const at = scope.indexOf(SCOPE_SEP);
   return at === -1 ? scope : scope.slice(0, at);
+}
+
+/** The folder of a worktree [Terminal scope]; null for a project's main folder. */
+export function scopeFolder(scope: string): string | null {
+  const at = scope.indexOf(SCOPE_SEP);
+  return at === -1 ? null : scope.slice(at + 1);
+}
+
+/**
+ * The [Terminal scope]s among `scopes` whose terminals stay stopped: every
+ * scope of a [Parked project], and a worktree scope no session on the rail
+ * works in any more (its sessions were archived, parked or closed). The dock
+ * unmounts them and their panes are stopped; their tabs stay, and a session
+ * back in that folder starts fresh shells. A main-folder scope is only dormant
+ * with its project parked. The orphan sweep decides the same in Rust
+ * (`terminal_pane_ids` in kriyon-core); change both together.
+ */
+export function dormantScopes(
+  scopes: Iterable<string>,
+  sessions: Record<string, UiSession>,
+  projects: readonly ProjectRow[]
+): ReadonlySet<string> {
+  const parked = fullyParkedProjectIds(sessions);
+  const live = new Set<string>();
+  for (const session of Object.values(sessions)) {
+    if (!isPutAway(session)) {
+      const scope = sessionTerminalScope(session, projects);
+      if (scope) {
+        live.add(scope);
+      }
+    }
+  }
+  const dormant = new Set<string>();
+  for (const scope of scopes) {
+    const worktree = scopeFolder(scope) !== null;
+    if (parked.has(scopeProjectId(scope)) || (worktree && !live.has(scope))) {
+      dormant.add(scope);
+    }
+  }
+  return dormant;
 }
 
 export interface ScopeTerminals {
@@ -119,6 +186,9 @@ export interface TerminalsState {
   /** Stop every pane of a [Parked project], keeping its tabs and layout so
    *  unparking brings them back; each pane opens a fresh shell when shown. */
   stopProject: (projectId: string) => void;
+  /** Stop every pane of some [Terminal scope]s, keeping their tabs and layout
+   *  so a session back in that folder brings them back with fresh shells. */
+  stopScopes: (scopes: Iterable<string>) => void;
 }
 
 function newPane(cwd: string): TerminalPane {
@@ -440,8 +510,19 @@ export const useTerminals = create<TerminalsState>((set, get) => ({
 
   hydrate: (byScope) => set({ byScope }),
 
-  stopProject: (projectId) => {
-    const paneIds = projectPaneIds(get().byScope, projectId);
+  stopProject: (projectId) =>
+    get().stopScopes(
+      Object.keys(get().byScope).filter(
+        (scope) => scopeProjectId(scope) === projectId
+      )
+    ),
+
+  stopScopes: (scopes) => {
+    const { byScope } = get();
+    const paneIds = Array.from(scopes).flatMap(
+      (scope) =>
+        byScope[scope]?.tabs.flatMap((tab) => tab.panes.map((p) => p.id)) ?? []
+    );
     for (const id of paneIds) {
       disposeSession(id);
     }
@@ -484,27 +565,34 @@ export function projectPaneIds(
 }
 
 /**
- * Stop a project's [Project terminal]s the moment it becomes fully parked —
- * whichever way it got there: *Park project*, or closing or archiving the one
- * session still on the rail after the rest were parked. The dock unmounts a
- * fully parked project's workspace, so a command left running there would be
- * out of sight and out of reach. Keyed on the state, not on the actions that
- * reach it, so a new way to get there can't forget. Returns the unsubscribe.
+ * Stop a [Terminal scope]'s terminals the moment it turns dormant (see
+ * {@link dormantScopes}) — whichever way it got there: *Park project*,
+ * archiving or closing the last session on the rail, or the last session
+ * working in a worktree leaving. The dock unmounts a dormant scope, so a
+ * command left running there would be out of sight and out of reach. Keyed on
+ * the state, not on the actions that reach it, so a new way to get there can't
+ * forget. Returns the unsubscribe.
  */
-export function installParkedTerminalStops(): () => void {
-  let parked = fullyParkedProjectIds(useSessions.getState().sessions);
+export function installDormantTerminalStops(): () => void {
+  const dormantNow = (): ReadonlySet<string> => {
+    const { projects, sessions } = useSessions.getState();
+    return dormantScopes(
+      Object.keys(useTerminals.getState().byScope),
+      sessions,
+      projects
+    );
+  };
+  let dormant = dormantNow();
   let seen = useSessions.getState().sessions;
   return useSessions.subscribe((state) => {
     if (state.sessions === seen) {
       return;
     }
     seen = state.sessions;
-    const next = fullyParkedProjectIds(state.sessions);
-    for (const projectId of next) {
-      if (!parked.has(projectId)) {
-        useTerminals.getState().stopProject(projectId);
-      }
-    }
-    parked = next;
+    const next = dormantNow();
+    useTerminals
+      .getState()
+      .stopScopes(Array.from(next).filter((scope) => !dormant.has(scope)));
+    dormant = next;
   });
 }

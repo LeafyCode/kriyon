@@ -54,7 +54,7 @@ export function useWorktreeRemoval(sessionId: string): WorktreeRemoval {
     // Its folder is gone, so its terminals have nowhere to run.
     useTerminals
       .getState()
-      .dropScope(terminalScope(project.id, current.worktreePath));
+      .dropScope(terminalScope(project.id, current.worktreePath, project.path));
     archiveSessionAndStop(sessionId);
     showToast("Worktree removed — its branch is kept");
   }

@@ -29,13 +29,15 @@ beforeEach(() => {
   useTerminals.setState({ busyPanes: {}, byScope: {}, deadPanes: {} });
   useSessions.setState({
     activeSessionId: "main",
-    projects: [],
+    projects: [
+      { color: null, id: "p1", name: "p1", path: "/repo", setupCommand: null },
+    ],
     sessions: { main: session("main", null), wt: session("wt", WT) },
   });
   const t = useTerminals.getState();
   const tab = t.openTab("p1", "/repo");
   t.splitPane("p1", tab, "/repo");
-  t.openTab(terminalScope("p1", WT), WT);
+  t.openTab(terminalScope("p1", WT, "/repo"), WT);
 });
 
 describe("TerminalToggle", () => {
@@ -52,7 +54,7 @@ describe("TerminalToggle", () => {
 
   it("pulses only for a busy terminal in the current folder", () => {
     const wtPane =
-      useTerminals.getState().byScope[terminalScope("p1", WT)]?.tabs[0]
+      useTerminals.getState().byScope[terminalScope("p1", WT, "/repo")]?.tabs[0]
         ?.panes[0]?.id ?? "";
     useTerminals.getState().setPaneBusy(wtPane, true);
     render(<TerminalToggle />);

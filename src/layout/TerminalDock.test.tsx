@@ -25,13 +25,13 @@ import { useSessions } from "../state/sessions.ts";
 import { terminalScope, useTerminals } from "../state/terminals.ts";
 import { TerminalDock } from "./TerminalDock.tsx";
 
-function session(id: string, projectId: string) {
+function session(id: string, projectId: string, cwd = "/repo") {
   return {
     archivedAt: null,
     baselineOid: null,
     claudeSessionId: null,
     createdAt: 1,
-    cwd: "/repo",
+    cwd,
     id,
     projectId,
     status: "idle" as const,
@@ -78,7 +78,7 @@ describe("TerminalDock", () => {
   });
 
   it("shows a worktree session only its own worktree's terminals", () => {
-    const wt = terminalScope("p1", "/repo-worktrees/feat");
+    const wt = terminalScope("p1", "/repo-worktrees/feat", "/repo");
     useLayout.setState({
       layout: { ...DEFAULT_LAYOUT, terminalDockOpen: true },
     });
@@ -99,8 +99,32 @@ describe("TerminalDock", () => {
     expect(screen.getByTestId(`scope-pane-${wt}`).style.display).toBe("block");
   });
 
+  it("unmounts a worktree's terminals once no session on the rail works there", () => {
+    const wt = terminalScope("p1", "/repo-worktrees/feat", "/repo");
+    useLayout.setState({
+      layout: { ...DEFAULT_LAYOUT, terminalDockOpen: true },
+    });
+    useSessions.setState({
+      activeSessionId: "main",
+      projects: [project("p1", "/repo")],
+      sessions: {
+        main: session("main", "p1"),
+        wt: {
+          ...session("wt", "p1"),
+          archivedAt: 5,
+          worktreePath: "/repo-worktrees/feat",
+        },
+      },
+    });
+    useTerminals.getState().openTab(wt, "/repo-worktrees/feat");
+
+    render(<TerminalDock />);
+    expect(screen.queryByTestId(`scope-pane-${wt}`)).toBeNull();
+    expect(screen.getByTestId("scope-pane-p1")).toBeTruthy();
+  });
+
   it("shows a main-folder session none of a worktree's terminals", () => {
-    const wt = terminalScope("p1", "/repo-worktrees/feat");
+    const wt = terminalScope("p1", "/repo-worktrees/feat", "/repo");
     useLayout.setState({
       layout: { ...DEFAULT_LAYOUT, terminalDockOpen: true },
     });
@@ -145,7 +169,7 @@ describe("TerminalDock", () => {
     useSessions.setState({
       activeSessionId: "s1",
       projects: [project("p1", "/a")],
-      sessions: { s1: session("s1", "p1") },
+      sessions: { s1: session("s1", "p1", "/a") },
     });
     useTerminals.getState().openTab("p1", "/a");
 
@@ -180,7 +204,10 @@ describe("TerminalDock", () => {
     useSessions.setState({
       activeSessionId: "s1",
       projects: [project("p1", "/a"), project("p2", "/b")],
-      sessions: { s1: session("s1", "p1"), s2: session("s2", "p2") },
+      sessions: {
+        s1: session("s1", "p1", "/a"),
+        s2: session("s2", "p2", "/b"),
+      },
     });
     // Both projects have opened terminals in a previous switch.
     useTerminals.getState().openTab("p1", "/a");
@@ -209,8 +236,8 @@ describe("TerminalDock", () => {
       activeSessionId: "s1",
       projects: [project("p1", "/a"), project("p2", "/b")],
       sessions: {
-        s1: session("s1", "p1"),
-        s2: { ...session("s2", "p2"), parkedAt: 10 },
+        s1: session("s1", "p1", "/a"),
+        s2: { ...session("s2", "p2", "/b"), parkedAt: 10 },
       },
     });
     useTerminals.getState().openTab("p1", "/a");
@@ -229,7 +256,7 @@ describe("TerminalDock", () => {
     useSessions.setState({
       activeSessionId: "s1",
       projects: [project("p1", "/a")],
-      sessions: { s1: session("s1", "p1") },
+      sessions: { s1: session("s1", "p1", "/a") },
     });
     render(<TerminalDock />);
     expect(screen.getByTestId("scope-pane-p1")).toBeTruthy();

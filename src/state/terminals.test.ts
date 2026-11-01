@@ -7,8 +7,10 @@ vi.mock("../terminal/sessionHost.ts", () => ({
 
 import { type UiSession, useSessions } from "./sessions.ts";
 import {
-  installParkedTerminalStops,
+  dormantScopes,
+  installDormantTerminalStops,
   projectPaneIds,
+  scopeFolder,
   scopeProjectId,
   sessionTerminalScope,
   terminalScope,
@@ -261,39 +263,115 @@ describe("useTerminals", () => {
   });
 });
 
+function session(id: string, projectId: string): UiSession {
+  return {
+    archivedAt: null,
+    baselineOid: null,
+    claudeSessionId: null,
+    createdAt: 1,
+    cwd: "/repo",
+    id,
+    projectId,
+    status: "idle",
+    summary: "",
+    title: id,
+    titleLocked: false,
+    worktreePath: null,
+  } as UiSession;
+}
+
+function project(id: string, path: string) {
+  return { color: null, id, name: id, path, setupCommand: null };
+}
+
 describe("terminal scopes", () => {
   beforeEach(reset);
 
   it("keys the main folder by the bare project id", () => {
-    expect(terminalScope("p", null)).toBe("p");
-    expect(terminalScope("p", "")).toBe("p");
+    expect(terminalScope("p", null, "/repo")).toBe("p");
+    expect(terminalScope("p", "", "/repo")).toBe("p");
+    expect(terminalScope("p", "/repo", "/repo")).toBe("p");
+    expect(terminalScope("p", "/repo/", "/repo")).toBe("p");
   });
 
   it("gives each worktree its own scope, separate from the main folder", () => {
-    const wt = terminalScope("p", "/repo-worktrees/feat");
+    const wt = terminalScope("p", "/repo-worktrees/feat", "/repo");
     expect(wt).not.toBe("p");
-    expect(wt).not.toBe(terminalScope("p", "/repo-worktrees/other"));
+    expect(wt).not.toBe(terminalScope("p", "/repo-worktrees/other", "/repo"));
     expect(scopeProjectId(wt)).toBe("p");
     expect(scopeProjectId("p")).toBe("p");
+    expect(scopeFolder(wt)).toBe("/repo-worktrees/feat");
+    expect(scopeFolder("p")).toBeNull();
   });
 
   it("keeps main-folder terminals out of a worktree scope", () => {
-    const wt = terminalScope("p", "/repo-worktrees/feat");
+    const wt = terminalScope("p", "/repo-worktrees/feat", "/repo");
     useTerminals.getState().openTab("p", "/repo");
     expect(useTerminals.getState().byScope[wt]).toBeUndefined();
   });
 
   it("sessionTerminalScope is the scope of the folder a session works in", () => {
-    const base = { projectId: "p", worktreePath: null } as UiSession;
-    expect(sessionTerminalScope(undefined)).toBeNull();
-    expect(sessionTerminalScope(base)).toBe("p");
+    const projects = [project("p", "/repo")];
+    const base = session("s", "p");
+    const wt = terminalScope("p", "/repo-worktrees/feat", "/repo");
+    expect(sessionTerminalScope(undefined, projects)).toBeNull();
+    expect(sessionTerminalScope(base, projects)).toBe("p");
     expect(
-      sessionTerminalScope({ ...base, worktreePath: "/repo-worktrees/feat" })
-    ).toBe(terminalScope("p", "/repo-worktrees/feat"));
+      sessionTerminalScope(
+        { ...base, worktreePath: "/repo-worktrees/feat" },
+        projects
+      )
+    ).toBe(wt);
+    // A nested session runs in its lead's worktree without one of its own:
+    // its terminals are that worktree's, not the main folder's.
+    expect(
+      sessionTerminalScope({ ...base, cwd: "/repo-worktrees/feat" }, projects)
+    ).toBe(wt);
+  });
+
+  it("dormantScopes: a worktree no rail session works in is dormant", () => {
+    const projects = [project("p", "/repo")];
+    const wt = terminalScope("p", "/repo-worktrees/feat", "/repo");
+    const other = terminalScope("p", "/repo-worktrees/old", "/repo");
+    const sessions = {
+      main: session("main", "p"),
+      old: {
+        ...session("old", "p"),
+        archivedAt: 5,
+        worktreePath: "/repo-worktrees/old",
+      },
+      wt: { ...session("wt", "p"), worktreePath: "/repo-worktrees/feat" },
+    };
+    expect([...dormantScopes(["p", wt, other], sessions, projects)]).toEqual([
+      other,
+    ]);
+  });
+
+  it("dormantScopes: every scope of a fully parked project is dormant", () => {
+    const projects = [project("p", "/repo")];
+    const wt = terminalScope("p", "/repo-worktrees/feat", "/repo");
+    const sessions = {
+      wt: {
+        ...session("wt", "p"),
+        parkedAt: 5,
+        worktreePath: "/repo-worktrees/feat",
+      },
+    };
+    expect(dormantScopes(["p", wt], sessions, projects)).toEqual(
+      new Set(["p", wt])
+    );
+  });
+
+  it("dormantScopes: a main-folder scope stays live with only worktree sessions", () => {
+    const projects = [project("p", "/repo")];
+    const sessions = {
+      wt: { ...session("wt", "p"), worktreePath: "/repo-worktrees/feat" },
+    };
+    expect(dormantScopes(["p"], sessions, projects).size).toBe(0);
   });
 
   it("counts every scope of a project as the project's panes", () => {
-    const wt = terminalScope("p", "/repo-worktrees/feat");
+    const wt = terminalScope("p", "/repo-worktrees/feat", "/repo");
     useTerminals.getState().openTab("p", "/repo");
     useTerminals.getState().openTab(wt, "/repo-worktrees/feat");
     useTerminals.getState().openTab("q", "/q");
@@ -303,7 +381,7 @@ describe("terminal scopes", () => {
   });
 
   it("stopProject stops the panes of every scope of the project", () => {
-    const wt = terminalScope("p", "/repo-worktrees/feat");
+    const wt = terminalScope("p", "/repo-worktrees/feat", "/repo");
     useTerminals.getState().openTab(wt, "/repo-worktrees/feat");
     const paneId = useTerminals.getState().byScope[wt].tabs[0].panes[0].id;
     useTerminals.getState().stopProject("p");
@@ -311,7 +389,7 @@ describe("terminal scopes", () => {
   });
 
   it("dropScope closes one scope's terminals and forgets its tabs", () => {
-    const wt = terminalScope("p", "/repo-worktrees/feat");
+    const wt = terminalScope("p", "/repo-worktrees/feat", "/repo");
     useTerminals.getState().openTab("p", "/repo");
     useTerminals.getState().openTab(wt, "/repo-worktrees/feat");
     const paneId = useTerminals.getState().byScope[wt].tabs[0].panes[0].id;
@@ -323,7 +401,7 @@ describe("terminal scopes", () => {
   });
 });
 
-describe("installParkedTerminalStops", () => {
+describe("installDormantTerminalStops", () => {
   const pane = (id: string) => ({ cwd: "/x", id });
   function session(id: string, projectId: string, parkedAt?: number) {
     return {
@@ -370,7 +448,7 @@ describe("installParkedTerminalStops", () => {
         },
       },
     });
-    const stop = installParkedTerminalStops();
+    const stop = installDormantTerminalStops();
 
     // Archiving (or closing) the one session still on the rail leaves the
     // project fully parked: its dock workspace unmounts, so a dev server
@@ -403,11 +481,41 @@ describe("installParkedTerminalStops", () => {
         },
       },
     });
-    const stop = installParkedTerminalStops();
+    const stop = installDormantTerminalStops();
 
     useSessions.getState().archiveSession("a");
 
     expect(dispose).not.toHaveBeenCalled();
+    stop();
+  });
+});
+
+describe("installDormantTerminalStops for worktrees", () => {
+  beforeEach(reset);
+
+  it("stops a worktree's terminals when its last session is archived, and keeps its tabs", () => {
+    const wt = terminalScope("p", "/repo-worktrees/feat", "/repo");
+    useSessions.setState({
+      projects: [project("p", "/repo")],
+      sessions: {
+        main: session("main", "p"),
+        wt: { ...session("wt", "p"), worktreePath: "/repo-worktrees/feat" },
+      },
+    });
+    useTerminals.getState().openTab("p", "/repo");
+    useTerminals.getState().openTab(wt, "/repo-worktrees/feat");
+    const mainPane = useTerminals.getState().byScope.p.tabs[0].panes[0].id;
+    const wtPane = useTerminals.getState().byScope[wt].tabs[0].panes[0].id;
+    useTerminals.getState().setPaneBusy(wtPane, true);
+    const stop = installDormantTerminalStops();
+
+    useSessions.getState().archiveSession("wt");
+
+    expect(dispose).toHaveBeenCalledWith(wtPane);
+    expect(dispose).not.toHaveBeenCalledWith(mainPane);
+    expect(useTerminals.getState().isPaneBusy(wtPane)).toBe(false);
+    // The tabs stay, so un-archiving brings the worktree's terminals back.
+    expect(useTerminals.getState().byScope[wt].tabs).toHaveLength(1);
     stop();
   });
 });

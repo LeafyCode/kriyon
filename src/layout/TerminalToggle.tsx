@@ -46,7 +46,10 @@ export function TerminalToggle() {
   // session's folder only, never another worktree's or the main folder's.
   const scope = useSessions((state) =>
     state.activeSessionId
-      ? sessionTerminalScope(state.sessions[state.activeSessionId])
+      ? sessionTerminalScope(
+          state.sessions[state.activeSessionId],
+          state.projects
+        )
       : null
   );
   const paneCount = useTerminals((state) => state.scopePaneCount(scope));

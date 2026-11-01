@@ -1,11 +1,9 @@
 import type { CSSProperties } from "react";
 import { useLayout } from "../state/layout.ts";
+import { sessionWorkingDir, useSessions } from "../state/sessions.ts";
 import {
-  fullyParkedProjectIds,
-  sessionWorkingDir,
-  useSessions,
-} from "../state/sessions.ts";
-import {
+  dormantScopes,
+  scopeFolder,
   scopeProjectId,
   sessionTerminalScope,
   useTerminals,
@@ -48,29 +46,31 @@ export function TerminalDock() {
 
   const activeSession = activeSessionId ? sessions[activeSessionId] : undefined;
   // Terminals belong to the folder the active session works in: its
-  // [Worktree] when it has one, else the project folder. Main-folder
+  // [Worktree] when it has one, else the folder it runs in. Main-folder
   // terminals never show in a worktree, nor one worktree's in another.
-  const activeScope = sessionTerminalScope(activeSession);
+  const activeScope = sessionTerminalScope(activeSession, projects);
   const cwdFor = (scope: string): string => {
     if (scope === activeScope) {
       return sessionWorkingDir(activeSession);
     }
-    // A hidden scope opens nothing new until it is active again; its panes
-    // keep their own cwd for split and restart.
     const projectId = scopeProjectId(scope);
-    return projects.find((p) => p.id === projectId)?.path ?? "";
+    return (
+      scopeFolder(scope) ?? projects.find((p) => p.id === projectId)?.path ?? ""
+    );
   };
 
   // Keep a workspace mounted for every scope that has terminals, plus the
   // active scope (which may not have any tabs yet). Only the active one is
   // visible; the rest are hidden-but-alive so switching sessions never tears
-  // down — and blanks — a running terminal. A [Parked project]'s terminals are
-  // stopped, so its workspaces unmount too: a mounted pane would start a fresh
-  // shell behind the person's back.
-  const parked = fullyParkedProjectIds(sessions);
-  const mountedScopes = Array.from(
+  // down — and blanks — a running terminal. A dormant scope (a [Parked
+  // project]'s, or a worktree no session on the rail works in) has its
+  // terminals stopped, so its workspace unmounts too: a mounted pane would
+  // start a fresh shell behind the person's back.
+  const scopes = Array.from(
     new Set([...Object.keys(byScope), ...(activeScope ? [activeScope] : [])])
-  ).filter((scope) => !parked.has(scopeProjectId(scope)));
+  );
+  const dormant = dormantScopes(scopes, sessions, projects);
+  const mountedScopes = scopes.filter((scope) => !dormant.has(scope));
 
   const startDrag = (event: {
     clientY: number;
