@@ -1,7 +1,7 @@
-import { describe, expect, test } from "vitest";
+import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import type { ActivityStep, ActivityTurn } from "../../ipc/bridge.ts";
-import { thisComputer } from "../../platform/os.ts";
 import { setHomeFolder } from "../../state/homeRelative.ts";
+import { pretendPlatform } from "../../test/platform.ts";
 import {
   agentLabel,
   changesPathFor,
@@ -24,6 +24,13 @@ import {
   turnTimeLabel,
   visibleTurns,
 } from "./activityLog.ts";
+
+// The copy asserted here is the macOS wording; os.test.ts covers Windows.
+let restorePlatform: () => void = () => undefined;
+beforeAll(() => {
+  restorePlatform = pretendPlatform("mac");
+});
+afterAll(() => restorePlatform());
 
 function step(over: Partial<ActivityStep> = {}): ActivityStep {
   return {
@@ -428,7 +435,7 @@ describe("detail helpers", () => {
         sizeBytes: 1,
         sizeCapBytes: 1,
       })
-    ).toBe(`Kept 30 days · only on ${thisComputer()}`);
+    ).toBe("Kept 30 days · only on this Mac");
   });
 
   test("the retention reads in days, singular for one", () => {

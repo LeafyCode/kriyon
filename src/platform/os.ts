@@ -1,6 +1,5 @@
 const MAC_PLATFORM = /mac/i;
 const MAC_AGENT = /mac os x/i;
-const WINDOWS_AGENT = /windows/i;
 
 /**
  * Whether this frontend runs on macOS. On mac, ⌘ carries app chords and Ctrl
@@ -15,17 +14,6 @@ export function isMacPlatform(): boolean {
     MAC_PLATFORM.test(navigator.platform ?? "") ||
     MAC_AGENT.test(navigator.userAgent ?? "")
   );
-}
-
-/**
- * Whether this frontend runs on Windows, where a session's shell is
- * PowerShell rather than a POSIX shell.
- */
-export function isWindowsPlatform(): boolean {
-  if (typeof navigator === "undefined") {
-    return false;
-  }
-  return WINDOWS_AGENT.test(navigator.userAgent ?? "");
 }
 
 /** How the copy names the person's computer: "this Mac" on macOS, "this PC"

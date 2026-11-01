@@ -148,6 +148,17 @@ pub fn build(app: &tauri::App) -> tauri::Result<()> {
     Ok(())
 }
 
+/// Show the menu bar's `shortcut` beside a tray item. A tray menu's accelerator
+/// is a label only (see `menu.rs`); off macOS there is no menu bar to give the
+/// shortcut, so there is nothing to name.
+fn menu_bar_shortcut(item: MenuItemBuilder, shortcut: &str) -> MenuItemBuilder {
+    if cfg!(target_os = "macos") {
+        item.accelerator(shortcut)
+    } else {
+        item
+    }
+}
+
 /// Build the right-click menu: Open Kriyon · New session (⌘N) · Sleep Idle
 /// Sessions · Preferences · Quit Kriyon.
 ///
@@ -156,14 +167,12 @@ pub fn build(app: &tauri::App) -> tauri::Result<()> {
 /// Returns an error if any menu item or the menu itself fails to build.
 fn build_menu(app: &tauri::App) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
     let open_i = MenuItemBuilder::with_id("open", "Open Kriyon").build(app)?;
-    let new_i = MenuItemBuilder::with_id("new", "New session")
-        .accelerator("CmdOrCtrl+N")
-        .build(app)?;
+    let new_i =
+        menu_bar_shortcut(MenuItemBuilder::with_id("new", "New session"), "Cmd+N").build(app)?;
     let sleep_i = MenuItemBuilder::with_id("sleep-idle", "Sleep Idle Sessions").build(app)?;
     let prefs_i = MenuItemBuilder::with_id("prefs", "Preferences").build(app)?;
-    let quit_i = MenuItemBuilder::with_id("quit", "Quit Kriyon")
-        .accelerator("CmdOrCtrl+Q")
-        .build(app)?;
+    let quit_i =
+        menu_bar_shortcut(MenuItemBuilder::with_id("quit", "Quit Kriyon"), "Cmd+Q").build(app)?;
     MenuBuilder::new(app)
         .items(&[&open_i, &new_i])
         .separator()

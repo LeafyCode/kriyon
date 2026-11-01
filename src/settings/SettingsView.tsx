@@ -958,7 +958,7 @@ function LayoutSection() {
             </button>
           }
           hint={platformCopy(
-            "A one-minute look at every part of the window. Also in Help → Kriyon Tour."
+            "A one-minute look at every part of the window.{mac: Also in Help → Kriyon Tour.}"
           )}
           label="App tour"
         />

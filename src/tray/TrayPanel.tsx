@@ -1,6 +1,5 @@
 import type { CSSProperties, ReactNode } from "react";
-import { isMacPlatform } from "../platform/os.ts";
-import { shortcutLabel } from "../platform/shortcut.ts";
+import { platformKeys } from "../platform/shortcut.ts";
 import { formatCpu, formatMb } from "../sidebar/memoryChip.ts";
 import { button, iconButton, sectionLabel } from "../theme/recipes.ts";
 import { statusDotStyle, statusMeta } from "../theme/status.ts";
@@ -487,19 +486,18 @@ export default function TrayPanel(props: TrayPanelProps) {
           type="button"
         >
           New session{" "}
-          {/* ⌘N comes from the macOS menu bar; elsewhere there is no menu bar
-              and no shortcut to advertise. */}
-          {isMacPlatform() ? (
+          {platformKeys(["⌘N"]).map((key) => (
             <span
+              key={key}
               style={{
                 fontFamily: tokens.font.mono,
                 fontSize: 10,
                 opacity: 0.75,
               }}
             >
-              {shortcutLabel("⌘N")}
+              {key}
             </span>
-          ) : null}
+          ))}
         </button>
       </footer>
     </div>

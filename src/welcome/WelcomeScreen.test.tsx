@@ -1,15 +1,22 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
-import { beforeEach, expect, test, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, expect, test, vi } from "vitest";
 import {
   activityStats,
   DEFAULT_INTEGRATION_PREFS,
   type IntegrationStatus,
   quitApp,
 } from "../ipc/bridge.ts";
-import { thisComputer } from "../platform/os.ts";
 import { useIntegration } from "../state/integration.ts";
 import { DEFAULT_LAYOUT, useLayout } from "../state/layout.ts";
+import { pretendPlatform } from "../test/platform.ts";
 import { WelcomeScreen } from "./WelcomeScreen.tsx";
+
+// The copy asserted here is the macOS wording; os.test.ts covers Windows.
+let restorePlatform: () => void = () => undefined;
+beforeAll(() => {
+  restorePlatform = pretendPlatform("mac");
+});
+afterAll(() => restorePlatform());
 
 const RE_0 = /Status hooks/;
 const RE_1 = /Live usage and plan limits/;
@@ -22,8 +29,8 @@ const RE_7 = /organization blocks per-session plugins/;
 const COMES_WITH_HOOKS = /Comes with status hooks/;
 const LOG_EMPTY = /stays empty while status hooks are off/;
 const COMPANION_UNAVAILABLE = /which your setup doesn't allow/;
-const KEPT_14 = new RegExp(`Kept 14 days, only on ${thisComputer()}\\.`);
-const KEPT_30 = new RegExp(`Kept 30 days, only on ${thisComputer()}\\.`);
+const KEPT_14 = /Kept 14 days, only on this Mac\./;
+const KEPT_30 = /Kept 30 days, only on this Mac\./;
 
 vi.mock("../ipc/bridge.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../ipc/bridge.ts")>()),

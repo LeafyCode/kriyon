@@ -13,22 +13,27 @@ const KEY_NAMES: Record<string, string> = {
   "⎋": "Esc",
 };
 
-/** The parts of the copy that name the macOS menu bar's Help menu. */
-const HELP_MENU_MENTION = /Help → Kriyon Tour, | Also in Help → Kriyon Tour\./g;
+/**
+ * Copy that only the macOS menu bar makes true, marked where it is written as
+ * `{mac:…}` — "Also in Help → Kriyon Tour." names a menu other platforms lack.
+ */
+const MAC_ONLY = /\{mac:([^}]*)\}/g;
 
 /** Shortcuts that come from the macOS menu bar, which other platforms lack. */
 const MENU_BAR_ONLY = new Set(["⌘N"]);
 
 /**
- * Copy as this platform reads it: shortcuts spelled with Ctrl off macOS (see
- * {@link shortcutLabel}), and no mention of the Help menu, which only the
- * macOS menu bar has.
+ * Copy as this platform reads it: the `{mac:…}` parts kept on macOS and
+ * dropped elsewhere, and shortcuts spelled with Ctrl off macOS (see
+ * {@link shortcutLabel}).
  */
 export function platformCopy(
   text: string,
   mac: boolean = isMacPlatform()
 ): string {
-  return mac ? text : shortcutLabel(text.replace(HELP_MENU_MENTION, ""), false);
+  return mac
+    ? text.replace(MAC_ONLY, "$1")
+    : shortcutLabel(text.replace(MAC_ONLY, ""), false);
 }
 
 /**

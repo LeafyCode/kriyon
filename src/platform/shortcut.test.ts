@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { TOUR_STEPS } from "../tour/steps.ts";
 import { platformCopy, platformKeys, shortcutLabel } from "./shortcut.ts";
 
 describe("shortcutLabel", () => {
@@ -24,28 +25,42 @@ describe("shortcutLabel", () => {
 
 describe("platformCopy and platformKeys", () => {
   it("leave mac copy as written", () => {
-    expect(platformCopy("Also in Help → Kriyon Tour.", true)).toBe(
-      "Also in Help → Kriyon Tour."
-    );
+    expect(
+      platformCopy("A look.{mac: Also in Help → Kriyon Tour.}", true)
+    ).toBe("A look. Also in Help → Kriyon Tour.");
     expect(platformKeys(["⌘N", "⌘K"], true)).toEqual(["⌘N", "⌘K"]);
   });
 
   it("drop the Help menu and menu-bar shortcuts elsewhere", () => {
     expect(
       platformCopy(
-        "Take this tour again any time from Help → Kriyon Tour, the command palette or Settings.",
+        "Take this tour again any time from {mac:Help → Kriyon Tour, }the command palette or Settings.",
         false
       )
     ).toBe(
       "Take this tour again any time from the command palette or Settings."
     );
     expect(
-      platformCopy("A one-minute look. Also in Help → Kriyon Tour.", false)
+      platformCopy(
+        "A one-minute look.{mac: Also in Help → Kriyon Tour.}",
+        false
+      )
     ).toBe("A one-minute look.");
     expect(platformCopy("⌘⇧N adds one from anywhere.", false)).toBe(
       "Ctrl+Shift+N adds one from anywhere."
     );
     expect(platformKeys(["⌘N"], false)).toEqual([]);
     expect(platformKeys(["⌘K", "⌘,"], false)).toEqual(["Ctrl+K", "Ctrl+,"]);
+  });
+});
+
+/** What only the macOS menu bar makes true. */
+const MENU_BAR_MENTION = /Help →|menu bar/;
+
+describe("Mac-only copy", () => {
+  it("is marked wherever the tour names the menu bar, so Windows never reads it", () => {
+    for (const step of TOUR_STEPS) {
+      expect(platformCopy(step.body, false)).not.toMatch(MENU_BAR_MENTION);
+    }
   });
 });

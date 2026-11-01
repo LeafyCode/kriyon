@@ -1,13 +1,20 @@
-import { expect, test } from "vitest";
+import { afterAll, beforeAll, expect, test } from "vitest";
 import type { IntegrationStatus } from "../ipc/bridge.ts";
 import { DEFAULT_INTEGRATION_PREFS } from "../ipc/bridge.ts";
-import { thisComputer } from "../platform/os.ts";
+import { pretendPlatform } from "../test/platform.ts";
 import {
   companionHint,
   hooksHint,
   liveUsageHint,
   REFUSED_TOAST,
 } from "./integrationCopy.ts";
+
+// The copy asserted here is the macOS wording; os.test.ts covers Windows.
+let restorePlatform: () => void = () => undefined;
+beforeAll(() => {
+  restorePlatform = pretendPlatform("mac");
+});
+afterAll(() => restorePlatform());
 
 const ON_PLUGIN = /only in Kriyon's sessions.*settings file has none/;
 const ORG = /organization blocks.*~\/\.claude\/settings\.json/;
@@ -52,7 +59,7 @@ test("the refusal toast says what changed and what to do", () => {
 
 test("the companion hint says what it sees and what it never does", () => {
   const hint = companionHint(true);
-  expect(hint).toContain(`only to Kriyon on ${thisComputer()}`);
+  expect(hint).toContain("only to Kriyon on this Mac");
   expect(hint).toContain("never approves, blocks or changes anything");
   // Nested sessions spend plan use, so the hint says when one starts.
   expect(hint).toContain("only when you asked for one in your own words");

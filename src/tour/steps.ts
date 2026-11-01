@@ -157,7 +157,7 @@ export const TOUR_STEPS: readonly TourStep[] = [
     title: "Make it yours",
   },
   {
-    body: "Take this tour again any time from Help → Kriyon Tour, the command palette or Settings.",
+    body: "Take this tour again any time from {mac:Help → Kriyon Tour, }the command palette or Settings.",
     icon: Sparkles,
     id: "done",
     title: "You are all set",
