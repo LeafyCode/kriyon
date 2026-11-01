@@ -428,3 +428,14 @@ test("each section's page is titled the same as its side-menu entry", () => {
     );
   }
 });
+
+test("Take the tour starts the app tour", async () => {
+  const { useTour } = await import("../state/tour.ts");
+  useTour.setState({ stepIndex: null });
+  render(<SettingsView />);
+  openSection("Layout");
+  fireEvent.click(screen.getByRole("button", { name: "Take the tour" }));
+  expect(useTour.getState().stepIndex).toBe(0);
+  expect(useLayout.getState().layout.view).toBe("studio");
+  useTour.setState({ stepIndex: null });
+});

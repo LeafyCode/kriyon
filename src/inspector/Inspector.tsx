@@ -473,7 +473,7 @@ export function Inspector() {
   // the project menu's "Open notes" works with no session open.
   if (tab === "notes" && notesProjectId) {
     return (
-      <aside data-testid="inspector" style={rootStyle}>
+      <aside data-testid="inspector" data-tour="inspector" style={rootStyle}>
         <DetailsHeader onTab={setTab} tab={tab} />
         <NotesTab key={notesProjectId} projectId={notesProjectId} />
       </aside>
@@ -482,7 +482,7 @@ export function Inspector() {
 
   if (!session) {
     return (
-      <aside data-testid="inspector" style={rootStyle}>
+      <aside data-testid="inspector" data-tour="inspector" style={rootStyle}>
         {/* With a project's notes to show, keep the strip so they stay one
             click away; with nothing at all, just the "Details" title. */}
         {notesProjectId ? (
@@ -505,7 +505,7 @@ export function Inspector() {
 
   if (tab === "activity") {
     return (
-      <aside data-testid="inspector" style={rootStyle}>
+      <aside data-testid="inspector" data-tour="inspector" style={rootStyle}>
         <DetailsHeader onTab={setTab} tab={tab} />
         <ActivityTab onOpenInChanges={openInChanges} sessionId={session.id} />
       </aside>
@@ -513,7 +513,7 @@ export function Inspector() {
   }
 
   return (
-    <aside data-testid="inspector" style={rootStyle}>
+    <aside data-testid="inspector" data-tour="inspector" style={rootStyle}>
       <DetailsHeader onTab={setTab} tab={tab} />
       <div style={bodyStyle}>
         {/* Session first: the canvas leads with what this session *is*, then

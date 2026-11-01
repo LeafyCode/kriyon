@@ -797,6 +797,15 @@ export function onShowAbout(cb: () => void): Promise<() => void> {
 }
 
 /**
+ * Subscribe to backend `show-tour` events, emitted when the macOS app menu's
+ * Help → "Kriyon Tour" item is chosen. Resolves to an unlisten fn. No-ops
+ * outside the Tauri webview.
+ */
+export function onShowTour(cb: () => void): Promise<() => void> {
+  return subscribe<void>("show-tour")(() => cb());
+}
+
+/**
  * Subscribe to backend `new-session` events, emitted when the tray's "New
  * session" row is clicked. Resolves to an unlisten fn. No-ops outside the
  * Tauri webview.

@@ -36,6 +36,7 @@ import { installNotesPickReset } from "./state/projectNotes.ts";
 import { useSessions } from "./state/sessions.ts";
 import { freedMemoryNote } from "./state/stopCost.ts";
 import { installParkedTerminalStops, useTerminals } from "./state/terminals.ts";
+import { useTour } from "./state/tour.ts";
 import { useUpdates } from "./state/updates.ts";
 import { useSessionWatch } from "./state/useSessionWatch.ts";
 import { sessionPaneMounts } from "./state/warmPanes.ts";
@@ -295,7 +296,13 @@ function App() {
     const stopUpdateAnswered = onEvent(onUpdateChannelAnswered, (snapshot) =>
       useUpdates.getState().answerMove(snapshot)
     );
-    ignore(hydrate().then(sessionRequestsReady));
+    ignore(
+      hydrate().then(() => {
+        sessionRequestsReady();
+        // The [App tour] opens on its own only once `tourSeen` is known.
+        useTour.getState().noteLayoutLoaded();
+      })
+    );
     const stopPersistence = installPersistence();
     const stopParkedTerminals = installParkedTerminalStops();
     const stopListeners = installSessionListeners();

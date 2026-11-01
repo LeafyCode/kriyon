@@ -8,6 +8,7 @@ import { sleepIdleSessionsNow, startNewSession } from "../state/actions.ts";
 import { useLayout } from "../state/layout.ts";
 import { importPromptsFromCommands } from "../state/promptLibrary.ts";
 import { useSessions } from "../state/sessions.ts";
+import { useTour } from "../state/tour.ts";
 import { useUi } from "../state/ui.ts";
 import {
   kbd,
@@ -220,6 +221,17 @@ function buildItems(
     },
   ];
 
+  const helpItems: PaletteItem[] = [
+    {
+      icon: "✦",
+      id: "cmd:app-tour",
+      kind: "Help",
+      label: "Take the app tour",
+      run: () => useTour.getState().start(),
+      sub: "A one-minute look around Kriyon",
+    },
+  ];
+
   const themeItems: PaletteItem[] = THEMES.map((theme) => ({
     icon: "◐",
     id: `theme:${theme.id}`,
@@ -248,6 +260,7 @@ function buildItems(
     ...sessionItems,
     ...commandItems,
     ...noteItems,
+    ...helpItems,
     ...themeItems,
     ...menuBarItems,
     ...sidebarItems,

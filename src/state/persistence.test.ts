@@ -888,3 +888,22 @@ test("a failed notes load says so and does not block core hydration", async () =
     "error"
   );
 });
+
+test("a fresh install has not seen the app tour", () => {
+  expect(DEFAULT_LAYOUT.tourSeen).toBe(false);
+});
+
+test("tourSeen survives a save/load round-trip", () => {
+  const unseen = { ...DEFAULT_LAYOUT, tourSeen: false };
+  expect(parseLayoutForTest(JSON.stringify(unseen))?.tourSeen).toBe(false);
+  const seen = { ...DEFAULT_LAYOUT, tourSeen: true };
+  expect(parseLayoutForTest(JSON.stringify(seen))?.tourSeen).toBe(true);
+});
+
+test("a layout saved before the app tour existed has not seen it", () => {
+  // Someone who used Kriyon before the tour existed has never seen it, so it
+  // opens for them once too.
+  expect(parseLayoutForTest(JSON.stringify({ view: "studio" }))?.tourSeen).toBe(
+    false
+  );
+});

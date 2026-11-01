@@ -1,4 +1,4 @@
-import type { CSSProperties, ReactNode } from "react";
+import type { CSSProperties, ReactNode, RefObject } from "react";
 import { useEffect, useRef } from "react";
 import { tokens } from "../theme/tokens.ts";
 
@@ -58,30 +58,27 @@ function focusableIn(root: HTMLElement | null): HTMLElement[] {
   );
 }
 
-export function Overlay({
-  children,
-  label,
-  onClose,
-  onEscape,
-  align = "top",
-  paddingTop = "14vh",
-  backdropTestId,
-}: OverlayProps) {
-  const panelRef = useRef<HTMLDivElement>(null);
-
+/**
+ * Keep keyboard focus inside `panelRef` while the caller is mounted: focus
+ * moves in on mount (to `initialRef` when given, else the first focusable,
+ * else the panel), Tab and Shift+Tab wrap at the ends, and on unmount focus
+ * goes back to whatever had it before — when that element is still in the
+ * document, and only if focus was still this trap's to give. A dialog that
+ * opened on top and took focus keeps it. Every modal surface uses this, so a
+ * fix to modal focus lands in all of them.
+ */
+export function useFocusTrap(
+  panelRef: RefObject<HTMLElement | null>,
+  initialRef?: RefObject<HTMLElement | null>
+): void {
   useEffect(() => {
     const previouslyFocused = document.activeElement as HTMLElement | null;
-    // Move focus into the panel so Tab starts trapped and screen readers land
-    // inside the overlay. Prefer the first focusable; fall back to the panel.
-    const initial = focusableIn(panelRef.current);
-    (initial[0] ?? panelRef.current)?.focus();
+    // Held here: the ref is already cleared by the time the cleanup runs.
+    const panel = panelRef.current;
+    const initial = focusableIn(panel);
+    (initialRef?.current ?? initial[0] ?? panelRef.current)?.focus();
 
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        (onEscape ?? onClose)();
-        return;
-      }
       if (event.key !== "Tab") {
         return;
       }
@@ -107,6 +104,14 @@ export function Overlay({
     window.addEventListener("keydown", onKeyDown);
     return () => {
       window.removeEventListener("keydown", onKeyDown);
+      // Another trap opened while this one was up (About from the app menu
+      // during the app tour) and has focus now: taking it back would put the
+      // keys behind that dialog's scrim. Focus on a removed element reads as
+      // `document.body`, so the usual close still restores.
+      const active = document.activeElement;
+      if (active && active !== document.body && !panel?.contains(active)) {
+        return;
+      }
       // Guarded like ContextMenu's own focus restore: the opener can be gone
       // by the time this overlay closes (e.g. deleting a file-tree row via
       // its ConfirmDialog detaches the button that opened it), and focusing a
@@ -119,6 +124,32 @@ export function Overlay({
         previouslyFocused.focus();
       }
     };
+  }, [panelRef, initialRef]);
+}
+
+export function Overlay({
+  children,
+  label,
+  onClose,
+  onEscape,
+  align = "top",
+  paddingTop = "14vh",
+  backdropTestId,
+}: OverlayProps) {
+  const panelRef = useRef<HTMLDivElement>(null);
+  // Move focus into the panel so Tab starts trapped and screen readers land
+  // inside the overlay, and give it back on close.
+  useFocusTrap(panelRef);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        (onEscape ?? onClose)();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
   }, [onClose, onEscape]);
 
   const containerStyle: CSSProperties = {

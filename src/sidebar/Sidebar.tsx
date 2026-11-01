@@ -299,7 +299,11 @@ export function Sidebar({
   );
 
   return (
-    <aside data-testid="sidebar" style={containerStyle(width)}>
+    <aside
+      data-testid="sidebar"
+      data-tour="sidebar"
+      style={containerStyle(width)}
+    >
       <SidebarHeader query={query} setQuery={setQuery} />
       <NeedsYouSection />
       <div className="kr-reveal-parent" style={projectsLabelRowStyle}>
@@ -345,6 +349,7 @@ export function Sidebar({
         <button
           aria-label="New session"
           className="kr-hover-surface"
+          data-tour="new-session"
           onClick={onNewSession}
           style={iconButton()}
           type="button"

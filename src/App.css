@@ -177,6 +177,45 @@ body {
   }
 }
 
+/* The app tour's spotlight ring: it breathes outward from the lit target so
+   the eye finds it after the glide. Reduced-motion is neutralized by the
+   global rule below. */
+@keyframes kr-tour-ring {
+  0% {
+    opacity: 0.9;
+    transform: scale(1);
+  }
+  70%,
+  100% {
+    opacity: 0;
+    transform: scale(1.06);
+  }
+}
+
+/* The welcome picture settles in: a slow push-out from a slight zoom. */
+@keyframes kr-tour-hero {
+  from {
+    opacity: 0;
+    transform: scale(1.08);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* The tour card's icon lands with a small overshoot each step. */
+@keyframes kr-tour-icon {
+  from {
+    opacity: 0;
+    transform: scale(0.6) rotate(-8deg);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) rotate(0);
+  }
+}
+
 /* The hover affordances inline styles can't express live in `hover.css`, which
  * the tray popover imports too — see the note at the top of that file. */
 
