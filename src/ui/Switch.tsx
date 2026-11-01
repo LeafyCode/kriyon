@@ -6,6 +6,11 @@ import { switchThumb, switchTrack } from "../theme/recipes.ts";
  * the switch and that text are then wrapped in one `<label>`, so the text
  * names the switch and clicking it toggles too. `labelStyle` lays that out.
  */
+/** How a switch is named: an `aria-label`, or a visible label beside it. */
+type SwitchName =
+  | { ariaLabel: string; label?: never; labelStyle?: never }
+  | { ariaLabel?: never; label: string; labelStyle?: CSSProperties };
+
 export function Switch({
   ariaLabel,
   checked,
@@ -13,11 +18,8 @@ export function Switch({
   labelStyle,
   onChange,
   testId,
-}: {
-  ariaLabel?: string;
+}: SwitchName & {
   checked: boolean;
-  label?: string;
-  labelStyle?: CSSProperties;
   onChange: (checked: boolean) => void;
   testId?: string;
 }) {
