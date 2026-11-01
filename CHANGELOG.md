@@ -29,6 +29,11 @@ shows new people around.
   well-known palettes, including Catppuccin, Dracula, Gruvbox, Nord, One
   Dark, Rosé Pine, Solarized Light and Tokyo Night. Each brings its own code
   and terminal colours.
+- **Each worktree gets its own terminals.** A terminal you open from a
+  worktree session runs in that worktree, and the terminal dock shows only
+  the terminals for the session you're in. Switching sessions keeps the
+  others running in the background, and removing a worktree closes its
+  terminals.
 - **App tour.** A short walk through every part of the window. It opens once
   on its own; replay it any time from Help → Kriyon Tour, ⌘K or Settings.
 
