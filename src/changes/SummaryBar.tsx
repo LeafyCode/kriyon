@@ -1,9 +1,10 @@
 import { ChevronsDownUp, ChevronsUpDown, RotateCw } from "lucide-react";
 import { type CSSProperties, useEffect, useState } from "react";
 import { useChanges } from "../state/changes.ts";
-import { iconButton, switchThumb, switchTrack } from "../theme/recipes.ts";
+import { iconButton } from "../theme/recipes.ts";
 import { accentAlpha, tokens } from "../theme/tokens.ts";
 import type { DiffTotals } from "../types.ts";
+import { Switch } from "../ui/Switch.tsx";
 
 /** Below this age, the fetch is fresh enough that no "updated Xs ago" label
  * shows at all. */
@@ -262,21 +263,13 @@ export function SummaryBar({
         </span>
       ) : null}
       {editsToggle ? (
-        // A `<label>`, so the visible text is the switch's accessible name
-        // and clicking it toggles too — a bigger target than the track.
-        <label style={toggleLabelStyle}>
-          <button
-            aria-checked={editsToggle.checked}
-            data-testid="my-edits-only-toggle"
-            onClick={editsToggle.onToggle}
-            role="switch"
-            style={switchTrack(editsToggle.checked)}
-            type="button"
-          >
-            <span style={switchThumb(editsToggle.checked)} />
-          </button>
-          <span>Only Claude's edits</span>
-        </label>
+        <Switch
+          checked={editsToggle.checked}
+          label="Only Claude's edits"
+          labelStyle={toggleLabelStyle}
+          onChange={editsToggle.onToggle}
+          testId="my-edits-only-toggle"
+        />
       ) : null}
       {editsToggle ? <span aria-hidden style={dividerStyle} /> : null}
       {diffControls ? (

@@ -1,30 +1,44 @@
+import type { CSSProperties } from "react";
 import { switchThumb, switchTrack } from "../theme/recipes.ts";
 
-/** An on/off switch. Its accessible name is `ariaLabel`; a visible label
- *  beside it is the caller's. */
+/**
+ * An on/off switch. Name it with `ariaLabel`, or give it a visible `label`:
+ * the switch and that text are then wrapped in one `<label>`, so the text
+ * names the switch and clicking it toggles too. `labelStyle` lays that out.
+ */
 export function Switch({
   ariaLabel,
   checked,
-  disabled = false,
+  label,
+  labelStyle,
   onChange,
+  testId,
 }: {
-  ariaLabel: string;
+  ariaLabel?: string;
   checked: boolean;
-  disabled?: boolean;
+  label?: string;
+  labelStyle?: CSSProperties;
   onChange: (checked: boolean) => void;
+  testId?: string;
 }) {
+  const track = {
+    "aria-checked": checked,
+    "aria-label": ariaLabel,
+    className: "kr-focusable",
+    "data-testid": testId,
+    onClick: () => onChange(!checked),
+    role: "switch",
+    style: switchTrack(checked),
+    type: "button",
+  } as const;
+  const thumb = <span style={switchThumb(checked)} />;
+  if (label === undefined) {
+    return <button {...track}>{thumb}</button>;
+  }
   return (
-    <button
-      aria-checked={checked}
-      aria-label={ariaLabel}
-      className="kr-focusable"
-      disabled={disabled}
-      onClick={() => onChange(!checked)}
-      role="switch"
-      style={{ ...switchTrack(checked), opacity: disabled ? 0.5 : 1 }}
-      type="button"
-    >
-      <span style={switchThumb(checked)} />
-    </button>
+    <label style={labelStyle}>
+      <button {...track}>{thumb}</button>
+      <span>{label}</span>
+    </label>
   );
 }
