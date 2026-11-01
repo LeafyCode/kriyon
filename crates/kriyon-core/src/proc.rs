@@ -13,7 +13,9 @@
 //! control moves each foreground command into its own process group, so the
 //! PTY's foreground process group id — `tpgid`, the same `tcgetpgrp` state the
 //! daemon's own `foreground_busy` reads — is the shell's own pid when the shell
-//! sits at its prompt, and the foreground command's pid otherwise.
+//! sits at its prompt, and the foreground command's pid otherwise. Windows has
+//! no terminal foreground; [`windows_command_of`] stands in for it, on both
+//! sides.
 //!
 //! This module is the pure half: parsing a `ps` table and folding it into a
 //! verdict. The `ps` invocation itself lives in the Tauri shell.
@@ -499,13 +501,23 @@ pub const fn may_still_be_blocked(foreground: PtyForeground) -> bool {
 /// read alike. Matching whole segments (not a substring) is what keeps
 /// `claudette` and a `~/.claude/…` file path from reading as the process.
 ///
+/// On Windows an npm install has no `claude` file to run: `claude.cmd`, or
+/// PowerShell's `claude.ps1` starting node on the package's own folder,
+/// `@anthropic-ai/claude-code`. Both read as `claude` too.
+///
 /// Deliberately generous: a false positive only means the seed gate stays as
 /// permissive as it was before the gate existed, while a false negative would
 /// hide a session that genuinely needs the user.
 fn looks_like_claude(cmd: &str) -> bool {
-    cmd.split_whitespace()
-        .flat_map(|token| token.split(['/', '\\']))
-        .any(|segment| segment == "claude" || segment == "claude.exe")
+    cmd.split_whitespace().any(|token| {
+        let segments: Vec<&str> = token.split(['/', '\\']).collect();
+        segments
+            .iter()
+            .any(|segment| matches!(*segment, "claude" | "claude.exe" | "claude.cmd"))
+            || segments
+                .windows(2)
+                .any(|pair| pair == ["@anthropic-ai", "claude-code"])
+    })
 }
 
 /// One process as Windows reports it: no terminal, no process groups, and a
@@ -553,10 +565,7 @@ pub fn rows_from_windows(procs: &[WindowsProcess]) -> Vec<ProcRow> {
             } else if CONSOLE_HOSTS.contains(&program.as_str()) {
                 p.pid
             } else {
-                procs
-                    .iter()
-                    .find(|child| child.ppid == p.pid && child.pid != p.pid)
-                    .map_or(p.pid, |child| child.pid)
+                windows_command_of(p.pid, procs.iter().map(|q| (q.pid, q.ppid))).unwrap_or(p.pid)
             };
             let mut cmd = program;
             for arg in &p.args {
@@ -573,9 +582,38 @@ pub fn rows_from_windows(procs: &[WindowsProcess]) -> Vec<ProcRow> {
         .collect()
 }
 
+/// The command a Windows [PTY daemon]'s shell is running: a live process whose
+/// parent is `shell`, or `None` when the shell sits at its prompt. `procs` is
+/// `(pid, parent pid)` pairs.
+///
+/// Windows has no terminal foreground, so this is its one rule for "the shell
+/// is busy". The app's sweep reads it from the whole process table; the daemon
+/// reads it from its shell's Job Object. A process left behind in the job after
+/// the command that started it ended is not the shell's child, so it never
+/// holds a session busy.
+pub fn windows_command_of(shell: i32, procs: impl IntoIterator<Item = (i32, i32)>) -> Option<i32> {
+    procs
+        .into_iter()
+        .find(|&(pid, ppid)| ppid == shell && pid != shell)
+        .map(|(pid, _)| pid)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_windows_shell_is_busy_only_while_it_has_a_child() {
+        // Shell 10 at its prompt; an orphan (parent 11, gone) still in its job.
+        assert_eq!(windows_command_of(10, [(10, 5), (12, 11)]), None);
+        // Shell 10 running claude (20), which has a child of its own (30).
+        assert_eq!(
+            windows_command_of(10, [(10, 5), (20, 10), (30, 20)]),
+            Some(20)
+        );
+        // A process is never its own command.
+        assert_eq!(windows_command_of(10, [(10, 10)]), None);
+    }
 
     fn seat(pgid: i32, foreground_pgid: i32, on_session_tty: bool) -> TerminalSeat {
         TerminalSeat {
@@ -665,10 +703,19 @@ mod tests {
             "/opt/homebrew/bin/claude --resume",
             "node /Users/x/.local/share/claude/cli.js",
             "/usr/bin/node /opt/claude",
+            // npm on Windows: PowerShell's claude.ps1 starts node on the
+            // package itself, and cmd runs claude.cmd.
+            r"node C:\Users\you\AppData\Roaming\npm\node_modules\@anthropic-ai\claude-code\cli.js",
+            r"cmd /d /s /c C:\Users\you\AppData\Roaming\npm\claude.cmd",
         ] {
             assert!(looks_like_claude(cmd), "{cmd} should read as claude");
         }
-        for cmd in ["/bin/zsh -l", "vim ~/.claude/settings.json", "claudette"] {
+        for cmd in [
+            "/bin/zsh -l",
+            "vim ~/.claude/settings.json",
+            "claudette",
+            "node /work/claude-code/cli.js",
+        ] {
             assert!(!looks_like_claude(cmd), "{cmd} should not read as claude");
         }
     }
@@ -1053,7 +1100,7 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn a_windows_daemon_is_found_by_its_session_socket() {
-        let run_dir = r"C:\Users\Leafy Admin\.claude\kriyon\run";
+        let run_dir = r"C:\Users\Jane Doe\.claude\kriyon\run";
         let socket = format!(r"{run_dir}\abc-123.sock");
         let rows = rows_from_windows(&[win(
             100,

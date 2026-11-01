@@ -274,18 +274,23 @@ impl PtyEngine {
 
     /// Whether the child shell has a command running.
     ///
-    /// Windows has no foreground process group. What it has is the shell's Job
-    /// Object: everything the shell starts joins it, so a job holding more than
-    /// the shell means a command is running. (The console host `ConPTY` starts is
-    /// the daemon's child, not the shell's, so it never counts.) Same meaning as
-    /// on Unix — a `claude` running in the shell reads as busy — and as cheap: one
-    /// query per sample.
+    /// Windows has no foreground process group. It is stood in for by the rule
+    /// the app's sweep uses too, [`kriyon_core::proc::windows_command_of`]: the
+    /// shell is busy while one of its own children is alive. Read from the
+    /// shell's Job Object, so only processes this terminal started count, and
+    /// one left behind by a command that ended (a server it started, a child of
+    /// a `claude` that was ended) doesn't hold the session busy. (The console
+    /// host `ConPTY` starts is the daemon's child, not the shell's, so it never
+    /// counts.)
     ///
-    /// Returns `None` when the job can't be read, which callers treat as "not busy".
+    /// Returns `None` when the shell or the job can't be read, which callers
+    /// treat as "not busy".
     #[cfg(windows)]
     #[must_use]
     pub fn foreground_busy(&self) -> Option<bool> {
-        self.job.active_processes().map(|count| count > 1)
+        let shell_pid = i32::try_from(self.child.lock().process_id()?).ok()?;
+        let members = self.job.members()?;
+        Some(kriyon_core::proc::windows_command_of(shell_pid, members).is_some())
     }
 }
 
@@ -634,10 +639,40 @@ mod windows_tests {
         engine.close().expect("close should succeed");
         assert!(start.elapsed() < Duration::from_secs(5), "close is prompt");
         assert_eq!(
-            engine.job.active_processes(),
+            engine.job.members().map(|members| members.len()),
             Some(0),
             "nothing survives the stop"
         );
         assert!(engine.child_has_exited());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_process_left_behind_does_not_hold_the_shell_busy() {
+        let engine = PtyEngine::spawn(SessionId("orphan".to_string()), &cmd_shell(), |_| {})
+            .expect("pty spawn should succeed");
+        // The inner cmd starts ping and exits at once, leaving ping in the job
+        // with no living parent — a server a command started and left running.
+        engine
+            .write_stdin(b"cmd /c start /b ping -n 60 127.0.0.1 >NUL\r")
+            .expect("write_stdin should succeed");
+        assert!(
+            wait_for(
+                || engine
+                    .job
+                    .members()
+                    .is_some_and(|members| members.len() >= 2),
+                Duration::from_secs(10)
+            ),
+            "the left-behind process is in the job"
+        );
+        assert!(
+            wait_for(
+                || engine.foreground_busy() == Some(false),
+                Duration::from_secs(10)
+            ),
+            "the shell is back at its prompt"
+        );
+        engine.close().expect("close should succeed");
     }
 }

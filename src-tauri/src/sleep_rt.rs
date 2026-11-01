@@ -72,10 +72,7 @@ fn terminate(pid: i32) {
 /// conversation is already on disk, which is what waking resumes from.
 #[cfg(windows)]
 fn terminate(pid: i32) {
-    let own_pid = i32::try_from(std::process::id()).unwrap_or(0);
-    if kriyon_core::tree_stop::may_signal(pid, &[own_pid]) {
-        crate::proc_win::terminate(pid);
-    }
+    crate::daemon_rt::terminate_gated(pid);
 }
 
 /// One sleep pass, run from the background ticker alongside the memory

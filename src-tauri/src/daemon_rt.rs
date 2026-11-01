@@ -46,6 +46,17 @@ pub(crate) fn signal_gated(pid: i32, signal: libc::c_int) {
     }
 }
 
+/// End `pid` outright if the [Signal gate] allows it — Windows has no signals,
+/// so this is the one way the app ends a process there, and every one passes
+/// the gate. Best-effort: a vanished pid is fine.
+#[cfg(windows)]
+pub(crate) fn terminate_gated(pid: i32) {
+    let own_pid = i32::try_from(std::process::id()).unwrap_or(0);
+    if may_signal(pid, &[own_pid]) {
+        crate::proc_win::terminate(pid);
+    }
+}
+
 /// Send `signal` to every process in group `pgid` if the [Signal gate] allows
 /// `pgid` itself: the group of a child started with `process_group(0)`, whose
 /// id is the child's pid. The gate keeps `kill(-1)` (every process the person
@@ -185,10 +196,7 @@ fn terminate_daemon(pid: i32) {
 /// go too.
 #[cfg(windows)]
 fn terminate_daemon(pid: i32) {
-    let own_pid = i32::try_from(std::process::id()).unwrap_or(0);
-    if may_signal(pid, &[own_pid]) {
-        crate::proc_win::terminate(pid);
-    }
+    terminate_gated(pid);
 }
 
 /// End a daemon that was asked to stop and did not: SIGKILL everything under it
@@ -202,12 +210,13 @@ fn force_stop(tree: &ProcessTree, daemon_pid: i32) {
     signal_gated(daemon_pid, libc::SIGKILL);
 }
 
-/// [`force_stop`] on Windows: end everything under the daemon, then the daemon.
+/// [`force_stop`] on Windows: end the daemon. Its Job Object closes with it and
+/// takes the shell and everything under it — the Windows [Tree stop]. The sweep
+/// is not walked: Windows never updates a parent pid when the parent exits, and
+/// pids are reused, so a process whose long-gone parent had the daemon's pid
+/// would read as its child and be ended.
 #[cfg(windows)]
-fn force_stop(tree: &ProcessTree, daemon_pid: i32) {
-    for pid in tree.descendants_of(daemon_pid) {
-        terminate_daemon(pid);
-    }
+fn force_stop(_tree: &ProcessTree, daemon_pid: i32) {
     terminate_daemon(daemon_pid);
 }
 

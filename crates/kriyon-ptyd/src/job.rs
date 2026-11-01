@@ -14,14 +14,20 @@
 
 use std::io;
 
-use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
+use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+    CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
+};
 use windows_sys::Win32::System::JobObjects::{
-    AssignProcessToJobObject, CreateJobObjectW, JobObjectBasicAccountingInformation,
+    AssignProcessToJobObject, CreateJobObjectW, JobObjectBasicProcessIdList,
     JobObjectExtendedLimitInformation, QueryInformationJobObject, SetInformationJobObject,
-    TerminateJobObject, JOBOBJECT_BASIC_ACCOUNTING_INFORMATION,
-    JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    TerminateJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
 };
 use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_SET_QUOTA, PROCESS_TERMINATE};
+
+/// The most processes [`Job::members`] reads from one job — far more than a
+/// terminal runs; the ceiling only keeps the buffer bounded.
+const MAX_MEMBERS: usize = 4096;
 
 /// A Job Object that ends every member when it is terminated or dropped.
 pub struct Job(HANDLE);
@@ -85,23 +91,80 @@ impl Job {
         Ok(())
     }
 
-    /// How many processes are in the job right now, or `None` if it can't be read.
+    /// Every process in the job right now, as `(pid, parent pid)`, or `None`
+    /// if the job or the process table can't be read.
+    ///
+    /// Only members are returned. A member's parent pid is trustworthy where a
+    /// whole-table one is not: every member started after the shell, so no
+    /// member's parent can be an older process that happened to have a pid the
+    /// shell now holds.
     #[must_use]
-    pub fn active_processes(&self) -> Option<u32> {
-        // SAFETY: plain-old-data struct; all zeroes is a valid value.
-        let mut info: JOBOBJECT_BASIC_ACCOUNTING_INFORMATION = unsafe { std::mem::zeroed() };
-        let size = u32::try_from(std::mem::size_of_val(&info)).ok()?;
-        // SAFETY: `info` is valid for `size` bytes of writes.
-        let ok = unsafe {
-            QueryInformationJobObject(
-                self.0,
-                JobObjectBasicAccountingInformation,
-                (&raw mut info).cast(),
-                size,
-                std::ptr::null_mut(),
-            )
-        };
-        (ok != 0).then_some(info.ActiveProcesses)
+    pub fn members(&self) -> Option<Vec<(i32, i32)>> {
+        let ids = self.member_ids()?;
+        // SAFETY: a process snapshot; the invalid handle is the error case.
+        let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
+        if snapshot == INVALID_HANDLE_VALUE {
+            return None;
+        }
+        let mut members = Vec::with_capacity(ids.len());
+        // SAFETY: plain-old-data struct; all zeroes is valid once dwSize is set.
+        let mut entry: PROCESSENTRY32W = unsafe { std::mem::zeroed() };
+        entry.dwSize = u32::try_from(std::mem::size_of::<PROCESSENTRY32W>()).unwrap_or(0);
+        // SAFETY: `entry` is valid for writes and its size is set.
+        let mut more = unsafe { Process32FirstW(snapshot, &raw mut entry) } != 0;
+        while more {
+            if ids.contains(&(entry.th32ProcessID as usize)) {
+                if let (Ok(pid), Ok(ppid)) = (
+                    i32::try_from(entry.th32ProcessID),
+                    i32::try_from(entry.th32ParentProcessID),
+                ) {
+                    members.push((pid, ppid));
+                }
+            }
+            // SAFETY: as above.
+            more = unsafe { Process32NextW(snapshot, &raw mut entry) } != 0;
+        }
+        // SAFETY: the snapshot handle is closed once.
+        unsafe { CloseHandle(snapshot) };
+        Some(members)
+    }
+
+    /// The ids of the job's processes. The list is read into a buffer that
+    /// grows until it holds them all, up to [`MAX_MEMBERS`].
+    fn member_ids(&self) -> Option<Vec<usize>> {
+        // The list is two `u32` counts followed by one `usize` per process.
+        let header = 8 / std::mem::size_of::<usize>();
+        let mut capacity = 64;
+        loop {
+            let mut buf = vec![0usize; header + capacity];
+            let size = u32::try_from(std::mem::size_of_val(buf.as_slice())).ok()?;
+            // SAFETY: `buf` is valid for `size` bytes of writes and is aligned
+            // for the list's `usize` entries.
+            let ok = unsafe {
+                QueryInformationJobObject(
+                    self.0,
+                    JobObjectBasicProcessIdList,
+                    buf.as_mut_ptr().cast(),
+                    size,
+                    std::ptr::null_mut(),
+                )
+            };
+            // SAFETY: the first 8 bytes are the two counts, written above.
+            let (assigned, listed) = unsafe {
+                let counts = buf.as_ptr().cast::<u32>();
+                (*counts, *counts.add(1))
+            };
+            let (assigned, listed) = (assigned as usize, listed as usize);
+            if ok != 0 && listed >= assigned {
+                return Some(buf[header..header + listed].to_vec());
+            }
+            // A failure that isn't "the buffer is too small" is final, and so
+            // is a job past the ceiling.
+            if (ok == 0 && assigned <= capacity) || capacity >= MAX_MEMBERS {
+                return None;
+            }
+            capacity = (assigned + 16).min(MAX_MEMBERS);
+        }
     }
 
     /// End every process in the job. Best-effort: an empty job is success.
