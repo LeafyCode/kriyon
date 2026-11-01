@@ -17,7 +17,12 @@ import {
 import { failureMessage } from "../ipc/failures.ts";
 import { ViewHeader } from "../layout/ViewHeader.tsx";
 import { useIntegration } from "../state/integration.ts";
-import { isNestedCap, NESTED_CAP_RANGE, useLayout } from "../state/layout.ts";
+import {
+  isNestedCap,
+  NESTED_CAP_RANGE,
+  type SidebarMode,
+  useLayout,
+} from "../state/layout.ts";
 import { useUpdates } from "../state/updates.ts";
 import {
   button,
@@ -47,6 +52,7 @@ import {
   MENU_BAR_OPTIONS,
   NOTIFY_OPTIONS,
   NOTIFY_SOUND_OPTIONS,
+  SIDEBAR_MODE_OPTIONS,
   UPDATE_CHANNEL_OPTIONS,
 } from "./settingsOptions.ts";
 import {
@@ -794,20 +800,26 @@ const TRIAGE_SKETCH: SketchRow[] = [
   { dot: tokens.color.status.done, faded: true, width: "58%" },
 ];
 
-const SIDEBAR_CHOICES = [
-  {
+/** What each [Sidebar mode] card adds to its option: a hint and a sketch. A
+ *  `Record`, so a new mode can't reach the picker without one. */
+const SIDEBAR_CARDS: Record<
+  SidebarMode,
+  { hint: string; sketch: SketchRow[] }
+> = {
+  calm: {
     hint: "Shows every session, in the sort you picked.",
-    label: "Calm",
     sketch: CALM_SKETCH,
-    value: "calm",
   },
-  {
+  triage: {
     hint: "Floats active work to the top and folds read Done sessions away.",
-    label: "Triage",
     sketch: TRIAGE_SKETCH,
-    value: "triage",
   },
-] as const;
+};
+
+const SIDEBAR_CHOICES = SIDEBAR_MODE_OPTIONS.map((option) => ({
+  ...option,
+  ...SIDEBAR_CARDS[option.value],
+}));
 
 /** Settings' choice of [Sidebar mode], each drawn as a small sketch. */
 function SidebarModePicker() {
