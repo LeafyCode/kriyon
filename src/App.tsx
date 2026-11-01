@@ -35,7 +35,10 @@ import { hydrate, installPersistence } from "./state/persistence.ts";
 import { installNotesPickReset } from "./state/projectNotes.ts";
 import { useSessions } from "./state/sessions.ts";
 import { freedMemoryNote } from "./state/stopCost.ts";
-import { installParkedTerminalStops, useTerminals } from "./state/terminals.ts";
+import {
+  installDormantTerminalStops,
+  useTerminals,
+} from "./state/terminals.ts";
 import { useTour } from "./state/tour.ts";
 import { useUpdates } from "./state/updates.ts";
 import { useSessionWatch } from "./state/useSessionWatch.ts";
@@ -304,7 +307,7 @@ function App() {
       })
     );
     const stopPersistence = installPersistence();
-    const stopParkedTerminals = installParkedTerminalStops();
+    const stopDormantTerminals = installDormantTerminalStops();
     const stopListeners = installSessionListeners();
     const stopHeldBack = installHeldBackStarts();
     const stopNotesPickReset = installNotesPickReset();
@@ -329,7 +332,7 @@ function App() {
       stopUpdateChanged();
       stopUpdateAnswered();
       stopPersistence();
-      stopParkedTerminals();
+      stopDormantTerminals();
       stopListeners();
       stopHeldBack();
       stopNotesPickReset();
