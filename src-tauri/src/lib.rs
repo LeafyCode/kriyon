@@ -17,6 +17,7 @@ pub mod integration;
 pub mod links_cmd;
 pub mod memory;
 pub mod menu;
+pub mod notes_cmd;
 pub mod notify;
 pub mod plan_limits_rt;
 pub mod policy;
@@ -25,6 +26,7 @@ pub mod quit;
 pub mod sandbox;
 pub mod session_registry;
 pub mod settings_cmd;
+pub mod shell_path;
 pub mod sleep_rt;
 pub mod status_rt;
 pub mod store;
@@ -319,6 +321,10 @@ pub fn run() {
             // assertion failure costs one event instead of the whole app.
             crate::appkit_guard::install();
 
+            // Read the person's shell PATH now, off the main thread, so the
+            // first git call or worktree setup does not wait for their shell.
+            crate::shell_path::warm();
+
             // The app launches with the main window frontmost; seed the flag so
             // the very first notification decision is correct even before any
             // `Focused` event arrives.
@@ -394,6 +400,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             greet,
             activity_rt::activity_turns,
+            activity_rt::activity_changed_paths,
             activity_rt::activity_step,
             activity_rt::activity_stats,
             activity_rt::activity_delete_session,
@@ -424,6 +431,8 @@ pub fn run() {
             git_cmd::diff_session_changes,
             git_cmd::repo_toplevel,
             git_cmd::read_baseline,
+            git_cmd::read_session_baseline,
+            git_cmd::blame_file,
             git_cmd::discard_file_changes,
             entry_cmd::create_file,
             entry_cmd::create_dir,
@@ -441,6 +450,9 @@ pub fn run() {
             store_cmd::upsert_session,
             store_cmd::list_sessions,
             store_cmd::delete_session,
+            notes_cmd::list_project_notes,
+            notes_cmd::upsert_project_note,
+            notes_cmd::delete_project_note,
             prompt_cmd::upsert_prompt,
             prompt_cmd::list_prompts,
             prompt_cmd::delete_prompt,
@@ -449,6 +461,7 @@ pub fn run() {
             prompt_cmd::import_commands,
             completion_cmd::list_slash_commands,
             completion_cmd::list_files,
+            completion_cmd::find_files,
             completion_cmd::prompt_history,
             file_cmd::read_file,
             file_cmd::list_dir,

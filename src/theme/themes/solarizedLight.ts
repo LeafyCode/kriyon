@@ -1,0 +1,81 @@
+import { defineTheme } from "./define.ts";
+
+/** Solarized Light (MIT, https://ethanschoonover.com/solarized), blue accent.
+ * The terminal's white and bright white are darker than upstream so white
+ * output still reads on the light plane (ADR-0051). */
+export const solarizedLight = defineTheme({
+  id: "solarized-light",
+  label: "Solarized Light",
+  palette: {
+    appearance: "light",
+    accent: {
+      bright: "#268bd2",
+      fill: "#268bd2",
+      hover: "#2280c2",
+      ink: "#1f6fa8",
+      on: "#ffffff",
+    },
+    editor: {
+      activeLine: "#eee8d5",
+      ink: "#4c6169",
+      selection: "#d8d1b8cc",
+    },
+    ink: ["#002b36", "#073642", "#3f565e", "#566b72", "#73858a", "#93a1a1"],
+    lines: {
+      base: "#e4ddc5",
+      soft: "#ece5ce",
+      strong: "#d8d0b6",
+    },
+    planes: {
+      block: "#f7f0dd",
+      card: "#fffbf0",
+      code: "#f5efdc",
+      input: "#eee8d5",
+      overlay: "#fffbf0",
+      plane: "#fdf6e3",
+      rail: "#f6efda",
+    },
+    status: {
+      amber: "#b58900",
+      amberInk: "#8a6900",
+      blue: "#268bd2",
+      green: "#859900",
+      red: "#dc322f",
+      redInk: "#c4281f",
+    },
+    syntax: {
+      attribute: "#b58900",
+      comment: "#93a1a1",
+      constant: "#b58900",
+      escape: "#dc322f",
+      function: "#268bd2",
+      keyword: "#859900",
+      number: "#d33682",
+      property: "#6c71c4",
+      punctuation: "#657b83",
+      regexp: "#dc322f",
+      string: "#2aa198",
+      tag: "#268bd2",
+      type: "#b58900",
+      variable: "#4c6169",
+    },
+  },
+  terminal: {
+    black: "#073642",
+    blue: "#268bd2",
+    brightBlack: "#002b36",
+    brightBlue: "#839496",
+    brightCyan: "#93a1a1",
+    brightGreen: "#586e75",
+    brightMagenta: "#6c71c4",
+    brightRed: "#cb4b16",
+    brightWhite: "#586e75",
+    brightYellow: "#657b83",
+    cyan: "#2aa198",
+    green: "#859900",
+    magenta: "#d33682",
+    red: "#dc322f",
+    white: "#657b83",
+    yellow: "#b58900",
+  },
+});

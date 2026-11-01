@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type {
   DirEntry,
+  FileBlame,
   FileContent,
   FileWriteResult,
   HooksOffScope,
@@ -15,6 +16,7 @@ import type {
   PastSessionPage,
   PendingAsk,
   PlanLimits,
+  ProjectNote,
   ProjectRow,
   RepoStatus,
   SavedPrompt,
@@ -795,6 +797,15 @@ export function onShowAbout(cb: () => void): Promise<() => void> {
 }
 
 /**
+ * Subscribe to backend `show-tour` events, emitted when the macOS app menu's
+ * Help → "Kriyon Tour" item is chosen. Resolves to an unlisten fn. No-ops
+ * outside the Tauri webview.
+ */
+export function onShowTour(cb: () => void): Promise<() => void> {
+  return subscribe<void>("show-tour")(() => cb());
+}
+
+/**
  * Subscribe to backend `new-session` events, emitted when the tray's "New
  * session" row is clicked. Resolves to an unlisten fn. No-ops outside the
  * Tauri webview.
@@ -984,6 +995,32 @@ export function readBaseline(
   path: string
 ): Promise<BaselineContent> {
   return invoke("read_baseline", { cwd, path });
+}
+
+/**
+ * One file as it was when the session started — its [Session baseline]
+ * snapshot — for the editor's session-change highlight (Rust
+ * `git_cmd::read_session_baseline`). Same sandbox and outcomes as
+ * {@link readBaseline}; `untracked` means the session created the file.
+ */
+export function readSessionBaseline(
+  cwd: string,
+  baselineOid: string,
+  path: string
+): Promise<BaselineContent> {
+  return invoke("read_session_baseline", { baselineOid, cwd, path });
+}
+
+/**
+ * Who last touched each line of one file, as it is on disk (Rust
+ * `git_cmd::blame_file`). `null` when there is nothing to blame: not a repo,
+ * never committed, or too large to open.
+ */
+export function blameFile(
+  cwd: string,
+  path: string
+): Promise<FileBlame | null> {
+  return invoke("blame_file", { cwd, path });
 }
 
 /**
@@ -1227,6 +1264,21 @@ export function deletePrompt(id: string): Promise<void> {
   return invoke("delete_prompt", { id });
 }
 
+/** Every [Project note], oldest first. */
+export function listProjectNotes(): Promise<ProjectNote[]> {
+  return invoke("list_project_notes");
+}
+
+/** Save a [Project note]; resolves to the copy the backend stored (trimmed,
+ *  and with a done mark only on a todo). Rejects a note that fails its checks. */
+export function upsertProjectNote(note: ProjectNote): Promise<ProjectNote> {
+  return invoke("upsert_project_note", { note });
+}
+
+export function deleteProjectNote(id: string): Promise<void> {
+  return invoke("delete_project_note", { id });
+}
+
 /** Bump a prompt's use count / last-used time (backend stamps the clock). */
 export function recordPromptUse(id: string): Promise<void> {
   return invoke("record_prompt_use", { id });
@@ -1383,12 +1435,36 @@ export function listSlashCommands(cwd: string): Promise<CommandCatalog> {
   return invoke("list_slash_commands", { cwd });
 }
 
+/** The Files search's answer (Rust `completion_cmd::FoundFiles`): the best
+ * matches by name, ranked over every match. */
+export interface FoundFiles {
+  entries: FileEntry[];
+  /** More matched than were returned: a longer query narrows it down. */
+  truncated: boolean;
+  /** The walk stopped before seeing the whole folder, so a file that exists
+   * may be missing whatever the query. */
+  walkStopped: boolean;
+}
+
+/** Find files anywhere under `cwd` by name, for the Files view's search box
+ * (Rust `completion_cmd::find_files`). */
+export function findFiles(cwd: string, query: string): Promise<FoundFiles> {
+  return invoke("find_files", { cwd, query });
+}
+
 /** Filesystem completions for `@` mentions under `cwd`, filtered by `query`. */
 export function listFiles(cwd: string, query: string): Promise<FileEntry[]> {
   return invoke("list_files", { cwd, query });
 }
 
 // --- Activity log (mirrors Rust `activity_store`) ---
+
+/** Every file Claude changed in a session — its edits, writes and the files
+ * its commands changed, subagents included — as absolute paths (Rust
+ * `activity_rt::activity_changed_paths`). */
+export function activityChangedPaths(sessionId: string): Promise<string[]> {
+  return invoke("activity_changed_paths", { sessionId });
+}
 
 /** What kind of tool an [Activity step] ran (Rust `StepKind`). */
 export type StepKind =

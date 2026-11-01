@@ -49,6 +49,31 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
   a row visible (the active session, running/waiting/error work, an unread finish) each
   keep the group visible too, and a filter turns the fold off. _Avoid_: hidden project,
   stale project.
+- **Parked project** — a [Project (Workspace)] the user has put away for now with *Park
+  project*: every [Session] still on its rail group is parked and stopped, and so is every
+  [Project terminal] it owns (the same stop archiving uses). Rows, titles, order, [Archived
+  session]s, [Transcript]s, [Worktree]s and terminal tabs all stay. While none of its sessions
+  is on the rail it is *fully parked* (`fullyParkedProjectIds`): its terminals stay stopped and
+  unmounted, and come back with fresh shells once one session returns. Its parked sessions wait in a
+  "Parked" section at the bottom of the sidebar (`ParkedGroup`), ordered, folded and nested as
+  the group would show them. *Unpark* brings every parked session back; each resumes (`claude
+  --resume`) only when opened. Opening one parked session from anywhere (the Parked section, ⌘K,
+  a notification) brings back only that one, with its leads if it is a [Nested session] — the
+  rest stay parked, out of the way. Unlike an [Inactive project], parking is the user's choice
+  and never undoes itself; unlike [Clear project], nothing is closed. _Avoid_: shelved, hidden,
+  archived project, sleeping project.
+- **Parked session** (`parkedAt`) — one [Session] of a [Parked project], stopped and off the
+  rail until opened. Put away like an [Archived session] (`isPutAway`), so no surface that
+  skips what isn't live — Needs-you, the [Command center], the quit's [Stop cost] — counts it.
+- **Project note** (`ProjectNote`, `useProjectNotes`, `project_notes`) — one of the user's
+  own todos, ideas or notes for a [Project (Workspace)] (`NoteKind`: `todo` | `idea` |
+  `note`). Belongs to the project, not a [Session], so every session in it sees the same
+  list; stored in the app's SQLite store and never sent to Claude (ADR-0053). Only a todo
+  can be done. Shown in the Details rail's Notes tab and counted (open todos only) on the
+  project header. _Avoid_: task (that is Claude's [Task]), memo, ticket.
+- **Note capture** (`NoteCaptureOverlay`) — the ⌘⇧N overlay that adds a [Project note]
+  from anywhere, to the project the Notes tab would show unless pointed at another. Part of
+  the ⌘K overlay family, so opening it closes the others. _Avoid_: quick add, inbox.
 - **Past session** (`PastSession`) — a session discovered from a folder's
   on-disk Claude history (`~/.claude/projects/<encoded-cwd>/<id>.jsonl`) that
   Kriyon does not yet track. Carries the [Claude session id] (the file stem),
@@ -88,8 +113,16 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
 - **Worktree bootstrap** — the one-time setup that makes a freshly created [Worktree]
   ready to work in: copying the project root's untracked top-level `.env*` files into it,
   running the [Install command] detected from the lockfile, then running the project's
-  optional [Setup command]. Best-effort — a failed step warns but never blocks the
+  optional [Setup command]. Both commands run with the [Shell PATH], so they find the
+  same tools as the terminal. Best-effort — a failed step warns but never blocks the
   Session from opening. _Avoid_: provisioning, worktree init.
+- **Shell PATH** (`shell_path.rs`) — the PATH the person's own shell sets up, read once per
+  app run by starting their shell as an interactive login shell (`$SHELL -ilc`, so
+  `.zshrc` counts) with a 10-second timeout. A Mac app opened from the Dock gets only the
+  system PATH, so without it a [Worktree bootstrap] cannot find pnpm and a git hook cannot
+  find node. Every [Git run] uses it once it is known, without waiting; the [Worktree
+  bootstrap], creating a worktree, merging one back and Discard wait for it. If it can't be read,
+  they keep the app's own PATH. _Avoid_: login env, fix-path.
 - **Install command** — the dependency-install command a [Worktree bootstrap] infers from
   which lockfile is present (`pnpm-lock.yaml`→`pnpm install`, `package-lock.json`→`npm
   install`, `yarn.lock`→`yarn`, `bun.lockb`→`bun install`), or none. Purely a function of

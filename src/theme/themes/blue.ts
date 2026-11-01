@@ -5,6 +5,7 @@ import type { Theme } from "./types.ts";
 export const blue: Theme = {
   id: "blue",
   label: "Cool blue",
+  appearance: "dark",
   colors: {
     ...darkChrome,
     accent: "#3D7BF5",

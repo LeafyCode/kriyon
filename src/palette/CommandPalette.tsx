@@ -8,6 +8,7 @@ import { sleepIdleSessionsNow, startNewSession } from "../state/actions.ts";
 import { useLayout } from "../state/layout.ts";
 import { importPromptsFromCommands } from "../state/promptLibrary.ts";
 import { useSessions } from "../state/sessions.ts";
+import { useTour } from "../state/tour.ts";
 import { useUi } from "../state/ui.ts";
 import {
   kbd,
@@ -103,7 +104,12 @@ function buildItems(
         // behind whatever full view was up.
         useLayout.getState().revealSessionView();
       },
-      sub: projectName(session.projectId),
+      // A parked session stays findable here, marked; opening it brings it
+      // back (see `setActiveSession`).
+      sub:
+        (session.parkedAt ?? null) === null
+          ? projectName(session.projectId)
+          : `${projectName(session.projectId)} · Parked`,
     }));
 
   const commandItems: PaletteItem[] = [
@@ -199,8 +205,30 @@ function buildItems(
       id: "cmd:toggle-transcript",
       kind: "View",
       // The palette's only route into the Changes view.
-      label: "Toggle Changes / Session view",
+      label: "Toggle Files / Session view",
       run: useLayout.getState().toggleTranscriptView,
+    },
+  ];
+
+  const noteItems: PaletteItem[] = [
+    {
+      icon: "✎",
+      id: "cmd:add-note",
+      kind: "Notes",
+      label: "Add a note…",
+      run: () => useUi.getState().openNoteCapture(),
+      sub: "⌘⇧N",
+    },
+  ];
+
+  const helpItems: PaletteItem[] = [
+    {
+      icon: "✦",
+      id: "cmd:app-tour",
+      kind: "Help",
+      label: "Take the app tour",
+      run: () => useTour.getState().start(),
+      sub: "A one-minute look around Kriyon",
     },
   ];
 
@@ -231,6 +259,8 @@ function buildItems(
   return [
     ...sessionItems,
     ...commandItems,
+    ...noteItems,
+    ...helpItems,
     ...themeItems,
     ...menuBarItems,
     ...sidebarItems,

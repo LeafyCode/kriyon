@@ -1,4 +1,5 @@
 import {
+  listProjectNotes,
   listProjects,
   listPrompts,
   listSessions,
@@ -7,12 +8,21 @@ import {
   upsertProject,
   upsertSession,
 } from "../ipc/bridge.ts";
+import { failureMessage } from "../ipc/failures.ts";
 import { themeById } from "../theme/themes/index.ts";
-import type { NotifyPreference, NotifySound, SessionRow } from "../types.ts";
+import type {
+  NotifyPreference,
+  NotifySound,
+  ProjectRow,
+  SessionRow,
+} from "../types.ts";
+import { showToast } from "../ui/Toast.tsx";
 import {
+  clampFileTreeWidth,
   clampSidebarWidth,
   clampTerminalDockHeight,
   DEFAULT_LAYOUT,
+  FILE_TREE_WIDTH_DEFAULT,
   type HideOlderThan,
   isNestedCap,
   type Layout,
@@ -21,14 +31,16 @@ import {
   TERMINAL_DOCK_HEIGHT_DEFAULT,
   useLayout,
 } from "./layout.ts";
+import { useProjectNotes } from "./projectNotes.ts";
 import { usePromptLibrary } from "./promptLibrary.ts";
 import {
   idleSession,
+  isPutAway,
   sessionRow,
   type UiSession,
   useSessions,
 } from "./sessions.ts";
-import { type ProjectTerminals, useTerminals } from "./terminals.ts";
+import { type ScopeTerminals, useTerminals } from "./terminals.ts";
 
 const LAYOUT_KEY = "layout";
 const TERMINALS_KEY = "terminals";
@@ -326,6 +338,10 @@ export function parseLayout(json: string | null): Layout | undefined {
       typeof parsed.sidebarWidth === "number"
         ? clampSidebarWidth(parsed.sidebarWidth)
         : SIDEBAR_WIDTH_DEFAULT,
+    fileTreeWidth:
+      typeof parsed.fileTreeWidth === "number"
+        ? clampFileTreeWidth(parsed.fileTreeWidth)
+        : FILE_TREE_WIDTH_DEFAULT,
     terminalDockFullHeight: parsed.terminalDockFullHeight === true,
     terminalDockHeight:
       typeof parsed.terminalDockHeight === "number"
@@ -336,6 +352,9 @@ export function parseLayout(json: string | null): Layout | undefined {
     themeId: themeById(
       typeof parsed.themeId === "string" ? parsed.themeId : undefined
     ).id,
+    // Only an explicit `true` is seen: a layout saved before the field
+    // existed belongs to someone who has never had the tour.
+    tourSeen: parsed.tourSeen === true,
     preferredSessionView: parseSessionView(parsed.preferredSessionView),
     mascot: parseMascot(parsed.mascot),
     mascotHue: parseMascotHue(parsed.mascotHue),
@@ -352,7 +371,7 @@ export function parseLayout(json: string | null): Layout | undefined {
  */
 function parseTerminals(
   json: string | null
-): Record<string, ProjectTerminals> | undefined {
+): Record<string, ScopeTerminals> | undefined {
   if (!json) {
     return;
   }
@@ -365,14 +384,14 @@ function parseTerminals(
   if (typeof parsed !== "object" || parsed === null) {
     return;
   }
-  const out: Record<string, ProjectTerminals> = {};
+  const out: Record<string, ScopeTerminals> = {};
   for (const [key, value] of Object.entries(parsed)) {
     if (
       value &&
       typeof value === "object" &&
-      Array.isArray((value as ProjectTerminals).tabs)
+      Array.isArray((value as ScopeTerminals).tabs)
     ) {
-      out[key] = value as ProjectTerminals;
+      out[key] = value as ScopeTerminals;
     }
   }
   return Object.keys(out).length > 0 ? out : undefined;
@@ -386,6 +405,15 @@ export async function hydrate(): Promise<void> {
   // The prompt library must never block core hydration: its load is
   // fault-isolated, degrading to an empty library on failure.
   const promptsPromise = listPrompts().catch(() => []);
+  // Notes are fault-isolated the same way, but a failure is said out loud:
+  // an empty Notes tab would otherwise read as "your notes are gone".
+  const notesPromise = listProjectNotes().catch((error: unknown) => {
+    showToast(
+      `Could not load project notes: ${failureMessage(error)}`,
+      "error"
+    );
+    return [];
+  });
 
   const [projects, sessionRows, layoutJson, terminalsJson] = await Promise.all([
     listProjects(),
@@ -397,7 +425,12 @@ export async function hydrate(): Promise<void> {
   const sessions: Record<string, UiSession> = {};
   let newest: SessionRow | undefined;
   for (const row of sessionRows) {
-    sessions[row.id] = idleSession(row);
+    const session = idleSession(row);
+    sessions[row.id] = session;
+    // A put-away session would boot on open, undoing the park or archive.
+    if (isPutAway(session)) {
+      continue;
+    }
     if (!newest || row.createdAt > newest.createdAt) {
       newest = row;
     }
@@ -430,6 +463,7 @@ export async function hydrate(): Promise<void> {
 
   const prompts = await promptsPromise;
   usePromptLibrary.getState().setPrompts(prompts);
+  useProjectNotes.getState().setNotes(await notesPromise);
 }
 
 /**
@@ -458,16 +492,16 @@ function fieldToken(
 }
 
 /**
- * Fold a {@link SessionRow} (via {@link sessionRow}) into one fingerprint
- * line, keyed in sorted-field order rather than the object's own insertion
- * order — so a field added to `SessionRow`/`sessionRow` later joins
+ * Fold a {@link SessionRow} (via {@link sessionRow}) or a {@link ProjectRow}
+ * into one fingerprint line, keyed in sorted-field order rather than the
+ * object's own insertion order — so a field added to either row later joins
  * {@link persistKey}'s fingerprint automatically, without this function
  * having to be told about it.
  */
-function rowKey(row: SessionRow): string {
-  return (Object.keys(row) as (keyof SessionRow)[])
-    .sort((a, b) => (a < b ? -1 : 1))
-    .map((key) => fieldToken(row[key]))
+function rowKey(row: SessionRow | ProjectRow): string {
+  return Object.entries(row)
+    .sort(([a], [b]) => (a < b ? -1 : 1))
+    .map(([, value]) => fieldToken(value))
     .join(SEP);
 }
 
@@ -480,11 +514,7 @@ function rowKey(row: SessionRow): string {
 export function persistKey(
   state: ReturnType<typeof useSessions.getState>
 ): string {
-  const projects = state.projects
-    .map((p) =>
-      [p.id, p.name, p.path, p.color ?? "", p.setupCommand ?? ""].join(SEP)
-    )
-    .join("\n");
+  const projects = state.projects.map(rowKey).join("\n");
   const sessions = Object.values(state.sessions)
     .map((s) => rowKey(sessionRow(s)))
     .sort()
@@ -558,12 +588,12 @@ export function installPersistence(): () => void {
   // Project-terminal structure persists on its own store (tabs/panes/layout),
   // keyed separately so it round-trips independently of the window layout.
   let terminalsTimer: ReturnType<typeof setTimeout> | undefined;
-  let prevTerminals = useTerminals.getState().byProject;
+  let prevTerminals = useTerminals.getState().byScope;
   const unsubscribeTerminals = useTerminals.subscribe((state) => {
-    if (state.byProject === prevTerminals) {
+    if (state.byScope === prevTerminals) {
       return;
     }
-    prevTerminals = state.byProject;
+    prevTerminals = state.byScope;
     if (terminalsTimer !== undefined) {
       clearTimeout(terminalsTimer);
     }

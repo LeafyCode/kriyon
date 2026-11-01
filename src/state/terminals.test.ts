@@ -5,12 +5,22 @@ vi.mock("../terminal/sessionHost.ts", () => ({
   disposeSession: (id: string) => dispose(id),
 }));
 
-import { useTerminals } from "./terminals.ts";
+import { type UiSession, useSessions } from "./sessions.ts";
+import {
+  dormantScopes,
+  installDormantTerminalStops,
+  projectPaneIds,
+  scopeFolder,
+  scopeProjectId,
+  sessionTerminalScope,
+  terminalScope,
+  useTerminals,
+} from "./terminals.ts";
 
 function reset() {
   useTerminals.setState({
     busyPanes: {},
-    byProject: {},
+    byScope: {},
     deadPanes: {},
     quitConfirm: null,
   });
@@ -22,7 +32,7 @@ describe("useTerminals", () => {
 
   it("openTab seeds one tab with one pane whose cwd is the project cwd", () => {
     const tabId = useTerminals.getState().openTab("proj", "/repo");
-    const p = useTerminals.getState().byProject.proj;
+    const p = useTerminals.getState().byScope.proj;
     expect(p.tabs).toHaveLength(1);
     expect(p.activeTabId).toBe(tabId);
     expect(p.tabs[0].panes).toHaveLength(1);
@@ -35,7 +45,7 @@ describe("useTerminals", () => {
   it("a second openTab numbers Terminal 2 and becomes active", () => {
     useTerminals.getState().openTab("proj", "/repo");
     const t2 = useTerminals.getState().openTab("proj", "/repo");
-    const p = useTerminals.getState().byProject.proj;
+    const p = useTerminals.getState().byScope.proj;
     expect(p.tabs).toHaveLength(2);
     expect(p.tabs[1].title).toBe("Terminal 2");
     expect(p.activeTabId).toBe(t2);
@@ -44,7 +54,7 @@ describe("useTerminals", () => {
   it("splitPane adds a pane to the tab and makes it active, preserving others", () => {
     const tabId = useTerminals.getState().openTab("proj", "/repo");
     const paneId = useTerminals.getState().splitPane("proj", tabId, "/repo");
-    const [tab] = useTerminals.getState().byProject.proj.tabs;
+    const [tab] = useTerminals.getState().byScope.proj.tabs;
     expect(tab.panes).toHaveLength(2);
     expect(tab.activePaneId).toBe(paneId);
   });
@@ -53,7 +63,7 @@ describe("useTerminals", () => {
     const tabId = useTerminals.getState().openTab("proj", "/repo");
     const paneId = useTerminals.getState().splitPane("proj", tabId, "/repo");
     useTerminals.getState().closePane("proj", tabId, paneId);
-    const [tab] = useTerminals.getState().byProject.proj.tabs;
+    const [tab] = useTerminals.getState().byScope.proj.tabs;
     expect(tab.panes).toHaveLength(1);
     expect(tab.activePaneId).toBe(tab.panes[0].id);
     expect(dispose).toHaveBeenCalledWith(paneId);
@@ -64,7 +74,7 @@ describe("useTerminals", () => {
     useTerminals.getState().splitPane("proj", tabId, "/repo"); // 2 panes
     useTerminals.getState().setLayout("proj", tabId, [70, 30]);
     useTerminals.getState().splitPane("proj", tabId, "/repo"); // 3 panes
-    const { layout } = useTerminals.getState().byProject.proj.tabs[0];
+    const { layout } = useTerminals.getState().byScope.proj.tabs[0];
     expect(layout).toHaveLength(3);
     const [a, b, c] = layout;
     // The two original panes keep their 70:30 ratio…
@@ -77,7 +87,7 @@ describe("useTerminals", () => {
   it("splitPane leaves an un-dragged tab to auto-distribute (layout stays [])", () => {
     const tabId = useTerminals.getState().openTab("proj", "/repo");
     useTerminals.getState().splitPane("proj", tabId, "/repo");
-    expect(useTerminals.getState().byProject.proj.tabs[0].layout).toEqual([]);
+    expect(useTerminals.getState().byScope.proj.tabs[0].layout).toEqual([]);
   });
 
   it("closePane re-normalizes the survivors instead of wiping their sizes", () => {
@@ -85,9 +95,9 @@ describe("useTerminals", () => {
     useTerminals.getState().splitPane("proj", tabId, "/repo"); // 2
     useTerminals.getState().splitPane("proj", tabId, "/repo"); // 3
     useTerminals.getState().setLayout("proj", tabId, [50, 30, 20]);
-    const middle = useTerminals.getState().byProject.proj.tabs[0].panes[1].id;
+    const middle = useTerminals.getState().byScope.proj.tabs[0].panes[1].id;
     useTerminals.getState().closePane("proj", tabId, middle);
-    const { layout } = useTerminals.getState().byProject.proj.tabs[0];
+    const { layout } = useTerminals.getState().byScope.proj.tabs[0];
     expect(layout).toHaveLength(2);
     const [a, b] = layout;
     // The survivors keep their 50:20 ratio, re-normalized to sum to 100.
@@ -98,57 +108,70 @@ describe("useTerminals", () => {
   it("closePane keeps [] for an un-dragged tab", () => {
     const tabId = useTerminals.getState().openTab("proj", "/repo");
     useTerminals.getState().splitPane("proj", tabId, "/repo"); // 2, never dragged
-    const second = useTerminals.getState().byProject.proj.tabs[0].panes[1].id;
+    const second = useTerminals.getState().byScope.proj.tabs[0].panes[1].id;
     useTerminals.getState().closePane("proj", tabId, second);
-    expect(useTerminals.getState().byProject.proj.tabs[0].layout).toEqual([]);
+    expect(useTerminals.getState().byScope.proj.tabs[0].layout).toEqual([]);
   });
 
   it("closing the last pane of a tab closes the tab and disposes the pane", () => {
     const tabId = useTerminals.getState().openTab("proj", "/repo");
-    const onlyPane = useTerminals.getState().byProject.proj.tabs[0].panes[0].id;
+    const onlyPane = useTerminals.getState().byScope.proj.tabs[0].panes[0].id;
     useTerminals.getState().closePane("proj", tabId, onlyPane);
-    expect(useTerminals.getState().byProject.proj.tabs).toHaveLength(0);
+    expect(useTerminals.getState().byScope.proj.tabs).toHaveLength(0);
     expect(dispose).toHaveBeenCalledWith(onlyPane);
   });
 
   it("closeTab disposes every pane in the tab and reassigns active tab", () => {
     const t1 = useTerminals.getState().openTab("proj", "/repo");
-    const paneT1 = useTerminals.getState().byProject.proj.tabs[0].panes[0].id;
+    const paneT1 = useTerminals.getState().byScope.proj.tabs[0].panes[0].id;
     useTerminals.getState().splitPane("proj", t1, "/repo");
     const t2 = useTerminals.getState().openTab("proj", "/repo");
     useTerminals.getState().closeTab("proj", t2);
-    const p = useTerminals.getState().byProject.proj;
+    const p = useTerminals.getState().byScope.proj;
     expect(p.tabs).toHaveLength(1);
     expect(p.activeTabId).toBe(t1);
     useTerminals.getState().closeTab("proj", t1);
     expect(dispose).toHaveBeenCalledWith(paneT1);
-    expect(useTerminals.getState().byProject.proj.tabs).toHaveLength(0);
+    expect(useTerminals.getState().byScope.proj.tabs).toHaveLength(0);
   });
 
   it("renameTab and setDirection mutate the tab", () => {
     const tabId = useTerminals.getState().openTab("proj", "/repo");
     useTerminals.getState().renameTab("proj", tabId, "dev");
     useTerminals.getState().setDirection("proj", tabId, "column");
-    const [tab] = useTerminals.getState().byProject.proj.tabs;
+    const [tab] = useTerminals.getState().byScope.proj.tabs;
     expect(tab.title).toBe("dev");
     expect(tab.direction).toBe("column");
   });
 
-  it("livePaneCount counts panes across all projects", () => {
+  it("scopePaneCount counts only the panes of one scope", () => {
     const a = useTerminals.getState().openTab("a", "/a");
     useTerminals.getState().splitPane("a", a, "/a");
     useTerminals.getState().openTab("b", "/b");
-    expect(useTerminals.getState().livePaneCount()).toBe(3);
+    expect(useTerminals.getState().scopePaneCount("a")).toBe(2);
+    expect(useTerminals.getState().scopePaneCount("b")).toBe(1);
+    expect(useTerminals.getState().scopePaneCount("c")).toBe(0);
+    expect(useTerminals.getState().scopePaneCount(null)).toBe(0);
+  });
+
+  it("isScopeBusy reads only the panes of one scope", () => {
+    useTerminals.getState().openTab("a", "/a");
+    useTerminals.getState().openTab("b", "/b");
+    const paneB = useTerminals.getState().byScope.b.tabs[0].panes[0].id;
+    useTerminals.getState().setPaneBusy(paneB, true);
+    expect(useTerminals.getState().isScopeBusy("b")).toBe(true);
+    expect(useTerminals.getState().isScopeBusy("a")).toBe(false);
+    expect(useTerminals.getState().isScopeBusy(null)).toBe(false);
   });
 
   it("projects are isolated", () => {
     useTerminals.getState().openTab("a", "/a");
-    expect(useTerminals.getState().byProject.b).toBeUndefined();
+    expect(useTerminals.getState().byScope.b).toBeUndefined();
   });
 
   it("setPaneBusy tracks busy panes and hasBusyPanes reflects it", () => {
     const tabId = useTerminals.getState().openTab("proj", "/repo");
-    const pane = useTerminals.getState().byProject.proj.tabs[0].panes[0].id;
+    const pane = useTerminals.getState().byScope.proj.tabs[0].panes[0].id;
     expect(useTerminals.getState().hasBusyPanes()).toBe(false);
     useTerminals.getState().setPaneBusy(pane, true);
     expect(useTerminals.getState().isPaneBusy(pane)).toBe(true);
@@ -173,7 +196,7 @@ describe("useTerminals", () => {
 
   it("setPaneExited marks a live pane dead and clears its busy flag", () => {
     const tabId = useTerminals.getState().openTab("proj", "/repo");
-    const paneId = useTerminals.getState().byProject.proj.tabs[0].panes[0].id;
+    const paneId = useTerminals.getState().byScope.proj.tabs[0].panes[0].id;
     useTerminals.getState().setPaneBusy(paneId, true);
 
     useTerminals.getState().setPaneExited(paneId);
@@ -191,7 +214,7 @@ describe("useTerminals", () => {
 
   it("clearPaneExited resets the dead flag for a restart", () => {
     useTerminals.getState().openTab("proj", "/repo");
-    const paneId = useTerminals.getState().byProject.proj.tabs[0].panes[0].id;
+    const paneId = useTerminals.getState().byScope.proj.tabs[0].panes[0].id;
     useTerminals.getState().setPaneExited(paneId);
 
     useTerminals.getState().clearPaneExited(paneId);
@@ -204,7 +227,7 @@ describe("useTerminals", () => {
     useTerminals.getState().splitPane("proj", tabId, "/repo");
     const [p1, p2] = useTerminals
       .getState()
-      .byProject.proj.tabs[0].panes.map((p) => p.id);
+      .byScope.proj.tabs[0].panes.map((p) => p.id);
     useTerminals.getState().setPaneExited(p1);
     useTerminals.getState().setPaneExited(p2);
 
@@ -231,11 +254,268 @@ describe("useTerminals", () => {
 
   it("closing a tab clears busy flags for all its panes", () => {
     const tabId = useTerminals.getState().openTab("proj", "/repo");
-    const p1 = useTerminals.getState().byProject.proj.tabs[0].panes[0].id;
+    const p1 = useTerminals.getState().byScope.proj.tabs[0].panes[0].id;
     const p2 = useTerminals.getState().splitPane("proj", tabId, "/repo");
     useTerminals.getState().setPaneBusy(p1, true);
     useTerminals.getState().setPaneBusy(p2, true);
     useTerminals.getState().closeTab("proj", tabId);
     expect(useTerminals.getState().hasBusyPanes()).toBe(false);
+  });
+});
+
+function session(id: string, projectId: string): UiSession {
+  return {
+    archivedAt: null,
+    baselineOid: null,
+    claudeSessionId: null,
+    createdAt: 1,
+    cwd: "/repo",
+    id,
+    projectId,
+    status: "idle",
+    summary: "",
+    title: id,
+    titleLocked: false,
+    worktreePath: null,
+  } as UiSession;
+}
+
+function project(id: string, path: string) {
+  return { color: null, id, name: id, path, setupCommand: null };
+}
+
+describe("terminal scopes", () => {
+  beforeEach(reset);
+
+  it("keys the main folder by the bare project id", () => {
+    expect(terminalScope("p", null, "/repo")).toBe("p");
+    expect(terminalScope("p", "", "/repo")).toBe("p");
+    expect(terminalScope("p", "/repo", "/repo")).toBe("p");
+    expect(terminalScope("p", "/repo/", "/repo")).toBe("p");
+  });
+
+  it("gives each worktree its own scope, separate from the main folder", () => {
+    const wt = terminalScope("p", "/repo-worktrees/feat", "/repo");
+    expect(wt).not.toBe("p");
+    expect(wt).not.toBe(terminalScope("p", "/repo-worktrees/other", "/repo"));
+    expect(scopeProjectId(wt)).toBe("p");
+    expect(scopeProjectId("p")).toBe("p");
+    expect(scopeFolder(wt)).toBe("/repo-worktrees/feat");
+    expect(scopeFolder("p")).toBeNull();
+  });
+
+  it("keeps main-folder terminals out of a worktree scope", () => {
+    const wt = terminalScope("p", "/repo-worktrees/feat", "/repo");
+    useTerminals.getState().openTab("p", "/repo");
+    expect(useTerminals.getState().byScope[wt]).toBeUndefined();
+  });
+
+  it("sessionTerminalScope is the scope of the folder a session works in", () => {
+    const projects = [project("p", "/repo")];
+    const base = session("s", "p");
+    const wt = terminalScope("p", "/repo-worktrees/feat", "/repo");
+    expect(sessionTerminalScope(undefined, projects)).toBeNull();
+    expect(sessionTerminalScope(base, projects)).toBe("p");
+    expect(
+      sessionTerminalScope(
+        { ...base, worktreePath: "/repo-worktrees/feat" },
+        projects
+      )
+    ).toBe(wt);
+    // A nested session runs in its lead's worktree without one of its own:
+    // its terminals are that worktree's, not the main folder's.
+    expect(
+      sessionTerminalScope({ ...base, cwd: "/repo-worktrees/feat" }, projects)
+    ).toBe(wt);
+  });
+
+  it("dormantScopes: a worktree no rail session works in is dormant", () => {
+    const projects = [project("p", "/repo")];
+    const wt = terminalScope("p", "/repo-worktrees/feat", "/repo");
+    const other = terminalScope("p", "/repo-worktrees/old", "/repo");
+    const sessions = {
+      main: session("main", "p"),
+      old: {
+        ...session("old", "p"),
+        archivedAt: 5,
+        worktreePath: "/repo-worktrees/old",
+      },
+      wt: { ...session("wt", "p"), worktreePath: "/repo-worktrees/feat" },
+    };
+    expect([...dormantScopes(["p", wt, other], sessions, projects)]).toEqual([
+      other,
+    ]);
+  });
+
+  it("dormantScopes: every scope of a fully parked project is dormant", () => {
+    const projects = [project("p", "/repo")];
+    const wt = terminalScope("p", "/repo-worktrees/feat", "/repo");
+    const sessions = {
+      wt: {
+        ...session("wt", "p"),
+        parkedAt: 5,
+        worktreePath: "/repo-worktrees/feat",
+      },
+    };
+    expect(dormantScopes(["p", wt], sessions, projects)).toEqual(
+      new Set(["p", wt])
+    );
+  });
+
+  it("dormantScopes: a main-folder scope stays live with only worktree sessions", () => {
+    const projects = [project("p", "/repo")];
+    const sessions = {
+      wt: { ...session("wt", "p"), worktreePath: "/repo-worktrees/feat" },
+    };
+    expect(dormantScopes(["p"], sessions, projects).size).toBe(0);
+  });
+
+  it("counts every scope of a project as the project's panes", () => {
+    const wt = terminalScope("p", "/repo-worktrees/feat", "/repo");
+    useTerminals.getState().openTab("p", "/repo");
+    useTerminals.getState().openTab(wt, "/repo-worktrees/feat");
+    useTerminals.getState().openTab("q", "/q");
+    expect(projectPaneIds(useTerminals.getState().byScope, "p")).toHaveLength(
+      2
+    );
+  });
+
+  it("stopProject stops the panes of every scope of the project", () => {
+    const wt = terminalScope("p", "/repo-worktrees/feat", "/repo");
+    useTerminals.getState().openTab(wt, "/repo-worktrees/feat");
+    const paneId = useTerminals.getState().byScope[wt].tabs[0].panes[0].id;
+    useTerminals.getState().stopProject("p");
+    expect(dispose).toHaveBeenCalledWith(paneId);
+  });
+
+  it("dropScope closes one scope's terminals and forgets its tabs", () => {
+    const wt = terminalScope("p", "/repo-worktrees/feat", "/repo");
+    useTerminals.getState().openTab("p", "/repo");
+    useTerminals.getState().openTab(wt, "/repo-worktrees/feat");
+    const paneId = useTerminals.getState().byScope[wt].tabs[0].panes[0].id;
+    useTerminals.getState().dropScope(wt);
+    expect(dispose).toHaveBeenCalledWith(paneId);
+    expect(dispose).toHaveBeenCalledTimes(1);
+    expect(useTerminals.getState().byScope[wt]).toBeUndefined();
+    expect(useTerminals.getState().byScope.p.tabs).toHaveLength(1);
+  });
+});
+
+describe("installDormantTerminalStops", () => {
+  const pane = (id: string) => ({ cwd: "/x", id });
+  function session(id: string, projectId: string, parkedAt?: number) {
+    return {
+      archivedAt: null,
+      baselineOid: null,
+      claudeSessionId: null,
+      createdAt: 1,
+      cwd: "/x",
+      id,
+      parkedAt: parkedAt ?? null,
+      projectId,
+      status: "idle" as const,
+      summary: "",
+      title: id,
+      titleLocked: false,
+      worktreePath: null,
+    };
+  }
+
+  beforeEach(() => {
+    reset();
+    dispose.mockClear();
+  });
+
+  it("stops a project's terminals when its last rail session leaves", () => {
+    useSessions.setState({
+      sessions: { live: session("live", "p"), old: session("old", "p", 5) },
+    });
+    useTerminals.setState({
+      busyPanes: { "pane-1": true },
+      byScope: {
+        p: {
+          activeTabId: "t",
+          tabs: [
+            {
+              activePaneId: "pane-1",
+              direction: "row",
+              id: "t",
+              layout: [],
+              panes: [pane("pane-1")],
+              title: "dev",
+            },
+          ],
+        },
+      },
+    });
+    const stop = installDormantTerminalStops();
+
+    // Archiving (or closing) the one session still on the rail leaves the
+    // project fully parked: its dock workspace unmounts, so a dev server
+    // left running there would be out of reach.
+    useSessions.getState().archiveSession("live");
+
+    expect(dispose).toHaveBeenCalledWith("pane-1");
+    expect(useTerminals.getState().hasBusyPanes()).toBe(false);
+    stop();
+  });
+
+  it("leaves a project with a rail session alone", () => {
+    useSessions.setState({
+      sessions: { a: session("a", "p"), b: session("b", "p") },
+    });
+    useTerminals.setState({
+      byScope: {
+        p: {
+          activeTabId: "t",
+          tabs: [
+            {
+              activePaneId: "pane-1",
+              direction: "row",
+              id: "t",
+              layout: [],
+              panes: [pane("pane-1")],
+              title: "dev",
+            },
+          ],
+        },
+      },
+    });
+    const stop = installDormantTerminalStops();
+
+    useSessions.getState().archiveSession("a");
+
+    expect(dispose).not.toHaveBeenCalled();
+    stop();
+  });
+});
+
+describe("installDormantTerminalStops for worktrees", () => {
+  beforeEach(reset);
+
+  it("stops a worktree's terminals when its last session is archived, and keeps its tabs", () => {
+    const wt = terminalScope("p", "/repo-worktrees/feat", "/repo");
+    useSessions.setState({
+      projects: [project("p", "/repo")],
+      sessions: {
+        main: session("main", "p"),
+        wt: { ...session("wt", "p"), worktreePath: "/repo-worktrees/feat" },
+      },
+    });
+    useTerminals.getState().openTab("p", "/repo");
+    useTerminals.getState().openTab(wt, "/repo-worktrees/feat");
+    const mainPane = useTerminals.getState().byScope.p.tabs[0].panes[0].id;
+    const wtPane = useTerminals.getState().byScope[wt].tabs[0].panes[0].id;
+    useTerminals.getState().setPaneBusy(wtPane, true);
+    const stop = installDormantTerminalStops();
+
+    useSessions.getState().archiveSession("wt");
+
+    expect(dispose).toHaveBeenCalledWith(wtPane);
+    expect(dispose).not.toHaveBeenCalledWith(mainPane);
+    expect(useTerminals.getState().isPaneBusy(wtPane)).toBe(false);
+    // The tabs stay, so un-archiving brings the worktree's terminals back.
+    expect(useTerminals.getState().byScope[wt].tabs).toHaveLength(1);
+    stop();
   });
 });

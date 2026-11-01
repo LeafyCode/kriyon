@@ -148,6 +148,27 @@ test("buildStandings omits archived sessions", () => {
   const standings = buildStandings(sessions, { live: now, gone: now }, {}, now);
   expect(standings.map((s) => s.sessionId)).toEqual(["live"]);
 });
+test("buildStandings omits parked sessions", () => {
+  const now = Date.now();
+  const base = {
+    baselineOid: null,
+    claudeSessionId: null,
+    createdAt: 1,
+    cwd: "/r",
+    projectId: "p1",
+    status: "running" as const,
+    summary: "",
+    title: "T",
+    titleLocked: false,
+    worktreePath: null,
+  };
+  const sessions = {
+    live: { ...base, archivedAt: null, id: "live" },
+    gone: { ...base, archivedAt: null, id: "gone", parkedAt: now - 1000 },
+  };
+  const standings = buildStandings(sessions, { live: now, gone: now }, {}, now);
+  expect(standings.map((s) => s.sessionId)).toEqual(["live"]);
+});
 
 test("needsYou filters to awaiting_input standings only", () => {
   const now = 100_000;

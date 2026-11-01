@@ -66,7 +66,7 @@ export function InspectorRail() {
   const dirtyCount = repo?.dirtyCount ?? 0;
 
   return (
-    <aside data-testid="inspector-rail" style={railStyle}>
+    <aside data-testid="inspector-rail" data-tour="inspector" style={railStyle}>
       <button
         aria-label="Expand inspector"
         className="kr-hover-surface"

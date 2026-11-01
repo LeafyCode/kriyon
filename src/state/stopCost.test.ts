@@ -147,6 +147,19 @@ describe("stopCostOfAll", () => {
     });
   });
 
+  it("skips parked sessions", () => {
+    const view = {
+      activity: {},
+      bootPhase: {},
+      exited: {},
+      sessions: {
+        a: session("a", { status: "running" }),
+        parked: session("parked", { parkedAt: 5, status: "running" }),
+      },
+    };
+    expect(stopCostOfAll(view).working).toBe(1);
+  });
+
   it("is empty when nothing is running anywhere", () => {
     const total = stopCostOfAll({
       activity: {},

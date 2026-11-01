@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import {
+  activityChangedPaths,
   defaultBranch,
   diffSessionChanges,
   diffWorkingTree,
@@ -23,6 +24,8 @@ import {
   isMissingBaselineObjectError,
   isWorkingTreeTooLargeError,
   nextViewedState,
+  scopeWantsUncommitted,
+  type UncommittedChanges,
   useChanges,
   // biome-ignore lint/suspicious/noImportCycles: deliberate and inert — see above.
 } from "./changes.ts";
@@ -117,7 +120,8 @@ export type RefreshReason =
   | "fs-change"
   | "live-edit"
   | "manual"
-  | "saved";
+  | "saved"
+  | "scope";
 
 /**
  * Resolve and cache `sessionId`'s git repo toplevel, once per distinct
@@ -162,6 +166,23 @@ function ensureRepoToplevel(sessionId: string, cwd: string): void {
     // tool calls, becoming active, and the manual button — just not on
     // changes nothing in the hook stream accounts for.
   });
+}
+
+/**
+ * Fold the [Activity log]'s record of what Claude changed in this session
+ * into its `touchedFiles` — subagents' edits, files a command changed, and
+ * edits from before a restart, none of which the live activity stream sees.
+ * One indexed SQLite read; never awaited, and a failure (no store outside
+ * Tauri) leaves the session's record as it was.
+ */
+function syncChangedPaths(sessionId: string): void {
+  activityChangedPaths(sessionId)
+    .then((paths) => {
+      useSessions.getState().setTouchedFromActivity(sessionId, paths);
+    })
+    .catch(() => {
+      // Best-effort: the live record still stands.
+    });
 }
 
 /** Resolved default branch per project root. The value changes about as often
@@ -209,6 +230,16 @@ function computeBaselineLabel(
     return "HEAD · uncommitted";
   }
   return baseSha ? `${base} @ ${baseSha}` : base;
+}
+
+/** What a diff is compared with, in words a person reads at a glance — the
+ * summary bar's label. The exact point (snapshot id, branch sha) is
+ * {@link computeBaselineLabel}'s, kept for the tooltip. */
+function comparedToPhrase(anchoredToBaseline: boolean, base?: string): string {
+  if (anchoredToBaseline) {
+    return "since session start";
+  }
+  return base ? `vs ${base}` : "vs last commit";
 }
 
 /**
@@ -358,6 +389,15 @@ async function doRefresh(
     } else {
       diff = await diffWorkingTree(cwd, options.base);
     }
+    // Awaited before `prev` is read: the write below spreads `prev`, so
+    // anything read before this await would put back a collapse or a viewed
+    // mark the user made while the second diff ran.
+    const uncommitted = await fetchUncommitted(
+      sessionId,
+      cwd,
+      options.base,
+      anchoredToBaseline ? undefined : diff
+    );
     const prev = useChanges.getState().bySession[sessionId] ?? EMPTY_ENTRY;
     const { hunkHashes, viewed } = nextViewedState(
       diff.files,
@@ -373,12 +413,14 @@ async function doRefresh(
         [sessionId]: {
           ...prev,
           baselineLabel,
+          comparedTo: comparedToPhrase(anchoredToBaseline, options.base),
           diff,
           error: undefined,
           fetchedAt: Date.now(),
           hunkHashes,
           status: "ready",
           totals: computeTotals(diff),
+          uncommitted,
           viewed,
         },
       },
@@ -404,6 +446,51 @@ async function doRefresh(
         },
       },
     }));
+  }
+}
+
+/**
+ * The All changes scope's diff for this refresh, or `undefined` when no
+ * scope on screen wants it (see {@link scopeWantsUncommitted}).
+ *
+ * `sameAsSession` is the session diff when that diff was itself taken
+ * against `base` rather than a session snapshot — then it already *is* the
+ * uncommitted diff, and a second fetch would only repeat it. A failure is
+ * kept on the scope (`error`) rather than failing the refresh: the session
+ * diff it rode along with is fine.
+ */
+async function fetchUncommitted(
+  sessionId: string,
+  cwd: string,
+  base: string | undefined,
+  sameAsSession: SessionDiff | undefined
+): Promise<UncommittedChanges | undefined> {
+  const tab = useChanges.getState().ui[sessionId]?.tab;
+  if (!scopeWantsUncommitted(tab)) {
+    return;
+  }
+  if (sameAsSession) {
+    return {
+      comparedTo: comparedToPhrase(false, base),
+      diff: sameAsSession,
+      label: computeBaselineLabel(base, sameAsSession.baseSha),
+    };
+  }
+  const prev = useChanges.getState().bySession[sessionId]?.uncommitted;
+  try {
+    const diff = await diffWorkingTree(cwd, base);
+    return {
+      comparedTo: comparedToPhrase(false, base),
+      diff,
+      label: computeBaselineLabel(base, diff.baseSha),
+    };
+  } catch (err) {
+    return {
+      comparedTo: comparedToPhrase(false, base),
+      diff: prev?.diff ?? null,
+      error: failureMessage(err),
+      label: prev?.label ?? computeBaselineLabel(base, null),
+    };
   }
 }
 
@@ -477,6 +564,7 @@ export async function refreshSessionChanges(sessionId: string): Promise<void> {
   // Never awaited — a slow or failing lookup must not hold up the diff
   // fetch below, which is the trust-anchored part of this refresh.
   ensureRepoToplevel(sessionId, cwd);
+  syncChangedPaths(sessionId);
   const onBaselineInvalid = () => {
     useSessions.getState().setBaseline(sessionId, null);
   };

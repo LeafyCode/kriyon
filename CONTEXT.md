@@ -11,13 +11,13 @@ file and its name in the list below. `[Term]` in an entry refers to another glos
 
 What a session is, where it runs, and how it is resumed, handed off and archived.
 
-Session, Claude session id, Session title, Project (Workspace), Worktree, Session identity, Merge outcome, Preferred session view, Clear project, Inactive project, Past session, Follow-up session, Handoff link, Handoff file, Handoff card, Handoff prompt, Worktree bootstrap, Install command, Setup command, Branch collision, Archived session, Nested session, Lead session, Session request, Session proposal, Nested session cap, Split off.
+Session, Claude session id, Session title, Project (Workspace), Worktree, Session identity, Merge outcome, Preferred session view, Clear project, Inactive project, Parked project, Parked session, Project note, Note capture, Past session, Follow-up session, Handoff link, Handoff file, Handoff card, Handoff prompt, Worktree bootstrap, Shell PATH, Install command, Setup command, Branch collision, Archived session, Nested session, Lead session, Session request, Session proposal, Nested session cap, Split off.
 
 ## [Terminals and the PTY daemon](docs/context/terminal.md)
 
 The terminals Kriyon hosts and the daemon process that keeps each PTY alive.
 
-Project terminal, Warm pane, Terminal tab, Terminal pane, Terminal workspace, Terminal dock, Terminal view, Link target, Raw view, Block, Engine, Write queue, Backpressure, Drained counter, PTY daemon, Run dir, Session socket, Daemon frame, Daemon client, Screen snapshot.
+Project terminal, Warm pane, Terminal scope, Terminal tab, Terminal pane, Terminal workspace, Terminal dock, Terminal view, Link target, Raw view, Block, Engine, Write queue, Backpressure, Drained counter, PTY daemon, Run dir, Session socket, Daemon frame, Daemon client, Screen snapshot.
 
 ## [Changes view, files and git](docs/context/changes.md)
 
@@ -59,4 +59,4 @@ Boot phase, Main session lock, Session runtime, Watch route, Event subscription 
 
 The window chrome, menus, themes and the WebKit guards that keep the UI responsive.
 
-Stray caret, DOM weight, Collapsible section, Mascot, Wordmark, Nav row, Anchored menu, Header action, Sort menu, Palette menu, Project menu, Confirm dialog, Theme, Theme registry, Steel, Style recipe, Accent.
+App tour, Stray caret, DOM weight, Collapsible section, Mascot, Wordmark, Nav row, Anchored menu, Header action, Sort menu, Palette menu, Project menu, Confirm dialog, Theme, Theme registry, Palette spec, Terminal palette, Theme picker, Steel, Style recipe, Accent.

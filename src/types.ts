@@ -181,12 +181,38 @@ export interface SessionRow {
   /** The [Handoff link]: the session this [Follow-up session] was spawned
    *  from, or null/absent for an ordinary session. Display only. */
   parentSessionId?: string | null;
+  /** When the session was parked (ms since epoch), or null/absent. A parked
+   *  session is stopped and off the rail until opened (mirrors Rust
+   *  `parked_at`, ADR-0052). */
+  parkedAt?: number | null;
   projectId: string;
   title: string;
   /** The user renamed this session by hand; Claude's `ai-title` must not
    *  overwrite it (mirrors Rust `title_locked`). */
   titleLocked: boolean;
   worktreePath: string | null;
+}
+
+/** What a [Project note] is (mirrors Rust `NoteKind`). Only a todo can be done. */
+export type NoteKind = "todo" | "idea" | "note";
+
+/**
+ * A [Project note]: one of the user's own todos, ideas or notes for a project
+ * (mirrors Rust `kriyon_core::project_notes::ProjectNote`). Never sent to Claude.
+ */
+export interface ProjectNote {
+  /** Optional longer text; empty when unused. */
+  body: string;
+  createdMs: number;
+  /** When a todo was ticked off; always null for an idea or a note. */
+  doneAt: number | null;
+  id: string;
+  kind: NoteKind;
+  pinned: boolean;
+  projectId: string;
+  /** The one line shown in the list. */
+  text: string;
+  updatedMs: number;
 }
 
 /** A [Saved prompt] in the user's global prompt library (mirrors Rust PromptRow). */
@@ -214,6 +240,24 @@ export interface RepoStatus {
 export interface DiffLine {
   kind: "added" | "removed" | "context";
   text: string;
+}
+
+/** One commit that last touched a line (mirrors Rust `kriyon_core::blame::BlameCommit`). */
+export interface BlameCommit {
+  author: string;
+  /** Seconds since the epoch. */
+  authorTime: number;
+  sha: string;
+  summary: string;
+  /** git's all-zero id: the line differs from what is committed. */
+  uncommitted: boolean;
+}
+
+/** Who last touched each line of a file (mirrors Rust `FileBlame`). */
+export interface FileBlame {
+  commits: BlameCommit[];
+  /** Per line, in order: an index into `commits`. */
+  lines: number[];
 }
 
 /** How a file changed (mirrors Rust `FileChange`). */

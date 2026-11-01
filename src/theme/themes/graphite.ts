@@ -5,6 +5,7 @@ import type { Theme } from "./types.ts";
 export const graphite: Theme = {
   id: "graphite",
   label: "Graphite",
+  appearance: "dark",
   colors: {
     ...darkChrome,
     accent: "#C8CAD0",

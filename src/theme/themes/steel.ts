@@ -15,6 +15,7 @@ import type { Theme } from "./types.ts";
 export const steel: Theme = {
   id: "steel",
   label: "Steel",
+  appearance: "dark",
   colors: {
     ...darkChrome,
     // oklch(0.55 0.11 225) — fills: Send, the brand tile, primary buttons.

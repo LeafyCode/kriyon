@@ -2,10 +2,11 @@ import {
   type CSSProperties,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
-import { useChanges } from "../state/changes.ts";
+import { scopeWantsUncommitted, useChanges } from "../state/changes.ts";
 import { type RefreshReason, requestRefresh } from "../state/changesRefresh.ts";
 import {
   type ChangesViewModel,
@@ -15,6 +16,7 @@ import {
 } from "../state/changesView.ts";
 import { useLayout } from "../state/layout.ts";
 import {
+  sessionClaudeFiles,
   sessionTouchedRelative,
   sessionWorkingDir,
   useSessions,
@@ -42,9 +44,9 @@ const bodyStyle: CSSProperties = {
   minHeight: 0,
 };
 
-// Layout: tree 236px | feed flex | jump rail 26px (see FileTreePane's
-// FILE_TREE_WIDTH and JumpRail's JUMP_RAIL_WIDTH) — the feed takes whatever
-// width is left between the two fixed-width columns.
+// Layout: tree (user-resizable, `fileTreeWidth` in the layout) | feed flex |
+// jump rail 26px (JumpRail's JUMP_RAIL_WIDTH) — the feed takes whatever width
+// is left between the two.
 const feedStyle: CSSProperties = {
   flex: 1,
   minHeight: 0,
@@ -60,7 +62,13 @@ function diffFeedWrapStyle(hidden: boolean): CSSProperties {
 }
 
 /** What the pending-jump effect should do about the requested path. */
-type JumpPlan = "clear-filter" | "drop" | "hold" | "scroll" | "show-feed";
+type JumpPlan =
+  | "clear-filter"
+  | "drop"
+  | "hold"
+  | "open"
+  | "scroll"
+  | "show-feed";
 
 /** Exactly the [Changes view model] fields {@link planJump} reads — a `Pick`
  * rather than the whole model, so the effect below can list them as its deps
@@ -68,7 +76,12 @@ type JumpPlan = "clear-filter" | "drop" | "hold" | "scroll" | "show-feed";
  * appearing, the totals moving). */
 type JumpContext = Pick<
   ChangesViewModel,
-  "displayFiles" | "editsFilterActive" | "files" | "loadedOnce" | "showViewer"
+  | "displayFiles"
+  | "editsFilterActive"
+  | "files"
+  | "loadedOnce"
+  | "showViewer"
+  | "tab"
 >;
 
 /**
@@ -81,10 +94,14 @@ type JumpContext = Pick<
  * a jump target the My-edits-only filter is hiding is still a real file in
  * the diff. The outcomes:
  *
- * - `"show-feed"` — `FileViewer` is what's on screen (All-files tab with a
- *   file selected), so `DiffFeed` is `display:none` and `scrollToFile` on a
- *   hidden virtualizer is a silent no-op. The caller flips the tab back to
- *   "changes" and leaves the request pending for the next run. Deliberately
+ * - `"open"` — a file is open in the editor, so the diff is hidden behind
+ *   it. Clicking a changed file opens it; a jump to one does the same, and
+ *   the viewer's own switch guard keeps an unsaved draft safe.
+ * - `"show-feed"` — another scope is on screen: All changes lists a
+ *   different diff, and on Files `DiffFeed` is hidden behind `FileViewer`
+ *   (`scrollToFile` on a hidden virtualizer is a silent no-op). A jump names
+ *   a file of the session diff, so the caller flips the tab back to AI
+ *   changes ("changes") and leaves the request pending for the next run. Deliberately
  *   never "clear `selectedFile`": both make the feed visible, but
  *   `selectedFile` surviving a tab flip is the documented contract that
  *   keeps the viewer's draft/cursor/scroll alive (see its doc comment in
@@ -109,6 +126,9 @@ function planJump(view: JumpContext, path: string): JumpPlan {
     return view.loadedOnce ? "drop" : "hold";
   }
   if (view.showViewer) {
+    return "open";
+  }
+  if (view.tab !== "changes") {
     return "show-feed";
   }
   if (
@@ -136,52 +156,6 @@ const errorBannerStyle: CSSProperties = {
   fontSize: "12.5px",
   padding: `${tokens.space.sm} ${tokens.space.md}`,
 };
-
-const editsToggleRowStyle: CSSProperties = {
-  alignItems: "center",
-  borderBottom: `1px solid ${tokens.color.line.soft}`,
-  cursor: "pointer",
-  display: "flex",
-  flex: "none",
-  fontFamily: tokens.font.sans,
-  fontSize: "11.5px",
-  gap: tokens.space.sm,
-  height: "30px",
-  padding: `0 ${tokens.space.md}`,
-};
-
-const editsToggleLabelStyle: CSSProperties = {
-  color: tokens.color.ink.muted,
-};
-
-/** The switch's track — accent-filled when on, and off the same sunken well
- * every other input in the app sits in (`inputWell`), so "off" reads as an
- * empty groove rather than a raised chip waiting to be pressed. */
-function switchTrackStyle(checked: boolean): CSSProperties {
-  return {
-    background: checked ? tokens.color.accent : tokens.color.inputWell,
-    border: `1px solid ${tokens.color.line.base}`,
-    borderRadius: tokens.radius.pill,
-    cursor: "pointer",
-    display: "inline-flex",
-    flex: "none",
-    height: "16px",
-    padding: "1px",
-    transition: `background-color ${tokens.motion.hover}`,
-    width: "28px",
-  };
-}
-
-function switchThumbStyle(checked: boolean): CSSProperties {
-  return {
-    background: tokens.color.onAccent,
-    borderRadius: "50%",
-    height: "12px",
-    transform: checked ? "translateX(12px)" : "translateX(0)",
-    transition: `transform ${tokens.motion.hover}`,
-    width: "12px",
-  };
-}
 
 /** How long `SummaryBar`'s pulse stays lit after a silent refresh, before
  * fading back out — a UI-timing constant, not a design token (`tokens.motion`
@@ -259,14 +233,22 @@ export function ChangesView({ sessionId }: { sessionId: string }) {
   // The same shared resource the Details rail and the header read, so this is
   // a third subscriber to one `git status`, not a third spawn of it.
   const repo = useRepoView(cwd);
+  // For the "this session" badges on diff cards.
   const touchedRelative = useSessions(() => sessionTouchedRelative(sessionId));
+  // For the AI changes filter: `null` while Claude's files can't be known,
+  // so the filter stands down instead of hiding everything.
+  const claudeFiles = useSessions(() => sessionClaudeFiles(sessionId));
   // The one subscription that replaced thirteen. `changesView` is memoized on
   // exactly the fields it reads (see `state/changesView.ts`), so the store
   // ticks this view doesn't care about — `setActiveFile` and `markViewed`,
   // both written on every card the user scrolls past — return the identical
   // object and re-render nothing.
   const view = useChanges((s) =>
-    changesView(s, sessionId, { cwd, repoToplevel, touchedRelative })
+    changesView(s, sessionId, {
+      cwd,
+      repoToplevel,
+      touchedRelative: claudeFiles,
+    })
   );
   // Release this session's memo entry when its pane goes away, so a closed
   // session's diff isn't retained here after `dropSession` drops it from the
@@ -275,6 +257,7 @@ export function ChangesView({ sessionId }: { sessionId: string }) {
   // one place that knows when an entry stops being needed.
   useEffect(() => () => forgetChangesView(sessionId), [sessionId]);
   const consumeJump = useChanges((s) => s.consumeJump);
+  const requestJump = useChanges((s) => s.requestJump);
   const setTab = useChanges((s) => s.setTab);
   const selectFile = useChanges((s) => s.selectFile);
   const toggleMyEditsOnly = useChanges((s) => s.toggleMyEditsOnly);
@@ -323,13 +306,15 @@ export function ChangesView({ sessionId }: { sessionId: string }) {
   // read off the store at click time rather than subscribed to: it changes
   // once per session and a subscription would only churn this callback's
   // identity (and with it every memoized card) for nothing.
-  const handleEditFile = useCallback(
+  //
+  // Opens the file beside whatever list is showing, without changing tabs —
+  // the way an editor's git panel opens a changed file.
+  const handleOpenFile = useCallback(
     (path: string) => {
       const toplevel = useSessions.getState().repoToplevel[sessionId] ?? "";
       selectFile(sessionId, cwdRelativePath(path, toplevel, cwd));
-      setTab(sessionId, "all");
     },
-    [selectFile, setTab, sessionId, cwd]
+    [selectFile, sessionId, cwd]
   );
 
   // Delegates entirely to the shared helper (see this component's top doc
@@ -397,17 +382,48 @@ export function ChangesView({ sessionId }: { sessionId: string }) {
   // consuming a jump writes the store and so produces a new view, and
   // re-running this effect on that (or on an unrelated dirty dot) is churn at
   // best and a re-entrant jump at worst.
-  const { displayFiles, editsFilterActive, files, loadedOnce, showViewer } =
-    view;
+  const {
+    displayFiles,
+    editsFilterActive,
+    files,
+    loadedOnce,
+    showViewer,
+    tab,
+  } = view;
+  const displayPaths = useMemo(
+    () => displayFiles.map((f) => f.path),
+    [displayFiles]
+  );
+
+  // A row with no file to open (a deletion) shows its diff. With a file
+  // open, the diff is hidden behind it, so close the file first — an
+  // unsaved draft is stashed on the way out and comes back on reopen — and
+  // let the jump land once the diff is on screen.
+  const handleJumpToFile = useCallback(
+    (path: string) => {
+      if (showViewer) {
+        selectFile(sessionId, undefined);
+        requestJump(sessionId, path);
+        return;
+      }
+      diffFeedRef.current?.scrollToFile(path);
+    },
+    [requestJump, selectFile, sessionId, showViewer]
+  );
   const { pendingJump } = view;
   useEffect(() => {
     if (pendingJump === undefined) {
       return;
     }
     const plan = planJump(
-      { displayFiles, editsFilterActive, files, loadedOnce, showViewer },
+      { displayFiles, editsFilterActive, files, loadedOnce, showViewer, tab },
       pendingJump
     );
+    if (plan === "open") {
+      handleOpenFile(pendingJump);
+      consumeJump(sessionId);
+      return;
+    }
     if (plan === "show-feed") {
       setTab(sessionId, "changes");
       return;
@@ -433,39 +449,43 @@ export function ChangesView({ sessionId }: { sessionId: string }) {
     sessionId,
     setTab,
     showViewer,
+    tab,
     toggleMyEditsOnly,
+    handleOpenFile,
   ]);
+
+  // Opening a scope that lists uncommitted work (All changes, or Files for
+  // its git colours) fetches it now rather than at the next refresh — the
+  // routine refresh skips it while nobody is looking. Only on the switch
+  // itself, so a failed fetch is not retried in a loop.
+  const wantsUncommitted = scopeWantsUncommitted(tab);
+  useEffect(() => {
+    if (wantsUncommitted && isActiveSession) {
+      requestRefresh(sessionId, "scope");
+    }
+  }, [wantsUncommitted, isActiveSession, sessionId]);
 
   return (
     <div data-testid="changes-view" style={rootStyle}>
       <SummaryBar
+        baselineLabel={view.baselineLabel}
+        comparedTo={view.comparedTo}
+        diffControls={!view.showViewer}
+        editsToggle={
+          view.showEditsToggle
+            ? {
+                checked: view.myEditsOnly,
+                onToggle: () => toggleMyEditsOnly(sessionId),
+              }
+            : undefined
+        }
         isVisible={isVisible}
         onRefresh={() => doRefresh("manual")}
+        paths={displayPaths}
         pulsing={pulsing}
         sessionId={sessionId}
         totals={view.totals}
       />
-      {view.showEditsToggle ? (
-        // A `<label>` (not a bare row div) so the visible "My edits only"
-        // text is the switch's one accessible name — no separate
-        // `aria-label` duplicating it — and clicking the text itself
-        // toggles the switch (the label's native click-forwarding to its
-        // labelable descendant), giving the control a bigger hit target
-        // than the 28px-wide track alone.
-        <label style={editsToggleRowStyle}>
-          <button
-            aria-checked={view.myEditsOnly}
-            data-testid="my-edits-only-toggle"
-            onClick={() => toggleMyEditsOnly(sessionId)}
-            role="switch"
-            style={switchTrackStyle(view.myEditsOnly)}
-            type="button"
-          >
-            <span style={switchThumbStyle(view.myEditsOnly)} />
-          </button>
-          <span style={editsToggleLabelStyle}>My edits only</span>
-        </label>
-      ) : null}
       {view.error ? (
         <div data-testid="changes-error" style={errorBannerStyle}>
           {view.error}
@@ -483,13 +503,18 @@ export function ChangesView({ sessionId }: { sessionId: string }) {
         <FileTreePane
           dirtyPaths={view.dirtyPaths}
           files={view.displayFiles}
-          onEditFile={handleEditFile}
-          onJumpToFile={(path) => diffFeedRef.current?.scrollToFile(path)}
+          onJumpToFile={handleJumpToFile}
+          onOpenFile={handleOpenFile}
           onTabChange={(next) => setTab(sessionId, next)}
+          selectedPath={view.selectedFileDiff?.path}
           tab={view.tab}
         >
           {filesTabMounted ? (
-            <FileBrowserTree cwd={cwd} sessionId={sessionId} />
+            <FileBrowserTree
+              cwd={cwd}
+              decorations={view.decorations}
+              sessionId={sessionId}
+            />
           ) : null}
         </FileTreePane>
         <div style={feedStyle}>
@@ -498,7 +523,7 @@ export function ChangesView({ sessionId }: { sessionId: string }) {
               <DiffFeed
                 files={view.displayFiles}
                 onActiveFileChange={(path) => setActiveFile(sessionId, path)}
-                onEditFile={handleEditFile}
+                onEditFile={handleOpenFile}
                 onSilentRefresh={handleSilentRefresh}
                 ref={diffFeedRef}
                 sessionId={sessionId}

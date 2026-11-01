@@ -439,6 +439,19 @@ pub fn activity_turns(session_id: String, limit: Option<u32>) -> Result<Vec<Acti
     with_store(|s| s.turns(&session_id, limit))
 }
 
+/// Every file Claude changed in `session_id` (absolute paths): what the
+/// Files view's AI changes tab keeps to. See
+/// [`ActivityStore::changed_paths`](crate::activity_store::ActivityStore::changed_paths).
+///
+/// # Errors
+/// On an invalid id or a database error.
+#[allow(clippy::needless_pass_by_value)]
+#[tauri::command]
+pub fn activity_changed_paths(session_id: String) -> Result<Vec<String>, String> {
+    kriyon_core::daemon::check_session_id(&session_id)?;
+    with_store(|s| s.changed_paths(&session_id))
+}
+
 /// One [Activity step] in full, for its detail dialog.
 ///
 /// # Errors

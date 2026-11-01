@@ -5,7 +5,7 @@ import { basename } from "../state/actions.ts";
 import { useChanges } from "../state/changes.ts";
 import { changedFileCount } from "../state/changesView.ts";
 import { useLayout } from "../state/layout.ts";
-import { sessionTouchedRelative, useSessions } from "../state/sessions.ts";
+import { sessionClaudeFiles, useSessions } from "../state/sessions.ts";
 import { recapHeadline, turnRecap } from "../state/turnRecap.ts";
 import { useUi } from "../state/ui.ts";
 import { button, iconButton } from "../theme/recipes.ts";
@@ -49,7 +49,7 @@ export function TurnRecapCard() {
   // The Changes tab's own count: it sees files Claude changed through the
   // shell too, which the turn's edit events miss.
   const touchedRelative = useSessions(() =>
-    sessionTouchedRelative(sessionId ?? "")
+    sessionClaudeFiles(sessionId ?? "")
   );
   const changedFiles = useChanges((state) =>
     changedFileCount(state, sessionId ?? "", touchedRelative)

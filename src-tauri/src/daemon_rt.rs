@@ -7,13 +7,15 @@
 //! [`kriyon_core::tree_stop`]. This module gathers their inputs (the store, the
 //! process table, the run dir) and carries out their answers.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io::Write as _;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use kriyon_core::orphan::{orphan_daemons, terminal_pane_ids, OrphanDaemon, ReapStep};
+use kriyon_core::orphan::{
+    orphan_daemons, terminal_pane_ids, LiveTerminalScopes, OpenSession, OrphanDaemon, ReapStep,
+};
 use kriyon_core::proc::ProcessTree;
 use kriyon_core::session::SessionId;
 use kriyon_core::tree_stop::may_signal;
@@ -29,8 +31,9 @@ const TERMINALS_KEY: &str = "terminals";
 /// the daemon is wedged, and the caller falls back to a signal.
 const SHUTDOWN_WRITE_TIMEOUT: Duration = Duration::from_secs(1);
 
-/// Send `signal` to `pid` if the [Signal gate] allows it. The one door every
-/// signal the app sends goes through. Best-effort: a vanished pid is fine.
+/// Send `signal` to `pid` if the [Signal gate] allows it. With
+/// [`signal_group_gated`], the only ways the app sends a signal, so every one
+/// passes the gate. Best-effort: a vanished pid is fine.
 #[cfg(unix)]
 pub(crate) fn signal_gated(pid: i32, signal: libc::c_int) {
     let own_pid = i32::try_from(std::process::id()).unwrap_or(0);
@@ -39,6 +42,24 @@ pub(crate) fn signal_gated(pid: i32, signal: libc::c_int) {
         // ours; no memory involved.
         unsafe {
             libc::kill(pid, signal);
+        }
+    }
+}
+
+/// Send `signal` to every process in group `pgid` if the [Signal gate] allows
+/// `pgid` itself: the group of a child started with `process_group(0)`, whose
+/// id is the child's pid. The gate keeps `kill(-1)` (every process the person
+/// owns) and Kriyon's own group out of reach.
+#[cfg(unix)]
+pub(crate) fn signal_group_gated(pgid: i32, signal: libc::c_int) {
+    let own_pid = i32::try_from(std::process::id()).unwrap_or(0);
+    // SAFETY: getpgrp(2) only reads this process's group id.
+    let own_group = unsafe { libc::getpgrp() };
+    if may_signal(pgid, &[own_pid, own_group]) {
+        // SAFETY: plain kill(2) on a group the gate has proven is > 1 and not
+        // ours; no memory involved.
+        unsafe {
+            libc::kill(-pgid, signal);
         }
     }
 }
@@ -262,8 +283,9 @@ pub(crate) fn recover_unreachable_daemon(
     Ok(None)
 }
 
-/// Every id something owns: non-archived session rows, persisted [Terminal
-/// pane]s, and whatever this run is attached to. `None` when ownership cannot
+/// Every id something owns: session rows that are not put away (archived or
+/// parked), persisted [Terminal pane]s outside a fully [Parked project], and
+/// whatever this run is attached to. `None` when ownership cannot
 /// be established — the store or the terminals blob is unreadable — and the
 /// caller must then reap nothing.
 ///
@@ -271,20 +293,40 @@ pub(crate) fn recover_unreachable_daemon(
 /// hydration leaves the frontend store empty, and "nothing is owned" would reap
 /// every live session.
 fn owned_ids<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Option<HashSet<String>> {
-    let (rows, terminals) = {
+    let (rows, projects, terminals) = {
         let store = app.state::<StoreState>();
         let store = store.0.lock();
         (
             store.list_sessions().ok()?,
+            store.list_projects().ok()?,
             store.load_layout(TERMINALS_KEY).ok()?,
         )
     };
+    let project_paths: HashMap<&str, &str> = projects
+        .iter()
+        .map(|p| (p.id.as_str(), p.path.as_str()))
+        .collect();
+    let live = LiveTerminalScopes::from_open_sessions(
+        rows.iter()
+            .filter(|row| row.archived_at.is_none())
+            .map(|row| OpenSession {
+                project_id: &row.project_id,
+                project_path: project_paths.get(row.project_id.as_str()).copied(),
+                folder: row
+                    .worktree_path
+                    .as_deref()
+                    .filter(|path| !path.is_empty())
+                    .unwrap_or(&row.cwd),
+                parked: row.parked_at.is_some(),
+            }),
+    );
+    let panes = terminal_pane_ids(terminals.as_deref(), &live)?;
     let mut owned: HashSet<String> = rows
         .into_iter()
-        .filter(|row| row.archived_at.is_none())
+        .filter(|row| !row.is_put_away())
         .map(|row| row.id)
         .collect();
-    owned.extend(terminal_pane_ids(terminals.as_deref())?);
+    owned.extend(panes);
     let state = app.state::<AppState>();
     owned.extend(state.sessions.lock().keys().map(|id| id.0.clone()));
     Some(owned)
@@ -547,6 +589,7 @@ mod tests {
             title_locked: false,
             parent_session_id: None,
             nested_under: None,
+            parked_at: None,
         }
     }
 
@@ -563,6 +606,98 @@ mod tests {
                 setup_command: None,
             })
             .expect("project");
+    }
+
+    #[test]
+    fn parked_sessions_and_a_fully_parked_projects_panes_are_not_owned() {
+        let app = mock_app();
+        seed_project(&app);
+        {
+            let store = app.state::<StoreState>();
+            let store = store.0.lock();
+            store
+                .upsert_project(&crate::store::ProjectRow {
+                    id: "p2".to_string(),
+                    name: "parked".to_string(),
+                    path: "/y".to_string(),
+                    color: None,
+                    setup_command: None,
+                })
+                .expect("second project");
+            store
+                .upsert_session(&session_row("live", None))
+                .expect("row");
+            store
+                .upsert_session(&crate::store::SessionRow {
+                    parked_at: Some(5),
+                    ..session_row("parked-in-live-project", None)
+                })
+                .expect("row");
+            store
+                .upsert_session(&crate::store::SessionRow {
+                    project_id: "p2".to_string(),
+                    parked_at: Some(5),
+                    ..session_row("parked-session", None)
+                })
+                .expect("row");
+            store
+                .save_layout(
+                    TERMINALS_KEY,
+                    r#"{"p1": {"tabs": [{"panes": [{"id": "pane-1"}]}]}, "p2": {"tabs": [{"panes": [{"id": "pane-2"}]}]}}"#,
+                )
+                .expect("layout");
+        }
+
+        let owned = owned_ids(app.handle()).expect("readable ownership");
+
+        assert!(owned.contains("live"));
+        // p1 still has a live session, so its terminal is still in use.
+        assert!(owned.contains("pane-1"));
+        // A parked session is stopped, so a daemon still serving it is a leftover.
+        assert!(!owned.contains("parked-in-live-project"));
+        assert!(!owned.contains("parked-session"));
+        // Every session of p2 is parked: its terminals were stopped too.
+        assert!(!owned.contains("pane-2"));
+    }
+
+    #[test]
+    fn a_worktrees_panes_are_owned_only_while_a_rail_session_works_there() {
+        let app = mock_app();
+        seed_project(&app);
+        {
+            let store = app.state::<StoreState>();
+            let store = store.0.lock();
+            store
+                .upsert_session(&session_row("main", None))
+                .expect("row");
+            store
+                .upsert_session(&crate::store::SessionRow {
+                    worktree_path: Some("/x-wt/feat".to_string()),
+                    ..session_row("feat", None)
+                })
+                .expect("row");
+            store
+                .upsert_session(&crate::store::SessionRow {
+                    worktree_path: Some("/x-wt/gone".to_string()),
+                    ..session_row("gone", Some(5))
+                })
+                .expect("row");
+            store
+                .save_layout(
+                    TERMINALS_KEY,
+                    "{\"p1\": {\"tabs\": [{\"panes\": [{\"id\": \"pane-main\"}]}]}, \
+                     \"p1\\u0000/x-wt/feat\": {\"tabs\": [{\"panes\": [{\"id\": \"pane-feat\"}]}]}, \
+                     \"p1\\u0000/x-wt/gone\": {\"tabs\": [{\"panes\": [{\"id\": \"pane-gone\"}]}]}}",
+                )
+                .expect("layout");
+        }
+
+        let owned = owned_ids(app.handle()).expect("readable ownership");
+
+        assert!(owned.contains("pane-main"));
+        assert!(owned.contains("pane-feat"));
+        // Its only session was archived: the frontend stopped those terminals.
+        assert!(!owned.contains("pane-gone"));
     }
 
     #[test]

@@ -61,6 +61,9 @@ export interface Layout {
   collapsedProjectIds: string[];
   /** Composer hidden to a slim reveal strip (terminal-first working style). */
   composerCollapsed: boolean;
+  /** The Files view's tree column width in px, user-resizable within the
+   * clamp range. */
+  fileTreeWidth: number;
   /** Fold sessions whose last activity predates this cutoff into a per-group
    *  "N older" disclosure; `off` shows all. */
   hideOlderThan: HideOlderThan;
@@ -111,6 +114,9 @@ export interface Layout {
   terminalDockOpen: boolean;
   /** Active theme id from the theme registry (`src/theme/themes/`). */
   themeId: string;
+  /** The [App tour] has been finished or skipped, so it no longer opens on
+   *  its own. A layout saved before the tour existed reads as unseen. */
+  tourSeen: boolean;
   transcriptView: TranscriptView;
   view: "studio" | "focus" | "command" | "prompts" | "settings";
 }
@@ -139,6 +145,11 @@ export const SIDEBAR_WIDTH_DEFAULT = 278;
 export const SIDEBAR_WIDTH_MIN = 220;
 export const SIDEBAR_WIDTH_MAX = 420;
 
+export const FILE_TREE_WIDTH_DEFAULT = 260;
+// Wide enough for the three scope tabs (AI changes · All changes · Files).
+export const FILE_TREE_WIDTH_MIN = 240;
+export const FILE_TREE_WIDTH_MAX = 520;
+
 export const TERMINAL_DOCK_HEIGHT_DEFAULT = 260;
 export const TERMINAL_DOCK_HEIGHT_MIN = 120;
 export const TERMINAL_DOCK_HEIGHT_MAX = 640;
@@ -146,6 +157,11 @@ export const TERMINAL_DOCK_HEIGHT_MAX = 640;
 /** Clamp a requested sidebar width into the resizable range. */
 export function clampSidebarWidth(width: number): number {
   return Math.min(SIDEBAR_WIDTH_MAX, Math.max(SIDEBAR_WIDTH_MIN, width));
+}
+
+/** Clamp a requested file tree width into the resizable range. */
+export function clampFileTreeWidth(width: number): number {
+  return Math.min(FILE_TREE_WIDTH_MAX, Math.max(FILE_TREE_WIDTH_MIN, width));
 }
 
 /** Clamp a requested terminal dock height into the resizable range. */
@@ -185,10 +201,12 @@ export const DEFAULT_LAYOUT: Layout = {
   sidebarCollapsed: false,
   sidebarMode: "calm",
   sidebarWidth: SIDEBAR_WIDTH_DEFAULT,
+  fileTreeWidth: FILE_TREE_WIDTH_DEFAULT,
   terminalDockFullHeight: false,
   terminalDockHeight: TERMINAL_DOCK_HEIGHT_DEFAULT,
   terminalDockOpen: false,
   themeId: DEFAULT_THEME_ID,
+  tourSeen: false,
   preferredSessionView: "raw",
   mascot: "visor",
   mascotHue: "cobalt",
@@ -196,8 +214,9 @@ export const DEFAULT_LAYOUT: Layout = {
   view: "studio",
 };
 
-/** The inspector's two tabs: what the session is, and what Claude did in it. */
-export type InspectorTab = "details" | "activity";
+/** The inspector's tabs: what the session is, what Claude did in it, and the
+ *  project's own [Project note]s. */
+export type InspectorTab = "details" | "activity" | "notes";
 
 interface LayoutState {
   /** The inspector's open tab. Not saved: a launch opens on Details. */
@@ -220,6 +239,7 @@ interface LayoutState {
    */
   revealSessionView: () => void;
   setAutoSleepAfter: (value: AutoSleepAfter) => void;
+  setFileTreeWidth: (width: number) => void;
   setHideOlderThan: (value: HideOlderThan) => void;
   setInspectorChangesOpen: (open: boolean) => void;
   setInspectorTab: (tab: InspectorTab) => void;
@@ -239,6 +259,7 @@ interface LayoutState {
   setSidebarWidth: (width: number) => void;
   setTerminalDockHeight: (height: number) => void;
   setThemeId: (themeId: string) => void;
+  setTourSeen: (tourSeen: boolean) => void;
   /** Show `view`. Picking the terminal or the Structured view makes it the
    *  [Preferred session view] unless `remember` is false (a detour the user
    *  didn't choose, like the terminal a permission prompt needs). */
@@ -271,6 +292,10 @@ export const useLayout = create<LayoutState>((set, get) => ({
   setSidebarWidth: (width) =>
     set((state) => ({
       layout: { ...state.layout, sidebarWidth: clampSidebarWidth(width) },
+    })),
+  setFileTreeWidth: (width) =>
+    set((state) => ({
+      layout: { ...state.layout, fileTreeWidth: clampFileTreeWidth(width) },
     })),
   toggleComposerCollapsed: () =>
     set((state) => ({
@@ -388,6 +413,8 @@ export const useLayout = create<LayoutState>((set, get) => ({
     set((state) => ({ layout: { ...state.layout, mascotHue } })),
   setThemeId: (themeId) =>
     set((state) => ({ layout: { ...state.layout, themeId } })),
+  setTourSeen: (tourSeen) =>
+    set((state) => ({ layout: { ...state.layout, tourSeen } })),
   setTranscriptView: (transcriptView, remember = true) =>
     set((state) => ({
       layout: {

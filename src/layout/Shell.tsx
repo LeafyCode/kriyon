@@ -7,6 +7,7 @@ import {
   InspectorRail,
 } from "../inspector/InspectorRail.tsx";
 import { NeedsYouOverlay } from "../needsYou/NeedsYouOverlay.tsx";
+import { NoteCaptureOverlay } from "../notes/NoteCaptureOverlay.tsx";
 import { CommandPalette } from "../palette/CommandPalette.tsx";
 import { PromptEditor } from "../prompts/PromptEditor.tsx";
 import { PromptPicker } from "../prompts/PromptPicker.tsx";
@@ -18,6 +19,7 @@ import { SpawnDialog } from "../spawn/SpawnDialog.tsx";
 import { useLayout } from "../state/layout.ts";
 import { useUi } from "../state/ui.ts";
 import { tokens } from "../theme/tokens.ts";
+import { AppTour } from "../tour/AppTour.tsx";
 import { CollapsePanel } from "../ui/CollapsePanel.tsx";
 import { ErrorBoundary } from "../ui/ErrorBoundary.tsx";
 import { OutsideOpenConfirm } from "../ui/OutsideOpenConfirm.tsx";
@@ -258,12 +260,15 @@ export function Shell({ children, onCloseSession, onNewSession }: ShellProps) {
       <SpawnDialog />
       <HandoffCards />
       <NeedsYouOverlay />
+      <NoteCaptureOverlay />
       <UpdateDialog />
       <About onClose={closeAbout} open={aboutOpen} />
       {/* Global toast host: mounted here (not in `children`) so it shows in
             every view — children are only visible in studio/focus. */}
       <Toast />
       <OutsideOpenConfirm />
+      {/* Last, so its spotlight sits over every other overlay. */}
+      <AppTour />
     </main>
   );
 }

@@ -29,6 +29,7 @@ import {
   requestRefresh,
   // biome-ignore lint/suspicious/noImportCycles: deliberate and inert — see above.
 } from "./changesRefresh.ts";
+import { canonicalDir } from "./paths.ts";
 import { useUsageCards } from "./usageCards.ts";
 import {
   completedTasks,
@@ -107,6 +108,8 @@ export interface UiSession {
   nestedUnder?: string | null;
   /** The [Handoff link] (see {@link SessionRow.parentSessionId}). */
   parentSessionId?: string | null;
+  /** When the session was parked (see {@link SessionRow.parkedAt}). */
+  parkedAt?: number | null;
   projectId: string;
   status: SessionStatus;
   summary: string;
@@ -146,6 +149,7 @@ export function sessionRow(session: UiSession): SessionRow {
     id: session.id,
     nestedUnder: session.nestedUnder ?? null,
     parentSessionId: session.parentSessionId ?? null,
+    parkedAt: session.parkedAt ?? null,
     projectId: session.projectId,
     title: session.title,
     titleLocked: session.titleLocked,
@@ -183,7 +187,8 @@ export function sessionWorkingDir(session: UiSession | undefined): string {
 /**
  * The branch-shaped label for a worktree [Session] — the last segment of its
  * [Worktree] path (the sanitized branch dir) — or null when the session runs
- * in the project folder. Drives the sidebar row's `⎇ name` chip.
+ * in the project folder. Drives the sidebar row's worktree mark beside the
+ * title and the branch name on its meta line.
  */
 export function worktreeName(session: UiSession | undefined): string | null {
   if (!isWorktreeSession(session)) {
@@ -269,6 +274,10 @@ export interface SessionsState {
    * panes). See {@link SessionsState.exited}.
    */
   noteSessionExited: (id: string) => void;
+  /** Park every session of a project still on the rail: stamp `parkedAt`, and
+   *  move the selection and warm panes off them. Stopping them is
+   *  `parkProjectAndStop`'s job. */
+  parkProject: (projectId: string) => void;
   /** Where each [Nested session] not yet launched reports its first answer. */
   pendingReport: Record<string, NestedReport>;
   /** In-memory seed prompts for follow-up sessions, consumed at first launch. Never persisted. */
@@ -358,6 +367,18 @@ export interface SessionsState {
    * not made here.)
    */
   setRepoToplevel: (id: string, cwd: string, toplevel?: string) => void;
+  /** Make the files the [Activity log] saw Claude change in `id` (absolute
+   * paths) its `touchedFiles`. The log is the one owner of that answer: it
+   * counts only finished steps, including subagents' edits, the files a
+   * command changed and everything from before a restart. A live-recorded
+   * edit the log hasn't taken in yet is kept for {@link LIVE_TOUCH_GRACE_MS};
+   * past that the log's answer stands. A session no longer in the store is
+   * ignored. */
+  setTouchedFromActivity: (
+    id: string,
+    paths: readonly string[],
+    now?: number
+  ) => void;
   /**
    * [Sleeping session]s: id → the phase while Kriyon has its `claude` stopped.
    * Absent means awake. `stuck` means the resume kept failing, so the row must
@@ -398,7 +419,19 @@ export interface SessionsState {
    * live-refresh trigger.
    */
   touchedFiles: Record<string, string[]>;
+  /** sessionId → path → when the live stream recorded Claude editing it. The
+   * [Activity log] takes hook events in every few seconds, so a sync right
+   * after an edit may not have it yet; these keep it for
+   * {@link LIVE_TOUCH_GRACE_MS} until the log confirms or the grace runs out. */
+  touchedLive: Record<string, Record<string, number>>;
+  /** Sessions whose `touchedFiles` the [Activity log] has answered for at
+   * least once — so an empty list means "Claude changed nothing", not "not
+   * known yet". See {@link sessionClaudeFiles}. */
+  touchedSynced: Record<string, boolean>;
   unarchiveSession: (id: string) => void;
+  /** Bring every parked session of a project back to the rail. Starts
+   *  nothing. */
+  unparkProject: (projectId: string) => void;
   usage: Record<string, UsageSnapshot>;
   /**
    * The {@link ViewedMarker} per session — what the user had seen when they last
@@ -438,10 +471,92 @@ export function badgeCount(activity: SessionActivity | undefined): number {
   return agents + shells;
 }
 
-/** Picks the most-recently-created session id, or null if there are none. */
+/** Whether a session is parked: stopped and off the rail until opened. */
+export function isParked(session: UiSession): boolean {
+  return session.archivedAt === null && (session.parkedAt ?? null) !== null;
+}
+
+/**
+ * Whether a session is put away: an [Archived session] or a parked one. Both
+ * are stopped, so neither is live — the one check every surface that means
+ * "skip what is not live" asks, so parking can't miss a path.
+ */
+export function isPutAway(session: UiSession): boolean {
+  return session.archivedAt !== null || (session.parkedAt ?? null) !== null;
+}
+
+/**
+ * Ids of every fully parked project: one with at least one parked session and
+ * none left on the rail. Its [Project terminal]s stay stopped (and unmounted)
+ * until one of its sessions comes back. The orphan sweep decides the same thing
+ * in Rust (`fully_parked_projects` in kriyon-core); change both together.
+ */
+export function fullyParkedProjectIds(
+  sessions: Record<string, UiSession>
+): ReadonlySet<string> {
+  const parked = new Set<string>();
+  const live = new Set<string>();
+  for (const session of Object.values(sessions)) {
+    if (isParked(session)) {
+      parked.add(session.projectId);
+    } else if (!isPutAway(session)) {
+      live.add(session.projectId);
+    }
+  }
+  for (const id of live) {
+    parked.delete(id);
+  }
+  return parked;
+}
+
+/**
+ * `id` and every session it is nested under, up its lead chain. Opening a
+ * parked [Nested session] brings its leads back with it, so it shows nested
+ * under them rather than orphaned at the top level.
+ */
+function withLeads(
+  sessions: Record<string, UiSession>,
+  id: string
+): Set<string> {
+  const chain = new Set<string>();
+  let current: string | null | undefined = id;
+  while (current && !chain.has(current) && sessions[current]) {
+    chain.add(current);
+    current = sessions[current]?.nestedUnder;
+  }
+  return chain;
+}
+
+/** `sessions` with `parkedAt` cleared on the given ids — the same object when
+ *  none of them was parked, so subscribers don't churn. */
+function unparked(
+  sessions: Record<string, UiSession>,
+  ids: Iterable<string>
+): Record<string, UiSession> {
+  let next = sessions;
+  for (const id of ids) {
+    const session = next[id];
+    if (session && (session.parkedAt ?? null) !== null) {
+      next = next === sessions ? { ...sessions } : next;
+      next[id] = { ...session, parkedAt: null };
+    }
+  }
+  return next;
+}
+
+/**
+ * The newest session still in sight, or null if there is none — where the
+ * selection goes when the selected session leaves. Never a put-away one:
+ * selecting a session launches it, and an archived or parked session must not
+ * start while it sits out of sight. One home for every path that moves the
+ * selection (close, archive, park), so none can forget the rule.
+ */
 function newestSessionId(sessions: Record<string, UiSession>): string | null {
   let newest: UiSession | undefined;
   for (const s of Object.values(sessions)) {
+    if (isPutAway(s)) {
+      continue;
+    }
     if (!newest || s.createdAt > newest.createdAt) {
       newest = s;
     }
@@ -603,24 +718,25 @@ export const EMPTY_TOUCHED_RELATIVE: Set<string> = new Set();
  * `../elsewhere/x.ts`), since {@link FileDiff.path} is always repo-relative
  * and such an entry could never match one anyway.
  *
- * Known gap: the Rust `repo_toplevel` command canonicalizes `cwd` (realpath),
- * so `toplevel` is always a realpath, while `touchedFiles` holds whatever
- * (possibly symlinked) path the edit tool actually used. Under a symlinked
- * project path — macOS's `/tmp` → `/private/tmp`, or a symlinked home
- * directory — every prefix test here fails and every badge for that session
- * silently vanishes. This fails safe (no file is ever mis-attributed to the
- * wrong session), so it's left as-is rather than special-cased.
+ * macOS's `/tmp` → `/private/tmp` firmlink is seen through (see
+ * `canonicalDir`). Known gap: any other symlinked project path (a symlinked
+ * home directory) still fails the prefix test, since the Rust
+ * `repo_toplevel` is a realpath and `touchedFiles` holds whatever path the
+ * tool used. That fails safe — no file is ever mis-attributed to the wrong
+ * session.
  */
 export function relativizeTouchedPath(
   absPath: string,
   toplevel: string
 ): string | null {
-  const root = toplevel.endsWith("/") ? toplevel.slice(0, -1) : toplevel;
-  const prefix = `${root}/`;
-  if (!absPath.startsWith(prefix)) {
+  // Both sides through one spelling: git canonicalizes the toplevel
+  // (`/private/tmp/…`) while a tool names the path it was given (`/tmp/…`).
+  const prefix = `${canonicalDir(toplevel)}/`;
+  const path = canonicalDir(absPath);
+  if (!path.startsWith(prefix)) {
     return null;
   }
-  return absPath.slice(prefix.length);
+  return path.slice(prefix.length);
 }
 
 /**
@@ -681,6 +797,31 @@ export function sessionTouchedRelative(sessionId: string): Set<string> {
   return result;
 }
 
+/**
+ * The files Claude changed in `sessionId`, relativized to the repo — or
+ * `null` while that can't be known: no repo toplevel yet, the [Activity log]
+ * not answered yet, or recorded paths none of which match the repo (a
+ * symlinked project path). The AI changes filter only applies to a real
+ * answer, so "can't tell" never reads as "Claude changed nothing".
+ * Returns {@link sessionTouchedRelative}'s stable `Set` when known.
+ */
+export function sessionClaudeFiles(sessionId: string): Set<string> | null {
+  const state = useSessions.getState();
+  if (!state.repoToplevel[sessionId]) {
+    return null;
+  }
+  const touched = state.touchedFiles[sessionId] ?? [];
+  if (touched.length === 0) {
+    return state.touchedSynced[sessionId] ? EMPTY_TOUCHED_RELATIVE : null;
+  }
+  const relative = sessionTouchedRelative(sessionId);
+  return relative.size > 0 ? relative : null;
+}
+
+/** How long a live-recorded edit outlives an [Activity log] sync that hasn't
+ * seen it — well past the log's ingest interval (a few seconds). */
+export const LIVE_TOUCH_GRACE_MS = 10_000;
+
 /** Every {@link SessionsState} slice keyed by session id, so
  *  {@link pruneById} can never drift from the store's shape. */
 const PER_SESSION_KEYS = [
@@ -699,6 +840,8 @@ const PER_SESSION_KEYS = [
   "sleeping",
   "statusOrigin",
   "touchedFiles",
+  "touchedSynced",
+  "touchedLive",
   "usage",
   "viewed",
 ] as const satisfies readonly (keyof SessionsState)[];
@@ -745,6 +888,8 @@ export const useSessions = create<SessionsState>((set, get) => ({
   projects: [],
   sessions: {},
   touchedFiles: {},
+  touchedSynced: {},
+  touchedLive: {},
   repoToplevel: {},
   repoToplevelCwd: {},
 
@@ -832,9 +977,15 @@ export const useSessions = create<SessionsState>((set, get) => ({
       // The warm set is LRU-bounded, so this may evict the coldest pane (its
       // xterm unmounts; the daemon lives on — see nextWarmPanes).
       const { warm } = nextWarmPanes(state.warmPanes, prev, id);
+      // Opening a session is what launches it, so opening a parked one — from
+      // the Parked section, the palette, a notification — brings it back to
+      // the rail: a running session must never sit hidden. Only it comes back
+      // (with its leads, if it is nested); the rest of its project stays
+      // parked, out of the way.
       return {
         warmPanes: warm,
         activeSessionId: id,
+        sessions: unparked(state.sessions, withLeads(state.sessions, id)),
         viewed,
       };
     }),
@@ -953,16 +1104,45 @@ export const useSessions = create<SessionsState>((set, get) => ({
       // screen and the warm set: a pane still wired to the stopped host would
       // sit dead, and would stay blank after an un-archive. The selection moves
       // to the newest session still in sight, exactly as a close would move it.
-      const live = Object.fromEntries(
-        Object.entries(sessions).filter(([, s]) => s.archivedAt === null)
-      );
       return {
         activeSessionId:
           state.activeSessionId === id
-            ? newestSessionId(live)
+            ? newestSessionId(sessions)
             : state.activeSessionId,
         sessions,
         warmPanes: state.warmPanes.filter((warmId) => warmId !== id),
+      };
+    }),
+
+  parkProject: (projectId) =>
+    set((state) => {
+      const now = Date.now();
+      let parkedAny = false;
+      const sessions = { ...state.sessions };
+      for (const session of Object.values(state.sessions)) {
+        if (session.projectId === projectId && !isPutAway(session)) {
+          sessions[session.id] = { ...session, parkedAt: now };
+          parkedAny = true;
+        }
+      }
+      if (!parkedAny) {
+        return state;
+      }
+      // Parking stops every session it parks (see `parkProjectAndStop`), so —
+      // exactly as archiving one does — their terminals leave the screen and
+      // the warm set, and the selection moves to the newest session still in
+      // sight.
+      const parked = (id: string) =>
+        (sessions[id]?.parkedAt ?? null) !== null &&
+        sessions[id]?.projectId === projectId;
+      const active = state.activeSessionId;
+      return {
+        activeSessionId:
+          active !== null && parked(active)
+            ? newestSessionId(sessions)
+            : active,
+        sessions,
+        warmPanes: state.warmPanes.filter((warmId) => !parked(warmId)),
       };
     }),
 
@@ -975,6 +1155,16 @@ export const useSessions = create<SessionsState>((set, get) => ({
       return {
         sessions: { ...state.sessions, [id]: { ...session, archivedAt: null } },
       };
+    }),
+
+  unparkProject: (projectId) =>
+    set((state) => {
+      const ids = Object.values(state.sessions)
+        .filter((s) => s.projectId === projectId && isParked(s))
+        .map((s) => s.id);
+      const sessions = unparked(state.sessions, ids);
+      // Nothing starts here: each session resumes only when it is opened.
+      return sessions === state.sessions ? state : { sessions };
     }),
 
   removeSession: (id) => {
@@ -1150,6 +1340,41 @@ export const useSessions = create<SessionsState>((set, get) => ({
         touchedFiles: completedTarget
           ? withTouchedFile(state.touchedFiles, id, completedTarget)
           : state.touchedFiles,
+        touchedLive: completedTarget
+          ? {
+              ...state.touchedLive,
+              [id]: { ...state.touchedLive[id], [completedTarget]: Date.now() },
+            }
+          : state.touchedLive,
+      };
+    }),
+
+  setTouchedFromActivity: (id, paths, now = Date.now()) =>
+    set((state) => {
+      if (!state.sessions[id]) {
+        return state;
+      }
+      // The log's answer, plus live edits it hasn't taken in yet — within
+      // the grace. Confirmed or expired live entries are dropped.
+      const logged = new Set(paths);
+      const live: Record<string, number> = {};
+      for (const [path, at] of Object.entries(state.touchedLive[id] ?? {})) {
+        if (!logged.has(path) && now - at < LIVE_TOUCH_GRACE_MS) {
+          live[path] = at;
+        }
+      }
+      const next = [...paths, ...Object.keys(live)];
+      const prev = state.touchedFiles[id] ?? [];
+      const unchanged =
+        prev.length === next.length && next.every((p) => prev.includes(p));
+      return {
+        touchedFiles: unchanged
+          ? state.touchedFiles
+          : { ...state.touchedFiles, [id]: next },
+        touchedLive: { ...state.touchedLive, [id]: live },
+        touchedSynced: state.touchedSynced[id]
+          ? state.touchedSynced
+          : { ...state.touchedSynced, [id]: true },
       };
     }),
 

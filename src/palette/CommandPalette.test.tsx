@@ -236,18 +236,18 @@ test("the transcript-view command reaches the Changes view and back", () => {
   render(<CommandPalette />);
   fireEvent.keyDown(window, { key: "k", metaKey: true });
   fireEvent.change(screen.getByPlaceholderText(PLACEHOLDER), {
-    target: { value: "Toggle Changes" },
+    target: { value: "Toggle Files" },
   });
 
-  fireEvent.click(screen.getByText("Toggle Changes / Session view"));
+  fireEvent.click(screen.getByText("Toggle Files / Session view"));
   expect(useLayout.getState().layout.transcriptView).toBe("changes");
 
   // Palette closes on run; reopen to run it again.
   fireEvent.keyDown(window, { key: "k", metaKey: true });
   fireEvent.change(screen.getByPlaceholderText(PLACEHOLDER), {
-    target: { value: "Toggle Changes" },
+    target: { value: "Toggle Files" },
   });
-  fireEvent.click(screen.getByText("Toggle Changes / Session view"));
+  fireEvent.click(screen.getByText("Toggle Files / Session view"));
   expect(useLayout.getState().layout.transcriptView).toBe("raw");
 });
 
@@ -263,4 +263,44 @@ test("sidebar mode commands set the layout mode", () => {
   fireEvent.click(screen.getByText("Sidebar: Triage view"));
 
   expect(useLayout.getState().layout.sidebarMode).toBe("triage");
+});
+
+test("'Add a note…' opens the note capture", () => {
+  useSessions.setState({
+    projects: [
+      { color: null, id: "p1", name: "kriyon", path: "/k", setupCommand: null },
+    ],
+  });
+  render(<CommandPalette />);
+  fireEvent.keyDown(window, { key: "k", metaKey: true });
+
+  fireEvent.change(screen.getByPlaceholderText(PLACEHOLDER), {
+    target: { value: "note" },
+  });
+  fireEvent.click(screen.getByText("Add a note…"));
+
+  expect(useUi.getState().noteCaptureOpen).toBe(true);
+});
+
+test("'Add a note…' before there is a project explains instead of opening", () => {
+  render(<CommandPalette />);
+  fireEvent.keyDown(window, { key: "k", metaKey: true });
+  fireEvent.change(screen.getByPlaceholderText(PLACEHOLDER), {
+    target: { value: "note" },
+  });
+  fireEvent.click(screen.getByText("Add a note…"));
+  expect(useUi.getState().noteCaptureOpen).toBe(false);
+});
+
+test("'Take the app tour' starts the app tour", async () => {
+  const { useTour } = await import("../state/tour.ts");
+  useTour.setState({ stepIndex: null });
+  render(<CommandPalette />);
+  fireEvent.keyDown(window, { key: "k", metaKey: true });
+  fireEvent.change(screen.getByPlaceholderText(PLACEHOLDER), {
+    target: { value: "tour" },
+  });
+  fireEvent.click(screen.getByText("Take the app tour"));
+  expect(useTour.getState().stepIndex).toBe(0);
+  useTour.setState({ stepIndex: null });
 });

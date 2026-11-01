@@ -1,4 +1,3 @@
-import { Pencil } from "lucide-react";
 import { type CSSProperties, type ReactNode, useMemo } from "react";
 // The per-file additions/deletions count is defined in the changes store,
 // alongside the auto-collapse rule that also derives from it.
@@ -6,15 +5,15 @@ import {
   type FileTreeTab,
   fileDiffCounts,
   fileKind,
-  isEditableFile,
 } from "../state/changes.ts";
+import { FILE_TREE_WIDTH_DEFAULT, useLayout } from "../state/layout.ts";
+import { treeRow } from "../theme/recipes.ts";
 import { tokens } from "../theme/tokens.ts";
 import type { FileDiff } from "../types.ts";
+import { ColumnResizeHandle } from "../ui/ColumnResizeHandle.tsx";
 import { Segmented, type SegmentedOption } from "../ui/Segmented.tsx";
-import { FileIcon } from "./fileIcon.tsx";
-
-/** The tree column's fixed width (Interfaces: "tree 236px | feed flex | jump rail"). */
-export const FILE_TREE_WIDTH = 236;
+import { DirIcon, FileIcon } from "./fileIcon.tsx";
+import { GIT_INK } from "./gitStatus.ts";
 
 /** Stable empty default for the optional `dirtyPaths` prop — a fresh `new
  * Set()` per render would be a new identity every time, which is exactly
@@ -78,7 +77,7 @@ function groupByDirectory(files: FileDiff[]): DirGroup[] {
  * renamed file (whether or not it also carries edits — git's `-M` emits both
  * shapes) shows `old → new` instead, since its old path has no entry of its
  * own anywhere in the changeset; only the old *basename* is used, because
- * this column is 236px wide and the row's `title` carries both full paths. */
+ * this column is narrow and the row's `title` carries both full paths. */
 function displayName(file: FileDiff, dir: string): string {
   const name = dir ? file.path.slice(dir.length + 1) : file.path;
   const oldPath = file.status === "renamed" ? file.oldPath : null;
@@ -96,18 +95,24 @@ function rowTitle(file: FileDiff): string {
   return oldPath ? `${oldPath} → ${file.path}` : file.path;
 }
 
-const rootStyle: CSSProperties = {
-  borderRight: `1px solid ${tokens.color.line.soft}`,
-  display: "flex",
-  flex: `0 0 ${FILE_TREE_WIDTH}px`,
-  flexDirection: "column",
-  fontFamily: tokens.font.sans,
-  minHeight: 0,
-  overflowY: "auto",
-};
+/** The column: user-resizable (its width lives in the layout), and not a
+ * scroller itself — each tab scrolls its own list, so there is never a
+ * scrollbar inside a scrollbar. */
+function rootStyle(width: number): CSSProperties {
+  return {
+    borderRight: `1px solid ${tokens.color.line.soft}`,
+    display: "flex",
+    flex: "none",
+    flexDirection: "column",
+    fontFamily: tokens.font.sans,
+    minHeight: 0,
+    position: "relative",
+    width: `${width}px`,
+  };
+}
 
 /** The tree column's own 46px header, on the app-wide header rhythm, holding
- * nothing but the two tabs. */
+ * nothing but the three scope tabs. */
 const tabsRowStyle: CSSProperties = {
   alignItems: "center",
   borderBottom: `1px solid ${tokens.color.line.soft}`,
@@ -118,105 +123,98 @@ const tabsRowStyle: CSSProperties = {
 };
 
 /**
- * The tree column's two tabs.
- *
- * These used to be forty lines of markup and styles copied out of
- * `ui/Segmented.tsx`, because this pane's tabs are queried by test id from
- * both its own suite and `ChangesView`'s, and `SegmentedOption` had no way to
- * carry one. It has one now — a smaller change to the shared primitive than a
- * second implementation of the same tab strip, and the two can no longer
- * drift apart. Using it also brings the keyboard contract these hand-rolled
- * buttons never had.
+ * The tree column's three scope tabs, on the shared `Segmented` primitive so they
+ * keep its keyboard contract and test ids.
  */
 const TREE_TABS = [
-  { label: "Changes", testId: "file-tree-tab-changes", value: "changes" },
-  { label: "All files", testId: "file-tree-tab-all", value: "all" },
+  {
+    label: "AI changes",
+    testId: "file-tree-tab-changes",
+    title: "Files Claude changed in this session",
+    value: "changes",
+  },
+  {
+    label: "All changes",
+    testId: "file-tree-tab-uncommitted",
+    title: "Everything not committed yet, whoever changed it",
+    value: "uncommitted",
+  },
+  {
+    label: "Files",
+    testId: "file-tree-tab-all",
+    title: "Every file in the project",
+    value: "all",
+  },
 ] as const satisfies readonly SegmentedOption<FileTreeTab>[];
 
+/** The Changes tab's scrolling list. */
 const listStyle: CSSProperties = {
   flex: 1,
-  padding: `${tokens.space.sm} 0`,
+  minHeight: 0,
+  overflowY: "auto",
+  padding: "6px 4px",
 };
 
-/** Toggles one of this pane's two sub-panes (the "Changes" grouped list vs.
+/** Toggles one of this pane's two sub-panes (the grouped changes list, shared
+ * by AI changes and All changes, vs.
  * the "All files" tree passed in as `children`) without removing it from the
- * tree. `display: "contents"` while visible so the wrapper adds no box of
- * its own — identical layout to before this wrapper existed — and `"none"`
- * while hidden. Mirrors `ChangesView`'s `diffFeedWrapStyle` and `SessionPane`
- * ("Never conditionally rendered away… switching back must not re-trigger
- * the mount-refresh or lose scroll position"): keeping `FileBrowserTree`
- * mounted while "Changes" is showing (and vice versa) is what lets its
- * listings cache survive a tab flip instead of refetching everything on
- * remount. */
+ * tree: a flex column that fills the pane while visible, `"none"` while
+ * hidden. Keeping `FileBrowserTree` mounted while a changes list is showing (and
+ * vice versa) is what lets its listings cache survive a tab flip instead of
+ * refetching everything on remount. */
 function subPaneStyle(hidden: boolean): CSSProperties {
-  return { display: hidden ? "none" : "contents" };
+  return hidden
+    ? { display: "none" }
+    : { display: "flex", flex: 1, flexDirection: "column", minHeight: 0 };
 }
 
+/** A folder's heading in the Changes list — a quiet folder row, so the list
+ * reads as the same tree the All-files tab shows, just pruned to what
+ * changed. */
 const dirLabelStyle: CSSProperties = {
-  color: tokens.color.ink.faint,
-  fontFamily: tokens.font.mono,
-  fontSize: "10.5px",
+  ...treeRow(),
+  color: tokens.color.ink.muted,
+  cursor: "default",
+  fontSize: "12px",
+  gap: "6px",
+};
+
+const dirLabelTextStyle: CSSProperties = {
+  direction: "rtl",
+  minWidth: 0,
   overflow: "hidden",
-  padding: `${tokens.space.xs} ${tokens.space.sm}`,
+  textAlign: "left",
   textOverflow: "ellipsis",
   whiteSpace: "nowrap",
 };
 
-/** The row's outer wrapper: the jump button as one flex child and the edit
- * button as a sibling, mirroring `DiffFileCard`'s header row (a row used to
- * be a single full-width `<button>` — nesting a button inside a button is
- * invalid HTML and would swallow the edit click as a jump click too). */
-const rowWrapStyle: CSSProperties = {
-  alignItems: "center",
-  display: "flex",
-  width: "100%",
-};
+/** One file's row. The row wears the hover, so the whole width lights; the
+ * button inside it is what opens the file. */
+function rowWrapStyle(nested: boolean, selected: boolean): CSSProperties {
+  return {
+    ...treeRow(selected),
+    cursor: "default",
+    padding: nested ? "0 4px 0 24px" : "0 4px 0 6px",
+  };
+}
 
-/** Matches `FileBrowserTree`'s row metrics exactly — the two tabs swap in
- * the same 236px column, so rows that differed in face, size or height made
- * the column visibly jump on a tab flip. Both sit on the 30px list rhythm
- * (`row30` in `theme/recipes.ts`); this one can't spread the recipe itself
- * because it is one of two flex children sharing a row, not the row. */
-const fileRowStyle: CSSProperties = {
+const openButtonStyle: CSSProperties = {
   alignItems: "center",
   background: "transparent",
   border: "none",
-  borderRadius: tokens.radius.md,
-  color: tokens.color.ink.secondary,
+  color: "inherit",
   cursor: "pointer",
   display: "flex",
   flex: 1,
-  fontFamily: tokens.font.sans,
-  fontSize: "12.5px",
+  font: "inherit",
   gap: "6px",
-  height: "30px",
-  lineHeight: 1,
+  height: "100%",
   minWidth: 0,
-  padding: `0 ${tokens.space.sm}`,
+  padding: 0,
   textAlign: "left",
 };
 
-/** The row's edit button — same visual family as `DiffFileCard`'s copy/edit
- * buttons (`copyButtonStyle`), reimplemented locally since it's a distinct
- * component with its own style constants. Always visible: this pane's rows
- * have no hover machinery to reveal it against. */
-const editRowButtonStyle: CSSProperties = {
-  alignItems: "center",
-  background: "none",
-  border: "none",
-  borderRadius: tokens.radius.md,
-  color: tokens.color.ink.muted,
-  cursor: "pointer",
-  display: "flex",
-  flex: "none",
-  padding: "3px",
-};
-
-/** `FileBrowserTree`'s `treeDirtyDotStyle`, minus its `marginLeft: "auto"` —
- * the two tabs swap in the same 236px column, so the same fact has to look
- * the same in both, but the push-to-the-right is that pane's business: there
- * the dot is the row's last child, while here it sits after the ± counts, in
- * a row whose name already carries the `flex: 1`. */
+/** The unsaved-changes dot — the same dot the All-files tab shows. */
 const treeDirtyDotStyle: CSSProperties = {
   background: tokens.color.status.waiting,
   borderRadius: "50%",
@@ -237,19 +235,21 @@ const fileNameStyle: CSSProperties = {
  * proportional face a `+9` and a `+11` don't line up down the column. */
 const addCountStyle: CSSProperties = {
   color: tokens.color.add,
+  flex: "none",
   fontFamily: tokens.font.mono,
   fontSize: "10.5px",
 };
 
 const delCountStyle: CSSProperties = {
   color: tokens.color.del,
+  flex: "none",
   fontFamily: tokens.font.mono,
   fontSize: "10.5px",
 };
 
 // Neutral (non-add/del) informational tag for the binary/empty buckets —
 // the same vocabulary `DiffFileCard` and `ChangedFilesList` use for the same
-// files, sized down for this column's 12px rows.
+// files, sized down for this column's rows.
 const kindTagStyle: CSSProperties = {
   background: tokens.color.chip,
   border: `1px solid ${tokens.color.line.base}`,
@@ -267,11 +267,11 @@ const kindTagStyle: CSSProperties = {
  * The Code Changes View's left column: a directory-grouped tree of changed
  * files, each row showing its +/− counts — or, for a file with no lines to
  * count, the same binary/empty tag and `old → new` rename display the other
- * two file surfaces use (see {@link fileKind}). Clicking a row asks the caller to
- * jump the feed to that file's card — this pane owns no scrolling itself,
- * it only reports *which* file was picked (`onJumpToFile`), so the caller
- * can drive `DiffFeed`'s `scrollToFile` jump handle, the virtualizer-aware
- * mechanism it already exposes.
+ * two file surfaces use (see {@link fileKind}). Clicking a row opens that file
+ * beside the list (`onOpenFile`), as an editor's git panel does; a deleted
+ * file, with nothing to open, asks the caller to jump the diff to its card
+ * instead (`onJumpToFile`). This pane owns neither the viewer nor any
+ * scrolling — it only reports which file was picked.
  *
  * There is deliberately no "N unchanged files hidden" count: the only
  * source available in Phase 1 (`listFiles`, the capped `@`-mention
@@ -279,12 +279,13 @@ const kindTagStyle: CSSProperties = {
  * count derived from it can be confidently wrong. An honest project-wide
  * count is backend work for a later phase.
  *
- * Which tab is active — "Changes" (this pane's own directory-grouped diff
- * list) or "All files" (Task 5's `list_dir`-backed browser) — is owned by
+ * Which tab is active — AI changes or All changes (this pane's own
+ * directory-grouped list, fed the scope's files) or Files (the `list_dir`-backed
+ * browser) — is owned by
  * the `changes` store and passed in via `tab`/`onTabChange` rather than
  * local state, so a session switch or a jump from a sibling pane (the
  * Inspector) sees the same tab this pane shows. This pane always owns the
- * tabs row itself (so both tabs stay reachable no matter which is active).
+ * tabs row itself (so every tab stays reachable no matter which is active).
  * Both sub-panes — this pane's own grouped list, and `children` (the
  * caller's `FileBrowserTree`) — are always rendered and merely
  * display-toggled by `tab` (see `subPaneStyle`), never swapped out via a
@@ -298,9 +299,10 @@ export function FileTreePane({
   children,
   dirtyPaths = EMPTY_DIRTY_PATHS,
   files,
-  onEditFile,
   onJumpToFile,
+  onOpenFile,
   onTabChange,
+  selectedPath,
   tab,
 }: {
   children?: ReactNode;
@@ -313,12 +315,15 @@ export function FileTreePane({
    * renders no dots. */
   dirtyPaths?: ReadonlySet<string>;
   files: FileDiff[];
-  /** Called with a file's path when its row's "Edit file" button is
-   * clicked. Undefined renders no edit button on any row; a row whose file
-   * {@link isEditableFile} rejects renders none either way. */
-  onEditFile?: (path: string) => void;
+  /** Scroll the diff to a file's card — what a row does when there is no
+   * file to open (a deletion), or when no `onOpenFile` is given. */
   onJumpToFile: (path: string) => void;
+  /** Open a changed file in the editor beside the list, the way an
+   * editor's git panel does. Paths are this pane's own (toplevel-relative). */
+  onOpenFile?: (path: string) => void;
   onTabChange: (tab: FileTreeTab) => void;
+  /** The row of the file open in the editor, marked as current. */
+  selectedPath?: string;
   tab: FileTreeTab;
 }) {
   // Keyed only on `files`' own identity: ChangesView re-renders this pane's
@@ -328,9 +333,11 @@ export function FileTreePane({
   // here, are skipped on those re-renders instead of re-running per scroll
   // step across the whole diff.
   const groups = useMemo(() => groupByDirectory(files), [files]);
+  const width = useLayout((s) => s.layout.fileTreeWidth);
+  const setWidth = useLayout((s) => s.setFileTreeWidth);
 
   return (
-    <nav data-testid="file-tree-pane" style={rootStyle}>
+    <nav data-testid="file-tree-pane" style={rootStyle(width)}>
       <div style={tabsRowStyle}>
         <Segmented
           ariaLabel="File tree"
@@ -341,14 +348,21 @@ export function FileTreePane({
       </div>
       <div
         data-testid="file-tree-pane-changes"
-        style={subPaneStyle(tab !== "changes")}
+        style={subPaneStyle(tab === "all")}
       >
         <div style={listStyle}>
           {groups.map((group) => (
             <div data-testid="file-tree-dir-group" key={group.dir || "/"}>
               {group.dir ? (
-                <div data-testid="file-tree-dir-label" style={dirLabelStyle}>
-                  {group.dir}
+                <div
+                  data-testid="file-tree-dir-label"
+                  style={dirLabelStyle}
+                  title={group.dir}
+                >
+                  <DirIcon open />
+                  {/* Clipped from the left, so a deep path keeps the folder
+                      names nearest the files. */}
+                  <span style={dirLabelTextStyle}>{group.dir}</span>
                 </div>
               ) : null}
               {/* Row content past the name is driven by `fileKind`, exactly
@@ -358,14 +372,25 @@ export function FileTreePane({
                   on the one surface that lists every file at once. */}
               {group.files.map(({ additions, deletions, file, kind }) => (
                 <div
+                  aria-current={file.path === selectedPath ? "true" : undefined}
+                  className="kr-hover-surface"
+                  data-git={file.status}
                   data-testid="file-tree-file-row"
                   key={file.path}
-                  style={rowWrapStyle}
+                  style={rowWrapStyle(
+                    Boolean(group.dir),
+                    file.path === selectedPath
+                  )}
                   title={rowTitle(file)}
                 >
                   <button
-                    onClick={() => onJumpToFile(file.path)}
-                    style={fileRowStyle}
+                    className="kr-tree-row"
+                    onClick={() =>
+                      onOpenFile && file.status !== "deleted"
+                        ? onOpenFile(file.path)
+                        : onJumpToFile(file.path)
+                    }
+                    style={{ ...openButtonStyle, color: GIT_INK[file.status] }}
                     type="button"
                   >
                     <FileIcon path={file.path} />
@@ -397,17 +422,6 @@ export function FileTreePane({
                       />
                     ) : null}
                   </button>
-                  {onEditFile && isEditableFile(file) ? (
-                    <button
-                      aria-label="Edit file"
-                      onClick={() => onEditFile(file.path)}
-                      style={editRowButtonStyle}
-                      title="Edit this file"
-                      type="button"
-                    >
-                      <Pencil size={12} />
-                    </button>
-                  ) : null}
                 </div>
               ))}
             </div>
@@ -417,6 +431,12 @@ export function FileTreePane({
       <div data-testid="file-tree-pane-all" style={subPaneStyle(tab !== "all")}>
         {children}
       </div>
+      <ColumnResizeHandle
+        onReset={() => setWidth(FILE_TREE_WIDTH_DEFAULT)}
+        onResize={setWidth}
+        testId="file-tree-resize"
+        width={() => useLayout.getState().layout.fileTreeWidth}
+      />
     </nav>
   );
 }

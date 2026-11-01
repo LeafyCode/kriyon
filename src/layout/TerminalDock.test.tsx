@@ -3,14 +3,17 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../terminal/TerminalWorkspace.tsx", () => ({
   TerminalWorkspace: ({
-    projectId,
+    cwd,
+    scope,
     visible,
   }: {
-    projectId: string | null;
+    cwd: string;
+    scope: string | null;
     visible: boolean;
   }) => (
     <div
-      data-project={projectId ?? "none"}
+      data-cwd={cwd}
+      data-project={scope ?? "none"}
       data-testid="workspace"
       data-visible={String(visible)}
     />
@@ -19,16 +22,16 @@ vi.mock("../terminal/TerminalWorkspace.tsx", () => ({
 
 import { DEFAULT_LAYOUT, useLayout } from "../state/layout.ts";
 import { useSessions } from "../state/sessions.ts";
-import { useTerminals } from "../state/terminals.ts";
+import { terminalScope, useTerminals } from "../state/terminals.ts";
 import { TerminalDock } from "./TerminalDock.tsx";
 
-function session(id: string, projectId: string) {
+function session(id: string, projectId: string, cwd = "/repo") {
   return {
     archivedAt: null,
     baselineOid: null,
     claudeSessionId: null,
     createdAt: 1,
-    cwd: "/repo",
+    cwd,
     id,
     projectId,
     status: "idle" as const,
@@ -40,16 +43,120 @@ function session(id: string, projectId: string) {
 }
 
 function project(id: string, path: string) {
-  return { color: null, id, name: id, path, setupCommand: null };
+  return {
+    color: null,
+    id,
+    name: id,
+    path,
+    setupCommand: null,
+  };
 }
 
 beforeEach(() => {
   useLayout.setState({ layout: { ...DEFAULT_LAYOUT } });
   useSessions.setState({ activeSessionId: null, projects: [], sessions: {} });
-  useTerminals.setState({ busyPanes: {}, byProject: {} });
+  useTerminals.setState({ busyPanes: {}, byScope: {} });
 });
 
 describe("TerminalDock", () => {
+  it("opens new terminals in the active session's worktree", () => {
+    useLayout.setState({
+      layout: { ...DEFAULT_LAYOUT, terminalDockOpen: true },
+    });
+    useSessions.setState({
+      activeSessionId: "s1",
+      projects: [project("p1", "/repo")],
+      sessions: {
+        s1: { ...session("s1", "p1"), worktreePath: "/repo-worktrees/feat" },
+      },
+    });
+
+    render(<TerminalDock />);
+    expect(screen.getByTestId("workspace").dataset.cwd).toBe(
+      "/repo-worktrees/feat"
+    );
+  });
+
+  it("shows a worktree session only its own worktree's terminals", () => {
+    const wt = terminalScope("p1", "/repo-worktrees/feat", "/repo");
+    useLayout.setState({
+      layout: { ...DEFAULT_LAYOUT, terminalDockOpen: true },
+    });
+    useSessions.setState({
+      activeSessionId: "wt",
+      projects: [project("p1", "/repo")],
+      sessions: {
+        main: session("main", "p1"),
+        wt: { ...session("wt", "p1"), worktreePath: "/repo-worktrees/feat" },
+      },
+    });
+    useTerminals.getState().openTab("p1", "/repo");
+
+    render(<TerminalDock />);
+    // The main folder's terminals stay mounted but hidden; the worktree's
+    // own (still empty) workspace is the visible one.
+    expect(screen.getByTestId("scope-pane-p1").style.display).toBe("none");
+    expect(screen.getByTestId(`scope-pane-${wt}`).style.display).toBe("block");
+  });
+
+  it("unmounts a worktree's terminals once no session on the rail works there", () => {
+    const wt = terminalScope("p1", "/repo-worktrees/feat", "/repo");
+    useLayout.setState({
+      layout: { ...DEFAULT_LAYOUT, terminalDockOpen: true },
+    });
+    useSessions.setState({
+      activeSessionId: "main",
+      projects: [project("p1", "/repo")],
+      sessions: {
+        main: session("main", "p1"),
+        wt: {
+          ...session("wt", "p1"),
+          archivedAt: 5,
+          worktreePath: "/repo-worktrees/feat",
+        },
+      },
+    });
+    useTerminals.getState().openTab(wt, "/repo-worktrees/feat");
+
+    render(<TerminalDock />);
+    expect(screen.queryByTestId(`scope-pane-${wt}`)).toBeNull();
+    expect(screen.getByTestId("scope-pane-p1")).toBeTruthy();
+  });
+
+  it("shows a main-folder session none of a worktree's terminals", () => {
+    const wt = terminalScope("p1", "/repo-worktrees/feat", "/repo");
+    useLayout.setState({
+      layout: { ...DEFAULT_LAYOUT, terminalDockOpen: true },
+    });
+    useSessions.setState({
+      activeSessionId: "main",
+      projects: [project("p1", "/repo")],
+      sessions: {
+        main: session("main", "p1"),
+        wt: { ...session("wt", "p1"), worktreePath: "/repo-worktrees/feat" },
+      },
+    });
+    useTerminals.getState().openTab(wt, "/repo-worktrees/feat");
+
+    render(<TerminalDock />);
+    expect(screen.getByTestId(`scope-pane-${wt}`).style.display).toBe("none");
+    expect(screen.getByTestId("scope-pane-p1").style.display).toBe("block");
+  });
+
+  it("opens new terminals in the project folder for a main-folder session", () => {
+    useLayout.setState({
+      layout: { ...DEFAULT_LAYOUT, terminalDockOpen: true },
+    });
+    useSessions.setState({
+      activeSessionId: "s1",
+      projects: [project("p1", "/repo")],
+      sessions: { s1: session("s1", "p1") },
+    });
+
+    render(<TerminalDock />);
+    expect(screen.getByTestId("workspace").dataset.cwd).toBe("/repo");
+  });
+
   it("renders nothing when the dock is closed and no project has terminals", () => {
     const { container } = render(<TerminalDock />);
     expect(container.firstChild).toBeNull();
@@ -62,7 +169,7 @@ describe("TerminalDock", () => {
     useSessions.setState({
       activeSessionId: "s1",
       projects: [project("p1", "/a")],
-      sessions: { s1: session("s1", "p1") },
+      sessions: { s1: session("s1", "p1", "/a") },
     });
     useTerminals.getState().openTab("p1", "/a");
 
@@ -97,7 +204,10 @@ describe("TerminalDock", () => {
     useSessions.setState({
       activeSessionId: "s1",
       projects: [project("p1", "/a"), project("p2", "/b")],
-      sessions: { s1: session("s1", "p1"), s2: session("s2", "p2") },
+      sessions: {
+        s1: session("s1", "p1", "/a"),
+        s2: session("s2", "p2", "/b"),
+      },
     });
     // Both projects have opened terminals in a previous switch.
     useTerminals.getState().openTab("p1", "/a");
@@ -105,19 +215,38 @@ describe("TerminalDock", () => {
 
     render(<TerminalDock />);
     const panes = screen.getAllByTestId("workspace");
-    const byProject = new Map(
+    const byScope = new Map(
       panes.map((el) => [el.getAttribute("data-project"), el])
     );
     // Every project with terminals stays mounted so switching never loses one.
-    expect(byProject.has("p1")).toBe(true);
-    expect(byProject.has("p2")).toBe(true);
+    expect(byScope.has("p1")).toBe(true);
+    expect(byScope.has("p2")).toBe(true);
     // Only the active project's workspace is visible; the other is hidden alive.
-    expect(byProject.get("p1")?.getAttribute("data-visible")).toBe("true");
-    expect(byProject.get("p2")?.getAttribute("data-visible")).toBe("false");
-    expect(screen.getByTestId("project-pane-p2").style.display).toBe("none");
-    expect(screen.getByTestId("project-pane-p1").style.display).not.toBe(
-      "none"
-    );
+    expect(byScope.get("p1")?.getAttribute("data-visible")).toBe("true");
+    expect(byScope.get("p2")?.getAttribute("data-visible")).toBe("false");
+    expect(screen.getByTestId("scope-pane-p2").style.display).toBe("none");
+    expect(screen.getByTestId("scope-pane-p1").style.display).not.toBe("none");
+  });
+
+  it("unmounts a fully parked project's terminals so no shell restarts behind its back", () => {
+    useLayout.setState({
+      layout: { ...DEFAULT_LAYOUT, terminalDockOpen: true },
+    });
+    useSessions.setState({
+      activeSessionId: "s1",
+      projects: [project("p1", "/a"), project("p2", "/b")],
+      sessions: {
+        s1: session("s1", "p1", "/a"),
+        s2: { ...session("s2", "p2", "/b"), parkedAt: 10 },
+      },
+    });
+    useTerminals.getState().openTab("p1", "/a");
+    useTerminals.getState().openTab("p2", "/b");
+
+    render(<TerminalDock />);
+
+    expect(screen.getByTestId("scope-pane-p1")).toBeTruthy();
+    expect(screen.queryByTestId("scope-pane-p2")).toBeNull();
   });
 
   it("mounts the active project's workspace even before it has any tabs", () => {
@@ -127,10 +256,10 @@ describe("TerminalDock", () => {
     useSessions.setState({
       activeSessionId: "s1",
       projects: [project("p1", "/a")],
-      sessions: { s1: session("s1", "p1") },
+      sessions: { s1: session("s1", "p1", "/a") },
     });
     render(<TerminalDock />);
-    expect(screen.getByTestId("project-pane-p1")).toBeTruthy();
+    expect(screen.getByTestId("scope-pane-p1")).toBeTruthy();
     expect(screen.getByTestId("workspace").getAttribute("data-project")).toBe(
       "p1"
     );

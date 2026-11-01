@@ -6,11 +6,12 @@ import { showToast } from "../ui/Toast.tsx";
 import {
   createSession,
   createWorktreeSession,
+  failedSetupSteps,
   type SpawnResult,
 } from "./actions.ts";
 import { isStarting } from "./bootPhase.ts";
 import { useLayout } from "./layout.ts";
-import { useSessions } from "./sessions.ts";
+import { isPutAway, useSessions } from "./sessions.ts";
 
 /**
  * [Nested session]s (ADR-0049): sessions started from another session — by
@@ -168,7 +169,7 @@ export function startNestedSession(
  *  failed setup step still started the session. */
 export function startProblem(result: SpawnResult): string | null {
   if (result.bootstrap && !result.bootstrap.ok) {
-    return "it started, but the worktree's setup step failed";
+    return `it started, but the worktree's ${failedSetupSteps(result.bootstrap)} failed`;
   }
   return result.ok ? null : (result.error ?? "unknown error");
 }
@@ -187,7 +188,9 @@ function busyCount(askingId: string): number {
   return Object.values(sessions).filter(
     (s) =>
       s.id !== askingId &&
-      s.archivedAt === null &&
+      // A put-away session keeps the status it was stopped with, so it must
+      // not count against the cap as if it were still running.
+      !isPutAway(s) &&
       (s.status === "running" ||
         s.status === "waiting" ||
         isStarting(bootPhase[s.id]))
@@ -236,12 +239,15 @@ let lastAsked = "";
 function nextHeldBack(): SessionProposal | undefined {
   const { proposals, starting } = useSessionProposals.getState();
   const { sessions } = useSessions.getState();
-  return proposals.find(
-    (p) =>
+  return proposals.find((p) => {
+    const lead = sessions[p.leadSessionId];
+    return (
       p.request.initiation === "user_asked" &&
-      sessions[p.leadSessionId]?.archivedAt === null &&
+      lead !== undefined &&
+      !isPutAway(lead) &&
       !starting.includes(p.request.requestId)
-  );
+    );
+  });
 }
 
 /** The core's inputs for starting `proposal` now. */

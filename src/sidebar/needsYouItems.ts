@@ -1,4 +1,4 @@
-import type { UiSession } from "../state/sessions.ts";
+import { isPutAway, type UiSession } from "../state/sessions.ts";
 import { unseenOutput, type ViewedMarker } from "../state/viewedMarker.ts";
 import type { PendingAskKind, SessionActivity } from "../types.ts";
 
@@ -55,7 +55,7 @@ export function needsYouSectionItems(args: {
 }): NeedsYouItem[] {
   const items: NeedsYouItem[] = [];
   for (const session of Object.values(args.sessions)) {
-    if (session.archivedAt !== null) {
+    if (isPutAway(session)) {
       continue;
     }
     if (session.status === "waiting") {

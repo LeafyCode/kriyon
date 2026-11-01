@@ -10,6 +10,11 @@ vi.mock("../state/changes.ts", async (importOriginal) => {
 });
 
 import { fileDiffCounts } from "../state/changes.ts";
+import {
+  DEFAULT_LAYOUT,
+  FILE_TREE_WIDTH_DEFAULT,
+  useLayout,
+} from "../state/layout.ts";
 import type { FileDiff } from "../types.ts";
 import { FileTreePane } from "./FileTreePane.tsx";
 
@@ -110,67 +115,58 @@ describe("FileTreePane", () => {
     expect(onJumpToFile).toHaveBeenCalledWith("src/changes/DiffFeed.tsx");
   });
 
-  it("shows no edit button on a row when onEditFile is not passed", () => {
-    render(
-      <FileTreePane
-        files={[file("src/a.ts")]}
-        onJumpToFile={vi.fn()}
-        onTabChange={vi.fn()}
-        tab="changes"
-      />
-    );
-
-    expect(
-      screen.queryByRole("button", { name: EDIT_FILE_BUTTON_RE })
-    ).not.toBeInTheDocument();
-  });
-
-  it("calls onEditFile with the file's path when a row's edit button is clicked, without jumping", () => {
-    const onEditFile = vi.fn();
+  it("opens a changed file when its row is clicked, given onOpenFile", () => {
+    const onOpenFile = vi.fn();
     const onJumpToFile = vi.fn();
     render(
       <FileTreePane
         files={[file("src/a.ts")]}
-        onEditFile={onEditFile}
         onJumpToFile={onJumpToFile}
+        onOpenFile={onOpenFile}
         onTabChange={vi.fn()}
         tab="changes"
       />
     );
 
-    fireEvent.click(screen.getByRole("button", { name: EDIT_FILE_BUTTON_RE }));
+    fireEvent.click(screen.getByText("a.ts"));
 
-    expect(onEditFile).toHaveBeenCalledWith("src/a.ts");
+    expect(onOpenFile).toHaveBeenCalledWith("src/a.ts");
     expect(onJumpToFile).not.toHaveBeenCalled();
   });
 
-  it("offers no edit button on a deleted file — there is nothing to open", () => {
+  it("jumps to a deleted file's diff instead — there is no file to open", () => {
+    const onOpenFile = vi.fn();
+    const onJumpToFile = vi.fn();
     render(
       <FileTreePane
         files={[file("src/gone.ts", { hunks: [], status: "deleted" })]}
-        onEditFile={vi.fn()}
-        onJumpToFile={vi.fn()}
+        onJumpToFile={onJumpToFile}
+        onOpenFile={onOpenFile}
         onTabChange={vi.fn()}
         tab="changes"
       />
     );
 
-    expect(
-      screen.queryByRole("button", { name: EDIT_FILE_BUTTON_RE })
-    ).not.toBeInTheDocument();
+    fireEvent.click(screen.getByText("gone.ts"));
+
+    expect(onJumpToFile).toHaveBeenCalledWith("src/gone.ts");
+    expect(onOpenFile).not.toHaveBeenCalled();
   });
 
-  it("offers no edit button on a binary file — the viewer cannot edit it", () => {
+  it("marks the open file's row, and offers no separate edit button", () => {
     render(
       <FileTreePane
-        files={[file("logo.png", { binary: true, hunks: [] })]}
-        onEditFile={vi.fn()}
+        files={[file("src/a.ts"), file("src/b.ts")]}
         onJumpToFile={vi.fn()}
+        onOpenFile={vi.fn()}
         onTabChange={vi.fn()}
+        selectedPath="src/b.ts"
         tab="changes"
       />
     );
-
+    const rows = screen.getAllByTestId("file-tree-file-row");
+    expect(rows[1]).toHaveAttribute("aria-current", "true");
+    expect(rows[0]).not.toHaveAttribute("aria-current");
     expect(
       screen.queryByRole("button", { name: EDIT_FILE_BUTTON_RE })
     ).not.toBeInTheDocument();
@@ -362,4 +358,78 @@ describe("FileTreePane", () => {
       callsAfterMount
     );
   });
+});
+
+test("dragging the column edge resizes the file tree and remembers it", () => {
+  useLayout.setState({ layout: DEFAULT_LAYOUT });
+  render(
+    <FileTreePane
+      files={[]}
+      onJumpToFile={vi.fn()}
+      onTabChange={vi.fn()}
+      tab="changes"
+    />
+  );
+  const pane = screen.getByTestId("file-tree-pane");
+  expect(pane).toHaveStyle({ width: `${FILE_TREE_WIDTH_DEFAULT}px` });
+
+  const handle = screen.getByTestId("file-tree-resize");
+  fireEvent.mouseDown(handle, { clientX: 300 });
+  fireEvent.mouseMove(window, { clientX: 340 });
+  fireEvent.mouseUp(window);
+
+  expect(useLayout.getState().layout.fileTreeWidth).toBe(
+    FILE_TREE_WIDTH_DEFAULT + 40
+  );
+  expect(pane).toHaveStyle({ width: `${FILE_TREE_WIDTH_DEFAULT + 40}px` });
+
+  fireEvent.doubleClick(handle);
+  expect(useLayout.getState().layout.fileTreeWidth).toBe(
+    FILE_TREE_WIDTH_DEFAULT
+  );
+});
+
+test("each changed file shows how it changed", () => {
+  render(
+    <FileTreePane
+      files={[{ ...file("src/new.ts"), status: "added" }, file("src/old.ts")]}
+      onJumpToFile={vi.fn()}
+      onTabChange={vi.fn()}
+      tab="changes"
+    />
+  );
+  const rows = screen.getAllByTestId("file-tree-file-row");
+  expect(rows[0]).toHaveAttribute("data-git", "added");
+  expect(rows[1]).toHaveAttribute("data-git", "modified");
+});
+
+test("the column offers three scopes: AI changes, All changes, Files", () => {
+  render(
+    <FileTreePane
+      files={[]}
+      onJumpToFile={vi.fn()}
+      onTabChange={vi.fn()}
+      tab="changes"
+    />
+  );
+  expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual([
+    "AI changes",
+    "All changes",
+    "Files",
+  ]);
+});
+
+test("All changes lists its files in the same list as AI changes", () => {
+  render(
+    <FileTreePane
+      files={[file("src/mine.ts")]}
+      onJumpToFile={vi.fn()}
+      onTabChange={vi.fn()}
+      tab="uncommitted"
+    />
+  );
+  expect(screen.getByTestId("file-tree-pane-changes")).not.toHaveStyle({
+    display: "none",
+  });
+  expect(screen.getByText("mine.ts")).toBeInTheDocument();
 });

@@ -9,6 +9,7 @@ import {
   kvRow,
   overlayEmpty,
   overlayPanel,
+  pickerOption,
   pill,
   resultLabel,
   resultList,
@@ -71,6 +72,8 @@ const EVERY_RECIPE = {
   "pill(waiting)": pill("waiting"),
   card: card(),
   inputBox: inputBox(),
+  pickerOption: pickerOption(false),
+  "pickerOption(picked)": pickerOption(true),
   statTile: statTile(),
   overlayPanel: overlayPanel(),
   searchRow: searchRow(),
@@ -105,6 +108,12 @@ describe("style recipes", () => {
     expect(iconButton().width).toBe("26px");
   });
 
+  it("keeps an input well 30px tall inside a flex column that runs short", () => {
+    // A dialog capped at a max height squeezes its children; an input must
+    // keep its height so the dialog scrolls instead.
+    expect(inputBox().flexShrink).toBe(0);
+  });
+
   it("never asks for a weight the UI face does not ship", () => {
     for (const [name, style] of Object.entries(EVERY_RECIPE)) {
       const weight = (style as { fontWeight?: number }).fontWeight;
@@ -131,6 +140,8 @@ const HOVER_CLASSED = {
   row30: row30(),
   "row30(active)": row30({ active: true }),
   "chip(pressable)": chip({}),
+  pickerOption: pickerOption(false),
+  "pickerOption(picked)": pickerOption(true),
 };
 
 describe("the hover seam", () => {
@@ -150,6 +161,11 @@ describe("the hover seam", () => {
     expect(vars(button("secondary"))["--kr-fill"]).toBe("transparent");
     expect(vars(row30())["--kr-fill"]).toBe("transparent");
     expect(vars(chip({}))["--kr-fill"]).toBe(tokens.color.chip);
+    expect(vars(pickerOption(false))["--kr-fill"]).toBe(tokens.color.blockWell);
+    // A picked option holds its fill under the pointer rather than darken.
+    expect(vars(pickerOption(true))["--kr-fill-hover"]).toBe(
+      vars(pickerOption(true))["--kr-fill"]
+    );
     expect(vars(row30({ active: true }))["--kr-fill"]).toBe(
       tokens.color.surface.s3
     );

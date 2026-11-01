@@ -45,7 +45,7 @@ body {
 }
 
 ::selection {
-  color: #fff;
+  color: var(--kr-ink-bright);
   background: rgba(var(--kr-accent-rgb), 0.32);
 }
 
@@ -57,14 +57,14 @@ body {
 }
 
 *::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(var(--kr-contrast-rgb), 0.08);
   background-clip: content-box;
   border: 2px solid transparent;
   border-radius: 8px;
 }
 
 *::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.16);
+  background: rgba(var(--kr-contrast-rgb), 0.16);
   background-clip: content-box;
 }
 
@@ -90,15 +90,15 @@ body {
   scrollbar-width: none;
 }
 .xterm .xterm-scrollable-element > .scrollbar > .slider {
-  background: rgba(255, 255, 255, 0.2) !important;
+  background: rgba(var(--kr-contrast-rgb), 0.2) !important;
   border-radius: 8px !important;
   transition: background 120ms linear;
 }
 .xterm .xterm-scrollable-element > .scrollbar > .slider:hover {
-  background: rgba(255, 255, 255, 0.34) !important;
+  background: rgba(var(--kr-contrast-rgb), 0.34) !important;
 }
 .xterm .xterm-scrollable-element > .scrollbar > .slider.active {
-  background: rgba(255, 255, 255, 0.42) !important;
+  background: rgba(var(--kr-contrast-rgb), 0.42) !important;
 }
 /* Thin, centered pill (only the vertical bar carries width/offset). */
 .xterm .xterm-scrollable-element > .scrollbar.vertical > .slider {
@@ -177,6 +177,45 @@ body {
   }
 }
 
+/* The app tour's spotlight ring: it breathes outward from the lit target so
+   the eye finds it after the glide. Reduced-motion is neutralized by the
+   global rule below. */
+@keyframes kr-tour-ring {
+  0% {
+    opacity: 0.9;
+    transform: scale(1);
+  }
+  70%,
+  100% {
+    opacity: 0;
+    transform: scale(1.06);
+  }
+}
+
+/* The welcome picture settles in: a slow push-out from a slight zoom. */
+@keyframes kr-tour-hero {
+  from {
+    opacity: 0;
+    transform: scale(1.08);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* The tour card's icon lands with a small overshoot each step. */
+@keyframes kr-tour-icon {
+  from {
+    opacity: 0;
+    transform: scale(0.6) rotate(-8deg);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) rotate(0);
+  }
+}
+
 /* The hover affordances inline styles can't express live in `hover.css`, which
  * the tray popover imports too — see the note at the top of that file. */
 
@@ -245,6 +284,13 @@ body {
 }
 .kr-composer-box:focus-within {
   border-color: var(--kr-line-strong);
+}
+
+/* A tree row's focus ring sits inside the row: the tree scrolls, and an
+ * outset ring is clipped by the scroll edge on the first and last rows. */
+.kr-tree-row:focus-visible {
+  outline: 1px solid rgba(var(--kr-accent-rgb), 0.7);
+  outline-offset: -1px;
 }
 
 .kr-focusable:focus-visible {

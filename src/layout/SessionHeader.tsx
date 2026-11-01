@@ -3,7 +3,7 @@ import type { CSSProperties } from "react";
 import { useChanges } from "../state/changes.ts";
 import { changedFileCount } from "../state/changesView.ts";
 import { useLayout } from "../state/layout.ts";
-import { sessionTouchedRelative, useSessions } from "../state/sessions.ts";
+import { sessionClaudeFiles, useSessions } from "../state/sessions.ts";
 import { useActiveSession, useRepoStatus } from "../state/useActiveSession.ts";
 import { projectColor } from "../theme/projectColor.ts";
 import { iconButton, pill } from "../theme/recipes.ts";
@@ -19,6 +19,11 @@ import { SidebarExpandButton } from "./ViewHeader.tsx";
 
 /** One of the header's two 46px rows. */
 const rowStyle: CSSProperties = topBandRow();
+
+/** Holds the view tabs so the [App tour] can light them alone, without the
+ *  terminal toggle at the row's far end. Stretches so the underline stays on
+ *  the row's bottom edge. */
+const viewTabsStyle: CSSProperties = { alignSelf: "stretch", display: "flex" };
 
 const crumbStyle: CSSProperties = {
   alignItems: "center",
@@ -122,7 +127,7 @@ export function SessionHeader() {
   // [Summary bar], and reading the whole-diff count made it contradict the bar
   // whenever "My edits only" narrowed the feed beneath them both.
   const touchedRelative = useSessions(() =>
-    sessionTouchedRelative(session?.id ?? "")
+    sessionClaudeFiles(session?.id ?? "")
   );
   const changedFiles = useChanges((state) =>
     changedFileCount(state, session?.id ?? "", touchedRelative)
@@ -189,27 +194,32 @@ export function SessionHeader() {
         </div>
       </header>
       <div data-tauri-drag-region style={rowStyle}>
-        <Segmented
-          ariaLabel="Transcript view"
-          onChange={setTranscriptView}
-          options={[
-            {
-              // Never disabled: with the companion off, the view itself says
-              // so and offers to turn it on — a dead tab only said it on hover.
-              label: "Structured",
-              title:
-                companion === null || companion.state === "on"
-                  ? undefined
-                  : (companionChip(companion)?.title ??
-                    "Kriyon Companion is off. Open to turn it on."),
-              value: "structured",
-            },
-            { count: changedFiles, label: "Changes", value: "changes" },
-            { label: "Session", value: "raw" },
-          ]}
-          value={transcriptView}
-          variant="underline"
-        />
+        <div data-tour="view-tabs" style={viewTabsStyle}>
+          <Segmented
+            ariaLabel="Transcript view"
+            onChange={setTranscriptView}
+            options={[
+              {
+                // Never disabled: with the companion off, the view itself says
+                // so and offers to turn it on — a dead tab only said it on hover.
+                label: "Structured",
+                title:
+                  companion === null || companion.state === "on"
+                    ? undefined
+                    : (companionChip(companion)?.title ??
+                      "Kriyon Companion is off. Open to turn it on."),
+                value: "structured",
+              },
+              { label: "Session", value: "raw" },
+              // Last, apart from the two ways of watching the session: this is
+              // the project's files (changed ones and the whole tree), a place
+              // you visit rather than a view a session opens in.
+              { count: changedFiles, label: "Files", value: "changes" },
+            ]}
+            value={transcriptView}
+            variant="underline"
+          />
+        </div>
         <div style={rightStyle}>
           <TerminalToggle />
         </div>

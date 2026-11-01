@@ -61,20 +61,41 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
 - **Palette menu** (`PaletteMenu`) — the project color-picker popover (swatch grid +
   Automatic), an [Anchored menu] adapter on the project header.
 - **Project menu** (`ProjectMenu`) — the project header's ⋯ popover, an [Anchored menu]
-  adapter: Rename, and the ask that opens the [Clear project] confirm. _Avoid_: context
+  adapter, also opened by right-clicking the header: *Park project* (see [Parked project]),
+  Rename, Colour…, Sort sessions…, and the ask that opens the [Clear project] confirm. Colour
+  and sort live here rather than in the header's hover row, which keeps that row to new
+  worktree session, new session and ⋯ — short enough to leave the project name readable. _Avoid_: context
   menu, project settings.
 - **Confirm dialog** (`ConfirmDialog`) — the app's one "are you sure?" modal: an
   {@link Overlay} panel with a title, a line of body copy and a Cancel/destructive pair.
   Adapters: the terminal's close-over-live-work warning and the [Clear project] confirm.
   A destructive decision is never asked from an [Anchored menu] — a confirm hanging off
   its trigger lands over whatever is beneath it. _Avoid_: alert, modal (generic).
-- **Theme** (`Theme`) — one complete named palette (id, label, colors) defined as a file in
-  `src/theme/themes/` and selected by the persisted `layout.themeId`. `applyTheme` publishes
-  the palette as `--kr-*` CSS custom properties; every design token resolves through them, so
-  switching restyles the app without re-rendering. _Avoid_: skin, color scheme.
-- **Theme registry** (`THEMES`) — the ordered list of shipped [Theme]s ([Steel] — the default —
-  indigo, cool blue, teal, graphite) plus `themeById`, which maps unknown or stale persisted ids
-  back to the default so startup can never break on a theme id. _Avoid_: theme list.
+- **Theme** (`Theme`) — one complete named palette (id, label, `appearance` light or dark,
+  colors, and an optional terminal ANSI palette) defined as a file in `src/theme/themes/` and
+  selected by the persisted `layout.themeId`. `applyTheme` publishes the palette as `--kr-*` CSS
+  custom properties; every design token resolves through them, so switching restyles the app
+  without re-rendering. A full theme is written as a [Palette spec] through `defineTheme`
+  (ADR-0051). _Avoid_: skin, color scheme.
+- **Theme registry** (`THEMES`) — the ordered list of shipped [Theme]s: the Steel family ([Steel]
+  — the default — indigo, cool blue, teal, graphite), Steel Light, and the community palettes
+  (Catppuccin Mocha and Latte, Dracula, Gruvbox Dark, Nord, One Dark, Rosé Pine, Solarized
+  Light, Tokyo Night), plus `themeById`, which maps unknown or stale persisted ids back to the
+  default so startup can never break on a theme id. _Avoid_: theme list.
+- **Palette spec** (`PaletteSpec`) — the few colours a full [Theme] actually chooses (planes,
+  hairlines, ink ramp, status hues, editor and syntax colours, accent, and light-or-dark).
+  `defineTheme` in `src/theme/themes/define.ts` derives every other colour from it — the soft
+  fills, washes and surface stops — with the same alpha rules `darkChrome` uses (ADR-0051).
+  _Avoid_: palette (alone — that is the [Palette menu] or the command palette).
+- **Terminal palette** (`TerminalPalette`) — a [Theme]'s sixteen ANSI colours for the xterm
+  canvas. A light theme must have one, with white and bright white still readable on its plane;
+  the Steel family has none and keeps xterm's defaults. _Avoid_: ANSI theme.
+- **Theme picker** (`ThemePicker`) — Settings' grid of [Theme] previews, each drawn in that
+  theme's own colours rather than the active one's, split into Kriyon's own and the community
+  palettes, with a Dark / Light filter. _Avoid_: theme switcher, theme menu.
+- **Settings section** (`SettingsSection`) — one page of the Settings view (Appearance, Layout,
+  Notifications, Sessions, Integration, Updates, Activity log), picked from its side menu. The
+  Settings search keeps the sections whose name or keywords match. _Avoid_: settings tab.
 - **Steel** — the default [Theme]: the steel-blue accent of the BisBig direction (ADR-0023),
   converted from the canvas's `oklch(… 225)` to hex because `applyTheme` derives
   `--kr-accent-rgb` from a 6-digit hex. The one [Accent] tuned for the cool chrome rather than
@@ -85,6 +106,16 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
   component library: the ADR-0007 seam wants module-level style objects, so the shared thing is
   the object, not a component. Spread it and override — a recipe never renders anything.
   _Avoid_: variant, style preset, component (it is not one).
-- **Accent** — the one brand hue a [Theme] layers over the shared dark chrome (primary buttons,
-  logo mark, selection). Session status colors are deliberately not accent-driven: running stays
-  green in every theme. _Avoid_: primary color, highlight.
+- **Accent** — the one brand hue of a [Theme] (primary buttons, logo mark, selection). In the
+  Steel family it is the only thing that changes between themes; a full theme picks one from its
+  own palette. Session status colors are deliberately not accent-driven: running takes the
+  theme's own running hue — green in every theme but Rosé Pine, which has no green and uses its
+  foam. _Avoid_: primary color, highlight.
+- **App tour** (`AppTour`, `useTour`) — a guided walk through the window: a spotlight glides to
+  each part (sidebar, new session, Command center and Prompts, the view tabs, the composer,
+  Project terminals, the [Details rail], the command palette, Focus mode, Settings) while a card
+  says what it is for. It opens on its own once for anyone who has not seen it, and any time
+  after from Help → Kriyon Tour, the command palette or Settings → Layout. A step whose part is
+  not on screen shows its card in the middle instead. Finishing or skipping sets
+  `layout.tourSeen`; a layout saved before the tour existed reads as unseen, so people updating
+  get it once too (ADR-0054). _Avoid_: onboarding, walkthrough, tutorial.

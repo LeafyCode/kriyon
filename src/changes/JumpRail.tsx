@@ -3,9 +3,8 @@ import { EMPTY_VIEWED, useChanges } from "../state/changes.ts";
 import { accentAlpha, tokens } from "../theme/tokens.ts";
 import type { FileDiff } from "../types.ts";
 
-/** The rail column's fixed width (Interfaces: "tree 236px | feed flex | jump
- * rail 26px"), a literal like `FileTreePane`'s `FILE_TREE_WIDTH` — no token
- * in the spacing ramp lands on this exact figure. */
+/** The rail column's fixed width ("tree | feed flex | jump rail 26px"), a
+ * literal — no token in the spacing ramp lands on this exact figure. */
 export const JUMP_RAIL_WIDTH = 26;
 
 /** Each dot's diameter, plus the vertical gap between dots — small literal

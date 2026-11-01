@@ -7,6 +7,7 @@ import {
   StateEffect,
   StateField,
   Text,
+  type Transaction,
 } from "@codemirror/state";
 import {
   type EditorView,
@@ -124,124 +125,142 @@ function buildMarks(doc: Text, changes: LineChanges): RangeSet<GutterMarker> {
   return builder.finish();
 }
 
-const setMarks = StateEffect.define<RangeSet<GutterMarker>>();
-
 /**
- * The HEAD-baseline text every other part of this module diffs against.
+ * Everything that follows one baseline text as the document changes: the
+ * baseline facet, a field holding what was built from the diff, and the
+ * plugin that rebuilds it. Shared by the HEAD gutter here and the editor's
+ * session highlight (`editorGit.ts`), so the debounce and the
+ * baseline-moved rules below are written once.
  *
- * A facet rather than a closure variable so {@link gitGutterMarks} can be one
- * module-level `StateField` instead of a fresh field per {@link gitGutter}
- * call — which is what lets a headless `EditorState` read the markers back
- * (`state.field(gitGutterMarks)`) and makes the field genuinely testable
- * without an `EditorView`. `null` (no `gitGutter` extension mounted) means
- * there is no baseline and the field stays empty.
- */
-const baselineFacet = Facet.define<string, string | null>({
-  combine: (values) => (values.length > 0 ? values[0] : null),
-});
-
-/**
- * The current git-gutter markers for a state, as a `RangeSet` keyed by
- * document position.
+ * The baseline is a facet rather than a closure variable so the field can be
+ * one module-level `StateField` per tracker instead of a fresh field per
+ * call — which is what lets a headless `EditorState` read the value back
+ * (`state.field(...)`) and makes it testable without an `EditorView`. `null`
+ * (no tracker extension mounted) means there is no baseline and the field
+ * stays empty.
  *
- * Two update paths, and the distinction is the whole point of the debounce:
- * a `setMarks` effect installs freshly computed markers, while a plain
- * document change only **remaps** the existing ones through `tr.changes`, so
- * markers keep pointing at the right lines during the 200 ms before the next
- * recompute lands (rather than sitting at stale offsets or vanishing).
- */
-export const gitGutterMarks = StateField.define<RangeSet<GutterMarker>>({
-  create(state) {
-    const baseline = state.facet(baselineFacet);
-    if (baseline === null) {
-      return RangeSet.empty;
-    }
-    return buildMarks(
-      state.doc,
-      computeLineChanges(baseline, state.doc.toString(), state.doc)
-    );
-  },
-  update(marks, tr) {
-    for (const effect of tr.effects) {
-      if (effect.is(setMarks)) {
-        return effect.value;
-      }
-    }
-    return tr.docChanged ? marks.map(tr.changes) : marks;
-  },
-});
-
-/**
- * Recomputes the markers `GIT_GUTTER_DEBOUNCE_MS` after the last document
- * change (VSCode's dirty-diff cadence) — never per keystroke, since
+ * The field has two update paths, and the distinction is the whole point of
+ * the debounce: a `set` effect installs a freshly built value, while a plain
+ * document change only **remaps** the existing one (`map`), so it keeps
+ * pointing at the right lines during the 200 ms before the next rebuild lands.
+ *
+ * The plugin rebuilds `GIT_GUTTER_DEBOUNCE_MS` after the last document change
+ * (VSCode's dirty-diff cadence) — never per keystroke, since
  * `presentableDiff` walks the whole file — and immediately when the baseline
- * itself moves.
- *
- * The baseline case is not an optimization, it's the correctness half.
- * {@link gitGutterMarks} is one module-level `StateField`, and CodeMirror
- * preserves a field's value across a compartment reconfiguration — so when
- * `CodeEditor` swaps in a new baseline (a commit or checkout moved HEAD), the
- * field keeps the markers computed against the OLD one and the gutter paints a
- * stale diff until the user happens to type. Rescheduling on a baseline change
- * is what closes that.
- *
- * Both paths go through the same timer rather than dispatching inline: a
- * `ViewPlugin` must not dispatch from inside `update` (CodeMirror forbids
- * re-entrant updates), so the recompute is always scheduled — at 0 ms for a
- * baseline change, which puts it on the very next task rather than a fifth of
- * a second later.
+ * itself moves. The baseline case is the correctness half: CodeMirror keeps
+ * a field's value across a compartment reconfiguration, so a swapped-in
+ * baseline (a commit moved HEAD) would otherwise leave the old diff painted
+ * until the user typed. Both go through a timer because a `ViewPlugin` must
+ * not dispatch from inside `update` — at 0 ms for a baseline change, so it
+ * lands on the very next task.
  */
-const recomputePlugin = ViewPlugin.fromClass(
-  class implements PluginValue {
-    private timer: ReturnType<typeof setTimeout> | undefined;
-
-    update(update: ViewUpdate) {
-      const baselineChanged =
-        update.startState.facet(baselineFacet) !==
-        update.state.facet(baselineFacet);
-      if (!(update.docChanged || baselineChanged)) {
-        return;
+export function createDiffTracker<T>(options: {
+  build: (doc: Text, changes: LineChanges) => T;
+  empty: T;
+  map: (value: T, tr: Transaction) => T;
+}) {
+  const baselineFacet = Facet.define<string, string | null>({
+    combine: (values) => (values.length > 0 ? values[0] : null),
+  });
+  const set = StateEffect.define<T>();
+  const field = StateField.define<T>({
+    create(state) {
+      const baseline = state.facet(baselineFacet);
+      if (baseline === null) {
+        return options.empty;
       }
-      if (this.timer !== undefined) {
-        clearTimeout(this.timer);
-      }
-      const { view } = update;
-      this.timer = setTimeout(
-        () => {
-          this.timer = undefined;
-          const baseline = view.state.facet(baselineFacet);
-          if (baseline === null) {
-            return;
-          }
-          const { doc } = view.state;
-          const changes = computeLineChanges(baseline, doc.toString(), doc);
-          view.dispatch({ effects: setMarks.of(buildMarks(doc, changes)) });
-        },
-        baselineChanged ? 0 : GIT_GUTTER_DEBOUNCE_MS
+      return options.build(
+        state.doc,
+        computeLineChanges(baseline, state.doc.toString(), state.doc)
       );
-    }
+    },
+    update(value, tr) {
+      for (const effect of tr.effects) {
+        if (effect.is(set)) {
+          return effect.value;
+        }
+      }
+      return tr.docChanged ? options.map(value, tr) : value;
+    },
+  });
+  const plugin = ViewPlugin.fromClass(
+    class implements PluginValue {
+      private timer: ReturnType<typeof setTimeout> | undefined;
 
-    destroy() {
-      if (this.timer !== undefined) {
-        clearTimeout(this.timer);
+      update(update: ViewUpdate) {
+        const baselineChanged =
+          update.startState.facet(baselineFacet) !==
+          update.state.facet(baselineFacet);
+        if (!(update.docChanged || baselineChanged)) {
+          return;
+        }
+        if (this.timer !== undefined) {
+          clearTimeout(this.timer);
+        }
+        const { view } = update;
+        this.timer = setTimeout(
+          () => {
+            this.timer = undefined;
+            const baseline = view.state.facet(baselineFacet);
+            if (baseline === null) {
+              return;
+            }
+            const { doc } = view.state;
+            const changes = computeLineChanges(baseline, doc.toString(), doc);
+            view.dispatch({ effects: set.of(options.build(doc, changes)) });
+          },
+          baselineChanged ? 0 : GIT_GUTTER_DEBOUNCE_MS
+        );
+      }
+
+      destroy() {
+        if (this.timer !== undefined) {
+          clearTimeout(this.timer);
+        }
       }
     }
-  }
-);
+  );
+  return {
+    baselineFacet,
+    extension: (baseline: string): Extension => [
+      baselineFacet.of(baseline),
+      field,
+      plugin,
+    ],
+    field,
+  };
+}
+
+const headTracker = createDiffTracker<RangeSet<GutterMarker>>({
+  build: buildMarks,
+  empty: RangeSet.empty,
+  map: (marks, tr) => marks.map(tr.changes),
+});
+
+/** The current git-gutter markers for a state, keyed by document position. */
+export const gitGutterMarks = headTracker.field;
+
+/** The HEAD text the gutter diffs against, or `null` with no gutter mounted —
+ * what a click on a marker reverts to (see `editorGit.ts`). */
+export const headBaseline = headTracker.baselineFacet;
 
 /**
  * Builds the full git-gutter extension for the given HEAD-baseline text: the
- * baseline itself, the {@link gitGutterMarks} field holding the current line
- * markers, a ViewPlugin that recomputes them (debounced) as the doc changes,
- * and the gutter that renders them.
+ * tracker holding the current line markers, and the gutter that renders
+ * them. `onMarkerClick` (the editor's "show this change" peek) is handed the
+ * clicked line's start position.
  */
-export function gitGutter(baseline: string): Extension {
+export function gitGutter(
+  baseline: string,
+  onMarkerClick?: (view: EditorView, pos: number) => boolean
+): Extension {
   return [
-    baselineFacet.of(baseline),
-    gitGutterMarks,
-    recomputePlugin,
+    headTracker.extension(baseline),
     gutter({
       class: "cm-gitGutter",
+      domEventHandlers: onMarkerClick
+        ? { mousedown: (view, line) => onMarkerClick(view, line.from) }
+        : {},
       markers: (view: EditorView) => view.state.field(gitGutterMarks),
     }),
   ];

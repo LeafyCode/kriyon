@@ -237,6 +237,31 @@ test("a failed worktree bootstrap keeps the dialog open and shows the failure", 
   expect(dialog.textContent).toContain("install failed");
 });
 
+test("a failed install names the install step, not the setup command, and says what to do", async () => {
+  vi.mocked(bootstrapWorktree).mockResolvedValueOnce({
+    ok: false,
+    output: "pnpm install: No such file or directory (os error 2)",
+    steps: [{ label: "install (pnpm install)", ok: false }],
+  });
+  render(<SpawnDialog />);
+  fireEvent.click(screen.getByTestId("spawn-mode-worktree"));
+  fireEvent.change(screen.getByTestId("spawn-branch"), {
+    target: { value: "wt/test-branch" },
+  });
+  fireEvent.click(screen.getByTestId("spawn-confirm"));
+
+  const dialog = await screen.findByTestId("spawn-dialog");
+  await waitFor(() => {
+    expect(dialog.textContent).toContain("install (pnpm install) failed");
+  });
+  expect(dialog.textContent).not.toContain("Setup command failed");
+  // The dialog covers the terminal, so Close comes first.
+  expect(dialog.textContent).toContain(
+    "Press Close, then fix it in the session's terminal."
+  );
+  expect(dialog.textContent).toContain("os error 2");
+});
+
 test("a failed worktree bootstrap locks the dialog against re-spawn; primary button closes it", async () => {
   vi.mocked(bootstrapWorktree).mockResolvedValueOnce({
     ok: false,

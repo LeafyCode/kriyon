@@ -20,8 +20,13 @@ import { useChanges } from "./changes.ts";
 import { DEFAULT_LAYOUT, useLayout } from "./layout.ts";
 import {
   badgeCount,
+  fullyParkedProjectIds,
   idleSession,
+  isPutAway,
   isWorktreeSession,
+  LIVE_TOUCH_GRACE_MS,
+  relativizeTouchedPath,
+  sessionClaudeFiles,
   sessionRow,
   sessionTouchedRelative,
   sessionWorkingDir,
@@ -35,7 +40,13 @@ import { MAX_WARM_PANES, sessionPaneMounts } from "./warmPanes.ts";
 const mockedUpsertSession = vi.mocked(upsertSession);
 
 function makeProject(id: string): ProjectRow {
-  return { color: null, id, name: id, path: "", setupCommand: null };
+  return {
+    color: null,
+    id,
+    name: id,
+    path: "",
+    setupCommand: null,
+  };
 }
 
 function makeSession(id: string, createdAt: number): UiSession {
@@ -78,6 +89,7 @@ function fullyPopulatedSession(): UiSession {
     id: "s-full",
     nestedUnder: "s-lead",
     parentSessionId: "s-parent",
+    parkedAt: 1_730_000_000_000,
     projectId: "p-full",
     status: "running",
     summary: "mid-turn",
@@ -143,6 +155,8 @@ beforeEach(() => {
     sessions: {},
     statusOrigin: {},
     touchedFiles: {},
+    touchedLive: {},
+    touchedSynced: {},
     repoToplevel: {},
     repoToplevelCwd: {},
   });
@@ -1125,4 +1139,259 @@ test("applyHooksOff ignores ids that are not sessions", () => {
   // claude and is never removed through `removeSession`.
   useSessions.getState().applyHooksOff("pane-1", "user");
   expect(useSessions.getState().hooksOff["pane-1"]).toBeUndefined();
+});
+
+test("setTouchedFromActivity makes the Activity log the record of Claude's files", () => {
+  useSessions.setState({
+    sessions: { s1: idleSession(base("s1")) },
+    // A denied edit the live stream counted; the log, which only counts
+    // finished steps, doesn't have it.
+    touchedFiles: { s1: ["/repo/denied.ts"] },
+  });
+  useSessions.getState().setTouchedFromActivity("s1", ["/repo/gen.ts"]);
+  expect(useSessions.getState().touchedFiles.s1).toEqual(["/repo/gen.ts"]);
+  expect(useSessions.getState().touchedSynced.s1).toBe(true);
+});
+
+test("setTouchedFromActivity keeps the same array when nothing changed", () => {
+  useSessions.setState({
+    sessions: { s1: idleSession(base("s1")) },
+    touchedFiles: { s1: ["/repo/a.ts", "/repo/b.ts"] },
+    touchedSynced: { s1: true },
+  });
+  const before = useSessions.getState().touchedFiles.s1;
+  useSessions
+    .getState()
+    .setTouchedFromActivity("s1", ["/repo/b.ts", "/repo/a.ts"]);
+  expect(useSessions.getState().touchedFiles.s1).toBe(before);
+});
+
+test("setTouchedFromActivity ignores a session that has been closed", () => {
+  useSessions.setState({ sessions: {}, touchedFiles: {}, touchedSynced: {} });
+  useSessions.getState().setTouchedFromActivity("gone", ["/repo/a.ts"]);
+  expect(useSessions.getState().touchedFiles.gone).toBeUndefined();
+  expect(useSessions.getState().touchedSynced.gone).toBeUndefined();
+});
+
+test("sessionClaudeFiles is unknown until Claude's files can be matched to the repo", () => {
+  useSessions.setState({
+    repoToplevel: {},
+    sessions: { s1: idleSession(base("s1")) },
+    touchedFiles: {},
+    touchedSynced: {},
+  });
+  // No repo root yet.
+  expect(sessionClaudeFiles("s1")).toBeNull();
+  // A root, but the Activity log hasn't answered yet.
+  useSessions.setState({ repoToplevel: { s1: "/repo" } });
+  expect(sessionClaudeFiles("s1")).toBeNull();
+  // The log answered: Claude changed nothing — a real, empty answer.
+  useSessions.setState({ touchedSynced: { s1: true } });
+  expect(sessionClaudeFiles("s1")?.size).toBe(0);
+  // Recorded paths none of which match the repo (a symlinked project path):
+  // unknown again, rather than "Claude changed nothing".
+  useSessions.setState({ touchedFiles: { s1: ["/elsewhere/a.ts"] } });
+  expect(sessionClaudeFiles("s1")).toBeNull();
+  useSessions.setState({ touchedFiles: { s1: ["/repo/a.ts"] } });
+  expect([...(sessionClaudeFiles("s1") ?? [])]).toEqual(["a.ts"]);
+});
+
+test("relativizeTouchedPath sees through macOS's /private firmlink either way", () => {
+  expect(relativizeTouchedPath("/tmp/repo/a.ts", "/private/tmp/repo")).toBe(
+    "a.ts"
+  );
+  expect(relativizeTouchedPath("/private/tmp/repo/a.ts", "/tmp/repo")).toBe(
+    "a.ts"
+  );
+  expect(relativizeTouchedPath("/elsewhere/a.ts", "/private/tmp/repo")).toBe(
+    null
+  );
+});
+
+function base(id: string) {
+  return {
+    archivedAt: null,
+    baselineOid: null,
+    claudeSessionId: null,
+    createdAt: 1,
+    cwd: "/repo",
+    id,
+    projectId: "p1",
+    title: id,
+    titleLocked: false,
+    worktreePath: null,
+  };
+}
+
+test("a live edit the Activity log hasn't taken in yet survives a sync, for a short grace", () => {
+  const now = 1_000_000;
+  useSessions.setState({
+    sessions: { s1: idleSession(base("s1")) },
+    touchedFiles: { s1: ["/repo/fresh.ts"] },
+    touchedLive: { s1: { "/repo/fresh.ts": now } },
+    touchedSynced: {},
+  });
+  // The log ingests every few seconds; a sync half a second later doesn't
+  // have the edit yet.
+  useSessions.getState().setTouchedFromActivity("s1", [], now + 500);
+  expect(useSessions.getState().touchedFiles.s1).toEqual(["/repo/fresh.ts"]);
+
+  // Past the grace, the log's answer stands: an edit it never recorded (a
+  // denied one) is dropped.
+  useSessions
+    .getState()
+    .setTouchedFromActivity("s1", [], now + LIVE_TOUCH_GRACE_MS + 1);
+  expect(useSessions.getState().touchedFiles.s1).toEqual([]);
+  expect(useSessions.getState().touchedLive.s1).toEqual({});
+});
+
+// --- Parking (ADR-0052) ---
+
+function inProject(
+  id: string,
+  projectId: string,
+  createdAt: number
+): UiSession {
+  return { ...makeSession(id, createdAt), projectId };
+}
+
+test("isPutAway is true for an archived or a parked session", () => {
+  expect(isPutAway(inProject("a", "p", 1))).toBe(false);
+  expect(isPutAway({ ...inProject("b", "p", 1), archivedAt: 5 })).toBe(true);
+  expect(isPutAway({ ...inProject("c", "p", 1), parkedAt: 5 })).toBe(true);
+});
+
+test("a project is fully parked only when none of its sessions is on the rail", () => {
+  const sessions = {
+    a: { ...inProject("a", "pa", 1), parkedAt: 5 },
+    b: { ...inProject("b", "pa", 2), parkedAt: 5 },
+    c: { ...inProject("c", "pb", 3), parkedAt: 5 },
+    d: inProject("d", "pb", 4),
+    e: { ...inProject("e", "pc", 5), archivedAt: 5 },
+  };
+  expect([...fullyParkedProjectIds(sessions)]).toEqual(["pa"]);
+});
+
+test("parking a project parks its rail sessions, drops their warm panes and moves the selection off them", () => {
+  useSessions.setState({
+    activeSessionId: "a2",
+    projects: [makeProject("pa"), makeProject("pb")],
+    sessions: {
+      a1: inProject("a1", "pa", 1),
+      a2: inProject("a2", "pa", 9),
+      old: { ...inProject("old", "pa", 3), archivedAt: 4 },
+      b1: inProject("b1", "pb", 2),
+    },
+    warmPanes: ["a1", "b1"],
+  });
+
+  useSessions.getState().parkProject("pa");
+
+  const state = useSessions.getState();
+  expect(state.sessions.a1?.parkedAt).toBeGreaterThan(0);
+  expect(state.sessions.a2?.parkedAt).toBeGreaterThan(0);
+  // Archived stays archived, not parked.
+  expect(state.sessions.old?.parkedAt).toBeUndefined();
+  expect(state.sessions.b1?.parkedAt).toBeUndefined();
+  expect(state.activeSessionId).toBe("b1");
+  expect(state.warmPanes).toEqual(["b1"]);
+});
+
+test("unparking a project brings back every parked session and starts nothing", () => {
+  useSessions.setState({
+    activeSessionId: null,
+    projects: [makeProject("pa")],
+    sessions: {
+      a1: { ...inProject("a1", "pa", 1), parkedAt: 10 },
+      a2: { ...inProject("a2", "pa", 2), parkedAt: 10 },
+    },
+    warmPanes: [],
+  });
+
+  useSessions.getState().unparkProject("pa");
+
+  const state = useSessions.getState();
+  expect(state.sessions.a1?.parkedAt).toBeNull();
+  expect(state.sessions.a2?.parkedAt).toBeNull();
+  expect(state.activeSessionId).toBeNull();
+  expect(state.warmPanes).toEqual([]);
+});
+
+test("opening a parked session brings back only that one", () => {
+  useSessions.setState({
+    activeSessionId: null,
+    projects: [makeProject("pa")],
+    sessions: {
+      a1: { ...inProject("a1", "pa", 1), parkedAt: 10 },
+      a2: { ...inProject("a2", "pa", 2), parkedAt: 10 },
+    },
+    warmPanes: [],
+  });
+
+  // The Parked section, the palette, a notification and the Needs-you rail all
+  // open a session this way; opening one is what launches it.
+  useSessions.getState().setActiveSession("a1");
+
+  const state = useSessions.getState();
+  expect(state.activeSessionId).toBe("a1");
+  expect(state.sessions.a1?.parkedAt).toBeNull();
+  // The rest of the project stays parked, out of the way.
+  expect(state.sessions.a2?.parkedAt).toBe(10);
+});
+
+test("opening a parked nested session brings back its leads with it", () => {
+  useSessions.setState({
+    activeSessionId: null,
+    projects: [makeProject("pa")],
+    sessions: {
+      lead: { ...inProject("lead", "pa", 1), parkedAt: 10 },
+      mid: { ...inProject("mid", "pa", 2), nestedUnder: "lead", parkedAt: 10 },
+      leaf: { ...inProject("leaf", "pa", 3), nestedUnder: "mid", parkedAt: 10 },
+      other: { ...inProject("other", "pa", 4), parkedAt: 10 },
+    },
+    warmPanes: [],
+  });
+
+  useSessions.getState().setActiveSession("leaf");
+
+  const { sessions } = useSessions.getState();
+  expect(sessions.leaf?.parkedAt).toBeNull();
+  expect(sessions.mid?.parkedAt).toBeNull();
+  expect(sessions.lead?.parkedAt).toBeNull();
+  expect(sessions.other?.parkedAt).toBe(10);
+});
+
+test("archiving the active session never hands the selection to a parked one", () => {
+  useSessions.setState({
+    activeSessionId: "s1",
+    projects: [makeProject("live")],
+    sessions: {
+      s0: inProject("s0", "live", 1),
+      s1: inProject("s1", "live", 2),
+      parked: { ...inProject("parked", "live", 9), parkedAt: 10 },
+    },
+    warmPanes: [],
+  });
+
+  useSessions.getState().archiveSession("s1");
+
+  expect(useSessions.getState().activeSessionId).toBe("s0");
+});
+
+test("closing the active session never hands the selection to a parked one", () => {
+  useSessions.setState({
+    activeSessionId: "s1",
+    projects: [makeProject("live"), makeProject("pk")],
+    sessions: {
+      s0: inProject("s0", "live", 1),
+      s1: inProject("s1", "live", 2),
+      parked: { ...inProject("parked", "pk", 9), parkedAt: 10 },
+    },
+    warmPanes: [],
+  });
+
+  useSessions.getState().removeSession("s1");
+
+  // Selecting it would launch it while it still sits in the Parked list.
+  expect(useSessions.getState().activeSessionId).toBe("s0");
 });

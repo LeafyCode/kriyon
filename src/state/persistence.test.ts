@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import {
+  listProjectNotes,
   listProjects,
   listPrompts,
   listSessions,
@@ -8,7 +9,13 @@ import {
   upsertProject,
   upsertSession,
 } from "../ipc/bridge.ts";
-import type { ProjectRow, SavedPrompt, SessionRow } from "../types.ts";
+import type {
+  ProjectNote,
+  ProjectRow,
+  SavedPrompt,
+  SessionRow,
+} from "../types.ts";
+import { showToast } from "../ui/Toast.tsx";
 import { DEFAULT_LAYOUT, useLayout } from "./layout.ts";
 import {
   hydrate,
@@ -17,11 +24,13 @@ import {
   persistKey as persistKeyForTest,
   pruneSortState,
 } from "./persistence.ts";
+import { useProjectNotes } from "./projectNotes.ts";
 import { usePromptLibrary } from "./promptLibrary.ts";
 import { sessionRow, type UiSession, useSessions } from "./sessions.ts";
 import { useTerminals } from "./terminals.ts";
 
 vi.mock("../ipc/bridge", () => ({
+  listProjectNotes: vi.fn(),
   listPrompts: vi.fn(),
   listProjects: vi.fn(),
   listSessions: vi.fn(),
@@ -31,6 +40,9 @@ vi.mock("../ipc/bridge", () => ({
   upsertSession: vi.fn(),
 }));
 
+vi.mock("../ui/Toast.tsx", () => ({ showToast: vi.fn() }));
+
+const mockedListProjectNotes = vi.mocked(listProjectNotes);
 const mockedListPrompts = vi.mocked(listPrompts);
 const mockedListProjects = vi.mocked(listProjects);
 const mockedListSessions = vi.mocked(listSessions);
@@ -67,7 +79,13 @@ afterEach(() => {
 });
 
 function project(id: string): ProjectRow {
-  return { color: null, id, name: id, path: `/${id}`, setupCommand: null };
+  return {
+    color: null,
+    id,
+    name: id,
+    path: `/${id}`,
+    setupCommand: null,
+  };
 }
 
 function session(
@@ -99,7 +117,9 @@ beforeEach(() => {
   vi.mocked(saveLayout).mockResolvedValue(undefined);
   vi.mocked(loadLayout).mockResolvedValue(null);
   mockedListPrompts.mockResolvedValue([]);
+  mockedListProjectNotes.mockResolvedValue([]);
   usePromptLibrary.setState({ prompts: [] });
+  useProjectNotes.setState({ notes: [] });
   useSessions.setState({
     activeSessionId: null,
     activity: {},
@@ -113,7 +133,13 @@ beforeEach(() => {
 
 test("hydrate populates the store from the bridge", async () => {
   mockedListProjects.mockResolvedValue([
-    { color: null, id: "p1", name: "Proj", path: "/p", setupCommand: null },
+    {
+      color: null,
+      id: "p1",
+      name: "Proj",
+      path: "/p",
+      setupCommand: null,
+    },
   ]);
   mockedListSessions.mockResolvedValue([
     {
@@ -429,6 +455,40 @@ test("persistKey changes when any single SessionRow field is perturbed", () => {
   }
 });
 
+test("persistKey changes when any single ProjectRow field is perturbed", () => {
+  const base: ProjectRow = {
+    color: "#fff",
+    id: "p1",
+    name: "Proj",
+    path: "/p",
+    setupCommand: "make",
+  };
+  useSessions.setState({ projects: [base], sessions: {} });
+  const baseKey = persistKeyForTest(useSessions.getState());
+  for (const key of Object.keys(base) as (keyof ProjectRow)[]) {
+    useSessions.setState({
+      projects: [{ ...base, [key]: perturbField(base[key]) }],
+      sessions: {},
+    });
+    expect(
+      persistKeyForTest(useSessions.getState()),
+      `persistKey should change when ${key} changes`
+    ).not.toBe(baseKey);
+  }
+});
+
+test("hydrate never selects a parked session", async () => {
+  mockedListProjects.mockResolvedValue([project("p1")]);
+  mockedListSessions.mockResolvedValue([
+    sessionRow({ ...session("old", "p1"), createdAt: 1 }),
+    sessionRow({ ...session("newer", "p1"), createdAt: 9, parkedAt: 10 }),
+  ]);
+
+  await hydrate();
+
+  expect(useSessions.getState().activeSessionId).toBe("old");
+});
+
 test("hydrate restores a persisted sidebar width, defaulting when absent", async () => {
   mockedListProjects.mockResolvedValue([]);
   mockedListSessions.mockResolvedValue([]);
@@ -446,7 +506,13 @@ test("hydrate restores a persisted sidebar width, defaulting when absent", async
 
 test("hydrate does not block core hydration when listPrompts rejects", async () => {
   mockedListProjects.mockResolvedValue([
-    { color: null, id: "p1", name: "Proj", path: "/p", setupCommand: null },
+    {
+      color: null,
+      id: "p1",
+      name: "Proj",
+      path: "/p",
+      setupCommand: null,
+    },
   ]);
   mockedListSessions.mockResolvedValue([
     {
@@ -564,7 +630,7 @@ test("an unknown persisted notifySound falls back to default", () => {
 });
 
 test("hydrate restores persisted terminals into useTerminals", async () => {
-  useTerminals.setState({ byProject: {} });
+  useTerminals.setState({ byScope: {} });
   mockedListProjects.mockResolvedValue([]);
   mockedListSessions.mockResolvedValue([]);
   const blob = JSON.stringify({
@@ -588,7 +654,7 @@ test("hydrate restores persisted terminals into useTerminals", async () => {
 
   await hydrate();
 
-  expect(useTerminals.getState().byProject.proj.tabs[0].title).toBe("dev");
+  expect(useTerminals.getState().byScope.proj.tabs[0].title).toBe("dev");
 });
 
 test("parseLayout restores session sort, overrides, and manual orders", () => {
@@ -783,4 +849,61 @@ test("the nested session cap survives a save, defaults to 4 and drops a bad valu
   expect(parseLayoutForTest(saved(0))?.nestedSessionCap).toBe(4);
   expect(parseLayoutForTest(saved(2.5))?.nestedSessionCap).toBe(4);
   expect(parseLayoutForTest(saved(99))?.nestedSessionCap).toBe(4);
+});
+
+test("hydrate loads every project note", async () => {
+  mockedListProjects.mockResolvedValue([]);
+  mockedListSessions.mockResolvedValue([]);
+  const note: ProjectNote = {
+    body: "",
+    createdMs: 1,
+    doneAt: null,
+    id: "n1",
+    kind: "idea",
+    pinned: false,
+    projectId: "p1",
+    text: "Split view",
+    updatedMs: 1,
+  };
+  mockedListProjectNotes.mockResolvedValue([note]);
+
+  await hydrate();
+
+  expect(useProjectNotes.getState().notes).toEqual([note]);
+});
+
+test("a failed notes load says so and does not block core hydration", async () => {
+  mockedListProjects.mockResolvedValue([
+    { color: null, id: "p1", name: "Proj", path: "/p", setupCommand: null },
+  ]);
+  mockedListSessions.mockResolvedValue([]);
+  mockedListProjectNotes.mockRejectedValue(new Error("locked"));
+
+  await hydrate();
+
+  expect(useSessions.getState().projects).toHaveLength(1);
+  expect(useProjectNotes.getState().notes).toEqual([]);
+  expect(showToast).toHaveBeenCalledWith(
+    expect.stringContaining("notes"),
+    "error"
+  );
+});
+
+test("a fresh install has not seen the app tour", () => {
+  expect(DEFAULT_LAYOUT.tourSeen).toBe(false);
+});
+
+test("tourSeen survives a save/load round-trip", () => {
+  const unseen = { ...DEFAULT_LAYOUT, tourSeen: false };
+  expect(parseLayoutForTest(JSON.stringify(unseen))?.tourSeen).toBe(false);
+  const seen = { ...DEFAULT_LAYOUT, tourSeen: true };
+  expect(parseLayoutForTest(JSON.stringify(seen))?.tourSeen).toBe(true);
+});
+
+test("a layout saved before the app tour existed has not seen it", () => {
+  // Someone who used Kriyon before the tour existed has never seen it, so it
+  // opens for them once too.
+  expect(parseLayoutForTest(JSON.stringify({ view: "studio" }))?.tourSeen).toBe(
+    false
+  );
 });

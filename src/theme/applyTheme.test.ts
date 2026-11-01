@@ -66,4 +66,19 @@ describe("applyTheme", () => {
       document.documentElement.style.getPropertyValue("--kr-accent");
     expect(accent).toBe(themeById("graphite").colors.accent);
   });
+
+  it("publishes the ink-side contrast colour for scrollbars and washes", () => {
+    const root = document.documentElement.style;
+    applyTheme(themeById("steel"));
+    expect(root.getPropertyValue("--kr-contrast-rgb")).toBe("255, 255, 255");
+    applyTheme(themeById("steel-light"));
+    expect(root.getPropertyValue("--kr-contrast-rgb")).toBe("0, 0, 0");
+  });
+
+  it("tells the webview whether the theme is light or dark", () => {
+    applyTheme(themeById("steel-light"));
+    expect(document.documentElement.style.colorScheme).toBe("light");
+    applyTheme(themeById("dracula"));
+    expect(document.documentElement.style.colorScheme).toBe("dark");
+  });
 });

@@ -44,7 +44,9 @@ import { useChanges } from "../state/changes.ts";
 import { useDrafts } from "../state/drafts.ts";
 import { DEFAULT_LAYOUT, useLayout } from "../state/layout.ts";
 import { useSessionProposals } from "../state/nestedSessions.ts";
+import { useProjectNotes } from "../state/projectNotes.ts";
 import { type UiSession, useSessions } from "../state/sessions.ts";
+import { terminalScope, useTerminals } from "../state/terminals.ts";
 import { useUi } from "../state/ui.ts";
 import { statusMeta } from "../theme/status.ts";
 import { themeById } from "../theme/themes/index.ts";
@@ -54,8 +56,22 @@ import { Toast } from "../ui/Toast.tsx";
 import { PREWARM_DWELL_MS, SessionRow } from "./SessionRow.tsx";
 import { Sidebar } from "./Sidebar.tsx";
 
+/** Open a project's ⋯ menu and pick "Colour…" — colour lives in the menu. */
+function openColourMenu(projectName: string): void {
+  fireEvent.click(screen.getByLabelText(`More actions for ${projectName}`));
+  fireEvent.click(screen.getByRole("menuitem", { name: "Colour…" }));
+}
+
+/** Open a project's ⋯ menu and pick "Sort sessions…". */
+function openProjectSortMenu(projectName: string): void {
+  fireEvent.click(screen.getByLabelText(`More actions for ${projectName}`));
+  fireEvent.click(screen.getByRole("menuitem", { name: "Sort sessions…" }));
+}
+
 /** The rail's empty-state copy, as one top-level matcher. */
 const EMPTY_HINT = /No open sessions/;
+/** The park confirm's line for one busy session. */
+const ONE_SESSION_WORKING = /1 session is working/;
 
 function makeProject(id: string): ProjectRow {
   return {
@@ -1041,7 +1057,6 @@ test("calm never shows the new badge, even for unread finished work", () => {
 });
 
 const RE_PROJECT_P1 = /Project p1/;
-const RE_SORT_SESSIONS_IN = /Sort sessions in /;
 
 test("a project header shows its session count and collapses its group", () => {
   seed();
@@ -1167,6 +1182,72 @@ test("a worktree session shows its worktree name", () => {
   );
 
   expect(screen.getByText("feat-flow")).toBeInTheDocument();
+});
+
+test("a worktree session carries a branch mark on its title line", () => {
+  seed();
+  useSessions.getState().addSession({
+    archivedAt: null,
+    baselineOid: null,
+    claudeSessionId: null,
+    createdAt: 4,
+    cwd: "/wt/feat-flow",
+    id: "s4",
+    projectId: "p2",
+    status: "idle",
+    summary: "",
+    title: "Worktree session",
+    titleLocked: false,
+    worktreePath: "/wt/feat-flow",
+  });
+  render(
+    <Sidebar
+      onCloseSession={vi.fn()}
+      onNewSession={vi.fn()}
+      onShowAbout={vi.fn()}
+    />
+  );
+
+  const mark = screen.getByTestId("worktree-mark-s4");
+  // Beside the title, not down among the memory and CPU numbers.
+  expect(mark.parentElement).toHaveTextContent("Worktree session");
+  expect(mark).toHaveAccessibleName("Runs in its own worktree: feat-flow");
+  // Plain sessions carry no mark.
+  expect(screen.queryByTestId("worktree-mark-s1")).not.toBeInTheDocument();
+});
+
+test("a worktree session's branch name sits ahead of memory and CPU on its meta line", () => {
+  seed();
+  useSessions.getState().addSession({
+    archivedAt: null,
+    baselineOid: null,
+    claudeSessionId: null,
+    createdAt: 4,
+    cwd: "/wt/feat-flow",
+    id: "s4",
+    projectId: "p2",
+    status: "running",
+    summary: "",
+    title: "Worktree session",
+    titleLocked: false,
+    worktreePath: "/wt/feat-flow",
+  });
+  useSessions.setState({ cpu: { s4: 3 }, memory: { s4: 400 } });
+  render(
+    <Sidebar
+      onCloseSession={vi.fn()}
+      onNewSession={vi.fn()}
+      onShowAbout={vi.fn()}
+    />
+  );
+
+  const branch = screen.getByTestId("worktree-branch-s4");
+  const line = branch.parentElement as HTMLElement;
+  const chips = Array.from(line.children);
+  const memory = screen.getByTestId("memory-chip-s4");
+  // Nothing to warn about here, so the branch is first.
+  expect(chips[0]).toBe(branch);
+  expect(chips.indexOf(branch)).toBeLessThan(chips.indexOf(memory));
 });
 
 test("the close button is hover-revealed", () => {
@@ -1500,9 +1581,7 @@ test("a project's hover palette action recolors it and can return to automatic",
     />
   );
 
-  fireEvent.click(
-    screen.getByRole("button", { name: "Change color of Project p1" })
-  );
+  openColourMenu("Project p1");
   fireEvent.click(screen.getByTestId("swatch-#a293e8"));
 
   expect(
@@ -1512,9 +1591,7 @@ test("a project's hover palette action recolors it and can return to automatic",
   expect(screen.queryByTestId("swatch-#a293e8")).not.toBeInTheDocument();
 
   // "Automatic" clears the explicit color back to the hashed palette hue.
-  fireEvent.click(
-    screen.getByRole("button", { name: "Change color of Project p1" })
-  );
+  openColourMenu("Project p1");
   fireEvent.click(screen.getByRole("menuitem", { name: "Automatic color" }));
   expect(
     useSessions.getState().projects.find((p) => p.id === "p1")?.color
@@ -1530,17 +1607,17 @@ test("the color popover dismisses on Escape and on clicking elsewhere", () => {
       onShowAbout={vi.fn()}
     />
   );
-  const trigger = screen.getByRole("button", {
-    name: "Change color of Project p1",
-  });
+  const trigger = screen.getByLabelText("More actions for Project p1");
 
-  fireEvent.click(trigger);
+  openColourMenu("Project p1");
+  // The ⋯ trigger owns every menu it leads to, so it reads expanded while
+  // the colour popover it opened is up.
   expect(trigger).toHaveAttribute("aria-expanded", "true");
   fireEvent.keyDown(document, { key: "Escape" });
   expect(screen.queryByTestId("swatch-#a293e8")).not.toBeInTheDocument();
   expect(trigger).toHaveAttribute("aria-expanded", "false");
 
-  fireEvent.click(trigger);
+  openColourMenu("Project p1");
   fireEvent.pointerDown(document.body);
   expect(screen.queryByTestId("swatch-#a293e8")).not.toBeInTheDocument();
 });
@@ -1556,9 +1633,7 @@ test("swatches carry human color names and a checked state", () => {
     />
   );
 
-  fireEvent.click(
-    screen.getByRole("button", { name: "Change color of Project p1" })
-  );
+  openColourMenu("Project p1");
 
   const selected = screen.getByRole("menuitemradio", {
     name: "Set color violet",
@@ -2131,6 +2206,40 @@ test("a dirty worktree asks for confirmation before a forced removal", async () 
   );
 });
 
+test("a command running in the worktree's terminals asks before removal", async () => {
+  vi.mocked(removeWorktree).mockResolvedValue(undefined);
+  seedWorktreeSession("done");
+  const scope = terminalScope("p1", "/p1-worktrees/feat-x", "/p1");
+  useTerminals.setState({ busyPanes: {}, byScope: {}, deadPanes: {} });
+  useTerminals.getState().openTab(scope, "/p1-worktrees/feat-x");
+  const pane = useTerminals.getState().byScope[scope]?.tabs[0]?.panes[0]?.id;
+  useTerminals.getState().setPaneBusy(pane ?? "", true);
+  render(
+    <SessionRow
+      mode="calm"
+      onCloseSession={vi.fn()}
+      onSelect={vi.fn()}
+      sessionId="w1"
+      sortable={false}
+    />
+  );
+
+  fireEvent.click(screen.getByTestId("session-menu-w1"));
+  fireEvent.click(screen.getByTestId("remove-worktree-w1"));
+
+  const confirm = await screen.findByTestId(
+    "confirm-stop-worktree-terminals-w1"
+  );
+  expect(confirm.textContent).toContain("A command is running");
+  expect(removeWorktree).not.toHaveBeenCalled();
+
+  fireEvent.click(screen.getByTestId("confirm-stop-worktree-terminals-go-w1"));
+  await waitFor(() => {
+    expect(useSessions.getState().sessions.w1?.archivedAt).toBeGreaterThan(0);
+  });
+  expect(useTerminals.getState().byScope[scope]).toBeUndefined();
+});
+
 test("the row overflow menu spawns a follow-up and archives", () => {
   seed();
   render(
@@ -2207,17 +2316,17 @@ test("a project sort override is set from the header and survives a Follow globa
     />
   );
 
-  fireEvent.click(screen.getAllByLabelText(RE_SORT_SESSIONS_IN)[0]);
+  openProjectSortMenu("Project p1");
   fireEvent.click(screen.getByRole("menuitemradio", { name: "Manual" }));
   const overrides = () => useLayout.getState().layout.projectSortOverrides;
   expect(Object.values(overrides())).toEqual(["manual"]);
 
-  // Verify the override mode is shown in the button title
+  // The override stays visible on the header, not only inside the menu.
   expect(
-    screen.getAllByLabelText(RE_SORT_SESSIONS_IN)[0].getAttribute("title")
+    screen.getByTestId("sort-override-p1").getAttribute("title")
   ).toContain("Sorted by manual");
 
-  fireEvent.click(screen.getAllByLabelText(RE_SORT_SESSIONS_IN)[0]);
+  openProjectSortMenu("Project p1");
   fireEvent.click(screen.getByRole("menuitem", { name: "Follow global" }));
   expect(overrides()).toEqual({});
 });
@@ -3129,4 +3238,296 @@ test("a nested session whose lead is filtered out isn't drawn indented", () => {
     .getAllByTestId("session-row")
     .find((row) => row.textContent?.includes("Nested One"));
   expect(nestedRow?.querySelector("[data-nest-depth='0']")).not.toBeNull();
+});
+
+// --- Parked project (ADR-0052) ---
+
+function renderSidebar() {
+  render(
+    <Sidebar
+      onCloseSession={vi.fn()}
+      onNewSession={vi.fn()}
+      onShowAbout={vi.fn()}
+    />
+  );
+}
+
+/** Park every session of a project, as the menu's Park project does. */
+function parkAll(projectId: string): void {
+  act(() => {
+    useSessions.getState().parkProject(projectId);
+  });
+}
+
+const parkedAt = (id: string) => useSessions.getState().sessions[id]?.parkedAt;
+
+test("parking a busy project asks first and names what it would stop", () => {
+  seed();
+  renderSidebar();
+
+  fireEvent.click(screen.getByLabelText("More actions for Project p1"));
+  fireEvent.click(screen.getByTestId("park-project-p1"));
+
+  // s1 is running, so nothing is parked until the confirm.
+  expect(parkedAt("s1")).toBeUndefined();
+  expect(screen.getByText("Park Project p1?")).toBeInTheDocument();
+  expect(screen.getByText(ONE_SESSION_WORKING)).toBeInTheDocument();
+
+  fireEvent.click(screen.getByTestId("confirm-park-project-p1"));
+
+  expect(parkedAt("s1")).toBeGreaterThan(0);
+  expect(parkedAt("s2")).toBeGreaterThan(0);
+});
+
+test("parking a quiet project needs no confirm", () => {
+  seed();
+  renderSidebar();
+
+  fireEvent.click(screen.getByLabelText("More actions for Project p2"));
+  fireEvent.click(screen.getByTestId("park-project-p2"));
+
+  expect(screen.queryByTestId("park-project-backdrop")).toBeNull();
+  expect(parkedAt("s3")).toBeGreaterThan(0);
+});
+
+test("a parked project leaves the rail for a closed Parked section", () => {
+  seed();
+  parkAll("p2");
+  renderSidebar();
+
+  expect(screen.getAllByTestId("project-group")).toHaveLength(1);
+  expect(screen.queryByText("Session Three")).toBeNull();
+  const parked = screen.getByTestId("parked-group");
+  expect(within(parked).getByText("Parked (1)")).toBeInTheDocument();
+
+  fireEvent.click(within(parked).getByText("Parked (1)"));
+  expect(within(parked).getByText("Project p2")).toBeInTheDocument();
+  expect(within(parked).getByText("1 session")).toBeInTheDocument();
+});
+
+test("Unpark brings every parked session back to the rail", () => {
+  seed();
+  parkAll("p1");
+  renderSidebar();
+
+  fireEvent.click(screen.getByText("Parked (1)"));
+  fireEvent.click(screen.getByLabelText("Unpark Project p1"));
+
+  expect(parkedAt("s1")).toBeNull();
+  expect(parkedAt("s2")).toBeNull();
+  expect(screen.getByText("Session One")).toBeInTheDocument();
+  expect(screen.getByText("Session Two")).toBeInTheDocument();
+  expect(screen.queryByTestId("parked-group")).toBeNull();
+});
+
+test("opening one parked session brings back only that one", () => {
+  seed();
+  parkAll("p1");
+  renderSidebar();
+
+  fireEvent.click(screen.getByText("Parked (1)"));
+  fireEvent.click(screen.getByLabelText("Expand Project p1"));
+  fireEvent.click(screen.getByText("Session One"));
+
+  expect(useSessions.getState().activeSessionId).toBe("s1");
+  expect(parkedAt("s1")).toBeNull();
+  // The rest stays parked: the rail shows the one session, not the project.
+  expect(parkedAt("s2")).toBeGreaterThan(0);
+  const rail = screen.getAllByTestId("project-group");
+  expect(rail.some((group) => within(group).queryByText("Session Two"))).toBe(
+    false
+  );
+  expect(screen.getByTestId("parked-group")).toBeInTheDocument();
+});
+
+test("a parked nested session sits under its lead in the Parked list", () => {
+  seed();
+  act(() => {
+    const state = useSessions.getState();
+    state.addSession({
+      ...state.sessions.s2,
+      createdAt: 9,
+      id: "child",
+      nestedUnder: "s2",
+      title: "Child of Two",
+    } as UiSession);
+    state.parkProject("p1");
+  });
+  renderSidebar();
+
+  fireEvent.click(screen.getByText("Parked (1)"));
+  fireEvent.click(screen.getByLabelText("Expand Project p1"));
+
+  const parked = screen.getByTestId("parked-group");
+  const titles = within(parked)
+    .getAllByTitle("Bring back and open only this session")
+    .map((row) => row.textContent);
+  const lead = titles.indexOf("Session Two");
+  expect(titles[lead + 1]).toBe("Child of Two");
+  const child = within(parked).getByText("Child of Two").closest("button");
+  const leadRow = within(parked).getByText("Session Two").closest("button");
+  expect(Number.parseInt(child?.style.paddingLeft ?? "0", 10)).toBeGreaterThan(
+    Number.parseInt(leadRow?.style.paddingLeft ?? "0", 10)
+  );
+});
+
+test("a project header's hover row is new worktree, new session, then ⋯ last", () => {
+  seed();
+  renderSidebar();
+
+  const cluster = screen
+    .getByLabelText("More actions for Project p1")
+    .closest(".kr-reveal-cluster");
+  const labels = Array.from(cluster?.querySelectorAll("button") ?? []).map(
+    (button) => button.getAttribute("aria-label")
+  );
+  // ⋯ sits last, on the solid end of the fade, so it never sits over the name.
+  expect(labels).toEqual([
+    "New worktree session in Project p1",
+    "New session in Project p1",
+    "More actions for Project p1",
+  ]);
+});
+
+test("the project menu leads with Park and holds notes, rename, colour, sort and close", () => {
+  seed();
+  renderSidebar();
+
+  fireEvent.click(screen.getByLabelText("More actions for Project p1"));
+
+  expect(
+    screen.getAllByRole("menuitem").map((item) => item.textContent)
+  ).toEqual([
+    "Park project",
+    "Open notes",
+    "Rename",
+    "Colour…",
+    "Sort sessions…",
+    "Close all sessions",
+  ]);
+});
+
+test("right-clicking a project header opens its menu", () => {
+  seed();
+  renderSidebar();
+
+  fireEvent.contextMenu(screen.getByTestId("project-header-p1"));
+
+  expect(screen.getByTestId("park-project-p1")).toBeInTheDocument();
+});
+
+test("a parked project lists what its group showed, with older sessions folded", () => {
+  useLayout.setState({
+    layout: { ...DEFAULT_LAYOUT, hideOlderThan: "1d" },
+  });
+  const now = Date.now();
+  const base = {
+    archivedAt: null,
+    baselineOid: null,
+    claudeSessionId: null,
+    cwd: "",
+    parkedAt: now,
+    projectId: "pk",
+    status: "idle" as const,
+    summary: "",
+    titleLocked: false,
+    worktreePath: null,
+  };
+  useSessions.setState({
+    activeSessionId: null,
+    projects: [makeProject("pk")],
+    sessions: {
+      fresh: { ...base, createdAt: now - 1000, id: "fresh", title: "Fresh" },
+      stale1: {
+        ...base,
+        createdAt: now - 5 * 86_400_000,
+        id: "stale1",
+        title: "Stale one",
+      },
+      stale2: {
+        ...base,
+        createdAt: now - 6 * 86_400_000,
+        id: "stale2",
+        title: "Stale two",
+      },
+    },
+  });
+  renderSidebar();
+
+  fireEvent.click(screen.getByText("Parked (1)"));
+  const parked = screen.getByTestId("parked-group");
+  // The header counts everything Unpark brings back, folded or not.
+  expect(within(parked).getByText("3 sessions")).toBeInTheDocument();
+
+  fireEvent.click(within(parked).getByLabelText("Expand Project pk"));
+  expect(within(parked).getByText("Fresh")).toBeInTheDocument();
+  expect(within(parked).queryByText("Stale one")).toBeNull();
+
+  // The folded ones stay reachable: the fold opens like the rail's.
+  fireEvent.click(within(parked).getByText("2 older"));
+  fireEvent.click(within(parked).getByText("Stale one"));
+  expect(useSessions.getState().activeSessionId).toBe("stale1");
+  expect(useSessions.getState().sessions.stale1?.parkedAt).toBeNull();
+});
+
+test("a project header ignores its parked sessions", () => {
+  seed();
+  act(() => {
+    useSessions.setState((state) => ({
+      sessions: {
+        ...state.sessions,
+        s2: { ...state.sessions.s2, status: "waiting", worktreePath: "/wt" },
+      } as Record<string, UiSession>,
+    }));
+    useSessions.getState().parkProject("p1");
+    // Open one: p1 is back on the rail with only s1.
+    useSessions.getState().setActiveSession("s1");
+  });
+  renderSidebar();
+
+  const header = screen.getByTestId("project-header-p1");
+  // s2 is parked: its frozen "waiting" must not ring the header, and its
+  // worktree must not be counted.
+  expect(header).toHaveAttribute("data-needs-attention", "false");
+  expect(screen.queryByTestId("worktree-count-p1")).toBeNull();
+});
+
+// --- Project notes ---
+
+test("the project menu opens the project's notes in the inspector", () => {
+  seed();
+  useProjectNotes.setState({ notes: [], pickedProjectId: null });
+  renderSidebar();
+
+  fireEvent.click(screen.getByLabelText("More actions for Project p2"));
+  fireEvent.click(screen.getByRole("menuitem", { name: "Open notes" }));
+
+  expect(useLayout.getState().inspectorTab).toBe("notes");
+  expect(useProjectNotes.getState().pickedProjectId).toBe("p2");
+  expect(screen.queryByRole("menu")).toBeNull();
+});
+
+test("a project header counts its open todos, and only those", () => {
+  seed();
+  const base = {
+    body: "",
+    createdMs: 1,
+    doneAt: null,
+    pinned: false,
+    projectId: "p1",
+    updatedMs: 1,
+  };
+  useProjectNotes.setState({
+    notes: [
+      { ...base, id: "a", kind: "todo", text: "a" },
+      { ...base, id: "b", kind: "todo", text: "b" },
+      { ...base, doneAt: 5, id: "c", kind: "todo", text: "c" },
+      { ...base, id: "d", kind: "idea", text: "d" },
+    ],
+    pickedProjectId: null,
+  });
+  renderSidebar();
+
+  expect(screen.getByTestId("open-todos-p1").textContent).toBe("2");
+  expect(screen.queryByTestId("open-todos-p2")).toBeNull();
 });

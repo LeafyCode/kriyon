@@ -9,6 +9,9 @@ import {
 import { afterEach, beforeEach, describe, expect, it, test, vi } from "vitest";
 
 vi.mock("../ipc/bridge.ts", () => ({
+  activityChangedPaths: vi.fn().mockResolvedValue([]),
+  blameFile: vi.fn().mockResolvedValue(null),
+  readSessionBaseline: vi.fn().mockResolvedValue({ state: "notARepo" }),
   defaultBranch: vi.fn(),
   diffSessionChanges: vi.fn(),
   diffWorkingTree: vi.fn(),
@@ -64,6 +67,7 @@ vi.mock("./CodeEditor.tsx", () => ({
 }));
 
 import {
+  activityChangedPaths,
   defaultBranch,
   diffSessionChanges,
   diffWorkingTree,
@@ -89,8 +93,9 @@ const mockedRepoToplevel = vi.mocked(repoToplevel);
 // Hoisted per Biome's `useTopLevelRegex` — reused by the touched-file
 // attribution describe block below.
 const THIS_SESSION_LABEL = /this session/i;
-const MY_EDITS_ONLY_NAME = /my edits only/i;
-const NO_FILES_TOUCHED_TEXT = /no files touched/i;
+const MY_EDITS_ONLY_NAME = /only claude's edits/i;
+const NO_FILES_TOUCHED_TEXT =
+  "Claude hasn't changed any files in this session.";
 const EDIT_FILE_BUTTON_RE = /edit file/i;
 
 /** The store's real `refresh` action, captured before any test overwrites it
@@ -259,6 +264,7 @@ function idleActivity(): SessionActivity {
 describe("ChangesView", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(activityChangedPaths).mockResolvedValue([]);
     useSessions.setState({
       activeSessionId: null,
       projects: [],
@@ -276,7 +282,11 @@ describe("ChangesView", () => {
       bySession: {},
       expandedDirs: {},
       refresh: REAL_REFRESH,
-      ui: {},
+      // Most of this file is about the view, not attribution, and seeds no
+      // touched files — so "Only Claude's edits" (on by default, ADR 0050)
+      // starts off here. The filter's own tests clear this back to the
+      // default.
+      ui: { s1: { myEditsOnly: false } },
     });
     useLayout.setState({ layout: DEFAULT_LAYOUT });
     // @tanstack/react-virtual measures via offsetHeight/offsetWidth in jsdom
@@ -528,10 +538,13 @@ describe("ChangesView", () => {
     });
   });
 
-  it("clicking an off-screen file in the tree scrolls the virtualized feed to its card", async () => {
+  it("clicking an off-screen deleted file in the tree scrolls the virtualized feed to its card", async () => {
+    // A deleted file has nothing to open, so its row jumps to its diff —
+    // every other row opens the file instead.
     const files = Array.from({ length: 30 }, (_, i) =>
       file(`src/file${String(i).padStart(2, "0")}.ts`)
     );
+    files[25] = { ...files[25], status: "deleted" };
     useChanges.setState({
       refresh: vi.fn().mockResolvedValue(undefined),
       bySession: {
@@ -1452,7 +1465,7 @@ describe("ChangesView", () => {
     expect(screen.getByTestId("diff-feed")).toBeTruthy();
   });
 
-  test("clicking a diff card's edit button opens that file in the viewer, flipping to the all-files tab", async () => {
+  test("clicking a diff card's edit button opens that file in the viewer, staying on the same tab", async () => {
     seedReadySession("s1", [fileDiff("src/a.ts")]);
     renderChangesView("s1");
 
@@ -1466,24 +1479,69 @@ describe("ChangesView", () => {
     fireEvent.click(card.getByRole("button", { name: EDIT_FILE_BUTTON_RE }));
 
     expect(useChanges.getState().ui.s1?.selectedFile).toBe("src/a.ts");
-    expect(useChanges.getState().ui.s1?.tab).toBe("all");
+    expect(useChanges.getState().ui.s1?.tab ?? "changes").toBe("changes");
     await waitFor(() => {
       expect(screen.getByTestId("file-viewer")).toBeInTheDocument();
     });
   });
 
-  test("clicking a tree row's edit button opens that file in the viewer, flipping to the all-files tab", async () => {
-    seedReadySession("s1", [fileDiff("src/a.ts")]);
+  test("clicking a changed file opens it beside the list, which stays put with the file marked", async () => {
+    seedReadySession("s1", [fileDiff("src/a.ts"), fileDiff("src/b.ts")]);
     renderChangesView("s1");
 
-    const tree = within(screen.getByTestId("file-tree-pane"));
-    fireEvent.click(tree.getByRole("button", { name: EDIT_FILE_BUTTON_RE }));
+    const list = within(screen.getByTestId("file-tree-pane-changes"));
+    fireEvent.click(list.getByText("b.ts"));
 
-    expect(useChanges.getState().ui.s1?.selectedFile).toBe("src/a.ts");
-    expect(useChanges.getState().ui.s1?.tab).toBe("all");
+    expect(useChanges.getState().ui.s1?.selectedFile).toBe("src/b.ts");
+    expect(useChanges.getState().ui.s1?.tab ?? "changes").toBe("changes");
     await waitFor(() => {
-      expect(screen.getByTestId("file-viewer")).toBeInTheDocument();
+      expect(screen.getByTestId("file-viewer")).toBeVisible();
     });
+    expect(screen.getByTestId("diff-feed").parentElement).toHaveStyle({
+      display: "none",
+    });
+    const rows = list.getAllByTestId("file-tree-file-row");
+    expect(rows[1]).toHaveAttribute("aria-current", "true");
+    expect(rows[0]).not.toHaveAttribute("aria-current");
+
+    // Closing it goes back to the diff list.
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    expect(screen.getByTestId("diff-feed").parentElement).toHaveStyle({
+      display: "block",
+    });
+  });
+
+  test("a deleted file's row closes the open file and shows its diff", async () => {
+    seedReadySession("s1", [
+      fileDiff("src/a.ts"),
+      { ...fileDiff("src/gone.ts"), status: "deleted" },
+    ]);
+    renderChangesView("s1");
+    const list = within(screen.getByTestId("file-tree-pane-changes"));
+    fireEvent.click(list.getByText("a.ts"));
+    await waitFor(() => {
+      expect(screen.getByTestId("file-viewer")).toBeVisible();
+    });
+
+    fireEvent.click(list.getByText("gone.ts"));
+
+    expect(useChanges.getState().ui.s1?.selectedFile).toBeUndefined();
+    expect(screen.getByTestId("diff-feed").parentElement).toHaveStyle({
+      display: "block",
+    });
+  });
+
+  test("an Inspector jump while a file is open opens the jumped-to file", () => {
+    seedReadySession("s1", [fileDiff("src/a.ts"), fileDiff("src/b.ts")]);
+    renderChangesView("s1");
+    fireEvent.click(
+      within(screen.getByTestId("file-tree-pane-changes")).getByText("a.ts")
+    );
+
+    act(() => useChanges.getState().requestJump("s1", "src/b.ts"));
+
+    expect(useChanges.getState().ui.s1?.selectedFile).toBe("src/b.ts");
+    expect(useChanges.getState().ui.s1?.pendingJump).toBeUndefined();
   });
 
   test("translates a repo-toplevel-relative diff path into a cwd-relative one for a session rooted in a subdirectory", async () => {
@@ -1499,7 +1557,6 @@ describe("ChangesView", () => {
     fireEvent.click(card.getByRole("button", { name: EDIT_FILE_BUTTON_RE }));
 
     expect(useChanges.getState().ui.s1?.selectedFile).toBe("src/a.ts");
-    expect(useChanges.getState().ui.s1?.tab).toBe("all");
     await waitFor(() => {
       expect(screen.getByTestId("file-viewer")).toBeInTheDocument();
     });
@@ -1619,14 +1676,14 @@ describe("ChangesView", () => {
       useChanges.getState().setTab("s1", "all");
     });
     expect(screen.getByTestId("file-tree-pane-all")).toHaveStyle({
-      display: "contents",
+      display: "flex",
     });
     expect(screen.getByText("README.md")).toBeInTheDocument();
     // No second root listDir call — the cache survived the flip.
     expect(mockedListDir).toHaveBeenCalledTimes(1);
   });
 
-  test("the file viewer survives a tab flip — stays mounted (display:none when hidden) and keeps its draft", async () => {
+  test("an open file stays open, draft and all, across a tab flip", async () => {
     mockedReadFile.mockResolvedValueOnce({
       binary: false,
       content: "hello",
@@ -1651,14 +1708,12 @@ describe("ChangesView", () => {
       useChanges.getState().setTab("s1", "changes");
     });
 
-    // Still in the DOM — not unmounted — just hidden via display:none, the
-    // same pane keep-alive rule DiffFeed already follows.
+    // The file stays open beside the AI changes list, as in an editor's
+    // git panel; the diff waits behind it until the file is closed.
     const viewer = screen.getByTestId("file-viewer");
-    expect(viewer).toBeInTheDocument();
-    expect(viewer.parentElement).toHaveStyle({ display: "none" });
-    // The diff feed (Changes tab's own content) is visible again.
+    expect(viewer.parentElement).toHaveStyle({ display: "block" });
     expect(screen.getByTestId("diff-feed").parentElement).toHaveStyle({
-      display: "block",
+      display: "none",
     });
 
     act(() => {
@@ -1752,15 +1807,20 @@ describe("ChangesView", () => {
       expect(screen.queryByLabelText(THIS_SESSION_LABEL)).toBeNull();
     });
 
-    it('the "My edits only" switch defaults off, rendering every file', () => {
+    it("AI changes starts with \"Only Claude's edits\" on, leaving the user's own edits out", () => {
       seedWithTouched(threeFiles, ["a.ts"]);
+      act(() => useChanges.setState({ ui: {} }));
 
       renderChangesView("s1");
 
-      expect(getMyEditsToggle()).toHaveAttribute("aria-checked", "false");
+      expect(getMyEditsToggle()).toHaveAttribute("aria-checked", "true");
       expect(findDiffCard("a.ts")).not.toBeNull();
+      expect(findDiffCard("b.ts")).toBeNull();
+      expect(findDiffCard("c.ts")).toBeNull();
+
+      // Off shows everything that changed since the session started.
+      fireEvent.click(getMyEditsToggle());
       expect(findDiffCard("b.ts")).not.toBeNull();
-      expect(findDiffCard("c.ts")).not.toBeNull();
     });
 
     it("filters the file list down to this session's touched files once toggled on", () => {
@@ -1913,6 +1973,11 @@ describe("ChangesView", () => {
         },
       });
       mockedRepoToplevel.mockResolvedValueOnce("/repo-wt/feat");
+      // The Activity log, which owns this record, agrees with it.
+      vi.mocked(activityChangedPaths).mockResolvedValue([
+        "/repo-wt/feat/a.ts",
+        "/repo/decoy.ts",
+      ]);
 
       renderChangesView("s1");
 
@@ -1963,6 +2028,11 @@ describe("ChangesView", () => {
 
     it("is hidden on the All-files tab, where FileBrowserTree ignores the filter entirely", () => {
       seedReadySession("s1", [fileDiff("a.ts")]);
+      // Claude's files are known (the Activity log answered: none).
+      useSessions.setState({
+        repoToplevel: { s1: "/repo" },
+        touchedSynced: { s1: true },
+      });
 
       renderChangesView("s1");
       expect(
@@ -1980,6 +2050,11 @@ describe("ChangesView", () => {
 
     it("is visible on the Changes tab once a diff has loaded", () => {
       seedReadySession("s1", [fileDiff("a.ts")]);
+      // Claude's files are known (the Activity log answered: none).
+      useSessions.setState({
+        repoToplevel: { s1: "/repo" },
+        touchedSynced: { s1: true },
+      });
 
       renderChangesView("s1");
 
@@ -2001,7 +2076,7 @@ describe("ChangesView", () => {
       const toggle = screen.getByRole("switch", { name: MY_EDITS_ONLY_NAME });
       expect(toggle).toHaveAttribute("aria-checked", "false");
 
-      fireEvent.click(screen.getByText("My edits only"));
+      fireEvent.click(screen.getByText("Only Claude's edits"));
 
       expect(toggle).toHaveAttribute("aria-checked", "true");
       expect(findDiffCard("b.ts")).toBeNull();
@@ -2009,11 +2084,7 @@ describe("ChangesView", () => {
   });
 
   describe("a jump while a file is open on the All-files tab", () => {
-    it("switches back to the Changes tab so the feed is actually visible, instead of scrolling a hidden feed and dropping the request", async () => {
-      // The viewer is showing (All-files tab + a selected file), so DiffFeed
-      // is display:none — `scrollToFile` on a hidden virtualizer is a silent
-      // no-op, and consuming the jump afterwards threw the user's click away:
-      // they stayed on the All-files tab with the OLD file open.
+    it("opens the jumped-to file when a file is already open, rather than scrolling a hidden feed", async () => {
       const files = Array.from({ length: 30 }, (_, i) =>
         fileDiff(`src/file${String(i).padStart(2, "0")}.ts`)
       );
@@ -2027,31 +2098,16 @@ describe("ChangesView", () => {
       await waitFor(() => {
         expect(screen.getByTestId("file-viewer")).toBeInTheDocument();
       });
-      expect(findDiffCard("src/file25.ts")).toBeNull();
 
       act(() => {
         useChanges.getState().requestJump("s1", "src/file25.ts");
       });
 
       await waitFor(() => {
-        expect(useChanges.getState().ui.s1?.tab).toBe("changes");
-      });
-      await waitFor(() => {
-        expect(findDiffCard("src/file25.ts")).not.toBeNull();
+        expect(useChanges.getState().ui.s1?.selectedFile).toBe("src/file25.ts");
       });
       expect(useChanges.getState().ui.s1?.pendingJump).toBeUndefined();
-      // The feed is the thing on screen now…
-      expect(screen.getByTestId("diff-feed").parentElement).toHaveStyle({
-        display: "block",
-      });
-      // …and the previously open file wasn't destroyed to get there: the
-      // viewer is still mounted (draft, cursor, scroll intact), just hidden,
-      // exactly as a normal tab flip leaves it.
-      expect(screen.getByTestId("file-viewer")).toBeInTheDocument();
-      expect(screen.getByTestId("file-viewer").parentElement).toHaveStyle({
-        display: "none",
-      });
-      expect(useChanges.getState().ui.s1?.selectedFile).toBe("src/file00.ts");
+      expect(useChanges.getState().ui.s1?.tab).toBe("all");
     });
   });
 
@@ -2092,6 +2148,8 @@ describe("ChangesView", () => {
         repoToplevel: { s1: "/repo" },
         touchedFiles: { s1: ["/repo/a.ts"] },
       });
+      // The Activity log, which owns this record, agrees with it.
+      vi.mocked(activityChangedPaths).mockResolvedValue(["/repo/a.ts"]);
 
       renderChangesView("s1");
       fireEvent.click(screen.getByRole("switch", { name: MY_EDITS_ONLY_NAME }));
@@ -2107,6 +2165,63 @@ describe("ChangesView", () => {
         screen.getByRole("switch", { name: MY_EDITS_ONLY_NAME })
       ).toHaveAttribute("aria-checked", "true");
       expect(findDiffCard("b.ts")).toBeNull();
+    });
+  });
+
+  describe("the three scopes", () => {
+    it("switching to All changes fetches the uncommitted work", () => {
+      seedReadySession("s1", [fileDiff("a.ts")]);
+      plainSession();
+      renderChangesView("s1");
+      const refresh = useChanges.getState().refresh as ReturnType<typeof vi.fn>;
+      const before = refresh.mock.calls.length;
+
+      fireEvent.click(screen.getByTestId("file-tree-tab-uncommitted"));
+
+      expect(refresh.mock.calls.length).toBe(before + 1);
+    });
+
+    it("shows the uncommitted files and what they are measured against", () => {
+      seedReadySession("s1", [fileDiff("a.ts")]);
+      plainSession();
+      useChanges.setState((s) => ({
+        bySession: {
+          s1: {
+            ...s.bySession.s1,
+            uncommitted: {
+              diff: {
+                base: "HEAD",
+                files: [fileDiff("a.ts"), fileDiff("b.ts")],
+              },
+              label: "HEAD · uncommitted",
+            },
+          },
+        },
+      }));
+      renderChangesView("s1");
+
+      fireEvent.click(screen.getByTestId("file-tree-tab-uncommitted"));
+
+      expect(
+        screen.getAllByTestId("file-tree-file-row").map((r) => r.title)
+      ).toEqual(["a.ts", "b.ts"]);
+      expect(screen.getByTestId("summary-totals")).toHaveTextContent(
+        "2 files changed"
+      );
+      expect(screen.getByTestId("summary-baseline")).toHaveTextContent(
+        "HEAD · uncommitted"
+      );
+    });
+
+    it("a jump to one of the session's files while All changes shows goes back to AI changes", () => {
+      seedReadySession("s1", [fileDiff("a.ts")]);
+      plainSession();
+      renderChangesView("s1");
+      fireEvent.click(screen.getByTestId("file-tree-tab-uncommitted"));
+
+      act(() => useChanges.getState().requestJump("s1", "a.ts"));
+
+      expect(useChanges.getState().ui.s1?.tab).toBe("changes");
     });
   });
 });

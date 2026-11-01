@@ -1,3 +1,5 @@
+import type { CSSProperties } from "react";
+
 /**
  * Per-project identity colors. Eight muted hues tuned for the dark chrome —
  * similar saturation and lightness so no project shouts, all clearly apart
@@ -50,4 +52,24 @@ export function projectColor(project: {
   return (
     project.color ?? PROJECT_PALETTE[hash(project.id) % PROJECT_PALETTE.length]
   );
+}
+
+/**
+ * A project's identity mark: the 8px square beside its name in the sidebar
+ * and the Notes tab. Layout around it (alignment, margins) is the caller's.
+ */
+export function projectSquareStyle(project: {
+  color: string | null;
+  id: string;
+}): CSSProperties {
+  return {
+    background: projectColor(project),
+    borderRadius: "2px",
+    flex: "none",
+    height: "8px",
+    // Full strength on the new chrome. The half-opacity was tuned against the
+    // old warm greys, where a saturated 7px square shouted; on the flat cool
+    // plane it reads as a smudge instead of an identity mark.
+    width: "8px",
+  };
 }

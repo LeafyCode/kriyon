@@ -1,3 +1,4 @@
+import { hexTriplet } from "./hex.ts";
 import type { Theme, ThemeColors } from "./themes/index.ts";
 
 /** The custom-property name a theme color key publishes as (e.g. `inkBright` → `--kr-ink-bright`). */
@@ -21,18 +22,6 @@ export const MOTION = {
   hover: "0.14s ease",
 } as const;
 
-const HEX_COLOR = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i;
-
-/** Parse `#rrggbb` into a `"r, g, b"` triplet for rgba() composition. */
-function hexTriplet(hex: string): string {
-  const match = HEX_COLOR.exec(hex);
-  if (!match) {
-    throw new Error(`theme accent must be a 6-digit hex color, got "${hex}"`);
-  }
-  const [, r, g, b] = match;
-  return [r, g, b].map((channel) => Number.parseInt(channel, 16)).join(", ");
-}
-
 /**
  * Publish a theme's palette as `--kr-*` custom properties on the root
  * element. All tokens resolve through these variables, so this single call
@@ -45,6 +34,15 @@ export function applyTheme(theme: Theme): void {
   }
   // The triplet form lets accentAlpha() tint at any alpha without hex math.
   root.setProperty("--kr-accent-rgb", hexTriplet(theme.colors.accent));
+  // The colour ink is made of — white on a dark theme, black on a light one.
+  // CSS that needs a faint wash or a scrollbar thumb tints with this rather
+  // than hard-coding white, which vanishes on a light plane.
+  root.setProperty(
+    "--kr-contrast-rgb",
+    theme.appearance === "light" ? "0, 0, 0" : "255, 255, 255"
+  );
+  // Native controls, scrollbars and form fills follow this.
+  root.colorScheme = theme.appearance;
 
   // Motion is theme-independent: publish the same constants every call so the
   // seam owns the values (harmless to re-set on a theme switch).

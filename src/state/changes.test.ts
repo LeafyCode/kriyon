@@ -1142,3 +1142,33 @@ test("toggleDir expands then collapses a directory", () => {
   useChanges.getState().toggleDir("s1", "src");
   expect(useChanges.getState().expandedDirs.s1?.src).toBe(false);
 });
+
+test("collapseAllDirs closes every open folder in the session's file tree", () => {
+  const store = useChanges.getState();
+  store.toggleDir("s1", "src");
+  store.toggleDir("s1", "src/ui");
+  store.toggleDir("s2", "docs");
+  store.collapseAllDirs("s1");
+  expect(useChanges.getState().expandedDirs.s1).toEqual({});
+  // Another session's tree is its own.
+  expect(useChanges.getState().expandedDirs.s2?.docs).toBe(true);
+});
+
+test("expandToPath opens every folder above a file, and leaves others alone", () => {
+  const store = useChanges.getState();
+  store.toggleDir("s1", "docs");
+  store.expandToPath("s1", "src/ui/deep/a.ts");
+  const expanded = useChanges.getState().expandedDirs.s1;
+  expect(expanded).toEqual({
+    docs: true,
+    src: true,
+    "src/ui": true,
+    "src/ui/deep": true,
+  });
+});
+
+test("expandToPath on a root-level file changes nothing", () => {
+  const before = useChanges.getState().expandedDirs;
+  useChanges.getState().expandToPath("s1", "README.md");
+  expect(useChanges.getState().expandedDirs).toBe(before);
+});

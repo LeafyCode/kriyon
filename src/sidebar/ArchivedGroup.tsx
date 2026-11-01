@@ -7,8 +7,9 @@ import { tokens } from "../theme/tokens.ts";
 
 // Quiet, collapsed-by-default disclosure — same muted/hairline language as
 // the project group header, but never expanded on load: archived sessions
-// are deliberately out of the way until asked for.
-const archivedHeaderStyle: CSSProperties = {
+// are deliberately out of the way until asked for. Shared with the Parked
+// section above it, so the two foot-of-rail sections always match.
+export const footSectionHeaderStyle: CSSProperties = {
   alignItems: "center",
   background: "transparent",
   border: "none",
@@ -41,8 +42,10 @@ const archivedTitleStyle: CSSProperties = {
   whiteSpace: "nowrap",
 };
 
-const unarchiveButtonStyle: CSSProperties = {
+/** The small "bring it back" button on a foot-of-rail row (Restore, Unpark). */
+export const restoreButtonStyle: CSSProperties = {
   ...button("secondary", "sm"),
+  flex: "none",
   fontSize: "10.5px",
   height: "20px",
   padding: "0 8px",
@@ -69,7 +72,7 @@ const ArchivedGroup = memo(function ArchivedGroup() {
       <button
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
-        style={archivedHeaderStyle}
+        style={footSectionHeaderStyle}
         type="button"
       >
         <ChevronRight
@@ -93,7 +96,7 @@ const ArchivedGroup = memo(function ArchivedGroup() {
                 className="kr-hover-surface"
                 data-testid={`unarchive-${s.id}`}
                 onClick={() => useSessions.getState().unarchiveSession(s.id)}
-                style={unarchiveButtonStyle}
+                style={restoreButtonStyle}
                 type="button"
               >
                 Restore

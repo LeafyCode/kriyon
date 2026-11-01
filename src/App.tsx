@@ -32,9 +32,14 @@ import {
   sessionRequestsReady,
 } from "./state/nestedSessions.ts";
 import { hydrate, installPersistence } from "./state/persistence.ts";
+import { installNotesPickReset } from "./state/projectNotes.ts";
 import { useSessions } from "./state/sessions.ts";
 import { freedMemoryNote } from "./state/stopCost.ts";
-import { useTerminals } from "./state/terminals.ts";
+import {
+  installDormantTerminalStops,
+  useTerminals,
+} from "./state/terminals.ts";
+import { useTour } from "./state/tour.ts";
 import { useUpdates } from "./state/updates.ts";
 import { useSessionWatch } from "./state/useSessionWatch.ts";
 import { sessionPaneMounts } from "./state/warmPanes.ts";
@@ -294,10 +299,18 @@ function App() {
     const stopUpdateAnswered = onEvent(onUpdateChannelAnswered, (snapshot) =>
       useUpdates.getState().answerMove(snapshot)
     );
-    ignore(hydrate().then(sessionRequestsReady));
+    ignore(
+      hydrate().then(() => {
+        sessionRequestsReady();
+        // The [App tour] opens on its own only once `tourSeen` is known.
+        useTour.getState().noteLayoutLoaded();
+      })
+    );
     const stopPersistence = installPersistence();
+    const stopDormantTerminals = installDormantTerminalStops();
     const stopListeners = installSessionListeners();
     const stopHeldBack = installHeldBackStarts();
+    const stopNotesPickReset = installNotesPickReset();
     const stopCommandCenter = installCommandCenterListeners();
     const stopBridgeMirrors = installBridgeMirrors();
     const stopCloseOnQuit = installCloseOnQuit();
@@ -319,8 +332,10 @@ function App() {
       stopUpdateChanged();
       stopUpdateAnswered();
       stopPersistence();
+      stopDormantTerminals();
       stopListeners();
       stopHeldBack();
+      stopNotesPickReset();
       stopCommandCenter();
       stopBridgeMirrors();
       stopCloseOnQuit();

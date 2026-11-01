@@ -44,11 +44,6 @@ export const MEMORY_BUDGET_OPTIONS: readonly SettingOption<string>[] = [
   { label: "12 GB", value: "12288" },
 ];
 
-export const MEMORY_WARN_OPTIONS: readonly SettingOption<"on" | "off">[] = [
-  { label: "On", value: "on" },
-  { label: "Off", value: "off" },
-];
-
 export const AUTO_SLEEP_OPTIONS: readonly SettingOption<AutoSleepAfter>[] = [
   { label: "Off", value: "off" },
   { label: "After 1h", value: "1h" },

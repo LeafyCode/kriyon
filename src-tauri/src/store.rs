@@ -1,10 +1,12 @@
-//! SQLite-backed persistence for projects, sessions, and UI layout state.
+//! SQLite-backed persistence for projects, sessions, project notes, and UI
+//! layout state.
 //!
 //! The [`Store`] wraps a single [`rusqlite::Connection`] and exposes typed
 //! upsert/list/load helpers. Schema is created idempotently on open.
 
 use std::path::Path;
 
+use kriyon_core::project_notes::{NoteKind, ProjectNote};
 use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json;
@@ -64,6 +66,20 @@ pub struct SessionRow {
     /// `None` for a top-level one. Nests the row under it in the sidebar.
     #[serde(default)]
     pub nested_under: Option<String>,
+    /// When the session was parked (ms since epoch), or `None`. A parked
+    /// session is stopped and kept off the rail until it is opened again
+    /// (ADR-0052).
+    #[serde(default)]
+    pub parked_at: Option<i64>,
+}
+
+impl SessionRow {
+    /// Whether the session is put away — an [Archived session] or a parked
+    /// one. Both are stopped, so neither is live.
+    #[must_use]
+    pub fn is_put_away(&self) -> bool {
+        self.archived_at.is_some() || self.parked_at.is_some()
+    }
 }
 
 /// A [Session]'s display identity: the fields a notification, sidebar row, or
@@ -134,6 +150,25 @@ pub struct PromptRow {
     pub updated_ms: i64,
 }
 
+/// The `project_notes` columns, in the order [`project_note_from_row`] reads.
+const PROJECT_NOTE_COLUMNS: &str =
+    "id, project_id, kind, text, body, done_at, pinned, created_ms, updated_ms";
+
+fn project_note_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProjectNote> {
+    let kind: String = row.get(2)?;
+    Ok(ProjectNote {
+        id: row.get(0)?,
+        project_id: row.get(1)?,
+        kind: NoteKind::from_stored(&kind),
+        text: row.get(3)?,
+        body: row.get(4)?,
+        done_at: row.get(5)?,
+        pinned: row.get(6)?,
+        created_ms: row.get(7)?,
+        updated_ms: row.get(8)?,
+    })
+}
+
 /// SQLite-backed persistence wrapping a single [`Connection`].
 pub struct Store {
     conn: Connection,
@@ -188,6 +223,7 @@ impl Store {
                  title_locked      INTEGER NOT NULL DEFAULT 0,
                  parent_session_id TEXT,
                  nested_under TEXT,
+                 parked_at INTEGER,
                  FOREIGN KEY(project_id) REFERENCES projects(id)
              );
              CREATE TABLE IF NOT EXISTS app_state (
@@ -204,7 +240,21 @@ impl Store {
                  last_used_ms INTEGER,
                  created_ms   INTEGER NOT NULL,
                  updated_ms   INTEGER NOT NULL
-             );",
+             );
+             CREATE TABLE IF NOT EXISTS project_notes (
+                 id         TEXT PRIMARY KEY,
+                 project_id TEXT NOT NULL,
+                 kind       TEXT NOT NULL,
+                 text       TEXT NOT NULL,
+                 body       TEXT NOT NULL DEFAULT '',
+                 done_at    INTEGER,
+                 pinned     INTEGER NOT NULL DEFAULT 0,
+                 created_ms INTEGER NOT NULL,
+                 updated_ms INTEGER NOT NULL,
+                 FOREIGN KEY(project_id) REFERENCES projects(id)
+             );
+             CREATE INDEX IF NOT EXISTS project_notes_by_project
+                 ON project_notes(project_id);",
         )?;
         self.migrate_claude_session_id()?;
         self.migrate_column("projects", "setup_command", "TEXT")?;
@@ -216,6 +266,7 @@ impl Store {
         self.migrate_column("sessions", "title_locked", "INTEGER NOT NULL DEFAULT 0")?;
         self.migrate_column("sessions", "parent_session_id", "TEXT")?;
         self.migrate_column("sessions", "nested_under", "TEXT")?;
+        self.migrate_column("sessions", "parked_at", "INTEGER")?;
         Ok(())
     }
 
@@ -287,8 +338,8 @@ impl Store {
     pub fn upsert_session(&self, s: &SessionRow) -> Result<(), StoreError> {
         self.conn.execute(
             "INSERT INTO sessions
-                 (id, project_id, title, cwd, worktree_path, created_at, claude_session_id, archived_at, baseline_oid, title_locked, parent_session_id, nested_under)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+                 (id, project_id, title, cwd, worktree_path, created_at, claude_session_id, archived_at, baseline_oid, title_locked, parent_session_id, nested_under, parked_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
              ON CONFLICT(id) DO UPDATE SET
                  project_id = excluded.project_id, title = excluded.title,
                  cwd = excluded.cwd, worktree_path = excluded.worktree_path,
@@ -296,7 +347,8 @@ impl Store {
                  archived_at = excluded.archived_at, baseline_oid = excluded.baseline_oid,
                  title_locked = excluded.title_locked,
                  parent_session_id = excluded.parent_session_id,
-                 nested_under = excluded.nested_under",
+                 nested_under = excluded.nested_under,
+                 parked_at = excluded.parked_at",
             rusqlite::params![
                 s.id,
                 s.project_id,
@@ -309,7 +361,8 @@ impl Store {
                 s.baseline_oid,
                 s.title_locked,
                 s.parent_session_id,
-                s.nested_under
+                s.nested_under,
+                s.parked_at
             ],
         )?;
         Ok(())
@@ -321,7 +374,7 @@ impl Store {
     /// Returns [`StoreError::Sqlite`] if the query fails.
     pub fn list_sessions(&self) -> Result<Vec<SessionRow>, StoreError> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, project_id, title, cwd, worktree_path, created_at, claude_session_id, archived_at, baseline_oid, title_locked, parent_session_id, nested_under
+            "SELECT id, project_id, title, cwd, worktree_path, created_at, claude_session_id, archived_at, baseline_oid, title_locked, parent_session_id, nested_under, parked_at
              FROM sessions ORDER BY created_at",
         )?;
         let rows = stmt.query_map([], |row| {
@@ -338,6 +391,7 @@ impl Store {
                 title_locked: row.get::<_, Option<i64>>(9)?.unwrap_or(0) != 0,
                 parent_session_id: row.get(10)?,
                 nested_under: row.get(11)?,
+                parked_at: row.get(12)?,
             })
         })?;
         let sessions = rows.collect::<Result<Vec<_>, _>>()?;
@@ -477,6 +531,77 @@ impl Store {
         Ok(())
     }
 
+    /// Insert a [Project note], or update the one with its `id`. An update
+    /// never changes which project the note belongs to.
+    ///
+    /// # Errors
+    /// Returns [`StoreError::Sqlite`] if the statement fails, including when
+    /// the note's project does not exist (the foreign key).
+    pub fn upsert_project_note(&self, n: &ProjectNote) -> Result<(), StoreError> {
+        self.conn.execute(
+            "INSERT INTO project_notes
+                 (id, project_id, kind, text, body, done_at, pinned, created_ms, updated_ms)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+             ON CONFLICT(id) DO UPDATE SET
+                 kind = excluded.kind, text = excluded.text, body = excluded.body,
+                 done_at = excluded.done_at, pinned = excluded.pinned,
+                 updated_ms = excluded.updated_ms",
+            rusqlite::params![
+                n.id,
+                n.project_id,
+                n.kind.as_str(),
+                n.text,
+                n.body,
+                n.done_at,
+                n.pinned,
+                n.created_ms,
+                n.updated_ms
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// List every [Project note], oldest first.
+    ///
+    /// # Errors
+    /// Returns [`StoreError::Sqlite`] if the query fails.
+    pub fn list_project_notes(&self) -> Result<Vec<ProjectNote>, StoreError> {
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT {PROJECT_NOTE_COLUMNS} FROM project_notes ORDER BY created_ms, id"
+        ))?;
+        let rows = stmt.query_map([], project_note_from_row)?;
+        let notes = rows.collect::<Result<Vec<_>, _>>()?;
+        Ok(notes)
+    }
+
+    /// The [Project note] with the given `id`, or `None`.
+    ///
+    /// # Errors
+    /// Returns [`StoreError::Sqlite`] if the query fails.
+    pub fn project_note(&self, id: &str) -> Result<Option<ProjectNote>, StoreError> {
+        let note = self
+            .conn
+            .query_row(
+                &format!("SELECT {PROJECT_NOTE_COLUMNS} FROM project_notes WHERE id = ?1"),
+                rusqlite::params![id],
+                project_note_from_row,
+            )
+            .optional()?;
+        Ok(note)
+    }
+
+    /// Delete the [Project note] with the given `id`. No-op if it does not exist.
+    ///
+    /// # Errors
+    /// Returns [`StoreError::Sqlite`] if the statement fails.
+    pub fn delete_project_note(&self, id: &str) -> Result<(), StoreError> {
+        self.conn.execute(
+            "DELETE FROM project_notes WHERE id = ?1",
+            rusqlite::params![id],
+        )?;
+        Ok(())
+    }
+
     /// Upsert a layout/app-state value keyed by `key`.
     ///
     /// # Errors
@@ -513,7 +638,7 @@ impl Store {
         let row = self
             .conn
             .query_row(
-                "SELECT id, project_id, title, cwd, worktree_path, created_at, claude_session_id, archived_at, baseline_oid, title_locked, parent_session_id, nested_under
+                "SELECT id, project_id, title, cwd, worktree_path, created_at, claude_session_id, archived_at, baseline_oid, title_locked, parent_session_id, nested_under, parked_at
                  FROM sessions WHERE id = ?1",
                 rusqlite::params![id],
                 |row| {
@@ -530,6 +655,7 @@ impl Store {
                         title_locked: row.get::<_, Option<i64>>(9)?.unwrap_or(0) != 0,
                 parent_session_id: row.get(10)?,
                         nested_under: row.get(11)?,
+                        parked_at: row.get(12)?,
                     })
                 },
             )
@@ -608,6 +734,7 @@ mod tests {
             title_locked: false,
             parent_session_id: None,
             nested_under: None,
+            parked_at: None,
         }
     }
 
@@ -788,11 +915,31 @@ mod tests {
             title_locked: false,
             parent_session_id: None,
             nested_under: None,
+            parked_at: None,
         };
         store.upsert_session(&updated).expect("update session");
 
         let sessions = store.list_sessions().expect("list sessions");
         assert_eq!(sessions, vec![updated]);
+    }
+
+    #[test]
+    fn session_round_trips_parked_at() {
+        let store = Store::open_in_memory().expect("open");
+        store.upsert_project(&sample_project()).expect("project");
+        let parked = SessionRow {
+            parked_at: Some(1_730_000_000_000),
+            ..sample_session()
+        };
+        store.upsert_session(&parked).expect("park");
+        assert_eq!(store.list_sessions().expect("list"), vec![parked.clone()]);
+        assert!(parked.is_put_away());
+        let unparked = SessionRow {
+            parked_at: None,
+            ..parked
+        };
+        store.upsert_session(&unparked).expect("unpark");
+        assert_eq!(store.list_sessions().expect("list"), vec![unparked]);
     }
 
     #[test]
@@ -893,6 +1040,7 @@ mod tests {
         let store = Store::from_connection(conn).expect("migrate on open");
         assert_eq!(store.list_sessions().expect("list")[0].archived_at, None);
         assert_eq!(store.list_sessions().expect("list")[0].baseline_oid, None);
+        assert_eq!(store.list_sessions().expect("list")[0].parked_at, None);
         assert_eq!(
             store.list_sessions().expect("list")[0].parent_session_id,
             None
@@ -1024,6 +1172,108 @@ mod tests {
         assert_eq!(
             store.list_prompts().expect("list")[0].tags,
             Vec::<String>::new()
+        );
+    }
+    fn sample_note() -> ProjectNote {
+        ProjectNote {
+            id: "n1".to_string(),
+            project_id: "p1".to_string(),
+            kind: NoteKind::Todo,
+            text: "Write the ADR".to_string(),
+            body: "Why, then what".to_string(),
+            done_at: None,
+            pinned: false,
+            created_ms: 1_000,
+            updated_ms: 1_000,
+        }
+    }
+
+    #[test]
+    fn project_note_round_trips() {
+        let store = Store::open_in_memory().expect("open");
+        store.upsert_project(&sample_project()).expect("project");
+        store.upsert_project_note(&sample_note()).expect("insert");
+        assert_eq!(
+            store.list_project_notes().expect("list"),
+            vec![sample_note()]
+        );
+    }
+
+    #[test]
+    fn upsert_project_note_updates_in_place_but_never_moves_projects() {
+        let store = Store::open_in_memory().expect("open");
+        store.upsert_project(&sample_project()).expect("project");
+        store
+            .upsert_project(&ProjectRow {
+                id: "p2".to_string(),
+                ..sample_project()
+            })
+            .expect("second project");
+        store.upsert_project_note(&sample_note()).expect("insert");
+        let edited = ProjectNote {
+            kind: NoteKind::Idea,
+            text: "Edited".to_string(),
+            pinned: true,
+            updated_ms: 2_000,
+            ..sample_note()
+        };
+        store
+            .upsert_project_note(&ProjectNote {
+                project_id: "p2".to_string(),
+                ..edited.clone()
+            })
+            .expect("update");
+        assert_eq!(store.list_project_notes().expect("list"), vec![edited]);
+    }
+
+    #[test]
+    fn project_notes_list_oldest_first() {
+        let store = Store::open_in_memory().expect("open");
+        store.upsert_project(&sample_project()).expect("project");
+        let newer = ProjectNote {
+            id: "n2".to_string(),
+            created_ms: 5_000,
+            ..sample_note()
+        };
+        store.upsert_project_note(&newer).expect("newer");
+        store.upsert_project_note(&sample_note()).expect("older");
+        let ids: Vec<String> = store
+            .list_project_notes()
+            .expect("list")
+            .into_iter()
+            .map(|n| n.id)
+            .collect();
+        assert_eq!(ids, ["n1", "n2"]);
+    }
+
+    #[test]
+    fn delete_project_note_removes_it_and_is_a_noop_when_missing() {
+        let store = Store::open_in_memory().expect("open");
+        store.upsert_project(&sample_project()).expect("project");
+        store.upsert_project_note(&sample_note()).expect("insert");
+        store.delete_project_note("n1").expect("delete");
+        store.delete_project_note("n1").expect("delete again");
+        assert_eq!(store.list_project_notes().expect("list"), vec![]);
+    }
+
+    #[test]
+    fn project_note_without_a_project_is_rejected() {
+        let store = Store::open_in_memory().expect("open");
+        assert!(store.upsert_project_note(&sample_note()).is_err());
+    }
+
+    #[test]
+    fn project_note_with_an_unknown_stored_kind_reads_as_a_note() {
+        let store = Store::open_in_memory().expect("open");
+        store.upsert_project(&sample_project()).expect("project");
+        store.upsert_project_note(&sample_note()).expect("insert");
+        store
+            .conn_for_tests()
+            .execute("UPDATE project_notes SET kind = 'checklist'", [])
+            .expect("corrupt");
+        assert_eq!(
+            store.list_project_notes().expect("list")[0].kind,
+            NoteKind::Note
         );
     }
 }

@@ -13,9 +13,14 @@ export type ChangesFetchStatus = "error" | "idle" | "loading" | "ready";
 
 /** One session's Code Changes View state. */
 export interface SessionChanges {
+  /** The exact comparison point, for the summary bar's tooltip:
+   * `session start · snapshot ac1741c`, `HEAD · uncommitted`, `main @ 1a2b`. */
   baselineLabel: string;
   /** File path → user-toggled collapse; preserved across `refresh`. */
   collapsed: Record<string, boolean>;
+  /** The same comparison in plain words, for the summary bar itself:
+   * `since session start`, `vs last commit`, `vs main`. */
+  comparedTo?: string;
   diff: SessionDiff | null;
   error?: string;
   /** `Date.now()` of the last *successful* fetch — `0` if one has never
@@ -37,6 +42,9 @@ export interface SessionChanges {
   hunkHashes: Record<string, string>;
   status: ChangesFetchStatus;
   totals: DiffTotals | null;
+  /** The All changes scope's diff, fetched only while a scope wants it (see
+   * {@link scopeWantsUncommitted}); absent until then. */
+  uncommitted?: UncommittedChanges;
   /** File path → the jump rail's "already looked at" flag (Task 10). Set by
    * `markViewed` when a file's card intersects the viewport; reset by
    * `refresh` only for a path whose hunk content actually changed (compared
@@ -74,8 +82,47 @@ export const EMPTY_VIEWED: Record<string, boolean> = {};
  * forever off a fresh `?? {}`. */
 export const EMPTY_EXPANDED_DIRS: Record<string, boolean> = {};
 
-/** Which tab the Changes view's left column is showing. */
-export type FileTreeTab = "all" | "changes";
+/**
+ * Whether the AI changes tab keeps to the files Claude changed — on unless
+ * the user turned it off. The record behind it is the [Activity log]
+ * (edits, writes and the files a command changed, subagents included), so it
+ * is trusted by default; the user's own edits are under All changes. See ADR
+ * 0050, which supersedes ADR 0015's default-off.
+ */
+export function myEditsOnlyOf(ui: SessionChangesUi | undefined): boolean {
+  return ui?.myEditsOnly ?? true;
+}
+
+/**
+ * Which scope the Files view's left column is showing:
+ * - `"changes"` — **AI changes**: what changed since the session started
+ *   (the [Session diff]), with the optional "only Claude's files" filter.
+ * - `"uncommitted"` — **All changes**: everything not yet committed (or, in
+ *   a worktree, not yet on the default branch), whoever made it — what an
+ *   editor's git panel shows.
+ * - `"all"` — **Files**: the whole tree.
+ */
+export type FileTreeTab = "all" | "changes" | "uncommitted";
+
+/** Whether `tab` needs the uncommitted diff: All changes lists it, and Files
+ * colours the tree from it. AI changes doesn't, so a session sitting there
+ * pays for one diff per refresh, not two. */
+export function scopeWantsUncommitted(tab: FileTreeTab | undefined): boolean {
+  return tab === "uncommitted" || tab === "all";
+}
+
+/** The All changes scope's diff — everything uncommitted — kept beside the
+ * session diff rather than in place of it, so the Inspector and the header
+ * count keep meaning "this session". */
+export interface UncommittedChanges {
+  /** Plain words, like {@link SessionChanges.comparedTo}. */
+  comparedTo?: string;
+  diff: SessionDiff | null;
+  /** Why the last fetch failed, over whatever `diff` still holds. */
+  error?: string;
+  /** The summary bar's label for it, e.g. `uncommitted · vs HEAD`. */
+  label: string;
+}
 
 /** A file's `(mtime, len)` signature at the moment it was last read from
  * disk — what `writeFile`'s [Save conflict guard] compares against. Adopted
@@ -180,6 +227,9 @@ export interface ChangesState {
    * one. */
   activeFile: Record<string, string | null>;
   bySession: Record<string, SessionChanges>;
+  /** Close every open folder in this session's All-files tree — the
+   * explorer's "Collapse folders" button. */
+  collapseAllDirs: (sessionId: string) => void;
   /** Take and clear the pending jump for `sessionId`. */
   consumeJump: (sessionId: string) => void;
   /** sessionId → the repo-relative path of the file currently dirty in that
@@ -198,6 +248,10 @@ export interface ChangesState {
   /** sessionId → repo-relative dir paths currently expanded in the All-files
    * tree. "" is the repo root. */
   expandedDirs: Record<string, Record<string, boolean>>;
+  /** Open every folder above `path` (cwd-relative) so its row is on screen —
+   * what an editor does when a file is opened from somewhere other than the
+   * tree. A root-level path opens nothing. */
+  expandToPath: (sessionId: string, path: string) => void;
   /** sessionId → path → the [File draft] stashed when that pane was unmounted
    * while dirty. Only dirty drafts are ever stashed, and only by the pane
    * going away underneath the user (the [Warm pane] LRU evicting it) — a
@@ -239,12 +293,16 @@ export interface ChangesState {
    * {@link ChangesState.activeFile}. No-ops when unchanged so a scroll that
    * doesn't cross a card boundary never touches the store. */
   setActiveFile: (sessionId: string, path: string | null) => void;
-  /** Set every file currently in `sessionId`'s diff to `collapsed` in one
-   * batch — the SummaryBar's "Collapse all"/"Expand all" controls (outline
-   * mode for a large review). A no-op when the session has no diff yet. A
-   * later per-file {@link toggleCollapsed} still overrides its file, the same
-   * as any other explicit toggle. */
-  setAllCollapsed: (sessionId: string, collapsed: boolean) => void;
+  /** Collapse or expand every card in `paths` — the files the scope on
+   * screen lists — or, without `paths`, every file in the session diff, in
+   * one batch: the SummaryBar's "Collapse all"/"Expand all". A no-op when
+   * there is nothing to act on. A later per-file {@link toggleCollapsed}
+   * still overrides its file. */
+  setAllCollapsed: (
+    sessionId: string,
+    collapsed: boolean,
+    paths?: readonly string[]
+  ) => void;
   /** Publish `sessionId`'s live dirty path — see {@link ChangesState.dirtyFiles}. */
   setDirtyFile: (sessionId: string, path: string | null) => void;
   setTab: (sessionId: string, tab: FileTreeTab) => void;
@@ -607,6 +665,33 @@ export const useChanges = create<ChangesState>((set, get) => ({
     }));
   },
 
+  collapseAllDirs: (sessionId) =>
+    set((state) => ({
+      expandedDirs: { ...state.expandedDirs, [sessionId]: {} },
+    })),
+
+  expandToPath: (sessionId, path) =>
+    set((state) => {
+      const parts = path.split("/").slice(0, -1);
+      if (parts.length === 0) {
+        return state;
+      }
+      const prev = state.expandedDirs[sessionId] ?? EMPTY_EXPANDED_DIRS;
+      const next = { ...prev };
+      let changed = false;
+      for (let i = 1; i <= parts.length; i += 1) {
+        const dir = parts.slice(0, i).join("/");
+        if (next[dir] !== true) {
+          next[dir] = true;
+          changed = true;
+        }
+      }
+      if (!changed) {
+        return state;
+      }
+      return { expandedDirs: { ...state.expandedDirs, [sessionId]: next } };
+    }),
+
   pruneExpandedDirsUnder: (sessionId, path) =>
     set((state) => {
       const prev = state.expandedDirs[sessionId];
@@ -702,16 +787,16 @@ export const useChanges = create<ChangesState>((set, get) => ({
   setTab: (sessionId, tab) =>
     set((state) => patchUi(state, sessionId, { tab })),
 
-  setAllCollapsed: (sessionId, collapsed) =>
+  setAllCollapsed: (sessionId, collapsed, paths) =>
     set((s) => {
       const prev = s.bySession[sessionId];
-      const files = prev?.diff?.files ?? [];
-      if (!prev || files.length === 0) {
+      const targets = paths ?? (prev?.diff?.files ?? []).map((f) => f.path);
+      if (!prev || targets.length === 0) {
         return s;
       }
       const nextCollapsed = { ...prev.collapsed };
-      for (const file of files) {
-        nextCollapsed[file.path] = collapsed;
+      for (const path of targets) {
+        nextCollapsed[path] = collapsed;
       }
       return {
         bySession: {
@@ -765,7 +850,7 @@ export const useChanges = create<ChangesState>((set, get) => ({
   toggleMyEditsOnly: (sessionId) =>
     set((state) =>
       patchUi(state, sessionId, {
-        myEditsOnly: !(state.ui[sessionId]?.myEditsOnly ?? false),
+        myEditsOnly: !myEditsOnlyOf(state.ui[sessionId]),
       })
     ),
 }));

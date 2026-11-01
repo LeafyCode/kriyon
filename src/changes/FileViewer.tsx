@@ -1,4 +1,5 @@
-import { type CSSProperties, useMemo, useState } from "react";
+import { ChevronRight, ExternalLink, Undo2, X } from "lucide-react";
+import { type CSSProperties, Fragment, useMemo, useState } from "react";
 import { discardFileChanges, openInEditor, openPath } from "../ipc/bridge.ts";
 import { failureMessage } from "../ipc/failures.ts";
 import type { EditState } from "../state/changes.ts";
@@ -17,6 +18,7 @@ import {
   type FileViewerNotice,
   useFileEditorSession,
 } from "./useFileEditorSession.ts";
+import { useGitAnnotations } from "./useGitAnnotations.ts";
 
 const rootStyle: CSSProperties = {
   display: "flex",
@@ -40,22 +42,33 @@ const headerRowStyle: CSSProperties = {
 };
 
 /**
- * The header's path block: filename first and legible, directory behind it as
- * muted context.
- *
- * It used to be the whole repo-relative path in one flat mono run at one
- * weight, which put `src/changes/` and `FileViewer.tsx` at equal visual
- * priority — so the one thing you actually need to read (which file is this?)
- * had to be picked out of a string, and on a deep path the filename was the
- * part the ellipsis ate.
+ * The header's path, as an editor's breadcrumb: each folder muted, the file
+ * name last and bright. Folders give way first when space runs out, so the
+ * file name — the one thing you need to read — is the last thing clipped.
  */
 const pathBlockStyle: CSSProperties = {
-  alignItems: "baseline",
+  alignItems: "center",
   display: "flex",
   flex: 1,
-  gap: "6px",
+  gap: "2px",
   minWidth: 0,
   overflow: "hidden",
+};
+
+const crumbDirStyle: CSSProperties = {
+  color: tokens.color.ink.muted,
+  flexShrink: 1,
+  fontFamily: tokens.font.sans,
+  fontSize: "12.5px",
+  minWidth: 0,
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+};
+
+const crumbSeparatorStyle: CSSProperties = {
+  color: tokens.color.ink.faint,
+  flex: "none",
 };
 
 const fileNameStyle: CSSProperties = {
@@ -65,23 +78,29 @@ const fileNameStyle: CSSProperties = {
   fontSize: "13px",
   // 500, not 600: the UI face ships 400/500/700, and a 600 is synthesized.
   fontWeight: 500,
-};
-
-/** The directory, truncated from the *left* (`…/changes/`) rather than the
- * right: a path's tail is what locates it, so clipping the front keeps the
- * useful end and drops the redundant repo-root prefix. */
-const fileDirStyle: CSSProperties = {
-  // `muted`, not `faint`: the directory is context but it is still read, and
-  // `faint` is below AA on this plane (ADR-0023).
-  color: tokens.color.ink.muted,
-  direction: "rtl",
-  fontFamily: tokens.font.mono,
-  fontSize: "11px",
-  minWidth: 0,
+  maxWidth: "100%",
   overflow: "hidden",
-  textAlign: "left",
   textOverflow: "ellipsis",
   whiteSpace: "nowrap",
+};
+
+/** The header's icon actions — open elsewhere, restore from git, close —
+ * quiet glyphs with their name on hover, the way an editor's title bar
+ * carries them. */
+const headerIconStyle: CSSProperties = {
+  ...iconButton(),
+  height: "26px",
+  width: "26px",
+};
+
+/** A thin rule between the save pair and the icon actions. */
+const headerDividerStyle: CSSProperties = {
+  alignSelf: "center",
+  background: tokens.color.line.soft,
+  flex: "none",
+  height: "16px",
+  margin: "0 4px",
+  width: "1px",
 };
 
 /** The header's and the banners' shared control: the 24px secondary button
@@ -89,35 +108,7 @@ const fileDirStyle: CSSProperties = {
  * in the header are visibly the same kind of thing. */
 const actionButtonStyle: CSSProperties = button("secondary", "sm");
 
-/**
- * The one "you can't press this" treatment the header's action buttons share:
- * faint ink, no pointer, and the same 0.6 wash.
- *
- * Save already had it; the discard buttons did not, so a clean buffer offered
- * a `Revert` that looked exactly as pressable as a dirty one's and did
- * nothing. Spread LAST, after each button's own colours, so it overrides them
- * — which is also why the enabled half restores only `cursor`/`opacity` and
- * leaves the caller's ink alone.
- */
-function disabledLook(disabled: boolean): CSSProperties {
-  return disabled
-    ? { color: tokens.color.ink.faint, cursor: "default", opacity: 0.6 }
-    : { cursor: "pointer", opacity: 1 };
-}
-
-function saveButtonStyle(disabled: boolean): CSSProperties {
-  return {
-    ...(disabled ? actionButtonStyle : button("primary", "sm")),
-    ...disabledLook(disabled),
-  };
-}
-
-/** A plain-surface header action that can be unavailable — the two discard
- * buttons. Same chrome as {@link actionButtonStyle}, plus the shared
- * {@link disabledLook}. */
-function discardButtonStyle(disabled: boolean): CSSProperties {
-  return { ...actionButtonStyle, ...disabledLook(disabled) };
-}
+const saveButtonStyle: CSSProperties = button("primary", "sm");
 
 const dirtyDotStyle: CSSProperties = {
   background: tokens.color.status.waiting,
@@ -125,12 +116,6 @@ const dirtyDotStyle: CSSProperties = {
   display: "inline-block",
   height: "6px",
   width: "6px",
-};
-
-const closeButtonStyle: CSSProperties = {
-  ...iconButton(),
-  fontSize: "15px",
-  lineHeight: 1,
 };
 
 const noticeStyle: CSSProperties = {
@@ -171,10 +156,10 @@ function fileBaseName(path: string): string {
   return path.slice(path.lastIndexOf("/") + 1);
 }
 
-/** A repo-relative path's directory, or `""` for a file at the repo root. */
-function fileDirName(path: string): string {
-  const slash = path.lastIndexOf("/");
-  return slash === -1 ? "" : path.slice(0, slash);
+/** The folders above `path`, outermost first — the breadcrumb's crumbs. */
+function fileDirParts(path: string): string[] {
+  const parts = path.split("/");
+  return parts.slice(0, -1).filter((p) => p !== "");
 }
 
 const editorWrapStyle: CSSProperties = {
@@ -198,10 +183,10 @@ const loadingPaneStyle: CSSProperties = {
   minHeight: 0,
 };
 
-/** The header row's "Discard edits"/Save buttons (only for an editable file)
- * and the dirty dot — factored out of `FileViewer` purely to keep its own
- * cognitive complexity within this repo's Biome budget; no independent
- * state. */
+/** The header row's dirty dot and its Discard edits / Save pair — shown only
+ * while there is something to save, the way an editor offers them. Factored
+ * out of `FileViewer` purely to keep its own cognitive complexity within this
+ * repo's Biome budget; no independent state. */
 function HeaderActions({
   dirty,
   edit,
@@ -215,38 +200,31 @@ function HeaderActions({
   onSave: () => void;
   saving: boolean;
 }) {
+  if (!(edit && dirty)) {
+    return null;
+  }
   return (
     <>
-      {dirty ? (
-        <span
-          aria-label="Unsaved changes"
-          data-testid="dirty-indicator"
-          role="status"
-          style={dirtyDotStyle}
-        />
-      ) : null}
-      {edit ? (
-        <button
-          className="kr-hover-surface"
-          disabled={!dirty}
-          onClick={onRevert}
-          style={discardButtonStyle(!dirty)}
-          type="button"
-        >
-          Discard edits
-        </button>
-      ) : null}
-      {edit ? (
-        <button
-          className="kr-hover-accent"
-          disabled={!dirty || saving}
-          onClick={onSave}
-          style={saveButtonStyle(!dirty || saving)}
-          type="button"
-        >
-          {saving ? "Saving…" : "Save"}
-        </button>
-      ) : null}
+      <button
+        className="kr-hover-surface"
+        onClick={onRevert}
+        style={actionButtonStyle}
+        title="Throw away the edits made here since the last save"
+        type="button"
+      >
+        Discard edits
+      </button>
+      <button
+        className="kr-hover-accent"
+        disabled={saving}
+        onClick={onSave}
+        style={saveButtonStyle}
+        title="Save (⌘S)"
+        type="button"
+      >
+        {saving ? "Saving…" : "Save"}
+      </button>
+      <span aria-hidden style={headerDividerStyle} />
     </>
   );
 }
@@ -268,12 +246,10 @@ function HeaderActions({
  */
 function DiscardFileChanges({
   cwd,
-  disabled,
   path,
   sessionId,
 }: {
   cwd: string;
-  disabled: boolean;
   path: string;
   sessionId?: string;
 }) {
@@ -312,20 +288,15 @@ function DiscardFileChanges({
   return (
     <>
       <button
+        aria-label="Discard file changes"
         className="kr-hover-surface"
-        disabled={disabled || discarding}
+        disabled={discarding}
         onClick={() => setAsking(true)}
-        style={discardButtonStyle(disabled || discarding)}
-        // `disabled` drops the button out of the tab order, so the reason has
-        // to travel with the control rather than only being implied by its
-        // wash — otherwise the one state that needs explaining is the one
-        // state nobody can reach to read.
-        title={
-          disabled ? "This file already matches its committed version" : ""
-        }
+        style={headerIconStyle}
+        title="Discard file changes — restore the committed version"
         type="button"
       >
-        Discard file changes
+        <Undo2 size={15} strokeWidth={1.75} />
       </button>
       {asking ? (
         <ConfirmDialog
@@ -651,6 +622,14 @@ export function FileViewer({
     state,
     target,
   } = useFileEditorSession(cwd, path, onClose, sessionId);
+  // Session tint and blame — decorations, fetched beside the file, never
+  // blocking it.
+  const { blame, sessionStart } = useGitAnnotations(
+    target.cwd,
+    target.path,
+    sessionId,
+    dirty
+  );
 
   // `ReadOnlyFileView` owns its own virtualizer and highlight effect, so none
   // of that runs while an editable file is open — this shell only picks which
@@ -687,17 +666,37 @@ export function FileViewer({
     <div data-testid="file-viewer" style={rootStyle}>
       <div style={headerRowStyle}>
         <FileIcon path={target.path} size={15} />
-        {/* `data-testid` stays on a single element carrying the full path, so
-            the existing "shows the path" assertions keep meaning what they
-            did before this was split into name + directory. */}
+        {/* `data-testid` stays on one element carrying the full path, so the
+            "shows the path" assertions keep meaning what they did. */}
         <span
           data-testid="file-viewer-path"
           style={pathBlockStyle}
           title={target.path}
         >
-          <span style={fileNameStyle}>{fileBaseName(target.path)}</span>
-          {fileDirName(target.path) ? (
-            <span style={fileDirStyle}>{fileDirName(target.path)}</span>
+          {fileDirParts(target.path).map((part, i) => (
+            // biome-ignore lint/suspicious/noArrayIndexKey: crumbs are positional; a path can repeat a folder name.
+            <Fragment key={i}>
+              <span data-testid="file-viewer-crumb" style={crumbDirStyle}>
+                {part}
+              </span>
+              <ChevronRight
+                aria-hidden
+                size={12}
+                strokeWidth={2}
+                style={crumbSeparatorStyle}
+              />
+            </Fragment>
+          ))}
+          <span data-testid="file-viewer-crumb" style={fileNameStyle}>
+            {fileBaseName(target.path)}
+          </span>
+          {dirty ? (
+            <span
+              aria-label="Unsaved changes"
+              data-testid="dirty-indicator"
+              role="status"
+              style={dirtyDotStyle}
+            />
           ) : null}
         </span>
         <HeaderActions
@@ -707,15 +706,17 @@ export function FileViewer({
           onSave={save}
           saving={saving}
         />
-        {comparable ? (
+        {/* Offered only when there is something to restore — a file that
+            already matches its committed version has nothing to discard. */}
+        {differsFromHead ? (
           <DiscardFileChanges
             cwd={target.cwd}
-            disabled={!differsFromHead}
             path={target.path}
             sessionId={sessionId}
           />
         ) : null}
         <button
+          aria-label={binary ? "Open" : "Open in editor"}
           className="kr-hover-surface"
           onClick={() => {
             // A text file (editable or too-large-to-edit) opens in the user's
@@ -730,19 +731,21 @@ export function FileViewer({
               // intentionally ignored — see comment above.
             });
           }}
-          style={actionButtonStyle}
+          style={headerIconStyle}
+          title={binary ? "Open with its default app" : "Open in editor"}
           type="button"
         >
-          {binary ? "Open" : "Open in editor"}
+          <ExternalLink size={14} strokeWidth={1.75} />
         </button>
         <button
           aria-label="Close"
           className="kr-hover-surface"
           onClick={guard.closeClick}
-          style={closeButtonStyle}
+          style={headerIconStyle}
+          title="Close"
           type="button"
         >
-          ×
+          <X size={15} strokeWidth={1.75} />
         </button>
       </div>
       {/* One notice, one banner — the list is already in render order, and a
@@ -796,6 +799,7 @@ export function FileViewer({
         <div data-testid="file-viewer-editor" style={editorWrapStyle}>
           <CodeEditor
             baseline={baseline}
+            blame={blame}
             key={target.path}
             language={lang}
             onChange={(next) => {
@@ -804,6 +808,7 @@ export function FileViewer({
               );
             }}
             onSave={save}
+            sessionStart={sessionStart}
             value={edit.draft}
           />
         </div>

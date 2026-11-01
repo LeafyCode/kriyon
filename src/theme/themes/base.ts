@@ -1,4 +1,18 @@
+import {
+  faintFill,
+  inkWash,
+  mascotThoughtFor,
+  scrimFor,
+  softFill,
+} from "./define.ts";
 import type { ThemeColors } from "./types.ts";
+
+// The three status hues the soft fills and washes below are tinted from.
+const GREEN = "#3fb950";
+const AMBER = "#d29922";
+const CORAL = "#f0716f";
+// Hoisted so the mascot-bubble rule below can be handed it too.
+const INK_MUTED = "#79839a";
 
 /**
  * The shared dark chrome from the **BisBig direction** canvas (ADR-0023): one
@@ -17,8 +31,9 @@ import type { ThemeColors } from "./types.ts";
  * - `#10141d` — a card (composer, diff file, settings group, stat tile) with a
  *   `#1f2531` border. `#161b26` is the overlay/chip step above it.
  *
- * The five shipped themes differ only in the accent block they layer on top;
- * a future light theme would replace this wholesale.
+ * The five Steel-family themes differ only in the accent block they layer on
+ * top. Full themes (Steel Light, Dracula, Nord…) don't use this at all — they
+ * are written as a spec through `defineTheme` in `define.ts` (ADR-0051).
  */
 export const darkChrome: Omit<
   ThemeColors,
@@ -46,17 +61,17 @@ export const darkChrome: Omit<
   inkBright: "#f2f5fa",
   inkPrimary: "#eceff5",
   inkSecondary: "#aab3c5",
-  inkMuted: "#79839a",
+  inkMuted: INK_MUTED,
   inkDim: "#5c677d",
   inkFaint: "#525d72",
 
   // Translucent stops over the plane. `surface3` is the active sidebar row's
   // 6% — the one step the canvas draws brighter than its own hover.
-  surface1: "rgba(255, 255, 255, 0.03)",
-  surface2: "rgba(255, 255, 255, 0.04)",
-  surface3: "rgba(255, 255, 255, 0.06)",
-  surfaceHover: "rgba(255, 255, 255, 0.04)",
-  surfaceActive: "rgba(255, 255, 255, 0.06)",
+  surface1: inkWash("dark", 0.03),
+  surface2: inkWash("dark", 0.04),
+  surface3: inkWash("dark", 0.06),
+  surfaceHover: inkWash("dark", 0.04),
+  surfaceActive: inkWash("dark", 0.06),
 
   // Opaque hairlines, not white alphas: on a plane this dark an alpha line
   // disappears over a card and doubles over a rail.
@@ -77,26 +92,26 @@ export const darkChrome: Omit<
   // faint ink, not by a second green), amber for waiting, coral for error.
   statusRunning: "#3fb950",
   statusRunningInk: "#3fb950",
-  statusRunningSoft: "rgba(63, 185, 80, 0.12)",
+  statusRunningSoft: softFill("dark", GREEN),
   statusWaiting: "#d29922",
   // The waiting *dot* is `#d29922`; its label is a stop brighter so amber text
   // stays legible at 10.5px on the amber wash behind it.
   statusWaitingInk: "#e3b341",
-  statusWaitingSoft: "rgba(210, 153, 34, 0.12)",
-  statusWaitingWash: "rgba(210, 153, 34, 0.08)",
+  statusWaitingSoft: softFill("dark", AMBER),
+  statusWaitingWash: faintFill("dark", AMBER),
   statusDone: "#3fb950",
-  statusDoneSoft: "rgba(63, 185, 80, 0.12)",
+  statusDoneSoft: softFill("dark", GREEN),
   statusIdle: "#525d72",
-  statusIdleSoft: "rgba(255, 255, 255, 0.05)",
+  statusIdleSoft: inkWash("dark", 0.05),
   statusError: "#f0716f",
-  statusErrorSoft: "rgba(240, 113, 111, 0.12)",
-  statusErrorWash: "rgba(240, 113, 111, 0.08)",
+  statusErrorSoft: softFill("dark", CORAL),
+  statusErrorWash: faintFill("dark", CORAL),
 
   add: "#3fb950",
   del: "#f0716f",
   mod: "#58a6ff",
-  addSoft: "rgba(63, 185, 80, 0.12)",
-  delSoft: "rgba(240, 113, 111, 0.12)",
+  addSoft: softFill("dark", GREEN),
+  delSoft: softFill("dark", CORAL),
   // Solid, not a translucent wash: the syntax palette below is tuned for an
   // opaque near-black well, and a see-through black over a tinted surface
   // reads washed-out next to it.
@@ -116,13 +131,14 @@ export const darkChrome: Omit<
   editorActiveLine: "#24262B",
   editorGutterActiveInk: "#E8EAEE",
   editorGutterInk: "#E8EAEE5C",
-  editorIndentGuide: "rgba(255, 255, 255, 0.07)",
-  editorIndentGuideActive: "rgba(255, 255, 255, 0.16)",
+  editorIndentGuide: inkWash("dark", 0.07),
+  editorIndentGuideActive: inkWash("dark", 0.16),
   // The base both highlighters fall back to, so plain code has one ink.
   editorInk: "#E8EAEE",
   editorSelection: "#3D4250A0",
 
-  scrim: "rgba(5, 7, 12, 0.6)",
+  scrim: scrimFor("dark"),
+  mascotThought: mascotThoughtFor("dark", INK_MUTED),
   chip: "#161b26",
 
   // Syntax palette — Kriyon's own: a teal keyword, a violet property, warm

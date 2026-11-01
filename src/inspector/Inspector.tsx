@@ -1,6 +1,7 @@
 import { PanelRight } from "lucide-react";
 import { type CSSProperties, type ReactNode, useMemo } from "react";
 import { topBandRow } from "../layout/topBand.ts";
+import { NotesTab } from "../notes/NotesTab.tsx";
 import { formatBootTime, useBootTimes } from "../state/bootTiming.ts";
 import {
   computeTotalsFromFiles,
@@ -11,7 +12,12 @@ import { homeRelative } from "../state/homeRelative.ts";
 import { type InspectorTab, useLayout } from "../state/layout.ts";
 import { usePlanLimitsView } from "../state/planLimits.ts";
 import {
-  sessionTouchedRelative,
+  openTodoCount,
+  useNotesProjectId,
+  useProjectNotes,
+} from "../state/projectNotes.ts";
+import {
+  sessionClaudeFiles,
   sessionWorkingDir,
   useSessions,
 } from "../state/sessions.ts";
@@ -41,9 +47,15 @@ export const INSPECTOR_WIDTH = 280;
  *  room side by side (the design draws it at 400). */
 export const ACTIVITY_INSPECTOR_WIDTH = 380;
 
+/** The Notes tab's width: room for a note's text to read as a sentence. */
+export const NOTES_INSPECTOR_WIDTH = 340;
+
 /** The inspector's width for the tab it shows. */
 export function inspectorWidth(tab: InspectorTab): number {
-  return tab === "activity" ? ACTIVITY_INSPECTOR_WIDTH : INSPECTOR_WIDTH;
+  if (tab === "activity") {
+    return ACTIVITY_INSPECTOR_WIDTH;
+  }
+  return tab === "notes" ? NOTES_INSPECTOR_WIDTH : INSPECTOR_WIDTH;
 }
 
 const rootStyle: CSSProperties = {
@@ -88,10 +100,22 @@ const detailsTitleStyle: CSSProperties = {
   fontWeight: 500,
 };
 
-const INSPECTOR_TABS: readonly SegmentedOption<InspectorTab>[] = [
-  { label: "Details", value: "details" },
-  { label: "Activity", value: "activity" },
-];
+/** The tab strip. Notes carries the shown project's open-todo count, and
+ *  nothing when there are none — ideas and notes never nag. */
+function inspectorTabs(
+  openTodos: number
+): readonly SegmentedOption<InspectorTab>[] {
+  return [
+    { label: "Details", value: "details" },
+    { label: "Activity", value: "activity" },
+    {
+      count: openTodos,
+      label: "Notes",
+      testId: "inspector-notes-tab",
+      value: "notes",
+    },
+  ];
+}
 
 /** With a session the title is the tab strip; without one, just "Details". */
 function DetailsHeader({
@@ -102,13 +126,17 @@ function DetailsHeader({
   tab?: InspectorTab;
 }) {
   const collapse = useLayout((state) => state.toggleInspectorCollapsed);
+  const notesProjectId = useNotesProjectId();
+  const openTodos = useProjectNotes((state) =>
+    notesProjectId ? openTodoCount(state.notes, notesProjectId) : 0
+  );
   return (
     <div data-tauri-drag-region style={detailsHeaderStyle}>
       {onTab && tab ? (
         <Segmented
           ariaLabel="Details rail"
           onChange={onTab}
-          options={INSPECTOR_TABS}
+          options={inspectorTabs(openTodos)}
           value={tab}
           variant="underline"
         />
@@ -395,7 +423,7 @@ export function Inspector() {
   // `SummaryBar` — so it has to describe the same population the centre does
   // (I5: totals follow the filter), or the two contradict each other in one
   // glance. Read through the same exported helpers `ChangesView` uses rather
-  // than re-deriving the touched set here; `sessionTouchedRelative` returns a
+  // than re-deriving the touched set here; `sessionClaudeFiles` returns a
   // stable `Set` until `touchedFiles`/`repoToplevel` actually change, so
   // subscribing through `useSessions` re-renders exactly then and never on an
   // unrelated store update (see its doc comment in `state/sessions.ts`).
@@ -403,26 +431,31 @@ export function Inspector() {
   // Changes view's tab and selection (see `ChangesState`), and zustand
   // compares a selector's output — so a tab flip over there re-renders
   // nothing here.
+  // Only when the user turned it on explicitly: the Inspector lists the
+  // whole session for review, so the Files view's on-by-default AI scope
+  // (`myEditsOnlyOf`) doesn't narrow it.
   const myEditsOnly = useChanges(
-    (state) => state.ui[activeSessionId ?? ""]?.myEditsOnly ?? false
+    (state) => state.ui[activeSessionId ?? ""]?.myEditsOnly === true
   );
-  const touchedRelative = useSessions(() =>
-    sessionTouchedRelative(activeSessionId ?? "")
+  // `null` while Claude's files can't be known — the filter then stands
+  // down, exactly as it does in the centre (`sessionClaudeFiles`).
+  const claudeFiles = useSessions(() =>
+    sessionClaudeFiles(activeSessionId ?? "")
   );
+  const filtering = myEditsOnly && claudeFiles !== null;
   const displayFiles = useMemo(() => {
-    if (!myEditsOnly) {
+    if (!(myEditsOnly && claudeFiles)) {
       return changedFiles;
     }
-    return changedFiles.filter((f) => touchedRelative.has(f.path));
-  }, [changedFiles, myEditsOnly, touchedRelative]);
+    return changedFiles.filter((f) => claudeFiles.has(f.path));
+  }, [changedFiles, myEditsOnly, claudeFiles]);
   // Falls back to the store's unfiltered `totals` with the filter off, and
   // stays `null` until a diff has actually landed — recomputing over an empty
   // `displayFiles` before then would print a confident "0 files +0 −0" where
   // the header's neutral "…" placeholder belongs.
   const displayTotals = useMemo(
-    () =>
-      myEditsOnly && totals ? computeTotalsFromFiles(displayFiles) : totals,
-    [displayFiles, myEditsOnly, totals]
+    () => (filtering && totals ? computeTotalsFromFiles(displayFiles) : totals),
+    [displayFiles, filtering, totals]
   );
   const setTranscriptView = useLayout((state) => state.setTranscriptView);
   const requestJump = useChanges((state) => state.requestJump);
@@ -434,11 +467,29 @@ export function Inspector() {
   );
   const tab = useLayout((state) => state.inspectorTab);
   const setTab = useLayout((state) => state.setInspectorTab);
+  const notesProjectId = useNotesProjectId();
+
+  // Notes belong to a project, not a session, so they show without one —
+  // the project menu's "Open notes" works with no session open.
+  if (tab === "notes" && notesProjectId) {
+    return (
+      <aside data-testid="inspector" data-tour="inspector" style={rootStyle}>
+        <DetailsHeader onTab={setTab} tab={tab} />
+        <NotesTab key={notesProjectId} projectId={notesProjectId} />
+      </aside>
+    );
+  }
 
   if (!session) {
     return (
-      <aside data-testid="inspector" style={rootStyle}>
-        <DetailsHeader />
+      <aside data-testid="inspector" data-tour="inspector" style={rootStyle}>
+        {/* With a project's notes to show, keep the strip so they stay one
+            click away; with nothing at all, just the "Details" title. */}
+        {notesProjectId ? (
+          <DetailsHeader onTab={setTab} tab={tab} />
+        ) : (
+          <DetailsHeader />
+        )}
         <div style={emptyBodyStyle}>
           <span>No active session</span>
           <span>—</span>
@@ -454,7 +505,7 @@ export function Inspector() {
 
   if (tab === "activity") {
     return (
-      <aside data-testid="inspector" style={rootStyle}>
+      <aside data-testid="inspector" data-tour="inspector" style={rootStyle}>
         <DetailsHeader onTab={setTab} tab={tab} />
         <ActivityTab onOpenInChanges={openInChanges} sessionId={session.id} />
       </aside>
@@ -462,7 +513,7 @@ export function Inspector() {
   }
 
   return (
-    <aside data-testid="inspector" style={rootStyle}>
+    <aside data-testid="inspector" data-tour="inspector" style={rootStyle}>
       <DetailsHeader onTab={setTab} tab={tab} />
       <div style={bodyStyle}>
         {/* Session first: the canvas leads with what this session *is*, then

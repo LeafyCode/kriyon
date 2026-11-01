@@ -591,6 +591,7 @@ mod tests {
             title_locked: false,
             parent_session_id: None,
             nested_under: None,
+            parked_at: None,
         }
     }
 

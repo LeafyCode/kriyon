@@ -5,7 +5,11 @@ import {
   pickDirectory,
   worktreePathFor,
 } from "../ipc/bridge.ts";
-import { type SpawnResult, spawnFollowUpSession } from "../state/actions.ts";
+import {
+  type SpawnResult,
+  setupFailureMessage,
+  spawnFollowUpSession,
+} from "../state/actions.ts";
 import { detectCollision } from "../state/collision.ts";
 import { startNestedSession } from "../state/nestedSessions.ts";
 import {
@@ -517,7 +521,7 @@ export function SpawnDialog() {
     ok: boolean;
   }): void {
     if (result.bootstrap && !result.bootstrap.ok) {
-      setError(`Setup command failed:\n${result.bootstrap.output}`);
+      setError(setupFailureMessage(result.bootstrap));
       setSpawned(true);
       return;
     }

@@ -143,7 +143,7 @@ function ChevronIcon({ up }: { up: boolean }) {
 /**
  * The shared Project-terminal surface: a Segmented-style tab strip over the
  * active tab's {@link TabPaneGrid}, hosted by the bottom TerminalDock (which can
- * maximize to full height). `projectId === null` (no active project) renders a
+ * maximize to full height). `scope === null` (no active project) renders a
  * disabled empty state. `onToggleFullHeight`, when given, shows a maximize
  * toggle in the strip.
  */
@@ -151,18 +151,16 @@ export function TerminalWorkspace({
   cwd,
   fullHeight,
   onToggleFullHeight,
-  projectId,
+  scope,
   visible,
 }: {
   cwd: string;
   fullHeight?: boolean;
   onToggleFullHeight?: () => void;
-  projectId: string | null;
+  scope: string | null;
   visible: boolean;
 }) {
-  const project = useTerminals((s) =>
-    projectId ? s.byProject[projectId] : undefined
-  );
+  const entry = useTerminals((s) => (scope ? s.byScope[scope] : undefined));
   const deadPanes = useTerminals((s) => s.deadPanes);
   const [editing, setEditing] = useState<string | null>(null);
   const [pending, setPending] = useState<PendingClose | null>(null);
@@ -175,7 +173,7 @@ export function TerminalWorkspace({
   // xterm (and its scrollback) stay as they were, with the new prompt painting
   // over via the daemon's attach repaint.
   const restartPane = (tabId: string, paneId: string): void => {
-    const cwd2 = project?.tabs
+    const cwd2 = entry?.tabs
       .find((tab) => tab.id === tabId)
       ?.panes.find((p) => p.id === paneId)?.cwd;
     t.clearPaneExited(paneId);
@@ -185,41 +183,41 @@ export function TerminalWorkspace({
       // ensureSession's onError already surfaced the failure.
     });
   };
-  const activeTab = project?.tabs.find((tab) => tab.id === project.activeTabId);
-  const hasTabs = Boolean(projectId && project && project.tabs.length > 0);
+  const activeTab = entry?.tabs.find((tab) => tab.id === entry.activeTabId);
+  const hasTabs = Boolean(scope && entry && entry.tabs.length > 0);
 
   // Closing a terminal with a foreground process running asks first, so a
   // `pnpm dev` or a build isn't killed by an accidental click.
   const requestCloseTab = (tabId: string): void => {
-    if (!projectId) {
+    if (!scope) {
       return;
     }
-    if (t.isTabBusy(projectId, tabId)) {
+    if (t.isTabBusy(scope, tabId)) {
       setPending({ tabId, target: "tab" });
     } else {
-      t.closeTab(projectId, tabId);
+      t.closeTab(scope, tabId);
     }
   };
 
   const requestClosePane = (tabId: string, paneId: string): void => {
-    if (!projectId) {
+    if (!scope) {
       return;
     }
     if (t.isPaneBusy(paneId)) {
       setPending({ paneId, tabId, target: "pane" });
     } else {
-      t.closePane(projectId, tabId, paneId);
+      t.closePane(scope, tabId, paneId);
     }
   };
 
   const confirmClose = (): void => {
-    if (!(pending && projectId)) {
+    if (!(pending && scope)) {
       return;
     }
     if (pending.target === "tab") {
-      t.closeTab(projectId, pending.tabId);
+      t.closeTab(scope, pending.tabId);
     } else if (pending.paneId) {
-      t.closePane(projectId, pending.tabId, pending.paneId);
+      t.closePane(scope, pending.tabId, pending.paneId);
     }
     setPending(null);
   };
@@ -236,16 +234,16 @@ export function TerminalWorkspace({
       }}
     >
       <div style={stripStyle}>
-        {project?.tabs.map((tab) => {
-          const isActive = tab.id === project.activeTabId;
+        {entry?.tabs.map((tab) => {
+          const isActive = tab.id === entry.activeTabId;
           if (editing === tab.id) {
             return (
               <input
                 defaultValue={tab.title}
                 key={tab.id}
                 onBlur={(e) => {
-                  if (projectId) {
-                    t.renameTab(projectId, tab.id, e.target.value || tab.title);
+                  if (scope) {
+                    t.renameTab(scope, tab.id, e.target.value || tab.title);
                   }
                   setEditing(null);
                 }}
@@ -270,7 +268,7 @@ export function TerminalWorkspace({
               style={tabWrapStyle(isActive)}
             >
               <button
-                onClick={() => projectId && t.setActiveTab(projectId, tab.id)}
+                onClick={() => scope && t.setActiveTab(scope, tab.id)}
                 onDoubleClick={() => setEditing(tab.id)}
                 style={tabLabelStyle(isActive)}
                 type="button"
@@ -289,11 +287,11 @@ export function TerminalWorkspace({
             </span>
           );
         })}
-        {projectId ? (
+        {scope ? (
           <button
             aria-label="New terminal tab"
             className="kr-hover-surface"
-            onClick={() => t.openTab(projectId, cwd)}
+            onClick={() => t.openTab(scope, cwd)}
             style={iconBtnStyle}
             title="New terminal"
             type="button"
@@ -302,13 +300,13 @@ export function TerminalWorkspace({
           </button>
         ) : null}
         <div style={{ flex: 1 }} />
-        {activeTab && projectId ? (
+        {activeTab && scope ? (
           <button
             aria-label="Toggle split direction"
             className="kr-hover-surface"
             onClick={() =>
               t.setDirection(
-                projectId,
+                scope,
                 activeTab.id,
                 activeTab.direction === "row" ? "column" : "row"
               )
@@ -348,9 +346,9 @@ export function TerminalWorkspace({
           the always-mounted session panes in App). `position: relative` lets the
           hidden panes stack out of flow without collapsing the active one. */}
       <div style={{ flex: 1, minHeight: 0, position: "relative" }}>
-        {hasTabs && project && projectId ? (
-          project.tabs.map((tab) => {
-            const isActiveTab = tab.id === project.activeTabId;
+        {hasTabs && entry && scope ? (
+          entry.tabs.map((tab) => {
+            const isActiveTab = tab.id === entry.activeTabId;
             return (
               <div
                 data-testid={`tab-pane-${tab.id}`}
@@ -365,13 +363,13 @@ export function TerminalWorkspace({
                   isPaneDead={(paneId) => deadPanes[paneId] === true}
                   onClosePane={(paneId) => requestClosePane(tab.id, paneId)}
                   onFocusPane={(paneId) =>
-                    t.setActivePane(projectId, tab.id, paneId)
+                    t.setActivePane(scope, tab.id, paneId)
                   }
-                  onLayout={(sizes) => t.setLayout(projectId, tab.id, sizes)}
+                  onLayout={(sizes) => t.setLayout(scope, tab.id, sizes)}
                   onRestartPane={(paneId) => restartPane(tab.id, paneId)}
                   onSplitPane={(paneId) =>
                     t.splitPane(
-                      projectId,
+                      scope,
                       tab.id,
                       tab.panes.find((p) => p.id === paneId)?.cwd ?? cwd
                     )
@@ -384,12 +382,12 @@ export function TerminalWorkspace({
           })
         ) : (
           <div style={emptyStyle}>
-            <span>No terminals in this project yet</span>
+            <span>No terminals in this folder yet</span>
             <button
               aria-label="New terminal"
               className="kr-hover-surface"
-              disabled={projectId === null}
-              onClick={() => projectId && t.openTab(projectId, cwd)}
+              disabled={scope === null}
+              onClick={() => scope && t.openTab(scope, cwd)}
               style={emptyButtonStyle}
               type="button"
             >

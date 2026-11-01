@@ -3,7 +3,7 @@ import type {
   SessionSort,
   SidebarMode,
 } from "../state/layout.ts";
-import type { UiSession } from "../state/sessions.ts";
+import { isParked, isPutAway, type UiSession } from "../state/sessions.ts";
 import { unseenOutput, type ViewedMarker } from "../state/viewedMarker.ts";
 import type { ProjectRow, SessionStatus } from "../types.ts";
 
@@ -48,7 +48,7 @@ export function sessionRank(status: SessionStatus): number {
 export function projectUrgency(sessions: UiSession[]): number {
   let best = 3;
   for (const session of sessions) {
-    if (session.archivedAt !== null) {
+    if (isPutAway(session)) {
       continue;
     }
     if (session.status === "waiting" || session.status === "error") {
@@ -435,7 +435,7 @@ export function inactiveProjectIds(
   }
   const byProject = new Map<string, string[]>();
   for (const session of Object.values(input.sessions)) {
-    if (session.archivedAt !== null) {
+    if (isPutAway(session)) {
       continue;
     }
     const bucket = byProject.get(session.projectId);
@@ -474,12 +474,14 @@ function computeMatched(
   mode: SidebarMode,
   sort: SessionSort,
   manual: string[],
-  hide: HideInputs
+  hide: HideInputs,
+  parked: boolean
 ): MatchedSessions {
   const list = Object.values(input.sessions).filter(
     (session) =>
       session.projectId === project.id &&
       session.archivedAt === null &&
+      isParked(session) === parked &&
       (filter === "" ||
         nameMatch ||
         session.title.toLowerCase().includes(filter))
@@ -589,6 +591,11 @@ const orderCache = new WeakMap<
  * instead of walking every session again. Guarded on every input it reads, so
  * a stale entry can only cause a recompute, never a wrong result. `manual` is
  * the project's saved id list ({@link EMPTY_ORDER} when it has none).
+ *
+ * `parked` picks which of the project's open sessions to draw: the ones on the
+ * rail (the default), or the parked ones waiting in the Parked section. Both
+ * are ordered, folded and nested by the same rules, so the Parked list
+ * previews exactly the rows unparking brings back.
  */
 export function orderMatched(
   input: OrderInputs,
@@ -598,7 +605,8 @@ export function orderMatched(
   mode: SidebarMode,
   sort: SessionSort,
   manual: string[],
-  hide: HideInputs
+  hide: HideInputs,
+  parked = false
 ): MatchedSessions {
   let byKey = orderCache.get(input.sessions);
   if (!byKey) {
@@ -618,6 +626,7 @@ export function orderMatched(
     hide.threshold,
     hide.now,
     hide.activeSessionId,
+    parked,
   ]);
   const cached = byKey.get(key);
   if (
@@ -638,7 +647,8 @@ export function orderMatched(
     mode,
     sort,
     manual,
-    hide
+    hide,
+    parked
   );
   byKey.set(key, {
     appendSeq: input.appendSeq,
