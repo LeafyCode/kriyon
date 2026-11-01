@@ -156,12 +156,10 @@ export const useProjectNotes = create<ProjectNotesState>((set, get) => {
         kind,
         text,
       };
-      if (
-        next.text === existing.text &&
-        next.body === existing.body &&
-        next.kind === existing.kind &&
-        next.pinned === existing.pinned
-      ) {
+      // Compare only what the edit carries, so `NotePatch` stays the one
+      // list of editable fields.
+      const fields = Object.keys(patch) as (keyof NotePatch)[];
+      if (fields.every((field) => next[field] === existing[field])) {
         return existing;
       }
       const edited = { ...next, updatedMs: nowMs };
