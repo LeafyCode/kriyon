@@ -1187,7 +1187,7 @@ export function SettingsView() {
     <div data-testid="settings-view" style={containerStyle}>
       <ViewHeader
         actions={
-          <label style={searchBoxStyle}>
+          <label className="kr-filter-box" style={searchBoxStyle}>
             <Search
               aria-hidden
               color={tokens.color.ink.muted}
@@ -1196,6 +1196,7 @@ export function SettingsView() {
             />
             <input
               aria-label="Search settings"
+              className="kr-filter-input"
               onChange={(event) => setQuery(event.target.value)}
               placeholder="Search settings"
               style={searchInput()}
