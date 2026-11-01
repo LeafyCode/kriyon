@@ -123,6 +123,15 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   },
 ];
 
+/** A section's side-menu entry, which is also its page title. */
+export function sectionTitle(id: SettingsSectionId): string {
+  const section = SETTINGS_SECTIONS.find((entry) => entry.id === id);
+  if (!section) {
+    throw new Error(`No Settings section "${id}"`);
+  }
+  return section.label;
+}
+
 /** The sections a Settings search keeps: every word of the query appears in
  *  the section's name or one of its keywords. An empty query keeps them all. */
 export function matchingSections(query: string): SettingsSectionId[] {

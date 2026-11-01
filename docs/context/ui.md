@@ -94,7 +94,7 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
   theme's own colours rather than the active one's, split into Kriyon's own and the community
   palettes, with a Dark / Light filter. _Avoid_: theme switcher, theme menu.
 - **Settings section** (`SettingsSection`) — one page of the Settings view (Appearance, Layout,
-  Notifications, Sessions, Claude Code, Updates, Activity log), picked from its side menu. The
+  Notifications, Sessions, Integration, Updates, Activity log), picked from its side menu. The
   Settings search keeps the sections whose name or keywords match. _Avoid_: settings tab.
 - **Steel** — the default [Theme]: the steel-blue accent of the BisBig direction (ADR-0023),
   converted from the canvas's `oklch(… 225)` to hex because `applyTheme` derives

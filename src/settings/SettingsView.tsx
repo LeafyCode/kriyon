@@ -51,9 +51,10 @@ import {
 } from "./settingsOptions.ts";
 import {
   matchingSections,
+  SETTINGS_GROUPS,
   SETTINGS_SECTIONS,
-  type SettingsSection,
   type SettingsSectionId,
+  sectionTitle,
 } from "./settingsSections.ts";
 import { ThemePicker } from "./ThemePicker.tsx";
 
@@ -436,20 +437,21 @@ function SettingGroup({
   );
 }
 
-/** One Settings section: its title, a line on what it covers, its groups. */
+/** One Settings section: its title (its side-menu entry), a line on what it
+ *  covers, its groups. */
 function SectionPage({
   children,
+  id,
   lead,
-  title,
 }: {
   children: ReactNode;
+  id: SettingsSectionId;
   lead: ReactNode;
-  title: string;
 }) {
   return (
     <div style={pageStyle}>
       <div>
-        <h2 style={pageTitleStyle}>{title}</h2>
+        <h2 style={pageTitleStyle}>{sectionTitle(id)}</h2>
         <p style={pageLeadStyle}>{lead}</p>
       </div>
       {children}
@@ -878,13 +880,13 @@ function SidebarModePicker() {
 function AppearanceSection() {
   return (
     <SectionPage
+      id="appearance"
       lead={
         <>
           Kriyon's colours and its mascot. Claude's own output follows its{" "}
           <code style={codeStyle}>/theme</code> setting.
         </>
       }
-      title="Appearance"
     >
       <ThemePicker />
       <SettingGroup hideLabel label="Mascot">
@@ -903,8 +905,8 @@ function LayoutSection() {
   const setMenuBarMode = useLayout((state) => state.setMenuBarMode);
   return (
     <SectionPage
+      id="layout"
       lead="How sessions are listed in the sidebar and the menu-bar quick view."
-      title="Layout"
     >
       <section aria-label="Sidebar layout" style={groupStyle}>
         <span style={groupLabelStyle}>Sidebar</span>
@@ -935,8 +937,8 @@ function NotificationsSection() {
   const setNotifySound = useLayout((state) => state.setNotifySound);
   return (
     <SectionPage
+      id="notifications"
       lead="When and how Kriyon tells you a session needs you."
-      title="Notifications"
     >
       <SettingGroup hideLabel label="Notifications">
         <SettingRow
@@ -1012,8 +1014,8 @@ function SessionsSection() {
   const setAutoSleepAfter = useLayout((state) => state.setAutoSleepAfter);
   return (
     <SectionPage
+      id="sessions"
       lead="Memory limits, sleeping idle sessions, and how many run at once."
-      title="Sessions"
     >
       <div style={groupGridStyle}>
         <SettingGroup label="Memory">
@@ -1076,8 +1078,8 @@ function SessionsSection() {
 function ClaudeSection() {
   return (
     <SectionPage
+      id="claude"
       lead="Changes apply to sessions started after them."
-      title="Claude Code"
     >
       <IntegrationGroup />
     </SectionPage>
@@ -1086,7 +1088,7 @@ function ClaudeSection() {
 
 function UpdatesSection() {
   return (
-    <SectionPage lead="Kriyon never installs without asking." title="Updates">
+    <SectionPage id="updates" lead="Kriyon never installs without asking.">
       <UpdatesGroup />
     </SectionPage>
   );
@@ -1095,8 +1097,8 @@ function UpdatesSection() {
 function ActivitySection() {
   return (
     <SectionPage
+      id="activity"
       lead="What Kriyon records about each session, kept on this Mac."
-      title="Activity log"
     >
       <ActivityGroup />
     </SectionPage>
@@ -1113,12 +1115,6 @@ const SECTION_PAGES: Record<SettingsSectionId, () => ReactNode> = {
   updates: UpdatesSection,
 };
 
-const NAV_GROUPS: readonly SettingsSection["group"][] = [
-  "Kriyon",
-  "Claude Code",
-  "App",
-];
-
 /** The side menu: the sections a search keeps, under their headings. */
 function SettingsNav({
   active,
@@ -1131,7 +1127,7 @@ function SettingsNav({
 }) {
   return (
     <nav aria-label="Settings sections" style={navStyle}>
-      {NAV_GROUPS.map((group) => {
+      {SETTINGS_GROUPS.map((group) => {
         const sections = SETTINGS_SECTIONS.filter(
           (section) => section.group === group && visible.includes(section.id)
         );

@@ -414,3 +414,13 @@ test("every setting a section shows can be found by searching its name", () => {
   }
   expect(missed).toEqual([]);
 });
+
+test("each section's page is titled the same as its side-menu entry", () => {
+  render(<SettingsView />);
+  for (const section of SETTINGS_SECTIONS) {
+    openSection(section.label);
+    expect(screen.getByRole("heading", { level: 2 })).toHaveTextContent(
+      section.label
+    );
+  }
+});
