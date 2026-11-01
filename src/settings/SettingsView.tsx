@@ -792,7 +792,7 @@ const TRIAGE_SKETCH: SketchRow[] = [
 
 const SIDEBAR_CHOICES = [
   {
-    hint: "Keeps the list in the order you made it.",
+    hint: "Shows every session, in the sort you picked.",
     label: "Calm",
     sketch: CALM_SKETCH,
     value: "calm",
