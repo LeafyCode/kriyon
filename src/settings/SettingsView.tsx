@@ -840,6 +840,8 @@ function SidebarModePicker() {
     >
       {SIDEBAR_CHOICES.map((choice) => (
         <button
+          aria-describedby={`sidebar-mode-${choice.value}-hint`}
+          aria-label={choice.label}
           aria-pressed={sidebarMode === choice.value}
           className="kr-focusable kr-hover-surface"
           key={choice.value}
@@ -881,7 +883,9 @@ function SidebarModePicker() {
           </span>
           <span style={rowTextStyle}>
             <span style={rowLabelStyle}>{choice.label}</span>
-            <span style={rowHintStyle}>{choice.hint}</span>
+            <span id={`sidebar-mode-${choice.value}-hint`} style={rowHintStyle}>
+              {choice.hint}
+            </span>
           </span>
         </button>
       ))}

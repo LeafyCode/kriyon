@@ -6,7 +6,6 @@ import { DEFAULT_LAYOUT, useLayout } from "../state/layout.ts";
 import { useUpdates } from "../state/updates.ts";
 import { THEMES } from "../theme/themes/index.ts";
 import { SettingsView } from "./SettingsView.tsx";
-import { NOTIFY_SOUND_OPTIONS } from "./settingsOptions.ts";
 import { matchingSections, SETTINGS_SECTIONS } from "./settingsSections.ts";
 
 const NOW_THREE = /Now 3 sessions, 2\.0 MB/;
@@ -393,17 +392,22 @@ test("every setting a section shows can be found by searching its name", () => {
   for (const section of SETTINGS_SECTIONS) {
     const { container, unmount } = render(<SettingsView />);
     openSection(section.label);
+    // Every name the page shows for a setting or one of its choices: row
+    // labels, segment tabs, picker cards and swatches, dropdown options. The
+    // theme filter's tabs pick what the picker shows, not a setting.
+    const filter = container.querySelector('[aria-label="Show themes"]');
+    const choices = Array.from(
+      container.querySelectorAll('[role="tab"], [aria-pressed], option')
+    ).filter((choice) => !filter?.contains(choice));
     const names = [
       ...Array.from(container.querySelectorAll("[data-setting-label]")).map(
         (label) => label.textContent ?? ""
       ),
-      ...(section.id === "appearance"
-        ? THEMES.map((theme) => theme.label)
-        : []),
-      ...(section.id === "notifications"
-        ? NOTIFY_SOUND_OPTIONS.map((option) => option.label)
-        : []),
-    ];
+      ...choices.map(
+        (choice) =>
+          choice.getAttribute("aria-label") ?? choice.textContent ?? ""
+      ),
+    ].filter((name) => name.trim() !== "");
     expect(names.length).toBeGreaterThan(0);
     for (const name of names) {
       if (!matchingSections(name).includes(section.id)) {

@@ -1,11 +1,32 @@
+import { MASCOT_HUES, MASCOTS } from "../structured/Mascot.tsx";
 import { THEMES } from "../theme/themes/index.ts";
-import { NOTIFY_SOUND_OPTIONS } from "./settingsOptions.ts";
+import {
+  AUTO_SLEEP_OPTIONS,
+  MEMORY_BUDGET_OPTIONS,
+  MENU_BAR_OPTIONS,
+  NOTIFY_OPTIONS,
+  NOTIFY_SOUND_OPTIONS,
+  SIDEBAR_MODE_OPTIONS,
+  UPDATE_CHANNEL_OPTIONS,
+} from "./settingsOptions.ts";
+
+/** The labels of a list of choices, so search finds a setting by any of its
+ *  choices without the list being typed out again here. */
+function labels(choices: readonly { label: string }[]): string[] {
+  return choices.map((choice) => choice.label);
+}
+
+/** The names of a list of named things (themes are labelled, mascots named). */
+function names(choices: readonly { name: string }[]): string[] {
+  return choices.map((choice) => choice.name);
+}
 
 /**
  * The pages of the Settings view, in side-menu order, and the words the
  * Settings search finds each one by. A setting added to a page adds its label
  * here too, or the search can't reach it — `SettingsView.test.tsx` fails when
- * a label shown on a page is missing.
+ * a setting's label, or the name of one of its choices, shown on a page is
+ * missing. Choices come from their own lists, never retyped.
  */
 
 const WHITESPACE = /\s+/;
@@ -44,7 +65,10 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
       "colour",
       "color",
       "mascot",
-      ...THEMES.map((theme) => theme.label),
+      "none",
+      ...labels(THEMES),
+      ...names(MASCOTS),
+      ...names(MASCOT_HUES),
     ],
     label: "Appearance",
   },
@@ -53,12 +77,10 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
     id: "layout",
     keywords: [
       "sidebar",
-      "calm",
-      "triage",
       "menu bar",
       "quick view",
-      "grouped",
-      "compact",
+      ...labels(SIDEBAR_MODE_OPTIONS),
+      ...labels(MENU_BAR_OPTIONS),
     ],
     label: "Layout",
   },
@@ -67,10 +89,10 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
     id: "notifications",
     keywords: [
       "os notifications",
-      "blocked",
       "sound",
       "preview",
-      ...NOTIFY_SOUND_OPTIONS.map((option) => option.label),
+      ...labels(NOTIFY_OPTIONS),
+      ...labels(NOTIFY_SOUND_OPTIONS),
     ],
     label: "Notifications",
   },
@@ -85,6 +107,8 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
       "nested sessions",
       "most busy at once",
       "limit",
+      ...labels(MEMORY_BUDGET_OPTIONS),
+      ...labels(AUTO_SLEEP_OPTIONS),
     ],
     label: "Sessions",
   },
@@ -107,9 +131,7 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
     id: "updates",
     keywords: [
       "channel",
-      "stable",
-      "beta",
-      "nightly",
+      ...labels(UPDATE_CHANNEL_OPTIONS),
       "check automatically",
       "check for updates",
     ],

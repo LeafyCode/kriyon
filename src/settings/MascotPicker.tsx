@@ -62,6 +62,7 @@ export function MascotPicker() {
       <fieldset aria-label="Mascot" style={rowStyle}>
         {options.map((option) => (
           <button
+            aria-label={option.name}
             aria-pressed={mascot === option.id}
             className="kr-focusable kr-hover-surface"
             key={option.id}
