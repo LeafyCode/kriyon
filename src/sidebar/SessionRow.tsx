@@ -1354,6 +1354,43 @@ export const SessionRow = memo(function SessionRow({
           worktreePath={session.worktreePath}
         />
       ) : null}
+      {removal.confirmingStop ? (
+        <div
+          data-no-dnd="true"
+          data-testid={`confirm-stop-worktree-terminals-${sessionId}`}
+          style={menuStyle}
+        >
+          <span style={confirmTextStyle}>
+            A command is running in this worktree's terminals. Removing the
+            worktree stops it.
+          </span>
+          <button
+            className="kr-hover-surface"
+            data-testid={`confirm-stop-worktree-terminals-go-${sessionId}`}
+            onClick={(event) => {
+              event.stopPropagation();
+              removal.stopAndRemove().catch(() => {
+                // Failures surface via the confirm step or a toast.
+              });
+            }}
+            style={{ ...menuItemStyle, color: tokens.color.status.error }}
+            type="button"
+          >
+            Stop it & remove
+          </button>
+          <button
+            className="kr-hover-surface"
+            onClick={(event) => {
+              event.stopPropagation();
+              removal.cancel();
+            }}
+            style={menuItemStyle}
+            type="button"
+          >
+            Cancel
+          </button>
+        </div>
+      ) : null}
       {removal.confirming ? (
         <div
           data-no-dnd="true"

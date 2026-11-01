@@ -47,6 +47,8 @@ function seed(): void {
 }
 
 beforeEach(() => {
+  dispose.mockClear();
+  useTerminals.setState({ busyPanes: {}, byScope: {}, deadPanes: {} });
   vi.mocked(removeWorktree).mockReset();
   vi.mocked(removeWorktree).mockResolvedValue();
   seed();
@@ -75,6 +77,25 @@ test("a removed worktree closes its terminals and keeps the main folder's", asyn
   expect(dispose).toHaveBeenCalledWith(pane);
   expect(useTerminals.getState().byScope[wt]).toBeUndefined();
   expect(useTerminals.getState().byScope.p1?.tabs).toHaveLength(1);
+});
+
+test("busy worktree terminals ask before anything is removed", async () => {
+  const wt = terminalScope("p1", "/p1-worktrees/feat-x", "/p1");
+  useTerminals.setState({ busyPanes: {}, byScope: {}, deadPanes: {} });
+  useTerminals.getState().openTab(wt, "/p1-worktrees/feat-x");
+  const pane = useTerminals.getState().byScope[wt]?.tabs[0]?.panes[0]?.id ?? "";
+  useTerminals.getState().setPaneBusy(pane, true);
+
+  const { result } = renderHook(() => useWorktreeRemoval("s1"));
+  await act(() => result.current.remove(false));
+  expect(result.current.confirmingStop).toBe(true);
+  expect(removeWorktree).not.toHaveBeenCalled();
+  expect(dispose).not.toHaveBeenCalledWith(pane);
+
+  await act(() => result.current.stopAndRemove());
+  expect(result.current.confirmingStop).toBe(false);
+  expect(removeWorktree).toHaveBeenCalledWith("/p1", "/p1-worktrees/feat-x");
+  expect(dispose).toHaveBeenCalledWith(pane);
 });
 
 test("a refused (dirty) removal escalates to the confirm step", async () => {
