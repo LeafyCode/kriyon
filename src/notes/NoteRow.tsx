@@ -71,6 +71,11 @@ const metaStyle: CSSProperties = {
   fontSize: "11px",
 };
 
+const pinSlotStyle: CSSProperties = {
+  display: "flex",
+  flex: "none",
+};
+
 const pinButtonStyle: CSSProperties = {
   ...iconButton(),
   height: "22px",
@@ -139,28 +144,34 @@ export function NoteRow({
         <span style={metaStyle}>{metaLine}</span>
       </button>
       {done ? null : (
-        <button
-          aria-label={
-            note.pinned
-              ? `Unpin "${note.text}"`
-              : `Pin "${note.text}" to the top`
-          }
-          aria-pressed={note.pinned}
-          className={
-            note.pinned ? "kr-hover-surface" : "kr-hover-surface kr-reveal"
-          }
-          onClick={() => update(note.id, { pinned: !note.pinned }, Date.now())}
-          style={{
-            ...pinButtonStyle,
-            color: note.pinned
-              ? tokens.color.accentBright
-              : tokens.color.ink.muted,
-          }}
-          title={note.pinned ? "Unpin" : "Pin to top"}
-          type="button"
+        // Hidden until hover, unless pinned: then the pin is the signal.
+        <span
+          className={note.pinned ? undefined : "kr-reveal"}
+          style={pinSlotStyle}
         >
-          <Pin fill={note.pinned ? "currentColor" : "none"} size={12} />
-        </button>
+          <button
+            aria-label={
+              note.pinned
+                ? `Unpin "${note.text}"`
+                : `Pin "${note.text}" to the top`
+            }
+            aria-pressed={note.pinned}
+            className="kr-hover-surface"
+            onClick={() =>
+              update(note.id, { pinned: !note.pinned }, Date.now())
+            }
+            style={{
+              ...pinButtonStyle,
+              color: note.pinned
+                ? tokens.color.accentBright
+                : tokens.color.ink.muted,
+            }}
+            title={note.pinned ? "Unpin" : "Pin to top"}
+            type="button"
+          >
+            <Pin fill={note.pinned ? "currentColor" : "none"} size={12} />
+          </button>
+        </span>
       )}
     </div>
   );
