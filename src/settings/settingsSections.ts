@@ -1,7 +1,11 @@
+import { THEMES } from "../theme/themes/index.ts";
+import { NOTIFY_SOUND_OPTIONS } from "./settingsOptions.ts";
+
 /**
  * The pages of the Settings view, in side-menu order, and the words the
  * Settings search finds each one by. A setting added to a page adds its label
- * here too, or the search can't reach it.
+ * here too, or the search can't reach it — `SettingsView.test.tsx` fails when
+ * a label shown on a page is missing.
  */
 
 const WHITESPACE = /\s+/;
@@ -15,13 +19,16 @@ export type SettingsSectionId =
   | "updates"
   | "activity";
 
+/** The side-menu headings, in order. */
+export const SETTINGS_GROUPS = ["Kriyon", "Claude Code", "App"] as const;
+
 export interface SettingsSection {
   /** The side-menu heading the section sits under. */
-  group: "Kriyon" | "Claude Code" | "App";
+  group: (typeof SETTINGS_GROUPS)[number];
   id: SettingsSectionId;
   /** Setting labels and the words a person might type to find them. */
   keywords: readonly string[];
-  /** The side-menu entry. */
+  /** The side-menu entry, and the title of the page it opens. */
   label: string;
 }
 
@@ -37,19 +44,34 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
       "colour",
       "color",
       "mascot",
+      ...THEMES.map((theme) => theme.label),
     ],
     label: "Appearance",
   },
   {
     group: "Kriyon",
     id: "layout",
-    keywords: ["sidebar", "calm", "triage", "menu bar", "grouped", "compact"],
+    keywords: [
+      "sidebar",
+      "calm",
+      "triage",
+      "menu bar",
+      "quick view",
+      "grouped",
+      "compact",
+    ],
     label: "Layout",
   },
   {
     group: "Kriyon",
     id: "notifications",
-    keywords: ["os notifications", "blocked", "sound", "preview"],
+    keywords: [
+      "os notifications",
+      "blocked",
+      "sound",
+      "preview",
+      ...NOTIFY_SOUND_OPTIONS.map((option) => option.label),
+    ],
     label: "Notifications",
   },
   {
@@ -58,7 +80,7 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
     keywords: [
       "memory",
       "warnings",
-      "budget",
+      "warn over budget",
       "sleep idle sessions",
       "nested sessions",
       "most busy at once",
@@ -75,7 +97,7 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
       "live usage",
       "status line",
       "kriyon companion",
-      "plugin",
+      "per-session plugin",
       "remove everything",
     ],
     label: "Integration",
@@ -83,13 +105,20 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   {
     group: "App",
     id: "updates",
-    keywords: ["channel", "stable", "beta", "nightly", "check automatically"],
+    keywords: [
+      "channel",
+      "stable",
+      "beta",
+      "nightly",
+      "check automatically",
+      "check for updates",
+    ],
     label: "Updates",
   },
   {
     group: "App",
     id: "activity",
-    keywords: ["activity log", "delete", "history"],
+    keywords: ["activity log", "delete all", "history"],
     label: "Activity log",
   },
 ];

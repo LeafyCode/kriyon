@@ -3,8 +3,11 @@ import { beforeEach, expect, test, vi } from "vitest";
 import { activityDeleteAll, previewNotifySound } from "../ipc/bridge.ts";
 import { useIntegration } from "../state/integration.ts";
 import { DEFAULT_LAYOUT, useLayout } from "../state/layout.ts";
+import { useUpdates } from "../state/updates.ts";
 import { THEMES } from "../theme/themes/index.ts";
 import { SettingsView } from "./SettingsView.tsx";
+import { NOTIFY_SOUND_OPTIONS } from "./settingsOptions.ts";
+import { matchingSections, SETTINGS_SECTIONS } from "./settingsSections.ts";
 
 const NOW_THREE = /Now 3 sessions, 2\.0 MB/;
 const KEPT_14 = /^Kept 14 days and up to 500\.0 MB, only on this Mac\./;
@@ -364,4 +367,50 @@ test("the theme filter shows only light or dark themes", () => {
       (theme) => theme.label
     )
   );
+});
+
+test("every setting a section shows can be found by searching its name", () => {
+  // Show the rows that only appear in some states, so they are checked too.
+  useUpdates.setState({
+    snapshot: {
+      available: null,
+      checking: false,
+      error: null,
+      lastCheckedMs: null,
+      prefs: { autoCheck: true, channel: "stable", skipped: null },
+      running: "1.0.0",
+      supported: true,
+    },
+  });
+  const { status } = useIntegration.getState();
+  if (!status) {
+    throw new Error("status set in beforeEach");
+  }
+  useIntegration.setState({
+    status: { ...status, prefs: { ...PREFS, sideloadRefused: true } },
+  });
+  const missed: string[] = [];
+  for (const section of SETTINGS_SECTIONS) {
+    const { container, unmount } = render(<SettingsView />);
+    openSection(section.label);
+    const names = [
+      ...Array.from(container.querySelectorAll("[data-setting-label]")).map(
+        (label) => label.textContent ?? ""
+      ),
+      ...(section.id === "appearance"
+        ? THEMES.map((theme) => theme.label)
+        : []),
+      ...(section.id === "notifications"
+        ? NOTIFY_SOUND_OPTIONS.map((option) => option.label)
+        : []),
+    ];
+    expect(names.length).toBeGreaterThan(0);
+    for (const name of names) {
+      if (!matchingSections(name).includes(section.id)) {
+        missed.push(`${section.label}: ${name}`);
+      }
+    }
+    unmount();
+  }
+  expect(missed).toEqual([]);
 });

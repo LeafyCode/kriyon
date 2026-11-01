@@ -393,7 +393,9 @@ function SettingRow({
   return (
     <div style={stacked ? stackedRowStyle : rowStyle}>
       <div style={rowTextStyle}>
-        <span style={rowLabelStyle}>{label}</span>
+        <span data-setting-label style={rowLabelStyle}>
+          {label}
+        </span>
         {hint ? <span style={rowHintStyle}>{hint}</span> : null}
       </div>
       {control}
