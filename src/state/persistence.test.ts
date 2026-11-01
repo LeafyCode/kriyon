@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import {
+  listProjectNotes,
   listProjects,
   listPrompts,
   listSessions,
@@ -8,7 +9,13 @@ import {
   upsertProject,
   upsertSession,
 } from "../ipc/bridge.ts";
-import type { ProjectRow, SavedPrompt, SessionRow } from "../types.ts";
+import type {
+  ProjectNote,
+  ProjectRow,
+  SavedPrompt,
+  SessionRow,
+} from "../types.ts";
+import { showToast } from "../ui/Toast.tsx";
 import { DEFAULT_LAYOUT, useLayout } from "./layout.ts";
 import {
   hydrate,
@@ -17,11 +24,13 @@ import {
   persistKey as persistKeyForTest,
   pruneSortState,
 } from "./persistence.ts";
+import { useProjectNotes } from "./projectNotes.ts";
 import { usePromptLibrary } from "./promptLibrary.ts";
 import { sessionRow, type UiSession, useSessions } from "./sessions.ts";
 import { useTerminals } from "./terminals.ts";
 
 vi.mock("../ipc/bridge", () => ({
+  listProjectNotes: vi.fn(),
   listPrompts: vi.fn(),
   listProjects: vi.fn(),
   listSessions: vi.fn(),
@@ -31,6 +40,9 @@ vi.mock("../ipc/bridge", () => ({
   upsertSession: vi.fn(),
 }));
 
+vi.mock("../ui/Toast.tsx", () => ({ showToast: vi.fn() }));
+
+const mockedListProjectNotes = vi.mocked(listProjectNotes);
 const mockedListPrompts = vi.mocked(listPrompts);
 const mockedListProjects = vi.mocked(listProjects);
 const mockedListSessions = vi.mocked(listSessions);
@@ -105,7 +117,9 @@ beforeEach(() => {
   vi.mocked(saveLayout).mockResolvedValue(undefined);
   vi.mocked(loadLayout).mockResolvedValue(null);
   mockedListPrompts.mockResolvedValue([]);
+  mockedListProjectNotes.mockResolvedValue([]);
   usePromptLibrary.setState({ prompts: [] });
+  useProjectNotes.setState({ notes: [] });
   useSessions.setState({
     activeSessionId: null,
     activity: {},
@@ -835,4 +849,42 @@ test("the nested session cap survives a save, defaults to 4 and drops a bad valu
   expect(parseLayoutForTest(saved(0))?.nestedSessionCap).toBe(4);
   expect(parseLayoutForTest(saved(2.5))?.nestedSessionCap).toBe(4);
   expect(parseLayoutForTest(saved(99))?.nestedSessionCap).toBe(4);
+});
+
+test("hydrate loads every project note", async () => {
+  mockedListProjects.mockResolvedValue([]);
+  mockedListSessions.mockResolvedValue([]);
+  const note: ProjectNote = {
+    body: "",
+    createdMs: 1,
+    doneAt: null,
+    id: "n1",
+    kind: "idea",
+    pinned: false,
+    projectId: "p1",
+    text: "Split view",
+    updatedMs: 1,
+  };
+  mockedListProjectNotes.mockResolvedValue([note]);
+
+  await hydrate();
+
+  expect(useProjectNotes.getState().notes).toEqual([note]);
+});
+
+test("a failed notes load says so and does not block core hydration", async () => {
+  mockedListProjects.mockResolvedValue([
+    { color: null, id: "p1", name: "Proj", path: "/p", setupCommand: null },
+  ]);
+  mockedListSessions.mockResolvedValue([]);
+  mockedListProjectNotes.mockRejectedValue(new Error("locked"));
+
+  await hydrate();
+
+  expect(useSessions.getState().projects).toHaveLength(1);
+  expect(useProjectNotes.getState().notes).toEqual([]);
+  expect(showToast).toHaveBeenCalledWith(
+    expect.stringContaining("notes"),
+    "error"
+  );
 });

@@ -12,6 +12,7 @@ import {
   Clock,
   GitBranch,
   GripVertical,
+  ListTodo,
   MoreHorizontal,
   Plus,
 } from "lucide-react";
@@ -29,6 +30,11 @@ import {
   type SidebarMode,
   useLayout,
 } from "../state/layout.ts";
+import {
+  openProjectNotes,
+  openTodoCount,
+  useProjectNotes,
+} from "../state/projectNotes.ts";
 import {
   isPutAway,
   isWorktreeSession,
@@ -433,6 +439,9 @@ function ProjectHeader({
 }: ProjectHeaderProps) {
   const picker = useAnchoredMenu();
   const sortMenu = useAnchoredMenu<HTMLDivElement>();
+  const openTodos = useProjectNotes((state) =>
+    openTodoCount(state.notes, project.id)
+  );
   const actionsMenu = useAnchoredMenu<HTMLDivElement>();
   const [editing, setEditing] = useState(false);
   // The header popovers share one anchor — opening one must close the others
@@ -534,6 +543,16 @@ function ProjectHeader({
             {worktreeCount}
           </span>
         ) : null}
+        {openTodos > 0 ? (
+          <span
+            data-testid={`open-todos-${project.id}`}
+            style={worktreeCountStyle}
+            title={`${openTodos} open todo${openTodos === 1 ? "" : "s"}`}
+          >
+            <ListTodo aria-hidden="true" size={9} />
+            {openTodos}
+          </span>
+        ) : null}
         {attention ? (
           <span data-testid="rollup-dot" style={rollupDotStyle} />
         ) : null}
@@ -611,6 +630,10 @@ function ProjectHeader({
           onColour={() => {
             actionsMenu.close();
             picker.toggle();
+          }}
+          onOpenNotes={() => {
+            actionsMenu.close();
+            openProjectNotes(project.id);
           }}
           onRename={() => {
             actionsMenu.close();

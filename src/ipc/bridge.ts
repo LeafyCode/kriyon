@@ -16,6 +16,7 @@ import type {
   PastSessionPage,
   PendingAsk,
   PlanLimits,
+  ProjectNote,
   ProjectRow,
   RepoStatus,
   SavedPrompt,
@@ -1252,6 +1253,21 @@ export function listPrompts(): Promise<SavedPrompt[]> {
 
 export function deletePrompt(id: string): Promise<void> {
   return invoke("delete_prompt", { id });
+}
+
+/** Every [Project note], oldest first. */
+export function listProjectNotes(): Promise<ProjectNote[]> {
+  return invoke("list_project_notes");
+}
+
+/** Save a [Project note]; resolves to the copy the backend stored (trimmed,
+ *  and with a done mark only on a todo). Rejects a note that fails its checks. */
+export function upsertProjectNote(note: ProjectNote): Promise<ProjectNote> {
+  return invoke("upsert_project_note", { note });
+}
+
+export function deleteProjectNote(id: string): Promise<void> {
+  return invoke("delete_project_note", { id });
 }
 
 /** Bump a prompt's use count / last-used time (backend stamps the clock). */

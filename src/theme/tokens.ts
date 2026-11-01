@@ -95,6 +95,17 @@ export const tokens = {
       errorSoft: themed("statusErrorSoft"),
       errorWash: themed("statusErrorWash"),
     },
+    /**
+     * The mark beside each [Project note] kind. Aliases of existing theme
+     * stops rather than new palette keys, so every theme gets them for free:
+     * a todo in the accent (it is the actionable one), an idea in the amber
+     * family, a plain note in quiet ink.
+     */
+    noteKind: {
+      todo: themed("accentBright"),
+      idea: themed("statusWaitingInk"),
+      note: themed("inkSecondary"),
+    },
     // Git / diff semantics.
     add: themed("add"),
     del: themed("del"),

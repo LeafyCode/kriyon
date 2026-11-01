@@ -1,4 +1,5 @@
 import {
+  listProjectNotes,
   listProjects,
   listPrompts,
   listSessions,
@@ -7,6 +8,7 @@ import {
   upsertProject,
   upsertSession,
 } from "../ipc/bridge.ts";
+import { failureMessage } from "../ipc/failures.ts";
 import { themeById } from "../theme/themes/index.ts";
 import type {
   NotifyPreference,
@@ -14,6 +16,7 @@ import type {
   ProjectRow,
   SessionRow,
 } from "../types.ts";
+import { showToast } from "../ui/Toast.tsx";
 import {
   clampFileTreeWidth,
   clampSidebarWidth,
@@ -28,6 +31,7 @@ import {
   TERMINAL_DOCK_HEIGHT_DEFAULT,
   useLayout,
 } from "./layout.ts";
+import { useProjectNotes } from "./projectNotes.ts";
 import { usePromptLibrary } from "./promptLibrary.ts";
 import {
   idleSession,
@@ -398,6 +402,15 @@ export async function hydrate(): Promise<void> {
   // The prompt library must never block core hydration: its load is
   // fault-isolated, degrading to an empty library on failure.
   const promptsPromise = listPrompts().catch(() => []);
+  // Notes are fault-isolated the same way, but a failure is said out loud:
+  // an empty Notes tab would otherwise read as "your notes are gone".
+  const notesPromise = listProjectNotes().catch((error: unknown) => {
+    showToast(
+      `Could not load project notes: ${failureMessage(error)}`,
+      "error"
+    );
+    return [];
+  });
 
   const [projects, sessionRows, layoutJson, terminalsJson] = await Promise.all([
     listProjects(),
@@ -447,6 +460,7 @@ export async function hydrate(): Promise<void> {
 
   const prompts = await promptsPromise;
   usePromptLibrary.getState().setPrompts(prompts);
+  useProjectNotes.getState().setNotes(await notesPromise);
 }
 
 /**

@@ -1,6 +1,6 @@
 /**
  * A project header's "⋯" popover (also opened by right-clicking the header):
- * park (put the project away and stop what it runs), rename, colour, sort, and
+ * park (put the project away and stop what it runs), its notes, rename, colour, sort, and
  * the destructive clear that closes every session in the group. Colour and
  * sort open their own popovers in this one's place; they live here, not in
  * the hover row, so that row stays short enough to leave the name readable. Its own component (the session row's
@@ -51,6 +51,8 @@ const dividerStyle: CSSProperties = {
 interface ProjectMenuProps {
   /** Open the colour picker in this menu's place. */
   onColour: () => void;
+  /** Show the project's [Project note]s in the inspector. */
+  onOpenNotes: () => void;
   onRename: () => void;
   /** Ask to close every session in the project — opens the group's confirm. */
   onRequestClear: () => void;
@@ -71,6 +73,7 @@ interface Item {
 
 export function ProjectMenu({
   onColour,
+  onOpenNotes,
   onRename,
   onRequestClear,
   onRequestPark,
@@ -85,6 +88,11 @@ export function ProjectMenu({
       onClick: onRequestPark,
       testId: `park-project-${projectId}`,
       title: "Stop its sessions and terminals and move it to Parked",
+    },
+    {
+      label: "Open notes",
+      onClick: onOpenNotes,
+      title: "Your todos, ideas and notes for this project",
     },
     {
       label: "Rename",

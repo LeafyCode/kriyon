@@ -1,6 +1,7 @@
 import { PanelRight } from "lucide-react";
 import { type CSSProperties, type ReactNode, useMemo } from "react";
 import { topBandRow } from "../layout/topBand.ts";
+import { NotesTab } from "../notes/NotesTab.tsx";
 import { formatBootTime, useBootTimes } from "../state/bootTiming.ts";
 import {
   computeTotalsFromFiles,
@@ -10,6 +11,11 @@ import {
 import { homeRelative } from "../state/homeRelative.ts";
 import { type InspectorTab, useLayout } from "../state/layout.ts";
 import { usePlanLimitsView } from "../state/planLimits.ts";
+import {
+  openTodoCount,
+  useNotesProjectId,
+  useProjectNotes,
+} from "../state/projectNotes.ts";
 import {
   sessionClaudeFiles,
   sessionWorkingDir,
@@ -41,9 +47,15 @@ export const INSPECTOR_WIDTH = 280;
  *  room side by side (the design draws it at 400). */
 export const ACTIVITY_INSPECTOR_WIDTH = 380;
 
+/** The Notes tab's width: room for a note's text to read as a sentence. */
+export const NOTES_INSPECTOR_WIDTH = 340;
+
 /** The inspector's width for the tab it shows. */
 export function inspectorWidth(tab: InspectorTab): number {
-  return tab === "activity" ? ACTIVITY_INSPECTOR_WIDTH : INSPECTOR_WIDTH;
+  if (tab === "activity") {
+    return ACTIVITY_INSPECTOR_WIDTH;
+  }
+  return tab === "notes" ? NOTES_INSPECTOR_WIDTH : INSPECTOR_WIDTH;
 }
 
 const rootStyle: CSSProperties = {
@@ -88,10 +100,22 @@ const detailsTitleStyle: CSSProperties = {
   fontWeight: 500,
 };
 
-const INSPECTOR_TABS: readonly SegmentedOption<InspectorTab>[] = [
-  { label: "Details", value: "details" },
-  { label: "Activity", value: "activity" },
-];
+/** The tab strip. Notes carries the shown project's open-todo count, and
+ *  nothing when there are none — ideas and notes never nag. */
+function inspectorTabs(
+  openTodos: number
+): readonly SegmentedOption<InspectorTab>[] {
+  return [
+    { label: "Details", value: "details" },
+    { label: "Activity", value: "activity" },
+    {
+      count: openTodos,
+      label: "Notes",
+      testId: "inspector-notes-tab",
+      value: "notes",
+    },
+  ];
+}
 
 /** With a session the title is the tab strip; without one, just "Details". */
 function DetailsHeader({
@@ -102,13 +126,17 @@ function DetailsHeader({
   tab?: InspectorTab;
 }) {
   const collapse = useLayout((state) => state.toggleInspectorCollapsed);
+  const notesProjectId = useNotesProjectId();
+  const openTodos = useProjectNotes((state) =>
+    notesProjectId ? openTodoCount(state.notes, notesProjectId) : 0
+  );
   return (
     <div data-tauri-drag-region style={detailsHeaderStyle}>
       {onTab && tab ? (
         <Segmented
           ariaLabel="Details rail"
           onChange={onTab}
-          options={INSPECTOR_TABS}
+          options={inspectorTabs(openTodos)}
           value={tab}
           variant="underline"
         />
@@ -439,6 +467,18 @@ export function Inspector() {
   );
   const tab = useLayout((state) => state.inspectorTab);
   const setTab = useLayout((state) => state.setInspectorTab);
+  const notesProjectId = useNotesProjectId();
+
+  // Notes belong to a project, not a session, so they show without one —
+  // the project menu's "Open notes" works with no session open.
+  if (tab === "notes" && notesProjectId) {
+    return (
+      <aside data-testid="inspector" style={rootStyle}>
+        <DetailsHeader onTab={setTab} tab={tab} />
+        <NotesTab key={notesProjectId} projectId={notesProjectId} />
+      </aside>
+    );
+  }
 
   if (!session) {
     return (
