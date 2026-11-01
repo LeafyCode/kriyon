@@ -4,12 +4,13 @@
  * first — git refuses a dirty tree, which escalates to an explicit confirm —
  * and only the confirm sends `force`. The branch (and its commits) always
  * survive: only the checkout folder goes. On success the session that lived
- * in the worktree is archived.
+ * in the worktree is archived and the worktree's terminals are closed.
  */
 import { useState } from "react";
 import { removeWorktree } from "../ipc/bridge.ts";
 import { archiveSessionAndStop } from "../state/actions.ts";
 import { useSessions } from "../state/sessions.ts";
+import { terminalScope, useTerminals } from "../state/terminals.ts";
 import { showToast } from "../ui/Toast.tsx";
 
 export interface WorktreeRemoval {
@@ -50,6 +51,10 @@ export function useWorktreeRemoval(sessionId: string): WorktreeRemoval {
       return;
     }
     setConfirming(false);
+    // Its folder is gone, so its terminals have nowhere to run.
+    useTerminals
+      .getState()
+      .dropScope(terminalScope(project.id, current.worktreePath));
     archiveSessionAndStop(sessionId);
     showToast("Worktree removed — its branch is kept");
   }

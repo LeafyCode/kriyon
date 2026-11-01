@@ -2,6 +2,7 @@ import { act, renderHook } from "@testing-library/react";
 import { beforeEach, expect, test, vi } from "vitest";
 import { removeWorktree } from "../ipc/bridge.ts";
 import { type UiSession, useSessions } from "../state/sessions.ts";
+import { terminalScope, useTerminals } from "../state/terminals.ts";
 import { useWorktreeRemoval } from "./useWorktreeRemoval.ts";
 
 vi.mock("../ipc/bridge.ts", () => ({
@@ -59,6 +60,21 @@ test("a clean removal archives the session and never confirms", async () => {
   expect(useSessions.getState().sessions.s1?.archivedAt).not.toBeNull();
   // Its worktree is gone: a claude left running there would have no cwd.
   expect(dispose).toHaveBeenCalledWith("s1");
+});
+
+test("a removed worktree closes its terminals and keeps the main folder's", async () => {
+  const wt = terminalScope("p1", "/p1-worktrees/feat-x");
+  useTerminals.setState({ busyPanes: {}, byScope: {}, deadPanes: {} });
+  useTerminals.getState().openTab("p1", "/p1");
+  useTerminals.getState().openTab(wt, "/p1-worktrees/feat-x");
+  const pane = useTerminals.getState().byScope[wt]?.tabs[0]?.panes[0]?.id;
+
+  const { result } = renderHook(() => useWorktreeRemoval("s1"));
+  await act(() => result.current.remove(false));
+
+  expect(dispose).toHaveBeenCalledWith(pane);
+  expect(useTerminals.getState().byScope[wt]).toBeUndefined();
+  expect(useTerminals.getState().byScope.p1?.tabs).toHaveLength(1);
 });
 
 test("a refused (dirty) removal escalates to the confirm step", async () => {

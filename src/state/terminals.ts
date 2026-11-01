@@ -1,6 +1,10 @@
 import { create } from "zustand";
 import { disposeSession } from "../terminal/sessionHost.ts";
-import { fullyParkedProjectIds, useSessions } from "./sessions.ts";
+import {
+  fullyParkedProjectIds,
+  type UiSession,
+  useSessions,
+} from "./sessions.ts";
 
 /**
  * What an intercepted quit would destroy, so the confirmation can name it: a
@@ -32,7 +36,38 @@ export interface TerminalTab {
   title: string;
 }
 
-export interface ProjectTerminals {
+/** Splits a scope key; a NUL byte can't occur in an id or a path. */
+const SCOPE_SEP = "\u0000";
+
+/**
+ * A [Terminal scope]: the folder a set of [Project terminal]s belongs to. A
+ * project's main folder is keyed by the bare project id (so terminals saved
+ * before scopes existed stay in the main folder); a [Worktree] is keyed by the
+ * project id and the worktree path. Terminals never show outside their scope.
+ */
+export function terminalScope(
+  projectId: string,
+  worktreePath: string | null | undefined
+): string {
+  return worktreePath ? `${projectId}${SCOPE_SEP}${worktreePath}` : projectId;
+}
+
+/** The [Terminal scope] of the folder a [Session] works in; null for none. */
+export function sessionTerminalScope(
+  session: UiSession | undefined
+): string | null {
+  return session
+    ? terminalScope(session.projectId, session.worktreePath)
+    : null;
+}
+
+/** The project a [Terminal scope] belongs to. */
+export function scopeProjectId(scope: string): string {
+  const at = scope.indexOf(SCOPE_SEP);
+  return at === -1 ? scope : scope.slice(0, at);
+}
+
+export interface ScopeTerminals {
   activeTabId: string;
   tabs: TerminalTab[];
 }
@@ -41,40 +76,46 @@ export interface TerminalsState {
   /** Panes with a foreground command running, keyed by pane id (ephemeral, not
    *  persisted). Derived from the shell's OSC 133 command markers. */
   busyPanes: Record<string, boolean>;
-  byProject: Record<string, ProjectTerminals>;
+  byScope: Record<string, ScopeTerminals>;
   /** Reset a pane's dead flag (its shell is being restarted). */
   clearPaneExited: (paneId: string) => void;
-  closePane: (projectId: string, tabId: string, paneId: string) => void;
-  closeTab: (projectId: string, tabId: string) => void;
+  closePane: (scope: string, tabId: string, paneId: string) => void;
+  closeTab: (scope: string, tabId: string) => void;
   /** Panes whose shell exited underneath the app (ephemeral, not persisted).
    *  Shown as a "Shell exited" overlay with a restart affordance. */
   deadPanes: Record<string, boolean>;
+  /** Close every terminal of one [Terminal scope] and forget its tabs — for a
+   *  [Worktree] whose folder is gone. */
+  dropScope: (scope: string) => void;
   hasBusyPanes: () => boolean;
-  hydrate: (byProject: Record<string, ProjectTerminals>) => void;
+  hydrate: (byScope: Record<string, ScopeTerminals>) => void;
   isPaneBusy: (paneId: string) => boolean;
   isPaneDead: (paneId: string) => boolean;
-  isTabBusy: (projectId: string, tabId: string) => boolean;
-  livePaneCount: () => number;
-  openTab: (projectId: string, cwd: string) => string;
+  /** Whether any pane of one [Terminal scope] runs a foreground command. */
+  isScopeBusy: (scope: string | null) => boolean;
+  isTabBusy: (scope: string, tabId: string) => boolean;
+  openTab: (scope: string, cwd: string) => string;
   /** What the quit the user asked for would destroy, or `null` when no quit is
    *  pending — drives the confirm dialog (ephemeral). The store only carries the
    *  stakes; working them out (which needs session state too) belongs to the
    *  quit gate in `terminal/closeOnQuit`. */
   quitConfirm: QuitStakes | null;
-  renameTab: (projectId: string, tabId: string, title: string) => void;
-  setActivePane: (projectId: string, tabId: string, paneId: string) => void;
-  setActiveTab: (projectId: string, tabId: string) => void;
+  renameTab: (scope: string, tabId: string, title: string) => void;
+  /** How many panes one [Terminal scope] has open; 0 for none. */
+  scopePaneCount: (scope: string | null) => number;
+  setActivePane: (scope: string, tabId: string, paneId: string) => void;
+  setActiveTab: (scope: string, tabId: string) => void;
   setDirection: (
-    projectId: string,
+    scope: string,
     tabId: string,
     direction: "row" | "column"
   ) => void;
-  setLayout: (projectId: string, tabId: string, layout: number[]) => void;
+  setLayout: (scope: string, tabId: string, layout: number[]) => void;
   setPaneBusy: (paneId: string, busy: boolean) => void;
   /** Mark a pane's shell as exited (also clears its busy flag). */
   setPaneExited: (paneId: string) => void;
   setQuitConfirm: (stakes: QuitStakes | null) => void;
-  splitPane: (projectId: string, tabId: string, cwd: string) => string;
+  splitPane: (scope: string, tabId: string, cwd: string) => string;
   /** Stop every pane of a [Parked project], keeping its tabs and layout so
    *  unparking brings them back; each pane opens a fresh shell when shown. */
   stopProject: (projectId: string) => void;
@@ -129,34 +170,34 @@ function newTab(title: string, cwd: string): TerminalTab {
   };
 }
 
-/** Apply `fn` to one project's tab and return a new byProject map (immutable). */
+/** Apply `fn` to one scope's tab and return a new byScope map (immutable). */
 function updateTab(
-  byProject: Record<string, ProjectTerminals>,
-  projectId: string,
+  byScope: Record<string, ScopeTerminals>,
+  scope: string,
   tabId: string,
   fn: (tab: TerminalTab) => TerminalTab
-): Record<string, ProjectTerminals> {
-  const project = byProject[projectId];
-  if (!project) {
-    return byProject;
+): Record<string, ScopeTerminals> {
+  const entry = byScope[scope];
+  if (!entry) {
+    return byScope;
   }
   return {
-    ...byProject,
-    [projectId]: {
-      ...project,
-      tabs: project.tabs.map((t) => (t.id === tabId ? fn(t) : t)),
+    ...byScope,
+    [scope]: {
+      ...entry,
+      tabs: entry.tabs.map((t) => (t.id === tabId ? fn(t) : t)),
     },
   };
 }
 
-/** Whether `paneId` is a live pane in any project — the guard that keeps
+/** Whether `paneId` is a live pane in any scope — the guard that keeps
  *  non-terminal ids (e.g. Claude sessions, always "busy" while claude runs) from
  *  ever entering `busyPanes`. */
 function paneExists(
-  byProject: Record<string, ProjectTerminals>,
+  byScope: Record<string, ScopeTerminals>,
   paneId: string
 ): boolean {
-  return Object.values(byProject).some((p) =>
+  return Object.values(byScope).some((p) =>
     p.tabs.some((t) => t.panes.some((pane) => pane.id === paneId))
   );
 }
@@ -178,21 +219,21 @@ function pruneBusy(
 }
 
 export const useTerminals = create<TerminalsState>((set, get) => ({
-  byProject: {},
+  byScope: {},
   busyPanes: {},
   deadPanes: {},
   quitConfirm: null,
 
-  openTab: (projectId, cwd) => {
-    const project = get().byProject[projectId];
-    const title = `Terminal ${(project?.tabs.length ?? 0) + 1}`;
+  openTab: (scope, cwd) => {
+    const entry = get().byScope[scope];
+    const title = `Terminal ${(entry?.tabs.length ?? 0) + 1}`;
     const tab = newTab(title, cwd);
     set((state) => {
-      const existing = state.byProject[projectId];
+      const existing = state.byScope[scope];
       return {
-        byProject: {
-          ...state.byProject,
-          [projectId]: {
+        byScope: {
+          ...state.byScope,
+          [scope]: {
             activeTabId: tab.id,
             tabs: [...(existing?.tabs ?? []), tab],
           },
@@ -202,9 +243,9 @@ export const useTerminals = create<TerminalsState>((set, get) => ({
     return tab.id;
   },
 
-  closeTab: (projectId, tabId) => {
-    const project = get().byProject[projectId];
-    const tab = project?.tabs.find((t) => t.id === tabId);
+  closeTab: (scope, tabId) => {
+    const entry = get().byScope[scope];
+    const tab = entry?.tabs.find((t) => t.id === tabId);
     if (!tab) {
       return;
     }
@@ -213,7 +254,7 @@ export const useTerminals = create<TerminalsState>((set, get) => ({
     }
     const closedPaneIds = tab.panes.map((pane) => pane.id);
     set((state) => {
-      const p = state.byProject[projectId];
+      const p = state.byScope[scope];
       if (!p) {
         return state;
       }
@@ -226,38 +267,38 @@ export const useTerminals = create<TerminalsState>((set, get) => ({
           : p.activeTabId;
       return {
         busyPanes: pruneBusy(state.busyPanes, closedPaneIds),
-        byProject: { ...state.byProject, [projectId]: { activeTabId, tabs } },
+        byScope: { ...state.byScope, [scope]: { activeTabId, tabs } },
         deadPanes: pruneBusy(state.deadPanes, closedPaneIds),
       };
     });
   },
 
-  renameTab: (projectId, tabId, title) =>
+  renameTab: (scope, tabId, title) =>
     set((state) => ({
-      byProject: updateTab(state.byProject, projectId, tabId, (t) => ({
+      byScope: updateTab(state.byScope, scope, tabId, (t) => ({
         ...t,
         title,
       })),
     })),
 
-  setActiveTab: (projectId, tabId) =>
+  setActiveTab: (scope, tabId) =>
     set((state) => {
-      const p = state.byProject[projectId];
+      const p = state.byScope[scope];
       if (!p) {
         return state;
       }
       return {
-        byProject: {
-          ...state.byProject,
-          [projectId]: { ...p, activeTabId: tabId },
+        byScope: {
+          ...state.byScope,
+          [scope]: { ...p, activeTabId: tabId },
         },
       };
     }),
 
-  splitPane: (projectId, tabId, cwd) => {
+  splitPane: (scope, tabId, cwd) => {
     const pane = newPane(cwd);
     set((state) => ({
-      byProject: updateTab(state.byProject, projectId, tabId, (t) => ({
+      byScope: updateTab(state.byScope, scope, tabId, (t) => ({
         ...t,
         activePaneId: pane.id,
         layout: layoutWithAddedPane(t.layout),
@@ -267,29 +308,29 @@ export const useTerminals = create<TerminalsState>((set, get) => ({
     return pane.id;
   },
 
-  setDirection: (projectId, tabId, direction) =>
+  setDirection: (scope, tabId, direction) =>
     set((state) => ({
-      byProject: updateTab(state.byProject, projectId, tabId, (t) => ({
+      byScope: updateTab(state.byScope, scope, tabId, (t) => ({
         ...t,
         direction,
       })),
     })),
 
-  closePane: (projectId, tabId, paneId) => {
-    const project = get().byProject[projectId];
-    const tab = project?.tabs.find((t) => t.id === tabId);
+  closePane: (scope, tabId, paneId) => {
+    const entry = get().byScope[scope];
+    const tab = entry?.tabs.find((t) => t.id === tabId);
     if (!tab) {
       return;
     }
     disposeSession(paneId);
     if (tab.panes.length <= 1) {
-      get().closeTab(projectId, tabId);
+      get().closeTab(scope, tabId);
       return;
     }
     set((state) => ({
       busyPanes: pruneBusy(state.busyPanes, [paneId]),
       deadPanes: pruneBusy(state.deadPanes, [paneId]),
-      byProject: updateTab(state.byProject, projectId, tabId, (t) => {
+      byScope: updateTab(state.byScope, scope, tabId, (t) => {
         const idx = t.panes.findIndex((pane) => pane.id === paneId);
         const panes = t.panes.filter((pane) => pane.id !== paneId);
         // Closing the active pane activates its left neighbour (or the first).
@@ -307,34 +348,46 @@ export const useTerminals = create<TerminalsState>((set, get) => ({
     }));
   },
 
-  setActivePane: (projectId, tabId, paneId) =>
+  setActivePane: (scope, tabId, paneId) =>
     set((state) => ({
-      byProject: updateTab(state.byProject, projectId, tabId, (t) => ({
+      byScope: updateTab(state.byScope, scope, tabId, (t) => ({
         ...t,
         activePaneId: paneId,
       })),
     })),
 
-  setLayout: (projectId, tabId, layout) =>
+  setLayout: (scope, tabId, layout) =>
     set((state) => ({
-      byProject: updateTab(state.byProject, projectId, tabId, (t) => ({
+      byScope: updateTab(state.byScope, scope, tabId, (t) => ({
         ...t,
         layout,
       })),
     })),
 
-  livePaneCount: () =>
-    Object.values(get().byProject).reduce(
-      (sum, p) => sum + p.tabs.reduce((n, t) => n + t.panes.length, 0),
-      0
-    ),
+  scopePaneCount: (scope) =>
+    scope === null
+      ? 0
+      : (get().byScope[scope]?.tabs.reduce((n, t) => n + t.panes.length, 0) ??
+        0),
+
+  isScopeBusy: (scope) => {
+    if (scope === null) {
+      return false;
+    }
+    const busy = get().busyPanes;
+    return (
+      get().byScope[scope]?.tabs.some((t) =>
+        t.panes.some((pane) => busy[pane.id] === true)
+      ) ?? false
+    );
+  },
 
   setPaneBusy: (paneId, busy) =>
     set((state) => {
       // Only track ids that are real panes; a busy signal for a Claude session
       // (or a since-closed pane) must never enter the map. Clearing is always
       // allowed so a stale entry can't get stuck.
-      if (busy && !paneExists(state.byProject, paneId)) {
+      if (busy && !paneExists(state.byScope, paneId)) {
         return state;
       }
       if ((state.busyPanes[paneId] === true) === busy) {
@@ -354,7 +407,7 @@ export const useTerminals = create<TerminalsState>((set, get) => ({
       // Same guard as busy: only ids that are live panes may enter the map —
       // a Claude session's shell dying is handled by its own activation
       // revive, not the dock's dead-pane overlay.
-      if (!paneExists(state.byProject, paneId)) {
+      if (!paneExists(state.byScope, paneId)) {
         return state;
       }
       return {
@@ -377,18 +430,18 @@ export const useTerminals = create<TerminalsState>((set, get) => ({
 
   isPaneBusy: (paneId) => get().busyPanes[paneId] === true,
 
-  isTabBusy: (projectId, tabId) => {
+  isTabBusy: (scope, tabId) => {
     const busy = get().busyPanes;
-    const tab = get().byProject[projectId]?.tabs.find((t) => t.id === tabId);
+    const tab = get().byScope[scope]?.tabs.find((t) => t.id === tabId);
     return tab?.panes.some((pane) => busy[pane.id] === true) ?? false;
   },
 
   hasBusyPanes: () => Object.keys(get().busyPanes).length > 0,
 
-  hydrate: (byProject) => set({ byProject }),
+  hydrate: (byScope) => set({ byScope }),
 
   stopProject: (projectId) => {
-    const paneIds = projectPaneIds(get().byProject, projectId);
+    const paneIds = projectPaneIds(get().byScope, projectId);
     for (const id of paneIds) {
       disposeSession(id);
     }
@@ -397,18 +450,37 @@ export const useTerminals = create<TerminalsState>((set, get) => ({
       deadPanes: pruneBusy(state.deadPanes, paneIds),
     }));
   },
+
+  dropScope: (scope) => {
+    const entry = get().byScope[scope];
+    if (!entry) {
+      return;
+    }
+    const paneIds = entry.tabs.flatMap((tab) => tab.panes.map((p) => p.id));
+    for (const id of paneIds) {
+      disposeSession(id);
+    }
+    set((state) => {
+      const { [scope]: _dropped, ...rest } = state.byScope;
+      return {
+        busyPanes: pruneBusy(state.busyPanes, paneIds),
+        byScope: rest,
+        deadPanes: pruneBusy(state.deadPanes, paneIds),
+      };
+    });
+  },
 }));
 
-/** Every [Terminal pane] id a project owns, across all its tabs. */
+/** Every [Terminal pane] id a project owns, across all its scopes and tabs. */
 export function projectPaneIds(
-  byProject: Record<string, ProjectTerminals>,
+  byScope: Record<string, ScopeTerminals>,
   projectId: string
 ): string[] {
-  return (
-    byProject[projectId]?.tabs.flatMap((tab) =>
-      tab.panes.map((pane) => pane.id)
-    ) ?? []
-  );
+  return Object.entries(byScope)
+    .filter(([scope]) => scopeProjectId(scope) === projectId)
+    .flatMap(([, entry]) =>
+      entry.tabs.flatMap((tab) => tab.panes.map((pane) => pane.id))
+    );
 }
 
 /**

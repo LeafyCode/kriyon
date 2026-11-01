@@ -1,7 +1,15 @@
 import type { CSSProperties } from "react";
 import { useLayout } from "../state/layout.ts";
-import { fullyParkedProjectIds, useSessions } from "../state/sessions.ts";
-import { useTerminals } from "../state/terminals.ts";
+import {
+  fullyParkedProjectIds,
+  sessionWorkingDir,
+  useSessions,
+} from "../state/sessions.ts";
+import {
+  scopeProjectId,
+  sessionTerminalScope,
+  useTerminals,
+} from "../state/terminals.ts";
 import { TerminalWorkspace } from "../terminal/TerminalWorkspace.tsx";
 import { tokens } from "../theme/tokens.ts";
 
@@ -28,9 +36,9 @@ export function TerminalDock() {
   const activeSessionId = useSessions((s) => s.activeSessionId);
   const sessions = useSessions((s) => s.sessions);
   const projects = useSessions((s) => s.projects);
-  const byProject = useTerminals((s) => s.byProject);
+  const byScope = useTerminals((s) => s.byScope);
 
-  const hasTerminals = Object.keys(byProject).length > 0;
+  const hasTerminals = Object.keys(byScope).length > 0;
   // Once any project has terminals the dock stays mounted forever and closing
   // only hides it — unmounting would dispose every xterm (and its scrollback)
   // while the PTYs live on. Rendering nothing is only safe before first use.
@@ -38,25 +46,31 @@ export function TerminalDock() {
     return null;
   }
 
-  const activeProjectId = activeSessionId
-    ? (sessions[activeSessionId]?.projectId ?? null)
-    : null;
-  const cwdFor = (id: string): string =>
-    projects.find((p) => p.id === id)?.path ?? "";
+  const activeSession = activeSessionId ? sessions[activeSessionId] : undefined;
+  // Terminals belong to the folder the active session works in: its
+  // [Worktree] when it has one, else the project folder. Main-folder
+  // terminals never show in a worktree, nor one worktree's in another.
+  const activeScope = sessionTerminalScope(activeSession);
+  const cwdFor = (scope: string): string => {
+    if (scope === activeScope) {
+      return sessionWorkingDir(activeSession);
+    }
+    // A hidden scope opens nothing new until it is active again; its panes
+    // keep their own cwd for split and restart.
+    const projectId = scopeProjectId(scope);
+    return projects.find((p) => p.id === projectId)?.path ?? "";
+  };
 
-  // Keep a workspace mounted for every project that has terminals, plus the
-  // active project (which may not have any tabs yet). Only the active one is
-  // visible; the rest are hidden-but-alive so switching projects never tears
+  // Keep a workspace mounted for every scope that has terminals, plus the
+  // active scope (which may not have any tabs yet). Only the active one is
+  // visible; the rest are hidden-but-alive so switching sessions never tears
   // down — and blanks — a running terminal. A [Parked project]'s terminals are
-  // stopped, so its workspace unmounts too: a mounted pane would start a fresh
+  // stopped, so its workspaces unmount too: a mounted pane would start a fresh
   // shell behind the person's back.
   const parked = fullyParkedProjectIds(sessions);
-  const mountedProjectIds = Array.from(
-    new Set([
-      ...Object.keys(byProject),
-      ...(activeProjectId ? [activeProjectId] : []),
-    ])
-  ).filter((id) => !parked.has(id));
+  const mountedScopes = Array.from(
+    new Set([...Object.keys(byScope), ...(activeScope ? [activeScope] : [])])
+  ).filter((scope) => !parked.has(scopeProjectId(scope)));
 
   const startDrag = (event: {
     clientY: number;
@@ -98,33 +112,33 @@ export function TerminalDock() {
         />
       )}
       <div style={{ flex: 1, minHeight: 0, position: "relative" }}>
-        {activeProjectId === null ? (
+        {activeScope === null ? (
           <TerminalWorkspace
             cwd=""
             fullHeight={fullHeight}
             onToggleFullHeight={toggleFullHeight}
-            projectId={null}
+            scope={null}
             visible={open}
           />
         ) : null}
-        {mountedProjectIds.map((id) => {
-          const isActiveProject = id === activeProjectId;
+        {mountedScopes.map((scope) => {
+          const isActive = scope === activeScope;
           return (
             <div
-              data-testid={`project-pane-${id}`}
-              key={id}
+              data-testid={`scope-pane-${scope}`}
+              key={scope}
               style={{
-                display: isActiveProject ? "block" : "none",
+                display: isActive ? "block" : "none",
                 inset: 0,
                 position: "absolute",
               }}
             >
               <TerminalWorkspace
-                cwd={cwdFor(id)}
+                cwd={cwdFor(scope)}
                 fullHeight={fullHeight}
                 onToggleFullHeight={toggleFullHeight}
-                projectId={id}
-                visible={open && isActiveProject}
+                scope={scope}
+                visible={open && isActive}
               />
             </div>
           );

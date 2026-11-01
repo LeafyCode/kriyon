@@ -1,7 +1,8 @@
 import { SquareTerminal } from "lucide-react";
 import type { CSSProperties } from "react";
 import { useLayout } from "../state/layout.ts";
-import { useTerminals } from "../state/terminals.ts";
+import { useSessions } from "../state/sessions.ts";
+import { sessionTerminalScope, useTerminals } from "../state/terminals.ts";
 import { iconButton } from "../theme/recipes.ts";
 import { accentAlpha, tokens } from "../theme/tokens.ts";
 
@@ -31,8 +32,8 @@ function countStyle(busy: boolean): CSSProperties {
 
 /**
  * Toggles the {@link TerminalDock} and doubles as the live indicator: the mark
- * and count chip take a pulse while any Project terminal has a foreground
- * process running.
+ * and count chip count the active session's [Terminal scope] and take a pulse
+ * while one of its terminals has a foreground process running.
  *
  * Lives at the right end of the session header's tab row — where the canvas
  * puts its `Structured | Raw` control — since the title bar that used to host
@@ -41,8 +42,15 @@ function countStyle(busy: boolean): CSSProperties {
 export function TerminalToggle() {
   const dockOpen = useLayout((state) => state.layout.terminalDockOpen);
   const toggleDock = useLayout((state) => state.toggleTerminalDock);
-  const paneCount = useTerminals((state) => state.livePaneCount());
-  const busy = useTerminals((state) => state.hasBusyPanes());
+  // The chip speaks for the terminals the dock would show: the active
+  // session's folder only, never another worktree's or the main folder's.
+  const scope = useSessions((state) =>
+    state.activeSessionId
+      ? sessionTerminalScope(state.sessions[state.activeSessionId])
+      : null
+  );
+  const paneCount = useTerminals((state) => state.scopePaneCount(scope));
+  const busy = useTerminals((state) => state.isScopeBusy(scope));
 
   return (
     <button
