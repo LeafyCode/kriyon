@@ -72,6 +72,17 @@ test("explains each thing Kriyon adds before anything is written", () => {
   expect(screen.getByText(RE_4)).toBeInTheDocument();
 });
 
+// A flex-centred child taller than its scroll box overflows upward, where it
+// can't be scrolled to, so the dialog's top was cut off in a short window.
+// Auto margins centre it only while it fits.
+test("the dialog stays fully reachable in a window shorter than it", () => {
+  render(<WelcomeScreen />);
+  const page = screen.getByTestId("welcome-screen");
+  expect(page.style.alignItems).not.toBe("center");
+  expect(page.style.overflowY).toBe("auto");
+  expect(screen.getByRole("dialog").style.margin).toBe("auto");
+});
+
 function choose(name: string | RegExp, option: "On" | "Off") {
   fireEvent.click(
     within(screen.getByRole("tablist", { name })).getByRole("tab", {

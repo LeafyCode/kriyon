@@ -21,12 +21,12 @@ import { companionHint, hooksHint, liveUsageHint } from "./integrationCopy.ts";
  * quits, leaving Claude Code exactly as it was.
  */
 
+// The panel centres itself with auto margins, not align-items: a flex-centred
+// child taller than the window overflows upward, past where it can scroll.
 const pageStyle: CSSProperties = {
-  alignItems: "center",
   background: tokens.color.chrome.window,
   display: "flex",
   height: "100%",
-  justifyContent: "center",
   overflowY: "auto",
   padding: tokens.space.xl,
 };
@@ -34,6 +34,7 @@ const pageStyle: CSSProperties = {
 const panelStyle: CSSProperties = {
   ...overlayPanel(),
   gap: tokens.space.lg,
+  margin: "auto",
   maxWidth: "560px",
   padding: tokens.space.xl,
   width: "100%",
