@@ -83,8 +83,14 @@ export function NoteDetail({
   draft.current = { body, note, text };
 
   const commit = () => {
-    const { body: nextBody, note: stored, text: nextText } = draft.current;
-    if (nextText.trim() !== stored.text || nextBody !== stored.body) {
+    const { body: nextBody, note: stored, text: typed } = draft.current;
+    // A note always has text: a cleared title snaps back to the stored one,
+    // and whatever else was edited still saves.
+    const nextText = typed.trim() || stored.text;
+    if (nextText !== typed) {
+      setText(nextText);
+    }
+    if (nextText !== stored.text || nextBody !== stored.body) {
       update(stored.id, { body: nextBody, text: nextText }, Date.now());
     }
   };

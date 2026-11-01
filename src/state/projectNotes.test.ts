@@ -165,11 +165,16 @@ describe("useProjectNotes", () => {
     });
   });
 
-  it("update keeps the old text when the new one is blank", () => {
-    useProjectNotes.setState({ notes: [note({})] });
-    useProjectNotes.getState().update("n1", { text: "  " }, 9);
-    expect(useProjectNotes.getState().notes[0].text).toBe("text");
-    expect(mockedUpsert).not.toHaveBeenCalled();
+  it("update keeps the old text when the new one is blank, and still saves the rest", () => {
+    useProjectNotes.getState().setNotes([note({})]);
+    useProjectNotes
+      .getState()
+      .update("n1", { body: "kept detail", text: "  " }, 9);
+    expect(useProjectNotes.getState().notes[0]).toMatchObject({
+      body: "kept detail",
+      text: "text",
+    });
+    expect(mockedUpsert).toHaveBeenCalledTimes(1);
   });
 
   it("takes the backend's stored copy once a save lands", async () => {
@@ -182,7 +187,7 @@ describe("useProjectNotes", () => {
   });
 
   it("rolls back and says so when a save fails", async () => {
-    useProjectNotes.setState({ notes: [note({})] });
+    useProjectNotes.getState().setNotes([note({})]);
     mockedUpsert.mockImplementationOnce(() => Promise.reject("disk full"));
     useProjectNotes.getState().update("n1", { text: "edited" }, 9);
     expect(useProjectNotes.getState().notes[0].text).toBe("edited");
@@ -199,7 +204,7 @@ describe("useProjectNotes", () => {
   });
 
   it("remove deletes, and puts the note back if the delete fails", async () => {
-    useProjectNotes.setState({ notes: [note({})] });
+    useProjectNotes.getState().setNotes([note({})]);
     mockedDelete.mockImplementationOnce(() => Promise.reject("locked"));
     useProjectNotes.getState().remove("n1");
     expect(useProjectNotes.getState().notes).toEqual([]);
@@ -207,6 +212,75 @@ describe("useProjectNotes", () => {
     await flush();
     expect(useProjectNotes.getState().notes).toEqual([note({})]);
     expect(showToast).toHaveBeenCalledWith(expect.any(String), "error");
+  });
+});
+
+describe("useProjectNotes, overlapping saves", () => {
+  /** An upsert the test settles by hand, to order overlapping saves. */
+  function heldUpsert() {
+    let settle: { reject: (e: unknown) => void; resolve: () => void } = {
+      reject: () => undefined,
+      resolve: () => undefined,
+    };
+    mockedUpsert.mockImplementationOnce(
+      (sent) =>
+        new Promise((resolve, reject) => {
+          settle = { reject, resolve: () => resolve(sent) };
+        })
+    );
+    return () => settle;
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useProjectNotes.setState({ picked: null });
+    useProjectNotes.getState().setNotes([note({})]);
+  });
+
+  it("a slow first save does not undo a later edit", async () => {
+    const first = heldUpsert();
+    useProjectNotes.getState().update("n1", { text: "first" }, 2);
+    useProjectNotes.getState().update("n1", { text: "second" }, 3);
+    await flush();
+    first().resolve();
+    await flush();
+    expect(useProjectNotes.getState().notes[0].text).toBe("second");
+  });
+
+  it("a failed first save does not undo a later edit that lands", async () => {
+    const first = heldUpsert();
+    const second = heldUpsert();
+    useProjectNotes.getState().update("n1", { text: "edited" }, 2);
+    useProjectNotes.getState().update("n1", { pinned: true }, 3);
+    first().reject("disk full");
+    await flush();
+    second().resolve();
+    await flush();
+    expect(useProjectNotes.getState().notes[0]).toMatchObject({
+      pinned: true,
+      text: "edited",
+    });
+  });
+
+  it("when every save fails, the note goes back to the last saved copy", async () => {
+    const first = heldUpsert();
+    const second = heldUpsert();
+    useProjectNotes.getState().update("n1", { text: "edited" }, 2);
+    useProjectNotes.getState().update("n1", { pinned: true }, 3);
+    first().reject("disk full");
+    await flush();
+    second().reject("disk full");
+    await flush();
+    expect(useProjectNotes.getState().notes).toEqual([note({})]);
+  });
+
+  it("a failed save does not bring back a note deleted meanwhile", async () => {
+    const first = heldUpsert();
+    useProjectNotes.getState().update("n1", { text: "edited" }, 2);
+    useProjectNotes.getState().remove("n1");
+    first().reject("disk full");
+    await flush();
+    expect(useProjectNotes.getState().notes).toEqual([]);
   });
 });
 

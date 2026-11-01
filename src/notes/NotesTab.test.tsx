@@ -119,6 +119,25 @@ describe("NotesTab", () => {
     expect(screen.getByTestId("notes-tab")).toBeTruthy();
   });
 
+  it("keeps a body typed under a cleared title, and puts the title back", () => {
+    useProjectNotes.setState({ notes: [note({})] });
+    render(<NotesTab projectId="p1" />);
+    fireEvent.click(screen.getByText("Write the ADR"));
+    const title = screen.getByLabelText("Note text") as HTMLInputElement;
+    fireEvent.change(title, { target: { value: "" } });
+    fireEvent.blur(title);
+    expect(title.value).toBe("Write the ADR");
+
+    fireEvent.change(screen.getByLabelText("More detail"), {
+      target: { value: "Why, then what" },
+    });
+    fireEvent.click(screen.getByLabelText("Back to notes"));
+    expect(useProjectNotes.getState().notes[0]).toMatchObject({
+      body: "Why, then what",
+      text: "Write the ADR",
+    });
+  });
+
   it("saves an edit when the open note is unmounted without a blur", () => {
     useProjectNotes.setState({ notes: [note({})] });
     const { unmount } = render(<NotesTab projectId="p1" />);

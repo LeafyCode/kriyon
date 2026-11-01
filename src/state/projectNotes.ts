@@ -65,10 +65,17 @@ function isDone(note: ProjectNote): boolean {
 /**
  * The [Project note]s store. Every change shows at once and is then saved
  * through the bridge. A save that lands swaps in the backend's stored copy; a
- * save that fails puts the note back as it was and says so — a note the user
- * believes is kept must never vanish quietly on the next launch.
+ * save that fails puts back the last copy known to be stored and says so — a
+ * note the user believes is kept must never vanish quietly on the next launch.
+ *
+ * Saves can overlap (an edit, then a pin before the edit lands). Each one only
+ * touches the note while it still shows that save's own copy, so a save that
+ * settles late never undoes a later change or brings back a deleted note.
  */
 export const useProjectNotes = create<ProjectNotesState>((set, get) => {
+  /** The last copy of each note known to be in the database. */
+  const stored = new Map<string, ProjectNote>();
+
   /** Replace `id` with `next` (or drop it when `next` is null). */
   const put = (id: string, next: ProjectNote | null) =>
     set((state) => {
@@ -76,17 +83,22 @@ export const useProjectNotes = create<ProjectNotesState>((set, get) => {
       return { notes: next ? [...rest, next] : rest };
     });
 
-  const save = (next: ProjectNote, previous: ProjectNote | null) => {
+  /** Whether the note still shows `copy`, untouched by any later change. */
+  const stillShows = (copy: ProjectNote) => get().notes.some((n) => n === copy);
+
+  const save = (next: ProjectNote) => {
     put(next.id, next);
     upsertProjectNote(next).then(
-      (stored) => {
-        // A later edit may have replaced the note meanwhile; keep that one.
-        if (get().notes.some((n) => n.id === stored.id && n === next)) {
-          put(stored.id, stored);
+      (row) => {
+        stored.set(row.id, row);
+        if (stillShows(next)) {
+          put(row.id, row);
         }
       },
       (error: unknown) => {
-        put(next.id, previous);
+        if (stillShows(next)) {
+          put(next.id, stored.get(next.id) ?? null);
+        }
         showToast(`Note not saved: ${failureMessage(error)}`, "error");
       }
     );
@@ -97,7 +109,13 @@ export const useProjectNotes = create<ProjectNotesState>((set, get) => {
   return {
     notes: [],
     picked: null,
-    setNotes: (notes) => set({ notes }),
+    setNotes: (notes) => {
+      stored.clear();
+      for (const note of notes) {
+        stored.set(note.id, note);
+      }
+      set({ notes });
+    },
     setPicked: (picked) => set({ picked }),
     add: (projectId, kind, text, nowMs) => {
       const trimmed = text.trim();
@@ -115,7 +133,7 @@ export const useProjectNotes = create<ProjectNotesState>((set, get) => {
         text: trimmed,
         updatedMs: nowMs,
       };
-      save(note, null);
+      save(note);
       return note;
     },
     update: (id, patch, nowMs) => {
@@ -123,36 +141,29 @@ export const useProjectNotes = create<ProjectNotesState>((set, get) => {
       if (!existing) {
         return;
       }
-      const text = patch.text === undefined ? existing.text : patch.text.trim();
-      if (!text) {
-        return;
-      }
+      // A blank text keeps the old one: a note always has text, and the
+      // rest of the edit (a body typed under a cleared title) still saves.
+      const text = patch.text?.trim() || existing.text;
       const kind = patch.kind ?? existing.kind;
-      save(
-        {
-          ...existing,
-          ...patch,
-          doneAt: kind === "todo" ? existing.doneAt : null,
-          kind,
-          text,
-          updatedMs: nowMs,
-        },
-        existing
-      );
+      save({
+        ...existing,
+        ...patch,
+        doneAt: kind === "todo" ? existing.doneAt : null,
+        kind,
+        text,
+        updatedMs: nowMs,
+      });
     },
     toggleDone: (id, nowMs) => {
       const existing = find(id);
       if (existing?.kind !== "todo") {
         return;
       }
-      save(
-        {
-          ...existing,
-          doneAt: isDone(existing) ? null : nowMs,
-          updatedMs: nowMs,
-        },
-        existing
-      );
+      save({
+        ...existing,
+        doneAt: isDone(existing) ? null : nowMs,
+        updatedMs: nowMs,
+      });
     },
     remove: (id) => {
       const existing = find(id);
@@ -160,10 +171,15 @@ export const useProjectNotes = create<ProjectNotesState>((set, get) => {
         return;
       }
       put(id, null);
-      deleteProjectNote(id).catch((error: unknown) => {
-        put(id, existing);
-        showToast(`Note not deleted: ${failureMessage(error)}`, "error");
-      });
+      deleteProjectNote(id).then(
+        () => {
+          stored.delete(id);
+        },
+        (error: unknown) => {
+          put(id, stored.get(id) ?? existing);
+          showToast(`Note not deleted: ${failureMessage(error)}`, "error");
+        }
+      );
     },
   };
 });
