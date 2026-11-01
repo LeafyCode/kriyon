@@ -7,7 +7,7 @@ import {
   useState,
 } from "react";
 import { useTour } from "../state/tour.ts";
-import { button } from "../theme/recipes.ts";
+import { button, overlayPanel } from "../theme/recipes.ts";
 import { accentAlpha, tokens } from "../theme/tokens.ts";
 import { Kbd } from "../ui/Kbd.tsx";
 import { useFocusTrap } from "../ui/Overlay.tsx";
@@ -63,15 +63,9 @@ const ringStyle: CSSProperties = {
 
 function cardStyle(left: number, top: number, width: number): CSSProperties {
   return {
+    // The same floating panel every overlay uses, placed and sized here.
+    ...overlayPanel(),
     animation: "kr-pop-in 0.28s cubic-bezier(0.22, 1, 0.36, 1) both",
-    background: tokens.color.chrome.overlay,
-    border: `1px solid ${tokens.color.border}`,
-    borderRadius: tokens.radius.xl,
-    boxShadow: tokens.shadow.pop,
-    color: tokens.color.text,
-    display: "flex",
-    flexDirection: "column",
-    fontFamily: tokens.font.sans,
     gap: "14px",
     left,
     // Clips the picture to the card's rounded corners.
