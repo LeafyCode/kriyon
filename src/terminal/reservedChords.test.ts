@@ -28,6 +28,13 @@ test("cmd+K is reserved (command palette)", () => {
   expect(isReservedAppChord(ev({ key: "k", metaKey: true }), true)).toBe(true);
 });
 
+test("cmd+shift+N is reserved (note capture), bare cmd+N is not", () => {
+  expect(
+    isReservedAppChord(ev({ key: "N", metaKey: true, shiftKey: true }), true)
+  ).toBe(true);
+  expect(isReservedAppChord(ev({ key: "n", metaKey: true }), true)).toBe(false);
+});
+
 test("cmd+shift+K is reserved (needs-you overlay)", () => {
   expect(
     isReservedAppChord(ev({ key: "K", metaKey: true, shiftKey: true }), true)

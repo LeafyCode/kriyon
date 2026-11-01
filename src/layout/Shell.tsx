@@ -7,6 +7,7 @@ import {
   InspectorRail,
 } from "../inspector/InspectorRail.tsx";
 import { NeedsYouOverlay } from "../needsYou/NeedsYouOverlay.tsx";
+import { NoteCaptureOverlay } from "../notes/NoteCaptureOverlay.tsx";
 import { CommandPalette } from "../palette/CommandPalette.tsx";
 import { PromptEditor } from "../prompts/PromptEditor.tsx";
 import { PromptPicker } from "../prompts/PromptPicker.tsx";
@@ -258,6 +259,7 @@ export function Shell({ children, onCloseSession, onNewSession }: ShellProps) {
       <SpawnDialog />
       <HandoffCards />
       <NeedsYouOverlay />
+      <NoteCaptureOverlay />
       <UpdateDialog />
       <About onClose={closeAbout} open={aboutOpen} />
       {/* Global toast host: mounted here (not in `children`) so it shows in

@@ -21,14 +21,19 @@ interface UiState {
   aboutOpen: boolean;
   closeAbout: () => void;
   closeNeedsYou: () => void;
+  closeNoteCapture: () => void;
   closePalette: () => void;
   closePromptEditor: () => void;
   closePromptPicker: () => void;
   closeSpawn: () => void;
   /** The ⌘⇧K Needs-you overlay. */
   needsYouOpen: boolean;
+  /** The ⌘⇧N [Note capture] overlay. */
+  noteCaptureOpen: boolean;
   openAbout: () => void;
   openNeedsYou: () => void;
+  /** Open the [Note capture]. Closes every other overlay in the family. */
+  openNoteCapture: () => void;
   openPalette: () => void;
   /**
    * Open the prompt editor with the given seed data.
@@ -77,6 +82,7 @@ interface UiState {
 type OverlayId =
   | "palette"
   | "needsYou"
+  | "noteCapture"
   | "promptPicker"
   | "promptEditor"
   | "spawn";
@@ -89,6 +95,7 @@ type OverlayId =
  */
 function showOnly(overlay: OverlayId | null): {
   needsYouOpen: boolean;
+  noteCaptureOpen: boolean;
   paletteOpen: boolean;
   promptEditorSeed: PromptEditorSeed | null;
   promptPickerOpen: boolean;
@@ -96,6 +103,7 @@ function showOnly(overlay: OverlayId | null): {
 } {
   return {
     needsYouOpen: overlay === "needsYou",
+    noteCaptureOpen: overlay === "noteCapture",
     paletteOpen: overlay === "palette",
     promptEditorSeed: null,
     promptPickerOpen: overlay === "promptPicker",
@@ -108,6 +116,7 @@ export const useUi = create<UiState>((set) => ({
   openAbout: () => set({ aboutOpen: true }),
   closeAbout: () => set({ aboutOpen: false }),
   needsYouOpen: false,
+  noteCaptureOpen: false,
   paletteOpen: false,
   promptEditorSeed: null,
   promptPickerOpen: false,
@@ -125,6 +134,8 @@ export const useUi = create<UiState>((set) => ({
     ),
   openNeedsYou: () => set(showOnly("needsYou")),
   closeNeedsYou: () => set({ needsYouOpen: false }),
+  openNoteCapture: () => set(showOnly("noteCapture")),
+  closeNoteCapture: () => set({ noteCaptureOpen: false }),
   openPromptPicker: () => set(showOnly("promptPicker")),
   closePromptPicker: () => set({ promptPickerOpen: false }),
   openPromptEditor: (seed) =>

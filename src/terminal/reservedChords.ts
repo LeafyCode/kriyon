@@ -34,8 +34,8 @@ function appModifier(event: ChordEvent, mac: boolean): boolean {
 
 /**
  * App-reserved chords that must reach the global `window` keydown listeners
- * (⌘⇧P Prompt picker, ⌘K Command palette, ⌘⇧K Needs-you) rather than be
- * intercepted by a focused xterm. The terminal's custom key handler returns
+ * (⌘⇧P Prompt picker, ⌘K Command palette, ⌘⇧K Needs-you, ⌘⇧N note capture)
+ * rather than be intercepted by a focused xterm. The terminal's custom key handler returns
  * `false` for these so xterm ignores the event entirely and it propagates —
  * fixing the "⌘⇧P doesn't open while a terminal is focused" report.
  *
@@ -57,8 +57,8 @@ export function isReservedAppChord(
   if (key === "k") {
     return true;
   }
-  // ⌘⇧P — Prompt picker (bare ⌘P is not reserved).
-  return key === "p" && event.shiftKey;
+  // ⌘⇧P — Prompt picker, ⌘⇧N — note capture (bare ⌘P / ⌘N are not reserved).
+  return (key === "p" || key === "n") && event.shiftKey;
 }
 
 /**
