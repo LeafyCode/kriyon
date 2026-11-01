@@ -41,7 +41,7 @@ import {
   useSessions,
 } from "../state/sessions.ts";
 import { useUi } from "../state/ui.ts";
-import { projectColor } from "../theme/projectColor.ts";
+import { projectSquareStyle } from "../theme/projectColor.ts";
 import { tokens } from "../theme/tokens.ts";
 import type { ProjectRow } from "../types.ts";
 import { useAnchoredMenu } from "../ui/AnchoredMenu.tsx";
@@ -320,19 +320,6 @@ function olderHistoryTitle(olderCount: number): string {
   return `${olderCount} stale ${sessions} hidden by your age filter, plus ${history}`;
 }
 
-function colorSquareStyle(project: ProjectRow): CSSProperties {
-  return {
-    background: projectColor(project),
-    borderRadius: "2px",
-    flex: "none",
-    height: "8px",
-    // Full strength on the new chrome. The half-opacity was tuned against the
-    // old warm greys, where a saturated 7px square shouted; on the flat cool
-    // plane it reads as a smudge instead of an identity mark.
-    width: "8px",
-  };
-}
-
 /**
  * dnd-kit's `attributes` include `aria-describedby`, pointing at keyboard-drag
  * instructions that don't apply to the pointer-only project grip. Drop just
@@ -463,7 +450,7 @@ function ProjectHeader({
           <span style={{ ...chevronStyle(!collapsed), visibility: "hidden" }}>
             <ChevronRight size={9} strokeWidth={2} />
           </span>
-          <span style={colorSquareStyle(project)} />
+          <span style={projectSquareStyle(project)} />
           <InlineRename
             ariaLabel={`Rename ${project.name}`}
             onCancel={() => setEditing(false)}
@@ -515,7 +502,7 @@ function ProjectHeader({
         <span style={chevronStyle(!collapsed)}>
           <ChevronRight size={9} strokeWidth={2} />
         </span>
-        <span style={colorSquareStyle(project)} />
+        <span style={projectSquareStyle(project)} />
         <span style={projectNameStyle(expandedLook)}>{label.name}</span>
         {label.qualifier ? (
           <span

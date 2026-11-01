@@ -6,9 +6,8 @@ import {
   useProjectNotes,
 } from "../state/projectNotes.ts";
 import { useSessions } from "../state/sessions.ts";
-import { projectColor } from "../theme/projectColor.ts";
+import { projectSquareStyle } from "../theme/projectColor.ts";
 import { tokens } from "../theme/tokens.ts";
-import type { ProjectRow } from "../types.ts";
 import { Kbd } from "../ui/Kbd.tsx";
 import { NoteCapture } from "./NoteCapture.tsx";
 import { NoteDetail } from "./NoteDetail.tsx";
@@ -28,17 +27,6 @@ const headStyle: CSSProperties = {
   gap: "8px",
   padding: "12px 14px 8px",
 };
-
-function projectSquareStyle(project: ProjectRow): CSSProperties {
-  return {
-    alignSelf: "center",
-    background: projectColor(project),
-    borderRadius: "2px",
-    flex: "none",
-    height: "8px",
-    width: "8px",
-  };
-}
 
 const projectNameStyle: CSSProperties = {
   color: tokens.color.ink.bright,
@@ -184,7 +172,9 @@ export function NotesTab({ projectId }: { projectId: string }) {
     <div data-testid="notes-tab" style={rootStyle}>
       {project ? (
         <div style={headStyle}>
-          <span style={projectSquareStyle(project)} />
+          <span
+            style={{ ...projectSquareStyle(project), alignSelf: "center" }}
+          />
           <span style={projectNameStyle}>{project.name}</span>
           <span style={captionStyle}>· every session sees these</span>
         </div>
