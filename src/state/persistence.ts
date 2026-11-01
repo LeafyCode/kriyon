@@ -40,7 +40,7 @@ import {
   type UiSession,
   useSessions,
 } from "./sessions.ts";
-import { type ProjectTerminals, useTerminals } from "./terminals.ts";
+import { type ScopeTerminals, useTerminals } from "./terminals.ts";
 
 const LAYOUT_KEY = "layout";
 const TERMINALS_KEY = "terminals";
@@ -371,7 +371,7 @@ export function parseLayout(json: string | null): Layout | undefined {
  */
 function parseTerminals(
   json: string | null
-): Record<string, ProjectTerminals> | undefined {
+): Record<string, ScopeTerminals> | undefined {
   if (!json) {
     return;
   }
@@ -384,14 +384,14 @@ function parseTerminals(
   if (typeof parsed !== "object" || parsed === null) {
     return;
   }
-  const out: Record<string, ProjectTerminals> = {};
+  const out: Record<string, ScopeTerminals> = {};
   for (const [key, value] of Object.entries(parsed)) {
     if (
       value &&
       typeof value === "object" &&
-      Array.isArray((value as ProjectTerminals).tabs)
+      Array.isArray((value as ScopeTerminals).tabs)
     ) {
-      out[key] = value as ProjectTerminals;
+      out[key] = value as ScopeTerminals;
     }
   }
   return Object.keys(out).length > 0 ? out : undefined;
@@ -588,12 +588,12 @@ export function installPersistence(): () => void {
   // Project-terminal structure persists on its own store (tabs/panes/layout),
   // keyed separately so it round-trips independently of the window layout.
   let terminalsTimer: ReturnType<typeof setTimeout> | undefined;
-  let prevTerminals = useTerminals.getState().byProject;
+  let prevTerminals = useTerminals.getState().byScope;
   const unsubscribeTerminals = useTerminals.subscribe((state) => {
-    if (state.byProject === prevTerminals) {
+    if (state.byScope === prevTerminals) {
       return;
     }
-    prevTerminals = state.byProject;
+    prevTerminals = state.byScope;
     if (terminalsTimer !== undefined) {
       clearTimeout(terminalsTimer);
     }

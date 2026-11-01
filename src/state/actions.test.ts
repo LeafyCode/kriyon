@@ -915,7 +915,7 @@ describe("parking a project", () => {
     vi.mocked(disposeSession).mockClear();
     vi.mocked(upsertSession).mockClear();
     vi.mocked(showToast).mockClear();
-    useTerminals.setState({ busyPanes: {}, byProject: {}, deadPanes: {} });
+    useTerminals.setState({ busyPanes: {}, byScope: {}, deadPanes: {} });
   });
 
   it("stops every rail session and terminal in the project and nothing else", () => {
@@ -931,7 +931,7 @@ describe("parking a project", () => {
       warmPanes: [],
     });
     useTerminals.setState({
-      byProject: {
+      byScope: {
         ...terminalsFor("pa", ["pane-a"]),
         ...terminalsFor("pb", ["pane-b"]),
       },
@@ -947,9 +947,7 @@ describe("parking a project", () => {
     expect(sessions.a1?.parkedAt).toBeGreaterThan(0);
     expect(sessions.b1?.parkedAt).toBeUndefined();
     // The terminal layout stays, so unparking brings the tabs back.
-    expect(useTerminals.getState().byProject.pa?.tabs[0]?.panes).toHaveLength(
-      1
-    );
+    expect(useTerminals.getState().byScope.pa?.tabs[0]?.panes).toHaveLength(1);
     expect(showToast).toHaveBeenCalledExactlyOnceWith(
       "Parked pa · 2 sessions and 1 terminal stopped"
     );
@@ -979,7 +977,7 @@ describe("parking a project", () => {
     });
     useTerminals.setState({
       busyPanes: { "pane-a": true },
-      byProject: terminalsFor("pa", ["pane-a"]),
+      byScope: terminalsFor("pa", ["pane-a"]),
     });
 
     parkProjectAndStop("pa");
@@ -1001,7 +999,7 @@ describe("parking a project", () => {
     });
     useTerminals.setState({
       busyPanes: { "pane-a": true },
-      byProject: terminalsFor("pa", ["pane-a", "pane-b"]),
+      byScope: terminalsFor("pa", ["pane-a", "pane-b"]),
     });
 
     expect(projectParkCost("pa")).toEqual({

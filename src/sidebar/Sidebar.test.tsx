@@ -46,6 +46,7 @@ import { DEFAULT_LAYOUT, useLayout } from "../state/layout.ts";
 import { useSessionProposals } from "../state/nestedSessions.ts";
 import { useProjectNotes } from "../state/projectNotes.ts";
 import { type UiSession, useSessions } from "../state/sessions.ts";
+import { terminalScope, useTerminals } from "../state/terminals.ts";
 import { useUi } from "../state/ui.ts";
 import { statusMeta } from "../theme/status.ts";
 import { themeById } from "../theme/themes/index.ts";
@@ -2203,6 +2204,40 @@ test("a dirty worktree asks for confirmation before a forced removal", async () 
     "/p1-worktrees/feat-x",
     true
   );
+});
+
+test("a command running in the worktree's terminals asks before removal", async () => {
+  vi.mocked(removeWorktree).mockResolvedValue(undefined);
+  seedWorktreeSession("done");
+  const scope = terminalScope("p1", "/p1-worktrees/feat-x", "/p1");
+  useTerminals.setState({ busyPanes: {}, byScope: {}, deadPanes: {} });
+  useTerminals.getState().openTab(scope, "/p1-worktrees/feat-x");
+  const pane = useTerminals.getState().byScope[scope]?.tabs[0]?.panes[0]?.id;
+  useTerminals.getState().setPaneBusy(pane ?? "", true);
+  render(
+    <SessionRow
+      mode="calm"
+      onCloseSession={vi.fn()}
+      onSelect={vi.fn()}
+      sessionId="w1"
+      sortable={false}
+    />
+  );
+
+  fireEvent.click(screen.getByTestId("session-menu-w1"));
+  fireEvent.click(screen.getByTestId("remove-worktree-w1"));
+
+  const confirm = await screen.findByTestId(
+    "confirm-stop-worktree-terminals-w1"
+  );
+  expect(confirm.textContent).toContain("A command is running");
+  expect(removeWorktree).not.toHaveBeenCalled();
+
+  fireEvent.click(screen.getByTestId("confirm-stop-worktree-terminals-go-w1"));
+  await waitFor(() => {
+    expect(useSessions.getState().sessions.w1?.archivedAt).toBeGreaterThan(0);
+  });
+  expect(useTerminals.getState().byScope[scope]).toBeUndefined();
 });
 
 test("the row overflow menu spawns a follow-up and archives", () => {

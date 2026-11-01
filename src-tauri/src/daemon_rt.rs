@@ -7,14 +7,14 @@
 //! [`kriyon_core::tree_stop`]. This module gathers their inputs (the store, the
 //! process table, the run dir) and carries out their answers.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io::Write as _;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use kriyon_core::orphan::{
-    fully_parked_projects, orphan_daemons, terminal_pane_ids, OrphanDaemon, ReapStep,
+    orphan_daemons, terminal_pane_ids, LiveTerminalScopes, OpenSession, OrphanDaemon, ReapStep,
 };
 use kriyon_core::proc::ProcessTree;
 use kriyon_core::session::SessionId;
@@ -293,25 +293,40 @@ pub(crate) fn recover_unreachable_daemon(
 /// hydration leaves the frontend store empty, and "nothing is owned" would reap
 /// every live session.
 fn owned_ids<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Option<HashSet<String>> {
-    let (rows, terminals) = {
+    let (rows, projects, terminals) = {
         let store = app.state::<StoreState>();
         let store = store.0.lock();
         (
             store.list_sessions().ok()?,
+            store.list_projects().ok()?,
             store.load_layout(TERMINALS_KEY).ok()?,
         )
     };
-    let parked = fully_parked_projects(
+    let project_paths: HashMap<&str, &str> = projects
+        .iter()
+        .map(|p| (p.id.as_str(), p.path.as_str()))
+        .collect();
+    let live = LiveTerminalScopes::from_open_sessions(
         rows.iter()
             .filter(|row| row.archived_at.is_none())
-            .map(|row| (row.project_id.as_str(), row.parked_at.is_some())),
+            .map(|row| OpenSession {
+                project_id: &row.project_id,
+                project_path: project_paths.get(row.project_id.as_str()).copied(),
+                folder: row
+                    .worktree_path
+                    .as_deref()
+                    .filter(|path| !path.is_empty())
+                    .unwrap_or(&row.cwd),
+                parked: row.parked_at.is_some(),
+            }),
     );
+    let panes = terminal_pane_ids(terminals.as_deref(), &live)?;
     let mut owned: HashSet<String> = rows
         .into_iter()
         .filter(|row| !row.is_put_away())
         .map(|row| row.id)
         .collect();
-    owned.extend(terminal_pane_ids(terminals.as_deref(), &parked)?);
+    owned.extend(panes);
     let state = app.state::<AppState>();
     owned.extend(state.sessions.lock().keys().map(|id| id.0.clone()));
     Some(owned)
@@ -643,6 +658,46 @@ mod tests {
         assert!(!owned.contains("parked-session"));
         // Every session of p2 is parked: its terminals were stopped too.
         assert!(!owned.contains("pane-2"));
+    }
+
+    #[test]
+    fn a_worktrees_panes_are_owned_only_while_a_rail_session_works_there() {
+        let app = mock_app();
+        seed_project(&app);
+        {
+            let store = app.state::<StoreState>();
+            let store = store.0.lock();
+            store
+                .upsert_session(&session_row("main", None))
+                .expect("row");
+            store
+                .upsert_session(&crate::store::SessionRow {
+                    worktree_path: Some("/x-wt/feat".to_string()),
+                    ..session_row("feat", None)
+                })
+                .expect("row");
+            store
+                .upsert_session(&crate::store::SessionRow {
+                    worktree_path: Some("/x-wt/gone".to_string()),
+                    ..session_row("gone", Some(5))
+                })
+                .expect("row");
+            store
+                .save_layout(
+                    TERMINALS_KEY,
+                    "{\"p1\": {\"tabs\": [{\"panes\": [{\"id\": \"pane-main\"}]}]}, \
+                     \"p1\\u0000/x-wt/feat\": {\"tabs\": [{\"panes\": [{\"id\": \"pane-feat\"}]}]}, \
+                     \"p1\\u0000/x-wt/gone\": {\"tabs\": [{\"panes\": [{\"id\": \"pane-gone\"}]}]}}",
+                )
+                .expect("layout");
+        }
+
+        let owned = owned_ids(app.handle()).expect("readable ownership");
+
+        assert!(owned.contains("pane-main"));
+        assert!(owned.contains("pane-feat"));
+        // Its only session was archived: the frontend stopped those terminals.
+        assert!(!owned.contains("pane-gone"));
     }
 
     #[test]
