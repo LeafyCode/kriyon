@@ -124,7 +124,7 @@ fn install_argv<'a>(argv: &[&'a str]) -> Vec<&'a str> {
 fn setup_argv(cmd: &str) -> Vec<&str> {
     if cfg!(windows) {
         vec![
-            "powershell.exe",
+            kriyon_core::shellinit::WINDOWS_SHELL,
             "-NoProfile",
             "-NonInteractive",
             "-Command",
@@ -133,21 +133,6 @@ fn setup_argv(cmd: &str) -> Vec<&str> {
     } else {
         vec!["/bin/sh", "-c", cmd]
     }
-}
-
-/// Whether `tool` (`pnpm`) is a program `cmd` would find on `path` (or the
-/// app's own PATH): `tool` plus any extension in `PATHEXT`, in any folder.
-fn on_path(tool: &str, path: Option<&str>) -> bool {
-    let search = path.map_or_else(
-        || std::env::var_os("PATH").unwrap_or_default(),
-        std::ffi::OsString::from,
-    );
-    let exts = std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_string());
-    std::env::split_paths(&search).any(|dir| {
-        exts.split(';')
-            .filter(|ext| !ext.is_empty())
-            .any(|ext| dir.join(format!("{tool}{ext}")).is_file())
-    })
 }
 
 /// Run `argv` in `dir` with `path` as its PATH (also used to find
@@ -163,7 +148,10 @@ fn run_in(dir: &str, path: Option<&str>, argv: &[&str]) -> (bool, String) {
     // NotFound does on macOS.
     if *program == "cmd.exe" {
         if let Some(tool) = argv.get(3) {
-            if !on_path(tool, path) {
+            if crate::spawn::on_path(tool, path.map(std::ffi::OsStr::new))
+                .next()
+                .is_none()
+            {
                 return (
                     false,
                     format!(

@@ -193,23 +193,14 @@ const EDITOR_COMMANDS: &[&str] = &["cursor", "code", "code-insiders", "windsurf"
 /// else Notepad, which every Windows has.
 #[cfg(windows)]
 fn open_in_code_editor(target: &Path) -> Result<(), String> {
-    use std::os::windows::process::CommandExt as _;
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    let path = std::env::var_os("PATH").unwrap_or_default();
-    let dirs: Vec<std::path::PathBuf> = std::env::split_paths(&path).collect();
-    let launcher = EDITOR_COMMANDS.iter().find_map(|name| {
-        dirs.iter().find_map(|dir| {
-            [".cmd", ".exe"]
-                .iter()
-                .map(|ext| dir.join(format!("{name}{ext}")))
-                .find(|candidate| candidate.is_file())
-        })
-    });
+    let launcher = EDITOR_COMMANDS
+        .iter()
+        .find_map(|name| crate::spawn::on_path(name, None).next());
     let mut command = std::process::Command::new(
         launcher.unwrap_or_else(|| std::path::PathBuf::from("notepad.exe")),
     );
     // A `.cmd` launcher runs through a console; keep it from flashing one.
-    command.arg(target).creation_flags(CREATE_NO_WINDOW);
+    crate::spawn::no_console(command.arg(target));
     command
         .spawn()
         .map(|_| ())
