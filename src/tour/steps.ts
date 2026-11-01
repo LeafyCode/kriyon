@@ -14,6 +14,7 @@ import {
   Sparkles,
   SquareTerminal,
 } from "lucide-react";
+import welcomeHero from "../assets/tour-welcome.jpg";
 import type { InspectorTab } from "../state/layout.ts";
 import type { CardSide } from "./placement.ts";
 
@@ -27,6 +28,8 @@ export interface TourStep {
   body: string;
   icon: LucideIcon;
   id: string;
+  /** A picture across the top of the card, which then shows wider. */
+  image?: string;
   /** The Details rail tab this step opens, so the person sees it. */
   inspectorTab?: InspectorTab;
   /** Shortcut keycaps shown under the body. */
@@ -47,6 +50,7 @@ export const TOUR_STEPS: readonly TourStep[] = [
     body: "Kriyon runs your own Claude Code in a real terminal, with every change it makes in view. Here is a one-minute look around.",
     icon: Sparkles,
     id: "welcome",
+    image: welcomeHero,
     title: "Welcome to Kriyon",
   },
   {

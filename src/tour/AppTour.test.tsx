@@ -127,4 +127,12 @@ describe("AppTour", () => {
     act(() => vi.advanceTimersByTime(5000));
     expect(screen.queryByTestId("app-tour")).toBeNull();
   });
+
+  test("the welcome card opens with its picture; the other steps have none", () => {
+    render(<AppTour />);
+    stepAt(0);
+    expect(screen.getByTestId("tour-hero")).toBeTruthy();
+    stepAt(1);
+    expect(screen.queryByTestId("tour-hero")).toBeNull();
+  });
 });

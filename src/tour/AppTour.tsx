@@ -19,6 +19,10 @@ const FIRST_RUN_DELAY_MS = 900;
 const SETTLE_MS = 340;
 /** The card's width; its height follows its text. */
 const CARD_WIDTH = 344;
+/** A card with a picture across its top is wider, so the picture has room. */
+const HERO_CARD_WIDTH = 460;
+/** The picture's own shape (the asset is 960×400). */
+const HERO_ASPECT = "960 / 400";
 /** The glide between steps, shared by the spotlight and the card. */
 const GLIDE = "460ms cubic-bezier(0.22, 1, 0.36, 1)";
 
@@ -56,7 +60,7 @@ const ringStyle: CSSProperties = {
   position: "absolute",
 };
 
-function cardStyle(left: number, top: number): CSSProperties {
+function cardStyle(left: number, top: number, width: number): CSSProperties {
   return {
     animation: "kr-pop-in 0.28s cubic-bezier(0.22, 1, 0.36, 1) both",
     background: tokens.color.chrome.overlay,
@@ -69,13 +73,39 @@ function cardStyle(left: number, top: number): CSSProperties {
     fontFamily: tokens.font.sans,
     gap: "14px",
     left,
+    // Clips the picture to the card's rounded corners.
+    overflow: "hidden",
     padding: "18px",
     position: "absolute",
     top,
-    transition: `top ${GLIDE}, left ${GLIDE}`,
-    width: CARD_WIDTH,
+    transition: `top ${GLIDE}, left ${GLIDE}, width ${GLIDE}`,
+    width,
   };
 }
+
+/** Bleeds the picture to the card's edges, past its padding. */
+const heroStyle: CSSProperties = {
+  aspectRatio: HERO_ASPECT,
+  margin: "-18px -18px 0",
+  overflow: "hidden",
+  position: "relative",
+};
+
+const heroImageStyle: CSSProperties = {
+  animation: "kr-tour-hero 1.4s cubic-bezier(0.22, 1, 0.36, 1) both",
+  display: "block",
+  height: "100%",
+  objectFit: "cover",
+  width: "100%",
+};
+
+/** Fades the picture's bottom edge into the card, so it has no hard seam. */
+const heroFadeStyle: CSSProperties = {
+  background: `linear-gradient(to bottom, transparent 60%, ${tokens.color.chrome.overlay})`,
+  inset: 0,
+  pointerEvents: "none",
+  position: "absolute",
+};
 
 const headStyle: CSSProperties = {
   alignItems: "center",
@@ -295,9 +325,10 @@ function TourLayer({ index }: { index: number }) {
     return () => window.removeEventListener("keydown", onKeyDown, true);
   }, []);
 
+  const cardWidth = step.image ? HERO_CARD_WIDTH : CARD_WIDTH;
   const placement = placeCard(
     target,
-    { height: cardHeight, width: CARD_WIDTH },
+    { height: cardHeight, width: cardWidth },
     viewport,
     step.side ?? "right"
   );
@@ -322,8 +353,24 @@ function TourLayer({ index }: { index: number }) {
         data-side={placement.side}
         ref={cardRef}
         role="dialog"
-        style={cardStyle(placement.left, placement.top)}
+        style={cardStyle(placement.left, placement.top, cardWidth)}
       >
+        {step.image ? (
+          <div
+            data-testid="tour-hero"
+            key={`hero-${step.id}`}
+            style={heroStyle}
+          >
+            <img
+              alt=""
+              height={400}
+              src={step.image}
+              style={heroImageStyle}
+              width={960}
+            />
+            <span style={heroFadeStyle} />
+          </div>
+        ) : null}
         {/* The header outlives the steps, so the dots glide from one step to
             the next; only the icon is keyed, to land afresh each step. */}
         <div style={headStyle}>
