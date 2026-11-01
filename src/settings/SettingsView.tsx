@@ -17,6 +17,7 @@ import {
 import { failureMessage } from "../ipc/failures.ts";
 import { ViewHeader } from "../layout/ViewHeader.tsx";
 import { thisComputer } from "../platform/os.ts";
+import { platformCopy } from "../platform/shortcut.ts";
 import { useIntegration } from "../state/integration.ts";
 import {
   isNestedCap,
@@ -956,7 +957,9 @@ function LayoutSection() {
               Take the tour
             </button>
           }
-          hint="A one-minute look at every part of the window. Also in Help → Kriyon Tour."
+          hint={platformCopy(
+            "A one-minute look at every part of the window. Also in Help → Kriyon Tour."
+          )}
           label="App tour"
         />
       </SettingGroup>

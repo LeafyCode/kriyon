@@ -6,6 +6,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { platformCopy, platformKeys } from "../platform/shortcut.ts";
 import { useTour } from "../state/tour.ts";
 import { button, overlayPanel } from "../theme/recipes.ts";
 import { accentAlpha, tokens } from "../theme/tokens.ts";
@@ -392,10 +393,10 @@ function TourLayer({ index }: { index: number }) {
           <h2 id={titleId} style={titleStyle}>
             {step.title}
           </h2>
-          <p style={textStyle}>{step.body}</p>
-          {step.keys ? (
+          <p style={textStyle}>{platformCopy(step.body)}</p>
+          {step.keys && platformKeys(step.keys).length > 0 ? (
             <div style={keysStyle}>
-              {step.keys.map((key) => (
+              {platformKeys(step.keys).map((key) => (
                 <Kbd key={key}>{key}</Kbd>
               ))}
             </div>
