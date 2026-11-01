@@ -114,6 +114,9 @@ export interface Layout {
   terminalDockOpen: boolean;
   /** Active theme id from the theme registry (`src/theme/themes/`). */
   themeId: string;
+  /** The [App tour] has been finished or skipped, so it no longer opens on
+   *  its own. A layout saved before the tour existed reads as unseen. */
+  tourSeen: boolean;
   transcriptView: TranscriptView;
   view: "studio" | "focus" | "command" | "prompts" | "settings";
 }
@@ -203,6 +206,7 @@ export const DEFAULT_LAYOUT: Layout = {
   terminalDockHeight: TERMINAL_DOCK_HEIGHT_DEFAULT,
   terminalDockOpen: false,
   themeId: DEFAULT_THEME_ID,
+  tourSeen: false,
   preferredSessionView: "raw",
   mascot: "visor",
   mascotHue: "cobalt",
@@ -255,6 +259,7 @@ interface LayoutState {
   setSidebarWidth: (width: number) => void;
   setTerminalDockHeight: (height: number) => void;
   setThemeId: (themeId: string) => void;
+  setTourSeen: (tourSeen: boolean) => void;
   /** Show `view`. Picking the terminal or the Structured view makes it the
    *  [Preferred session view] unless `remember` is false (a detour the user
    *  didn't choose, like the terminal a permission prompt needs). */
@@ -408,6 +413,8 @@ export const useLayout = create<LayoutState>((set, get) => ({
     set((state) => ({ layout: { ...state.layout, mascotHue } })),
   setThemeId: (themeId) =>
     set((state) => ({ layout: { ...state.layout, themeId } })),
+  setTourSeen: (tourSeen) =>
+    set((state) => ({ layout: { ...state.layout, tourSeen } })),
   setTranscriptView: (transcriptView, remember = true) =>
     set((state) => ({
       layout: {

@@ -9,7 +9,9 @@
 //! so ⌘Q would quit without ever asking about live work (see
 //! [`crate::quit::request_quit`]). File → New Session is ours too: it gives ⌘N,
 //! which the tray menu and the popover advertise, something to fire (a tray
-//! menu's accelerator is a label only). Everything else (Services, Hide, and the
+//! menu's accelerator is a label only). Help → Kriyon Tour replays the app
+//! tour (the `show-tour` event); the submenu carries Tauri's help-menu id, so
+//! macOS adds its own Help search above it. Everything else (Services, Hide, and the
 //! Edit and Window submenus) mirrors the platform default so the standard
 //! shortcuts keep working.
 //!
@@ -29,6 +31,10 @@ pub const QUIT_ID: &str = "quit-app";
 /// [`crate::window_cmd::request_new_session`]).
 pub const NEW_SESSION_ID: &str = "new-session";
 
+/// The menu id of the Help → "Kriyon Tour" item. [`on_event`] emits
+/// `show-tour` when this is chosen.
+pub const TOUR_ID: &str = "show-tour";
+
 /// Build the application menu (see the module docs). Custom on macOS, the Tauri
 /// default elsewhere.
 ///
@@ -38,7 +44,9 @@ pub const NEW_SESSION_ID: &str = "new-session";
 pub fn build(handle: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
     #[cfg(target_os = "macos")]
     {
-        use tauri::menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder};
+        use tauri::menu::{
+            MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder, HELP_SUBMENU_ID,
+        };
 
         let about_i = MenuItemBuilder::with_id(ABOUT_ID, "About Kriyon").build(handle)?;
         let quit_i = MenuItemBuilder::with_id(QUIT_ID, "Quit Kriyon")
@@ -84,8 +92,13 @@ pub fn build(handle: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri
             .item(&PredefinedMenuItem::close_window(handle, None)?)
             .build()?;
 
+        let tour_i = MenuItemBuilder::with_id(TOUR_ID, "Kriyon Tour").build(handle)?;
+        let help_menu = SubmenuBuilder::with_id(handle, HELP_SUBMENU_ID, "Help")
+            .item(&tour_i)
+            .build()?;
+
         MenuBuilder::new(handle)
-            .items(&[&app_menu, &file_menu, &edit_menu, &window_menu])
+            .items(&[&app_menu, &file_menu, &edit_menu, &window_menu, &help_menu])
             .build()
     }
     #[cfg(not(target_os = "macos"))]
@@ -94,8 +107,8 @@ pub fn build(handle: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri
     }
 }
 
-/// Handle an application-menu selection. Reveals the About overlay by asking the
-/// frontend to open it, starts a new session, and routes Quit through the close
+/// Handle an application-menu selection. Reveals the About overlay or the app
+/// tour by asking the frontend to open it, starts a new session, and routes Quit through the close
 /// gate. Tray-menu ids
 /// are handled by the tray's own handler and are ignored here.
 pub fn on_event(app: &tauri::AppHandle, event: &tauri::menu::MenuEvent) {
@@ -104,6 +117,9 @@ pub fn on_event(app: &tauri::AppHandle, event: &tauri::menu::MenuEvent) {
     match event.id().as_ref() {
         ABOUT_ID => {
             let _ = app.emit("show-about", ());
+        }
+        TOUR_ID => {
+            let _ = app.emit("show-tour", ());
         }
         NEW_SESSION_ID => crate::window_cmd::request_new_session(app),
         QUIT_ID => crate::quit::request_quit(app),

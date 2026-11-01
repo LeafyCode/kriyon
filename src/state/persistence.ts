@@ -352,6 +352,9 @@ export function parseLayout(json: string | null): Layout | undefined {
     themeId: themeById(
       typeof parsed.themeId === "string" ? parsed.themeId : undefined
     ).id,
+    // Only an explicit `true` is seen: a layout saved before the field
+    // existed belongs to someone who has never had the tour.
+    tourSeen: parsed.tourSeen === true,
     preferredSessionView: parseSessionView(parsed.preferredSessionView),
     mascot: parseMascot(parsed.mascot),
     mascotHue: parseMascotHue(parsed.mascotHue),

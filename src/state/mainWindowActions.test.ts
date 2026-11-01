@@ -18,6 +18,10 @@ vi.mock("../ipc/bridge.ts", () => ({
     (globalThis as Record<string, unknown>).__fireShowAbout = cb;
     return Promise.resolve(() => undefined);
   },
+  onShowTour: (cb: () => void) => {
+    (globalThis as Record<string, unknown>).__fireShowTour = cb;
+    return Promise.resolve(() => undefined);
+  },
 }));
 
 describe("installMainWindowActions", () => {
@@ -56,5 +60,17 @@ describe("installMainWindowActions", () => {
     await Promise.resolve();
     (globalThis as unknown as Record<string, () => void>).__fireShowAbout();
     expect(useUi.getState().aboutOpen).toBe(true);
+  });
+
+  // Help → Kriyon Tour replays the tour, even for someone who has seen it.
+  test("a show-tour event starts the app tour", async () => {
+    const { useLayout } = await import("./layout.ts");
+    const { useTour } = await import("./tour.ts");
+    useLayout.getState().setTourSeen(true);
+    const { installMainWindowActions } = await import("./mainWindowActions.ts");
+    installMainWindowActions();
+    await Promise.resolve();
+    (globalThis as unknown as Record<string, () => void>).__fireShowTour();
+    expect(useTour.getState().stepIndex).toBe(0);
   });
 });

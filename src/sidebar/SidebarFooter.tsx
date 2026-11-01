@@ -37,6 +37,7 @@ const SidebarFooter = memo(function SidebarFooter({
           aria-label="Settings"
           className="kr-hover-surface"
           data-testid="open-settings"
+          data-tour="settings"
           onClick={() => setView("settings")}
           style={iconButton()}
           title="Settings (⌘,)"

@@ -20,6 +20,11 @@ import { SidebarExpandButton } from "./ViewHeader.tsx";
 /** One of the header's two 46px rows. */
 const rowStyle: CSSProperties = topBandRow();
 
+/** Holds the view tabs so the [App tour] can light them alone, without the
+ *  terminal toggle at the row's far end. Stretches so the underline stays on
+ *  the row's bottom edge. */
+const viewTabsStyle: CSSProperties = { alignSelf: "stretch", display: "flex" };
+
 const crumbStyle: CSSProperties = {
   alignItems: "center",
   display: "flex",
@@ -189,30 +194,32 @@ export function SessionHeader() {
         </div>
       </header>
       <div data-tauri-drag-region style={rowStyle}>
-        <Segmented
-          ariaLabel="Transcript view"
-          onChange={setTranscriptView}
-          options={[
-            {
-              // Never disabled: with the companion off, the view itself says
-              // so and offers to turn it on — a dead tab only said it on hover.
-              label: "Structured",
-              title:
-                companion === null || companion.state === "on"
-                  ? undefined
-                  : (companionChip(companion)?.title ??
-                    "Kriyon Companion is off. Open to turn it on."),
-              value: "structured",
-            },
-            { label: "Session", value: "raw" },
-            // Last, apart from the two ways of watching the session: this is
-            // the project's files (changed ones and the whole tree), a place
-            // you visit rather than a view a session opens in.
-            { count: changedFiles, label: "Files", value: "changes" },
-          ]}
-          value={transcriptView}
-          variant="underline"
-        />
+        <div data-tour="view-tabs" style={viewTabsStyle}>
+          <Segmented
+            ariaLabel="Transcript view"
+            onChange={setTranscriptView}
+            options={[
+              {
+                // Never disabled: with the companion off, the view itself says
+                // so and offers to turn it on — a dead tab only said it on hover.
+                label: "Structured",
+                title:
+                  companion === null || companion.state === "on"
+                    ? undefined
+                    : (companionChip(companion)?.title ??
+                      "Kriyon Companion is off. Open to turn it on."),
+                value: "structured",
+              },
+              { label: "Session", value: "raw" },
+              // Last, apart from the two ways of watching the session: this is
+              // the project's files (changed ones and the whole tree), a place
+              // you visit rather than a view a session opens in.
+              { count: changedFiles, label: "Files", value: "changes" },
+            ]}
+            value={transcriptView}
+            variant="underline"
+          />
+        </div>
         <div style={rightStyle}>
           <TerminalToggle />
         </div>

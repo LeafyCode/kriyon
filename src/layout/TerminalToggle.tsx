@@ -48,6 +48,7 @@ export function TerminalToggle() {
     <button
       aria-label="Toggle terminals"
       className="kr-hover-surface"
+      data-tour="terminal-toggle"
       onClick={toggleDock}
       style={
         dockOpen

@@ -111,3 +111,11 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
   own palette. Session status colors are deliberately not accent-driven: running takes the
   theme's own running hue — green in every theme but Rosé Pine, which has no green and uses its
   foam. _Avoid_: primary color, highlight.
+- **App tour** (`AppTour`, `useTour`) — a guided walk through the window: a spotlight glides to
+  each part (sidebar, new session, Command center and Prompts, the view tabs, the composer,
+  Project terminals, the [Details rail], the command palette, Focus mode, Settings) while a card
+  says what it is for. It opens on its own once for anyone who has not seen it, and any time
+  after from Help → Kriyon Tour, the command palette or Settings → Layout. A step whose part is
+  not on screen shows its card in the middle instead. Finishing or skipping sets
+  `layout.tourSeen`; a layout saved before the tour existed reads as unseen, so people updating
+  get it once too (ADR-0054). _Avoid_: onboarding, walkthrough, tutorial.

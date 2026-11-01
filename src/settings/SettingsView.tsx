@@ -23,6 +23,7 @@ import {
   type SidebarMode,
   useLayout,
 } from "../state/layout.ts";
+import { useTour } from "../state/tour.ts";
 import { useUpdates } from "../state/updates.ts";
 import {
   button,
@@ -922,7 +923,7 @@ function LayoutSection() {
   return (
     <SectionPage
       id="layout"
-      lead="How sessions are listed in the sidebar and the menu-bar quick view."
+      lead="How sessions are listed in the sidebar and the menu-bar quick view, and a tour of the window."
     >
       <section aria-label="Sidebar layout" style={groupStyle}>
         <span style={groupLabelStyle}>Sidebar</span>
@@ -940,6 +941,22 @@ function LayoutSection() {
           }
           hint="How the menu-bar quick view lays out its sessions."
           label="Quick view"
+        />
+      </SettingGroup>
+      <SettingGroup label="Getting around">
+        <SettingRow
+          control={
+            <button
+              className="kr-focusable kr-hover-surface"
+              onClick={() => useTour.getState().start()}
+              style={button("secondary")}
+              type="button"
+            >
+              Take the tour
+            </button>
+          }
+          hint="A one-minute look at every part of the window. Also in Help → Kriyon Tour."
+          label="App tour"
         />
       </SettingGroup>
     </SectionPage>

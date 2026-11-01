@@ -19,6 +19,7 @@ import { SpawnDialog } from "../spawn/SpawnDialog.tsx";
 import { useLayout } from "../state/layout.ts";
 import { useUi } from "../state/ui.ts";
 import { tokens } from "../theme/tokens.ts";
+import { AppTour } from "../tour/AppTour.tsx";
 import { CollapsePanel } from "../ui/CollapsePanel.tsx";
 import { ErrorBoundary } from "../ui/ErrorBoundary.tsx";
 import { OutsideOpenConfirm } from "../ui/OutsideOpenConfirm.tsx";
@@ -266,6 +267,8 @@ export function Shell({ children, onCloseSession, onNewSession }: ShellProps) {
             every view — children are only visible in studio/focus. */}
       <Toast />
       <OutsideOpenConfirm />
+      {/* Last, so its spotlight sits over every other overlay. */}
+      <AppTour />
     </main>
   );
 }

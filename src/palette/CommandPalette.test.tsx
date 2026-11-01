@@ -291,3 +291,16 @@ test("'Add a note…' before there is a project explains instead of opening", ()
   fireEvent.click(screen.getByText("Add a note…"));
   expect(useUi.getState().noteCaptureOpen).toBe(false);
 });
+
+test("'Take the app tour' starts the app tour", async () => {
+  const { useTour } = await import("../state/tour.ts");
+  useTour.setState({ stepIndex: null });
+  render(<CommandPalette />);
+  fireEvent.keyDown(window, { key: "k", metaKey: true });
+  fireEvent.change(screen.getByPlaceholderText(PLACEHOLDER), {
+    target: { value: "tour" },
+  });
+  fireEvent.click(screen.getByText("Take the app tour"));
+  expect(useTour.getState().stepIndex).toBe(0);
+  useTour.setState({ stepIndex: null });
+});

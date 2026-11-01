@@ -227,6 +227,7 @@ export function SidebarHeader({ query, setQuery }: SidebarHeaderProps) {
         <button
           aria-label="Focus mode"
           className="kr-hover-surface"
+          data-tour="focus-mode"
           onClick={() => setView("focus")}
           style={iconButton()}
           title="Focus mode — hide the chrome"
@@ -272,6 +273,7 @@ export function SidebarHeader({ query, setQuery }: SidebarHeaderProps) {
             left now that the title bar's Search button is gone. */}
         <button
           aria-label="Open command palette"
+          data-tour="palette"
           onClick={openPalette}
           style={paletteChipStyle}
           title="Command palette (⌘K)"
@@ -281,7 +283,7 @@ export function SidebarHeader({ query, setQuery }: SidebarHeaderProps) {
         </button>
       </div>
 
-      <nav aria-label="Views" style={navStyle}>
+      <nav aria-label="Views" data-tour="views-nav" style={navStyle}>
         {navRows.map((row) => (
           <NavRow
             count={row.count}

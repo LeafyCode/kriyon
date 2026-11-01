@@ -1061,6 +1061,7 @@ export function PromptBar({ suppressed = false }: PromptBarProps) {
       <div
         aria-hidden={hidden}
         data-testid="composer-drawer"
+        data-tour="composer"
         style={drawerStyle(hidden)}
       >
         <div style={drawerInnerStyle}>
