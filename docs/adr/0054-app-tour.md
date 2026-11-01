@@ -42,8 +42,12 @@ for someone new, and can be replayed by anyone.
 - **Motion:** the spotlight and the card glide between steps on one shared
   easing, the lit target carries a soft pulsing ring, and each step's text
   fades up. The global reduced-motion rule in `App.css` turns all of it off.
-- **Keyboard:** → and Enter move on, ← goes back, Escape skips. The keys are
-  caught in the capture phase so they never reach a focused terminal.
+- **Keyboard:** → moves on, ← goes back, Escape skips, and every ⌘ or Ctrl
+  shortcut is held until the tour ends. These are caught in the capture phase,
+  before a focused terminal or any other window listener sees them. Enter
+  presses the focused button, which is Next unless the person moved focus. Focus
+  is trapped in the card with the same `useFocusTrap` every overlay uses, and it
+  goes back where it was when the tour ends.
 - **Shown once, by default, to anyone who has not seen it.** `layout.tourSeen`
   is saved with the rest of the layout. A fresh install starts with it
   `false`, and so does a layout saved before this field existed: people who

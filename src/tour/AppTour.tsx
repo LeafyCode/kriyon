@@ -10,6 +10,7 @@ import { useTour } from "../state/tour.ts";
 import { button } from "../theme/recipes.ts";
 import { accentAlpha, tokens } from "../theme/tokens.ts";
 import { Kbd } from "../ui/Kbd.tsx";
+import { useFocusTrap } from "../ui/Overlay.tsx";
 import { type Box, placeCard, type Size, spotlightRect } from "./placement.ts";
 import { TOUR_STEPS, type TourStep, tourTarget } from "./steps.ts";
 
@@ -299,11 +300,11 @@ function TourLayer({ index }: { index: number }) {
   });
 
   // Keep the keyboard on the card: the primary button takes focus, so Enter
-  // moves on and nothing types into the terminal underneath. It is the same
-  // button on every step, so it keeps focus as the steps change.
-  useEffect(() => {
-    primaryRef.current?.focus();
-  }, []);
+  // moves on; Tab wraps inside the card, so nothing types into the terminal
+  // underneath; and focus goes back where it was when the tour ends. The
+  // primary is the same button on every step, so it keeps focus as the steps
+  // change.
+  useFocusTrap(cardRef, primaryRef);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -314,13 +315,18 @@ function TourLayer({ index }: { index: number }) {
         Escape: tour.finish,
       };
       const action = actions[event.key];
-      if (action) {
+      // App shortcuts (⌘K, ⌘⇧K, ⌘, …) would open their views behind the
+      // tour, where they take keys out of sight; none of them run until it
+      // ends. The steps show some of them, which invites a press.
+      const shortcut = event.metaKey || event.ctrlKey;
+      if (action || shortcut) {
         event.preventDefault();
         event.stopPropagation();
-        action();
+        action?.();
       }
     };
-    // Capture, so the keys reach the tour before a focused terminal or editor.
+    // Capture, so the keys reach the tour before a focused terminal or editor,
+    // and before every other window listener.
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
   }, []);

@@ -135,4 +135,74 @@ describe("AppTour", () => {
     stepAt(1);
     expect(screen.queryByTestId("tour-hero")).toBeNull();
   });
+
+  test("Tab stays inside the card", () => {
+    render(<AppTour />);
+    stepAt(1);
+    const skip = screen.getByRole("button", { name: "Skip tour" });
+    const next = screen.getByRole("button", { name: "Next" });
+    next.focus();
+    fireEvent.keyDown(next, { key: "Tab" });
+    expect(document.activeElement).toBe(skip);
+    fireEvent.keyDown(skip, { key: "Tab", shiftKey: true });
+    expect(document.activeElement).toBe(next);
+  });
+
+  test("focus goes back to where it was when the tour ends", () => {
+    const before = document.createElement("textarea");
+    document.body.append(before);
+    before.focus();
+    render(<AppTour />);
+    stepAt(0);
+    expect(document.activeElement).not.toBe(before);
+    fireEvent.click(screen.getByRole("button", { name: "Skip tour" }));
+    expect(document.activeElement).toBe(before);
+    before.remove();
+  });
+
+  test("app shortcuts do not fire under the tour", () => {
+    const shortcut = vi.fn();
+    window.addEventListener("keydown", shortcut);
+    render(<AppTour />);
+    stepAt(1);
+    fireEvent.keyDown(document.body, { key: "k", metaKey: true });
+    fireEvent.keyDown(document.body, { key: ",", metaKey: true });
+    fireEvent.keyDown(document.body, {
+      key: "k",
+      metaKey: true,
+      shiftKey: true,
+    });
+    expect(shortcut).not.toHaveBeenCalled();
+    act(() => useTour.getState().finish());
+    fireEvent.keyDown(document.body, { key: "k", metaKey: true });
+    expect(shortcut).toHaveBeenCalledTimes(1);
+    window.removeEventListener("keydown", shortcut);
+  });
+
+  test("arrow keys pressed on an element underneath still reach the tour first", () => {
+    const shortcut = vi.fn();
+    window.addEventListener("keydown", shortcut);
+    render(<AppTour />);
+    stepAt(0);
+    fireEvent.keyDown(document.body, { key: "ArrowRight" });
+    expect(useTour.getState().stepIndex).toBe(1);
+    expect(shortcut).not.toHaveBeenCalled();
+    window.removeEventListener("keydown", shortcut);
+  });
+
+  test("ending the tour leaves focus with a dialog that opened during it", () => {
+    const before = document.createElement("textarea");
+    document.body.append(before);
+    before.focus();
+    render(<AppTour />);
+    stepAt(0);
+    // About Kriyon, opened from the app menu mid-tour, takes focus.
+    const dialogButton = document.createElement("button");
+    document.body.append(dialogButton);
+    dialogButton.focus();
+    act(() => useTour.getState().finish());
+    expect(document.activeElement).toBe(dialogButton);
+    before.remove();
+    dialogButton.remove();
+  });
 });
