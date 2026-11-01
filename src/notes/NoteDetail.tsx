@@ -86,16 +86,13 @@ export function NoteDetail({
   const draft = useRef({ body, note, text });
   draft.current = { body, note, text };
 
+  // The store decides what an edit keeps (a cleared title keeps the old
+  // one); the field then shows what it kept.
   const commit = () => {
-    const { body: nextBody, note: stored, text: typed } = draft.current;
-    // A note always has text: a cleared title snaps back to the stored one,
-    // and whatever else was edited still saves.
-    const nextText = typed.trim() || stored.text;
-    if (nextText !== typed) {
-      setText(nextText);
-    }
-    if (nextText !== stored.text || nextBody !== stored.body) {
-      update(stored.id, { body: nextBody, text: nextText }, Date.now());
+    const { body: typedBody, note: shown, text: typed } = draft.current;
+    const kept = update(shown.id, { body: typedBody, text: typed }, Date.now());
+    if (kept && kept.text !== typed) {
+      setText(kept.text);
     }
   };
 

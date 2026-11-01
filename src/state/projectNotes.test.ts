@@ -215,6 +215,17 @@ describe("useProjectNotes", () => {
     expect(mockedUpsert).toHaveBeenCalledTimes(1);
   });
 
+  it("update returns the note it kept, and saves nothing when nothing changed", () => {
+    useProjectNotes.getState().setNotes([note({})]);
+    const kept = useProjectNotes.getState().update("n1", { text: "  " }, 9);
+    expect(kept).toEqual(note({}));
+    expect(mockedUpsert).not.toHaveBeenCalled();
+
+    const edited = useProjectNotes.getState().update("n1", { text: "new" }, 9);
+    expect(edited?.text).toBe("new");
+    expect(mockedUpsert).toHaveBeenCalledTimes(1);
+  });
+
   it("takes the backend's stored copy once a save lands", async () => {
     mockedUpsert.mockImplementationOnce((sent) =>
       Promise.resolve({ ...sent, text: "stored" })

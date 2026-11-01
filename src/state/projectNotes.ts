@@ -55,7 +55,11 @@ interface ProjectNotesState {
   setPickedProjectId: (projectId: string | null) => void;
   /** Tick a todo off, or back on. Does nothing for an idea or a note. */
   toggleDone: (id: string, nowMs: number) => void;
-  update: (id: string, patch: NotePatch, nowMs: number) => void;
+  /**
+   * Apply an edit and return the note as it now stands (null when there is
+   * no such note). An edit that changes nothing saves nothing.
+   */
+  update: (id: string, patch: NotePatch, nowMs: number) => ProjectNote | null;
 }
 
 function isDone(note: ProjectNote): boolean {
@@ -139,20 +143,30 @@ export const useProjectNotes = create<ProjectNotesState>((set, get) => {
     update: (id, patch, nowMs) => {
       const existing = find(id);
       if (!existing) {
-        return;
+        return null;
       }
       // A blank text keeps the old one: a note always has text, and the
       // rest of the edit (a body typed under a cleared title) still saves.
       const text = patch.text?.trim() || existing.text;
       const kind = patch.kind ?? existing.kind;
-      save({
+      const next: ProjectNote = {
         ...existing,
         ...patch,
         doneAt: kind === "todo" ? existing.doneAt : null,
         kind,
         text,
-        updatedMs: nowMs,
-      });
+      };
+      if (
+        next.text === existing.text &&
+        next.body === existing.body &&
+        next.kind === existing.kind &&
+        next.pinned === existing.pinned
+      ) {
+        return existing;
+      }
+      const edited = { ...next, updatedMs: nowMs };
+      save(edited);
+      return edited;
     },
     toggleDone: (id, nowMs) => {
       const existing = find(id);
