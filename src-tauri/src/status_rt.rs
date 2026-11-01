@@ -390,6 +390,16 @@ pub(crate) fn process_table_fresh() -> Option<ProcessSurvey> {
 /// "this session has no daemon", which would hide *every* blocked session at
 /// once. `ps` spawning but failing (an unsupported `-o` keyword on a future
 /// macOS, a sandbox change, a failed fork) must fail open, loudly.
+#[cfg(windows)]
+fn sweep_process_table() -> Option<Vec<kriyon_core::proc::ProcRow>> {
+    let rows = crate::proc_win::sweep();
+    if rows.is_none() {
+        eprintln!("kriyon: process snapshot failed; trusting replayed attention state");
+    }
+    rows
+}
+
+#[cfg(not(windows))]
 fn sweep_process_table() -> Option<Vec<kriyon_core::proc::ProcRow>> {
     let output = std::process::Command::new("ps")
         .args(["-axww", "-o", "pid=,ppid=,tpgid=,args="])

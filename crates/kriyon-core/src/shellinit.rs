@@ -37,6 +37,7 @@ impl SpawnPlan {
 
 /// The person's shell: `$SHELL`, or `/bin/zsh` (the macOS default) when it is
 /// unset or empty. Session shells and the [Worktree bootstrap] both use it.
+#[cfg(not(windows))]
 #[must_use]
 pub fn user_shell(shell_env: Option<&str>) -> String {
     shell_env
@@ -44,6 +45,18 @@ pub fn user_shell(shell_env: Option<&str>) -> String {
         .unwrap_or("/bin/zsh")
         .to_string()
 }
+
+/// The person's shell on Windows: Windows PowerShell, which every supported
+/// Windows ships. `$SHELL` is ignored — when it is set at all it is a Git Bash
+/// or MSYS path (`/usr/bin/bash`) that means nothing to a Windows process.
+#[cfg(windows)]
+#[must_use]
+pub fn user_shell(_shell_env: Option<&str>) -> String {
+    WINDOWS_SHELL.to_string()
+}
+
+/// The shell Kriyon hosts on Windows. See [`user_shell`].
+pub const WINDOWS_SHELL: &str = "powershell.exe";
 
 /// True when the shell path's basename ends with `zsh` (`zsh`, `/bin/zsh`, …).
 #[must_use]

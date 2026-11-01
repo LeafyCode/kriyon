@@ -5,6 +5,10 @@
 //! still running, still hosting a `claude`, but with no path left that anything
 //! could connect to — a daemon left orphaned forever because it was busy.
 
+// Drives a POSIX shell through the daemon; the Windows path is covered by
+// `windows_daemon.rs`.
+#![cfg(unix)]
+
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
 use std::process::Command;

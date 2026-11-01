@@ -1,5 +1,6 @@
 import { BookMarked, Inbox, MessagesSquare } from "lucide-react";
 import type { CSSProperties, ReactNode } from "react";
+import { shortcutLabel } from "../platform/shortcut.ts";
 import { pickFocusSession } from "../sidebar/sessionOrder.ts";
 import { useCommandCenter } from "../state/commandCenter.ts";
 import { useLayout } from "../state/layout.ts";
@@ -166,7 +167,7 @@ export function FocusRail() {
         }}
         type="button"
       >
-        ⌘K
+        {shortcutLabel("⌘K")}
       </button>
     </nav>
   );

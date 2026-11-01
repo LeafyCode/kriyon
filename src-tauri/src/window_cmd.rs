@@ -474,3 +474,38 @@ mod intent_tests {
         assert_eq!(emits("open-preferences", request_preferences), 1);
     }
 }
+
+/// Shrink the main window to the screen it opened on when it is bigger than
+/// that screen's work area (the screen minus the taskbar), and centre it. A
+/// 1280×820 window at 125 % scaling is taller than a 1080p laptop screen, and
+/// Windows would place it with its bottom edge off-screen.
+#[cfg(windows)]
+pub fn fit_to_screen<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    use tauri::Manager as _;
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    let (Ok(Some(monitor)), Ok(size), Ok(inner)) = (
+        window.current_monitor(),
+        window.outer_size(),
+        window.inner_size(),
+    ) else {
+        return;
+    };
+    let area = monitor.work_area();
+    if size.width <= area.size.width && size.height <= area.size.height {
+        return;
+    }
+    let width = size.width.min(area.size.width);
+    let height = size.height.min(area.size.height);
+    // `set_size` sizes the content; the title bar and borders come on top.
+    let _ = window.set_size(tauri::PhysicalSize::new(
+        width.saturating_sub(size.width - inner.width),
+        height.saturating_sub(size.height - inner.height),
+    ));
+    // Centred in the work area, not the whole screen, so the taskbar can't
+    // cover the bottom edge.
+    let x = area.position.x + i32::try_from((area.size.width - width) / 2).unwrap_or(0);
+    let y = area.position.y + i32::try_from((area.size.height - height) / 2).unwrap_or(0);
+    let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
+}

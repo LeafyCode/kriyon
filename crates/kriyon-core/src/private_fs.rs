@@ -1,10 +1,35 @@
 //! Owner-only files for what Kriyon keeps about sessions. Logged commands and
 //! tool output must not be readable by other local accounts, so folders are
 //! `0700` and files `0600` — the modes Claude Code gives its own transcripts.
+//!
+//! On Windows these live under the user's profile (`%LOCALAPPDATA%`,
+//! `%USERPROFILE%`), whose inherited ACL already grants only the user, SYSTEM
+//! and Administrators, so there is no mode to set and these are plain writes.
 
 use std::io::Write as _;
+#[cfg(unix)]
 use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _};
 use std::path::Path;
+
+/// What tells a file apart from another later made at the same path: its
+/// device and inode on Unix. Windows has no stable equivalent in `std`, so the
+/// volume-independent creation time (to the 100 ns) stands in, which a file
+/// re-made at the same path never shares.
+#[cfg(unix)]
+#[must_use]
+pub fn file_identity(meta: &std::fs::Metadata) -> (u64, u64) {
+    use std::os::unix::fs::MetadataExt as _;
+    (meta.dev(), meta.ino())
+}
+
+/// What tells a file apart from another later made at the same path. See the
+/// Unix version.
+#[cfg(windows)]
+#[must_use]
+pub fn file_identity(meta: &std::fs::Metadata) -> (u64, u64) {
+    use std::os::windows::fs::MetadataExt as _;
+    (meta.creation_time(), 0)
+}
 
 /// Create `dir` (and its parents) owner-only. An existing folder keeps its
 /// mode; [`lock_down`] fixes one an older build left open.
@@ -12,10 +37,21 @@ use std::path::Path;
 /// # Errors
 /// When a folder can't be created.
 pub fn create_private_dir(dir: &Path) -> std::io::Result<()> {
-    std::fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(dir)
+    #[cfg_attr(not(unix), allow(unused_mut))]
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    builder.mode(0o700);
+    builder.create(dir)
+}
+
+/// Open options that create a file owner-only.
+fn private_file() -> std::fs::OpenOptions {
+    #[cfg_attr(not(unix), allow(unused_mut))]
+    let mut options = std::fs::OpenOptions::new();
+    #[cfg(unix)]
+    options.mode(0o600);
+    options
 }
 
 /// Append `bytes` to `path` in one `O_APPEND` write, creating it owner-only
@@ -27,10 +63,9 @@ pub fn append_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     if let Some(dir) = path.parent() {
         create_private_dir(dir)?;
     }
-    std::fs::OpenOptions::new()
+    private_file()
         .append(true)
         .create(true)
-        .mode(0o600)
         .open(path)?
         .write_all(bytes)
 }
@@ -40,16 +75,19 @@ pub fn append_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 /// # Errors
 /// When the file can't be written.
 pub fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    use std::os::unix::fs::PermissionsExt as _;
-    std::fs::OpenOptions::new()
+    private_file()
         .write(true)
         .create(true)
         .truncate(true)
-        .mode(0o600)
         .open(path)?
         .write_all(bytes)?;
     // An existing file keeps its old mode through `open`.
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(())
 }
 
 /// Set every folder under `root` (and `root`) to `0700` and every regular file
@@ -58,6 +96,19 @@ pub fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 ///
 /// # Errors
 /// Only when `root` itself can't be read; a missing `root` is fine.
+#[cfg(not(unix))]
+#[allow(clippy::unnecessary_wraps)]
+pub fn lock_down(_root: &Path) -> std::io::Result<()> {
+    Ok(())
+}
+
+/// Set every folder under `root` (and `root`) to `0700` and every regular file
+/// to `0600`. Symlinks are never followed or changed. Best-effort per entry:
+/// one unreadable entry does not stop the rest.
+///
+/// # Errors
+/// Only when `root` itself can't be read; a missing `root` is fine.
+#[cfg(unix)]
 pub fn lock_down(root: &Path) -> std::io::Result<()> {
     use std::os::unix::fs::PermissionsExt as _;
     let meta = match std::fs::symlink_metadata(root) {

@@ -1,5 +1,6 @@
 import { Info, Settings } from "lucide-react";
 import { type CSSProperties, memo } from "react";
+import { shortcutLabel } from "../platform/shortcut.ts";
 import { useLayout } from "../state/layout.ts";
 import { iconButton } from "../theme/recipes.ts";
 import { tokens } from "../theme/tokens.ts";
@@ -40,7 +41,7 @@ const SidebarFooter = memo(function SidebarFooter({
           data-tour="settings"
           onClick={() => setView("settings")}
           style={iconButton()}
-          title="Settings (⌘,)"
+          title={shortcutLabel("Settings (⌘,)")}
           type="button"
         >
           <Settings size={14} strokeWidth={1.75} />

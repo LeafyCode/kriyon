@@ -151,12 +151,12 @@ pub fn build(app: &tauri::App) -> tauri::Result<()> {
 fn build_menu(app: &tauri::App) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
     let open_i = MenuItemBuilder::with_id("open", "Open Kriyon").build(app)?;
     let new_i = MenuItemBuilder::with_id("new", "New session")
-        .accelerator("Cmd+N")
+        .accelerator("CmdOrCtrl+N")
         .build(app)?;
     let sleep_i = MenuItemBuilder::with_id("sleep-idle", "Sleep Idle Sessions").build(app)?;
     let prefs_i = MenuItemBuilder::with_id("prefs", "Preferences").build(app)?;
     let quit_i = MenuItemBuilder::with_id("quit", "Quit Kriyon")
-        .accelerator("Cmd+Q")
+        .accelerator("CmdOrCtrl+Q")
         .build(app)?;
     MenuBuilder::new(app)
         .items(&[&open_i, &new_i])

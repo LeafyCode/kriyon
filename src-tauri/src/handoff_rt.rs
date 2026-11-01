@@ -195,6 +195,7 @@ mod tests {
         assert_eq!(got, Some(std::fs::canonicalize(&file).expect("canon")));
     }
 
+    #[cfg(unix)]
     #[test]
     fn files_outside_the_roots_too_big_or_not_files_are_rejected() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -282,6 +283,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_symlinked_home_is_matched_in_its_real_form_too() {
         // Test dirs live under the temp roots, so asking `allows` would pass
@@ -295,6 +297,7 @@ mod tests {
         assert_eq!(places.homes(), [home, physical]);
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_home_handoff_in_a_hidden_folder_or_linked_out_of_home_is_rejected() {
         let (home, _temp, places) = home_and_temp();

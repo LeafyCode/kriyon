@@ -65,6 +65,7 @@ pub fn hosted_tty() -> Option<u64> {
 /// PTY and leave everything it hosted to launchd — the leak the tree stop
 /// exists to prevent — and the engine's own `close` may be the thing that
 /// panicked.
+#[cfg(unix)]
 pub fn emergency_stop() {
     let shell = HOSTED_SHELL.load(std::sync::atomic::Ordering::SeqCst);
     if shell > 1 {
@@ -72,14 +73,52 @@ pub fn emergency_stop() {
     }
 }
 
+/// Nothing to do on Windows: the panic hook exits the process, which closes
+/// the shell's Job Object, and that ends the whole tree (see `crate::job`).
+#[cfg(windows)]
+pub fn emergency_stop() {}
+
+/// `ConPTY`'s opening question: "where is the cursor?" (DSR 6).
+#[cfg(windows)]
+const CURSOR_QUERY: &[u8] = b"\x1b[6n";
+
+/// Answer `ConPTY`'s opening cursor query, if `chunk` holds it, and take it out
+/// of the output. Returns whether it was answered.
+///
+/// `ConPTY` starts every console by asking the terminal for the cursor position
+/// and runs nothing until it hears back. A terminal would answer, but the
+/// daemon has none attached when the shell starts — the app attaches after —
+/// and a client that attaches later only ever sees the snapshot, never the
+/// question. So the daemon answers it: the console is fresh, the cursor is at
+/// the top left. Taken out of the output so an attached xterm can't answer it a
+/// second time, which would type the reply into the shell.
+#[cfg(windows)]
+fn answer_cursor_query(chunk: &mut Vec<u8>, writer: &Mutex<Box<dyn Write + Send>>) -> bool {
+    let Some(at) = chunk
+        .windows(CURSOR_QUERY.len())
+        .position(|w| w == CURSOR_QUERY)
+    else {
+        return false;
+    };
+    chunk.drain(at..at + CURSOR_QUERY.len());
+    let mut writer = writer.lock();
+    let _ = writer.write_all(b"\x1b[1;1R");
+    let _ = writer.flush();
+    true
+}
+
 /// A pty-backed [`SessionEngine`]. Hosts a child shell process behind a pty,
 /// streaming its output to a callback on a dedicated reader thread.
 pub struct PtyEngine {
     id: SessionId,
     master: Mutex<Box<dyn MasterPty + Send>>,
-    writer: Mutex<Box<dyn Write + Send>>,
+    writer: std::sync::Arc<Mutex<Box<dyn Write + Send>>>,
     child: Mutex<Box<dyn Child + Send + Sync>>,
     reader_thread: Mutex<Option<JoinHandle<()>>>,
+    /// The Job Object holding the shell and everything it starts: the Windows
+    /// [Tree stop], and the busy signal (see [`PtyEngine::foreground_busy`]).
+    #[cfg(windows)]
+    job: crate::job::Job,
     /// Serializes `close`: a `Shutdown` frame and the child-exit reaper can both
     /// reach it at once, and the [Tree stop] must run exactly once. A second
     /// caller blocks until the first has finished.
@@ -134,6 +173,8 @@ impl PtyEngine {
         // an inherited name: a Kriyon started from a Kriyon terminal carries
         // that terminal's, and every event from this session would be dropped.
         cmd.env_remove("KRIYON_TTY");
+        // Windows has no terminal device to name; the hooks fail open without it.
+        #[cfg(unix)]
         if let Some(tty) = pair.master.tty_name() {
             if let Ok(meta) = std::fs::metadata(&tty) {
                 use std::os::unix::fs::MetadataExt as _;
@@ -142,15 +183,29 @@ impl PtyEngine {
             cmd.env("KRIYON_TTY", tty);
         }
 
+        // The job exists before the shell does, so a failure to make one fails
+        // the spawn instead of leaving a shell nothing could stop as a tree.
+        #[cfg(windows)]
+        let job = crate::job::Job::new().map_err(pty_err)?;
         let child = pair.slave.spawn_command(cmd).map_err(pty_err)?;
         if let Some(pid) = child.process_id().and_then(|pid| i32::try_from(pid).ok()) {
             HOSTED_SHELL.store(pid, std::sync::atomic::Ordering::SeqCst);
         }
+        // Into the job before the shell has had time to start anything: what
+        // it starts from here on joins the job with it.
+        #[cfg(windows)]
+        if let Some(pid) = child.process_id() {
+            job.assign(pid).map_err(pty_err)?;
+        }
         // Drop the slave right after spawning to avoid hangs.
         drop(pair.slave);
 
-        let writer = pair.master.take_writer().map_err(pty_err)?;
+        let writer = std::sync::Arc::new(Mutex::new(pair.master.take_writer().map_err(pty_err)?));
         let mut reader = pair.master.try_clone_reader().map_err(pty_err)?;
+        #[cfg(windows)]
+        let answer_to = std::sync::Arc::clone(&writer);
+        #[cfg(windows)]
+        let mut cursor_asked = false;
 
         // No reader-side backpressure lives here: in the daemon, `on_output`
         // writes to the client socket and a blocking socket write IS the
@@ -167,6 +222,10 @@ impl PtyEngine {
                     Ok(0) | Err(_) => break,
                     Ok(n) => {
                         chunk.truncate(n);
+                        #[cfg(windows)]
+                        if !cursor_asked {
+                            cursor_asked = answer_cursor_query(&mut chunk, &answer_to);
+                        }
                         on_output(chunk);
                     }
                 }
@@ -176,9 +235,11 @@ impl PtyEngine {
         Ok(Self {
             id,
             master: Mutex::new(pair.master),
-            writer: Mutex::new(writer),
+            writer,
             child: Mutex::new(child),
             reader_thread: Mutex::new(Some(reader_thread)),
+            #[cfg(windows)]
+            job,
             stopped: std::sync::Once::new(),
         })
     }
@@ -202,12 +263,29 @@ impl PtyEngine {
     ///
     /// Returns `None` when either value is unavailable (the child has exited, or
     /// there is no foreground group), which callers treat as "not busy".
+    #[cfg(unix)]
     #[must_use]
     pub fn foreground_busy(&self) -> Option<bool> {
         let shell_pid = self.child.lock().process_id()?;
         let foreground = self.master.lock().process_group_leader()?;
         let shell_pid = i32::try_from(shell_pid).ok()?;
         Some(foreground != shell_pid)
+    }
+
+    /// Whether the child shell has a command running.
+    ///
+    /// Windows has no foreground process group. What it has is the shell's Job
+    /// Object: everything the shell starts joins it, so a job holding more than
+    /// the shell means a command is running. (The console host `ConPTY` starts is
+    /// the daemon's child, not the shell's, so it never counts.) Same meaning as
+    /// on Unix — a `claude` running in the shell reads as busy — and as cheap: one
+    /// query per sample.
+    ///
+    /// Returns `None` when the job can't be read, which callers treat as "not busy".
+    #[cfg(windows)]
+    #[must_use]
+    pub fn foreground_busy(&self) -> Option<bool> {
+        self.job.active_processes().map(|count| count > 1)
     }
 }
 
@@ -251,6 +329,21 @@ impl SessionEngine for PtyEngine {
         // A [Tree stop], never a bare `child.kill()`: that signals the shell pid
         // alone, and everything it leaves behind is reparented to launchd and
         // runs on, untraceable. Best-effort throughout; never panics.
+        #[cfg(windows)]
+        self.stopped.call_once(|| {
+            // The Windows [Tree stop]: end the job, so the shell and everything
+            // it started go together. Then collect the shell, and let the
+            // reader see the console close.
+            self.job.terminate();
+            let mut child = self.child.lock();
+            let deadline = std::time::Instant::now() + READER_JOIN_TIMEOUT;
+            while !matches!(child.try_wait(), Ok(Some(_))) && std::time::Instant::now() < deadline {
+                std::thread::sleep(READER_JOIN_POLL);
+            }
+            drop(child);
+            self.join_reader();
+        });
+        #[cfg(unix)]
         self.stopped.call_once(|| {
             let shell = self
                 .child
@@ -274,7 +367,7 @@ impl SessionEngine for PtyEngine {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use std::collections::HashMap;
@@ -446,5 +539,105 @@ mod tests {
             start.elapsed() < Duration::from_secs(5),
             "close() should complete promptly, not hang the reader thread"
         );
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use super::*;
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
+
+    fn cmd_shell() -> SpawnSpec {
+        SpawnSpec {
+            cwd: std::env::temp_dir().to_string_lossy().into_owned(),
+            shell: "cmd.exe".to_string(),
+            env: HashMap::new(),
+        }
+    }
+
+    fn wait_for(what: impl Fn() -> bool, within: Duration) -> bool {
+        let deadline = Instant::now() + within;
+        while Instant::now() < deadline {
+            if what() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        false
+    }
+
+    #[test]
+    fn pty_engine_echoes_shell_output() {
+        let collected = Arc::new(Mutex::new(Vec::<u8>::new()));
+        let sink = Arc::clone(&collected);
+        let engine = PtyEngine::spawn(SessionId("test".to_string()), &cmd_shell(), move |bytes| {
+            sink.lock().expect("lock").extend_from_slice(&bytes);
+        })
+        .expect("pty spawn should succeed");
+        engine
+            .write_stdin(b"echo hel^lo\r")
+            .expect("write_stdin should succeed");
+        // `^` escapes nothing here, so only the output — not the echoed command — reads `hello`.
+        let found = wait_for(
+            || String::from_utf8_lossy(&collected.lock().expect("lock")).contains("hello"),
+            Duration::from_secs(10),
+        );
+        engine.close().expect("close should succeed");
+        assert!(
+            found,
+            "expected shell output to contain 'hello', got {:?}",
+            String::from_utf8_lossy(&collected.lock().expect("lock"))
+        );
+    }
+
+    #[test]
+    fn foreground_busy_tracks_a_running_command() {
+        let engine = PtyEngine::spawn(SessionId("busy".to_string()), &cmd_shell(), |_| {})
+            .expect("pty spawn should succeed");
+        engine
+            .write_stdin(b"ping -n 3 127.0.0.1 >NUL\r")
+            .expect("write_stdin should succeed");
+        assert!(
+            wait_for(
+                || engine.foreground_busy() == Some(true),
+                Duration::from_secs(10)
+            ),
+            "busy while a command runs"
+        );
+        assert!(
+            wait_for(
+                || engine.foreground_busy() == Some(false),
+                Duration::from_secs(10)
+            ),
+            "idle once it finishes"
+        );
+        engine.close().expect("close should succeed");
+    }
+
+    #[test]
+    fn close_ends_everything_the_shell_started() {
+        let engine = PtyEngine::spawn(SessionId("tree".to_string()), &cmd_shell(), |_| {})
+            .expect("pty spawn should succeed");
+        engine
+            .write_stdin(b"ping -n 60 127.0.0.1 >NUL\r")
+            .expect("write_stdin should succeed");
+        assert!(
+            wait_for(
+                || engine.foreground_busy() == Some(true),
+                Duration::from_secs(10)
+            ),
+            "the command started"
+        );
+        let start = Instant::now();
+        engine.close().expect("close should succeed");
+        assert!(start.elapsed() < Duration::from_secs(5), "close is prompt");
+        assert_eq!(
+            engine.job.active_processes(),
+            Some(0),
+            "nothing survives the stop"
+        );
+        assert!(engine.child_has_exited());
     }
 }

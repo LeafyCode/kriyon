@@ -117,7 +117,7 @@ pub(crate) fn forget(state: &AppState, id: &SessionId) -> Option<Session> {
 mod tests {
     use super::*;
     use crate::daemon_client::DaemonClient;
-    use std::os::unix::net::UnixStream;
+    use kriyon_core::uds::UnixStream;
     use std::path::Path;
 
     /// A [Daemon client] attached to a fake daemon, standing in for what

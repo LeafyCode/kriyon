@@ -32,7 +32,7 @@ INPUT=$(cat)
 # Start python only when there is something to capture: a Kriyon session, or
 # a reply that carried plan limits (an API-key login never does).
 if [ -n "$KRIYON_SESSION" ] || printf '%s' "$INPUT" | grep -q '"rate_limits"'; then
-  printf '%s' "$INPUT" | python3 "$HOME/.claude/kriyon/kriyon-usage.py" "$KRIYON_SESSION" 2>/dev/null || true
+  printf '%s' "$INPUT" | __PYTHON__ "$HOME/.claude/kriyon/kriyon-usage.py" "$KRIYON_SESSION" 2>/dev/null || true
 fi
 INNER_FILE="$HOME/.claude/kriyon/inner-statusline"
 if [ -f "$INNER_FILE" ]; then
@@ -43,7 +43,7 @@ if [ -f "$INNER_FILE" ]; then
   fi
 fi
 # No original status line: print the model name so the bar isn't blank.
-printf '%s' "$INPUT" | python3 -c 'import sys,json
+printf '%s' "$INPUT" | __PYTHON__ -c 'import sys,json
 try: d=json.load(sys.stdin)
 except Exception: d={}
 print((d.get("model") or {}).get("display_name","Claude"))' 2>/dev/null || true
@@ -69,8 +69,49 @@ pub fn tasks_dir(home: &Path) -> PathBuf {
 /// The shell command Claude runs for the hook: `python3 '<script>'`.
 fn hook_command(script: &Path) -> String {
     // Single-quote the path so spaces are safe; paths under ~/.claude won't
-    // contain single quotes.
-    format!("python3 '{}'", script.display())
+    // contain single quotes. Forward slashes, so the Git Bash that Claude Code
+    // runs hooks in on Windows reads a Windows path as one.
+    format!(
+        "{} '{}'",
+        python_command(),
+        script.display().to_string().replace('\\', "/")
+    )
+}
+
+/// How a hook command starts Python: `python3` on macOS.
+#[cfg(not(windows))]
+fn python_command() -> String {
+    "python3".to_string()
+}
+
+/// How a hook command starts Python on Windows: the full path of a real
+/// `python.exe`. Windows has no `python3`, and the `python.exe` / `python3.exe`
+/// in `WindowsApps` are Store stubs that print "Python was not found" — the
+/// hook would fail on every event. Found once per run on the app's PATH; the
+/// `py` launcher when only that is installed; `python3` (which fails loudly in
+/// Claude's hook output) when there is no Python at all.
+#[cfg(windows)]
+fn python_command() -> String {
+    static FOUND: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    FOUND
+        .get_or_init(|| {
+            let path = std::env::var_os("PATH").unwrap_or_default();
+            let dirs: Vec<PathBuf> = std::env::split_paths(&path).collect();
+            let real = |name: &str| {
+                dirs.iter()
+                    .filter(|dir| !dir.to_string_lossy().contains("WindowsApps"))
+                    .map(|dir| dir.join(name))
+                    .find(|exe| exe.is_file())
+            };
+            if let Some(exe) = real("python.exe") {
+                format!("'{}'", exe.display().to_string().replace('\\', "/"))
+            } else if real("py.exe").is_some() {
+                "py -3".to_string()
+            } else {
+                "python3".to_string()
+            }
+        })
+        .clone()
 }
 
 /// Which settings scope, if any, turns Kriyon's hooks off for a session in
@@ -121,7 +162,11 @@ pub fn hook_command_for(home: &Path) -> String {
 pub fn statusline_command(home: &Path) -> String {
     format!(
         "sh '{}'",
-        kriyon_dir(home).join("kriyon-statusline.sh").display()
+        kriyon_dir(home)
+            .join("kriyon-statusline.sh")
+            .display()
+            .to_string()
+            .replace('\\', "/")
     )
 }
 
@@ -139,7 +184,9 @@ pub fn write_scripts(home: &Path) -> std::io::Result<()> {
     write_private(&hook_script(home), HOOK_SCRIPT.as_bytes())?;
     write_private(
         &dir.join("kriyon-statusline.sh"),
-        STATUSLINE_SCRIPT.as_bytes(),
+        STATUSLINE_SCRIPT
+            .replace("__PYTHON__", &python_command())
+            .as_bytes(),
     )?;
     write_private(&dir.join("kriyon-usage.py"), USAGE_SCRIPT.as_bytes())?;
     Ok(())

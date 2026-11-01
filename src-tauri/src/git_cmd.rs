@@ -2254,6 +2254,7 @@ mod tests {
         assert_eq!(file.hunks[0].lines[0].text, "hi");
     }
 
+    #[cfg(unix)]
     #[test]
     fn diff_working_tree_does_not_read_untracked_symlink_target() {
         if !git_available() {
@@ -3498,6 +3499,7 @@ mod tests {
     /// inside the root makes the two disagree, in the escaping direction. The
     /// pathspec handed to git must therefore be derived from the resolved path,
     /// never from the raw string the frontend sent.
+    #[cfg(unix)]
     #[test]
     fn discard_file_changes_does_not_escape_via_a_symlink_and_dotdot() {
         if !git_available() {
@@ -3939,6 +3941,7 @@ mod tests {
 
     /// Make `main` and `feature` diverge (no conflict), so merging needs a
     /// merge commit — the case that runs the commit hooks.
+    #[cfg(unix)]
     fn diverge_feature(dir: &std::path::Path) {
         let repo = dir.to_str().expect("utf8");
         git_setup(repo, &["checkout", "-b", "feature"]);

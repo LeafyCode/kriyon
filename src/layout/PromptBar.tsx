@@ -23,6 +23,7 @@ import {
 } from "../completion/chipModel.ts";
 import { useCompletion } from "../completion/useCompletion.ts";
 import { type Attachment, promptHistory } from "../ipc/bridge.ts";
+import { shortcutLabel } from "../platform/shortcut.ts";
 import { useAttachments } from "../state/attachments.ts";
 import { useDrafts } from "../state/drafts.ts";
 import { type TranscriptView, useLayout } from "../state/layout.ts";
@@ -291,11 +292,11 @@ function FooterTools(props: FooterToolsProps) {
         className="kr-hover-surface"
         onClick={() => useUi.getState().openPromptPicker()}
         style={footerActionStyle}
-        title="Open prompt library (⌘⇧P)"
+        title={shortcutLabel("Open prompt library (⌘⇧P)")}
         type="button"
       >
         {fit.promptsLabel ? "Prompts" : <BookMarked size={13} />}
-        {fit.promptsKey ? <Kbd>⌘⇧P</Kbd> : null}
+        {fit.promptsKey ? <Kbd>{shortcutLabel("⌘⇧P")}</Kbd> : null}
       </button>
     </span>
   );

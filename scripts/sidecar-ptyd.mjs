@@ -76,7 +76,13 @@ function buildFor(triple, host) {
     builtDir = join(repoRoot, "target", triple, profile);
   }
   execFileSync("cargo", cargoArgs, { stdio: "inherit" });
-  return join(builtDir, "kriyon-ptyd");
+  return join(builtDir, `kriyon-ptyd${exeSuffix(triple)}`);
+}
+
+// Windows executables carry `.exe`, both as cargo builds them and as Tauri's
+// externalBin looks for them (`kriyon-ptyd-<triple>.exe`).
+function exeSuffix(triple) {
+  return triple.includes("windows") ? ".exe" : "";
 }
 
 const sidecarDir = join(repoRoot, "src-tauri", "binaries");
@@ -101,7 +107,7 @@ if (target === UNIVERSAL) {
   }
   console.log(`staged universal sidecar: ${names.join(", ")}`);
 } else {
-  const staged = join(sidecarDir, `kriyon-ptyd-${target}`);
+  const staged = join(sidecarDir, `kriyon-ptyd-${target}${exeSuffix(target)}`);
   copyFileSync(buildFor(target, hostTriple()), staged);
   console.log(`staged sidecar: ${staged}`);
 }

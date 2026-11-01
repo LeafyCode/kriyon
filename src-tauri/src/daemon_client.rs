@@ -3,8 +3,8 @@
 //! lives in the daemon, but stdin/resize/close and the Phase-1 backpressure look
 //! exactly as they did when the PTY was in-process.
 
+use kriyon_core::uds::UnixStream;
 use std::io::{Read, Write};
-use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -301,8 +301,8 @@ impl SessionEngine for DaemonClient {
 
 #[cfg(test)]
 pub(crate) mod test_support {
+    use kriyon_core::uds::UnixListener;
     use std::io::{Read as _, Write as _};
-    use std::os::unix::net::UnixListener;
     use std::path::Path;
     use std::sync::{Arc, Mutex as StdMutex};
 
@@ -342,7 +342,7 @@ pub(crate) mod test_support {
 mod tests {
     use super::test_support::spawn_greeting_daemon;
     use super::*;
-    use std::os::unix::net::UnixListener;
+    use kriyon_core::uds::UnixListener;
     use std::sync::Mutex as StdMutex;
     use std::time::{Duration, Instant};
 

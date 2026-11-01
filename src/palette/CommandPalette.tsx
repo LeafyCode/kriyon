@@ -1,5 +1,6 @@
 import type { CSSProperties, KeyboardEvent } from "react";
 import { useEffect, useRef, useState } from "react";
+import { shortcutLabel } from "../platform/shortcut.ts";
 import {
   MENU_BAR_OPTIONS,
   SIDEBAR_MODE_OPTIONS,
@@ -164,7 +165,7 @@ function buildItems(
       kind: "Prompts",
       label: "Insert prompt…",
       run: () => useUi.getState().openPromptPicker(),
-      sub: "⌘⇧P",
+      sub: shortcutLabel("⌘⇧P"),
     },
     {
       icon: "✦",
@@ -217,7 +218,7 @@ function buildItems(
       kind: "Notes",
       label: "Add a note…",
       run: () => useUi.getState().openNoteCapture(),
-      sub: "⌘⇧N",
+      sub: shortcutLabel("⌘⇧N"),
     },
   ];
 

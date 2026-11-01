@@ -4,6 +4,10 @@
 //! memory and ports. These tests host exactly those processes and assert that
 //! none outlives the daemon, on both exit paths.
 
+// Drives a POSIX shell through the daemon; the Windows path is covered by
+// `windows_daemon.rs`.
+#![cfg(unix)]
+
 use std::io::Write;
 use std::os::unix::net::UnixStream;
 use std::process::{Child, Command};

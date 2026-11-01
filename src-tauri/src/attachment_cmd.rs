@@ -276,7 +276,15 @@ fn unique_path(dir: &Path, stem: &str, ext: &str) -> PathBuf {
     path
 }
 
+/// Windows has no `sips`: the picture is attached as a file, with the caution
+/// that says Claude may not be able to see it.
+#[cfg(not(target_os = "macos"))]
+fn convert_with_sips(_src: &Path, _out: &Path, _format: &str) -> Result<(), String> {
+    Err("picture conversion needs macOS".to_string())
+}
+
 /// Convert `src` to `format` at `out` with macOS's own `sips`, owner-only.
+#[cfg(target_os = "macos")]
 fn convert_with_sips(src: &Path, out: &Path, format: &str) -> Result<(), String> {
     use std::os::unix::fs::PermissionsExt as _;
     let mut command = std::process::Command::new("/usr/bin/sips");
@@ -301,13 +309,14 @@ fn convert_with_sips(src: &Path, out: &Path, format: &str) -> Result<(), String>
 
 fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     use std::io::Write as _;
-    use std::os::unix::fs::OpenOptionsExt as _;
-    std::fs::OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .mode(0o600)
-        .open(path)?
-        .write_all(bytes)
+    let mut options = std::fs::OpenOptions::new();
+    options.create_new(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(0o600);
+    }
+    options.open(path)?.write_all(bytes)
 }
 
 fn paste_dir<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<PathBuf, String> {

@@ -8,8 +8,7 @@
 //! family because `completion_cmd`, `git_cmd`, and `links_cmd` all depend on
 //! it too.
 
-use std::os::unix::net::UnixStream;
-use std::os::unix::process::CommandExt as _;
+use kriyon_core::uds::UnixStream;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -27,14 +26,21 @@ const DAEMON_READY_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Resolve the `kriyon-ptyd` binary: `$KRIYON_PTYD_BIN`, else a sibling of the
 /// app executable (where the bundler and the dev build both place it).
+/// The daemon's file name beside the app: `kriyon-ptyd`, `.exe` on Windows.
+const PTYD_NAME: &str = if cfg!(windows) {
+    "kriyon-ptyd.exe"
+} else {
+    "kriyon-ptyd"
+};
+
 fn ptyd_binary() -> PathBuf {
     if let Ok(path) = std::env::var("KRIYON_PTYD_BIN") {
         return PathBuf::from(path);
     }
     std::env::current_exe()
         .ok()
-        .and_then(|exe| exe.parent().map(|dir| dir.join("kriyon-ptyd")))
-        .unwrap_or_else(|| PathBuf::from("kriyon-ptyd"))
+        .and_then(|exe| exe.parent().map(|dir| dir.join(PTYD_NAME)))
+        .unwrap_or_else(|| PathBuf::from(PTYD_NAME))
 }
 
 /// This app's daemon run directory under `~/.claude/kriyon/` — `run` for the
@@ -88,10 +94,10 @@ fn spawn_daemon(socket: &Path, run: &Path, id: &str, spec: &SpawnSpec) -> Result
     for (key, value) in &spec.env {
         cmd.env(key, value);
     }
-    // Detach into its own process group so the daemon outlives the app, with no
-    // inherited stdio pipe tying it to the parent.
-    cmd.process_group(0)
-        .stdin(std::process::Stdio::null())
+    // Detach so the daemon outlives the app, with no inherited stdio pipe tying
+    // it to the parent.
+    detach_daemon(&mut cmd);
+    cmd.stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null());
     // Keep the daemon's stderr for field diagnosis rather than discarding it.
     match std::fs::File::create(run.join(format!("{id}.log"))) {
@@ -114,6 +120,25 @@ fn spawn_daemon(socket: &Path, run: &Path, id: &str, spec: &SpawnSpec) -> Result
         }
         std::thread::sleep(Duration::from_millis(50));
     }
+}
+
+/// Start the daemon in its own process group, so a signal to the app's group
+/// (a dev build's Ctrl-C) never reaches it.
+#[cfg(unix)]
+fn detach_daemon(cmd: &mut std::process::Command) {
+    use std::os::unix::process::CommandExt as _;
+    cmd.process_group(0);
+}
+
+/// Start the daemon with no console window and in its own process group, so a
+/// console Ctrl-C aimed at the app never reaches it. Windows doesn't end a child
+/// with its parent, so this is all detaching takes.
+#[cfg(windows)]
+fn detach_daemon(cmd: &mut std::process::Command) {
+    use std::os::windows::process::CommandExt as _;
+    const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    cmd.creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW);
 }
 
 /// Write `<dir>/<name>` with owner-only permissions (`0600` on unix).
