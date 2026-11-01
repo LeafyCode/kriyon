@@ -326,6 +326,38 @@ export function card(): CSSProperties {
 }
 
 /**
+ * An on/off switch's track — accent-filled when on, and off the same sunken
+ * well every other input sits in, so "off" reads as an empty groove. Pair with
+ * {@link switchThumb}; `ui/Switch.tsx` puts the two together.
+ */
+export function switchTrack(checked: boolean): CSSProperties {
+  return {
+    background: checked ? tokens.color.accent : tokens.color.inputWell,
+    border: `1px solid ${tokens.color.line.base}`,
+    borderRadius: tokens.radius.pill,
+    cursor: "pointer",
+    display: "inline-flex",
+    flex: "none",
+    height: "16px",
+    padding: "1px",
+    transition: `background-color ${tokens.motion.hover}`,
+    width: "28px",
+  };
+}
+
+/** The knob inside {@link switchTrack}. */
+export function switchThumb(checked: boolean): CSSProperties {
+  return {
+    background: tokens.color.onAccent,
+    borderRadius: "50%",
+    height: "12px",
+    transform: checked ? "translateX(12px)" : "translateX(0)",
+    transition: `transform ${tokens.motion.hover}`,
+    width: "12px",
+  };
+}
+
+/**
  * A 30px input well — the sidebar search box, the Prompts filter, every
  * `<input>` / `<select>` / `<textarea>` in a dialog. A *well*, not a card: it
  * sits below the plane so it reads as something to type into.

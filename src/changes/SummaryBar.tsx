@@ -4,6 +4,7 @@ import { useChanges } from "../state/changes.ts";
 import { iconButton } from "../theme/recipes.ts";
 import { accentAlpha, tokens } from "../theme/tokens.ts";
 import type { DiffTotals } from "../types.ts";
+import { Switch } from "../ui/Switch.tsx";
 
 /** Below this age, the fetch is fresh enough that no "updated Xs ago" label
  * shows at all. */
@@ -116,34 +117,6 @@ const toggleLabelStyle: CSSProperties = {
   fontSize: "12px",
   gap: "8px",
 };
-
-/** The switch's track — accent-filled when on, and off the same sunken well
- * every other input sits in, so "off" reads as an empty groove. */
-function switchTrackStyle(checked: boolean): CSSProperties {
-  return {
-    background: checked ? tokens.color.accent : tokens.color.inputWell,
-    border: `1px solid ${tokens.color.line.base}`,
-    borderRadius: tokens.radius.pill,
-    cursor: "pointer",
-    display: "inline-flex",
-    flex: "none",
-    height: "16px",
-    padding: "1px",
-    transition: `background-color ${tokens.motion.hover}`,
-    width: "28px",
-  };
-}
-
-function switchThumbStyle(checked: boolean): CSSProperties {
-  return {
-    background: tokens.color.onAccent,
-    borderRadius: "50%",
-    height: "12px",
-    transform: checked ? "translateX(12px)" : "translateX(0)",
-    transition: `transform ${tokens.motion.hover}`,
-    width: "12px",
-  };
-}
 
 function filesChangedLabel(files: number): string {
   return `${files} file${files === 1 ? "" : "s"} changed`;
@@ -290,21 +263,13 @@ export function SummaryBar({
         </span>
       ) : null}
       {editsToggle ? (
-        // A `<label>`, so the visible text is the switch's accessible name
-        // and clicking it toggles too — a bigger target than the track.
-        <label style={toggleLabelStyle}>
-          <button
-            aria-checked={editsToggle.checked}
-            data-testid="my-edits-only-toggle"
-            onClick={editsToggle.onToggle}
-            role="switch"
-            style={switchTrackStyle(editsToggle.checked)}
-            type="button"
-          >
-            <span style={switchThumbStyle(editsToggle.checked)} />
-          </button>
-          <span>Only Claude's edits</span>
-        </label>
+        <Switch
+          checked={editsToggle.checked}
+          label="Only Claude's edits"
+          labelStyle={toggleLabelStyle}
+          onChange={editsToggle.onToggle}
+          testId="my-edits-only-toggle"
+        />
       ) : null}
       {editsToggle ? <span aria-hidden style={dividerStyle} /> : null}
       {diffControls ? (

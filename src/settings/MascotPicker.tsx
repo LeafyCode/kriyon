@@ -52,11 +52,17 @@ export function MascotPicker() {
   ];
   return (
     <div
-      style={{ display: "flex", flexDirection: "column", gap: tokens.space.md }}
+      style={{
+        alignItems: "center",
+        display: "flex",
+        flexWrap: "wrap",
+        gap: tokens.space.xl,
+      }}
     >
       <fieldset aria-label="Mascot" style={rowStyle}>
         {options.map((option) => (
           <button
+            aria-label={option.name}
             aria-pressed={mascot === option.id}
             className="kr-focusable kr-hover-surface"
             key={option.id}
