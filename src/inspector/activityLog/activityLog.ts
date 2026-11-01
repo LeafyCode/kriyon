@@ -9,6 +9,7 @@ import type {
   ActivityTurn,
   StepKind,
 } from "../../ipc/bridge.ts";
+import { thisComputer } from "../../platform/os.ts";
 import { pathBasename, pathDirname } from "../../platform/path.ts";
 import { homeRelative } from "../../state/homeRelative.ts";
 import { relativizeTouchedPath } from "../../state/sessions.ts";
@@ -1041,7 +1042,7 @@ export function keptFor(retentionDays: number): string {
 
 /** The footer's "Kept 30 days · only on this Mac". */
 export function retentionNote(stats: ActivityStats): string {
-  return `${keptFor(stats.retentionDays)} · only on this Mac`;
+  return `${keptFor(stats.retentionDays)} · only on ${thisComputer()}`;
 }
 
 /**

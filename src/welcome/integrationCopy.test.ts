@@ -1,6 +1,7 @@
 import { expect, test } from "vitest";
 import type { IntegrationStatus } from "../ipc/bridge.ts";
 import { DEFAULT_INTEGRATION_PREFS } from "../ipc/bridge.ts";
+import { thisComputer } from "../platform/os.ts";
 import {
   companionHint,
   hooksHint,
@@ -51,7 +52,7 @@ test("the refusal toast says what changed and what to do", () => {
 
 test("the companion hint says what it sees and what it never does", () => {
   const hint = companionHint(true);
-  expect(hint).toContain("only to Kriyon on this Mac");
+  expect(hint).toContain(`only to Kriyon on ${thisComputer()}`);
   expect(hint).toContain("never approves, blocks or changes anything");
   // Nested sessions spend plan use, so the hint says when one starts.
   expect(hint).toContain("only when you asked for one in your own words");

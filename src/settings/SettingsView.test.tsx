@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { beforeEach, expect, test, vi } from "vitest";
 import { activityDeleteAll, previewNotifySound } from "../ipc/bridge.ts";
+import { thisComputer } from "../platform/os.ts";
 import { useIntegration } from "../state/integration.ts";
 import { DEFAULT_LAYOUT, useLayout } from "../state/layout.ts";
 import { useUpdates } from "../state/updates.ts";
@@ -9,7 +10,9 @@ import { SettingsView } from "./SettingsView.tsx";
 import { matchingSections, SETTINGS_SECTIONS } from "./settingsSections.ts";
 
 const NOW_THREE = /Now 3 sessions, 2\.0 MB/;
-const KEPT_14 = /^Kept 14 days and up to 500\.0 MB, only on this Mac\./;
+const KEPT_14 = new RegExp(
+  `^Kept 14 days and up to 500\\.0 MB, only on ${thisComputer()}\\.`
+);
 const RE_0 = /only in Kriyon's sessions/;
 const RE_1 = /my-bar/;
 const CALM = /^Calm/;

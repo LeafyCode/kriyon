@@ -1,3 +1,4 @@
+import { fileManagerName } from "../platform/os.ts";
 import { useOutsideOpen } from "../state/outsideOpen.ts";
 import { ConfirmDialog } from "./ConfirmDialog.tsx";
 
@@ -12,9 +13,11 @@ export function OutsideOpenConfirm() {
   return (
     <ConfirmDialog
       body={`This file isn't in any of your projects, so Kriyon doesn't open it by itself. ${
-        request.reveal ? "Show it in Finder" : "Open it"
+        request.reveal ? `Show it in ${fileManagerName()}` : "Open it"
       } only if you trust it.`}
-      confirmLabel={request.reveal ? "Show in Finder" : "Open anyway"}
+      confirmLabel={
+        request.reveal ? `Show in ${fileManagerName()}` : "Open anyway"
+      }
       details={[request.path]}
       label="Cancel opening the file"
       onCancel={dismiss}

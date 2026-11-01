@@ -1,4 +1,4 @@
-//! macOS menu-bar quick view: a tray icon that toggles a frosted popover window
+//! The menu-bar (macOS) or notification-area (Windows) quick view: a tray icon that toggles a frosted popover window
 //! (`tray.html`) anchored under the icon. The panel is a separate borderless,
 //! transparent, always-on-top webview that subscribes to the same session
 //! streams the main window uses. Left-click toggles it; it hides on blur.
@@ -42,7 +42,13 @@ pub fn build(app: &tauri::App) -> tauri::Result<()> {
     // image serves both appearances. The colourful app icon would render as a
     // solid black squircle blob here, so we ship a dedicated silhouette
     // (`scripts/make-tray-icon.mjs`) embedded at compile time.
-    let icon = match tauri::image::Image::from_bytes(include_bytes!("../icons/menubar-icon.png")) {
+    // Windows has no template tinting: a black silhouette would vanish on a
+    // dark taskbar, and Windows tray icons are the app's own colour icon.
+    #[cfg(windows)]
+    let tray_icon_bytes: &[u8] = include_bytes!("../icons/32x32.png");
+    #[cfg(not(windows))]
+    let tray_icon_bytes: &[u8] = include_bytes!("../icons/menubar-icon.png");
+    let icon = match tauri::image::Image::from_bytes(tray_icon_bytes) {
         Ok(img) => img,
         Err(e) => {
             // Best-effort: a decode failure loses only the menu-bar extra. Log

@@ -27,3 +27,14 @@ export function isWindowsPlatform(): boolean {
   }
   return WINDOWS_AGENT.test(navigator.userAgent ?? "");
 }
+
+/** How the copy names the person's computer: "this Mac" on macOS, "this PC"
+ * on Windows. */
+export function thisComputer(): string {
+  return isMacPlatform() ? "this Mac" : "this PC";
+}
+
+/** The platform's file manager, for "Reveal in …": Finder or File Explorer. */
+export function fileManagerName(): string {
+  return isMacPlatform() ? "Finder" : "File Explorer";
+}

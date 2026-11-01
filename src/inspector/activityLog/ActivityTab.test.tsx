@@ -8,6 +8,7 @@ import {
   activityTurns,
   onActivityChanged,
 } from "../../ipc/bridge.ts";
+import { thisComputer } from "../../platform/os.ts";
 import { useSessions } from "../../state/sessions.ts";
 import { ActivityTab } from "./ActivityTab.tsx";
 import { STEP_FLAGS } from "./activityLog.ts";
@@ -82,7 +83,7 @@ test("an empty log says steps will appear", async () => {
     )
   ).toBeTruthy();
   expect(
-    await screen.findByText("Kept 30 days · only on this Mac")
+    await screen.findByText(`Kept 30 days · only on ${thisComputer()}`)
   ).toBeTruthy();
 });
 

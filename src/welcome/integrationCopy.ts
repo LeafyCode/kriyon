@@ -1,4 +1,5 @@
 import type { IntegrationStatus, RouteReason } from "../ipc/bridge.ts";
+import { thisComputer } from "../platform/os.ts";
 
 /**
  * Plain words for what Kriyon adds to Claude Code, shared by the welcome
@@ -38,7 +39,7 @@ export function companionHint(available: boolean): string {
   if (!available) {
     return "Needs Kriyon's hooks on as a per-session plugin, which your setup doesn't allow.";
   }
-  return "Optional mod in Kriyon's sessions (Claude Code 2.1.287+). It sees your prompts, Claude's replies and every tool call, and sends them only to Kriyon on this Mac. It never approves, blocks or changes anything you or Claude do. It gives exact state, the Structured view and nested sessions: Claude gets a tool to ask Kriyon for a new session, which starts only when you asked for one in your own words, and a nested session sends its first reply to the session that started it.";
+  return `Optional mod in Kriyon's sessions (Claude Code 2.1.287+). It sees your prompts, Claude's replies and every tool call, and sends them only to Kriyon on ${thisComputer()}. It never approves, blocks or changes anything you or Claude do. It gives exact state, the Structured view and nested sessions: Claude gets a tool to ask Kriyon for a new session, which starts only when you asked for one in your own words, and a nested session sends its first reply to the session that started it.`;
 }
 
 /** One short line per addition that is on: what goes when it is removed. */

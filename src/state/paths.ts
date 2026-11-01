@@ -17,5 +17,24 @@ const MACOS_FIRMLINK_PREFIX = /^\/private(?=\/(?:etc|tmp|var)(?:\/|$))/;
  * Collapses toward the short form, which makes it direction-agnostic: either
  * operand may be the canonicalized one. */
 export function canonicalDir(path: string): string {
-  return withoutTrailingSlash(path).replace(MACOS_FIRMLINK_PREFIX, "");
+  return withoutTrailingSlash(windowsSpelling(path)).replace(
+    MACOS_FIRMLINK_PREFIX,
+    ""
+  );
+}
+
+/** A Windows drive path (`C:\` or `c:/`) — the shape Windows names a folder. */
+const WINDOWS_DRIVE_PATH = /^([A-Za-z]):[\\/]/;
+
+/** Windows writes one folder several ways: git's `rev-parse --show-toplevel`
+ * says `C:/dev/app`, while Claude and the folder picker say `C:\dev\app`, and
+ * the drive letter's case varies. One spelling for a Windows path: `/` between
+ * parts and an upper-case drive letter. Any other path is left alone — a
+ * backslash is a legal character in a macOS file name. */
+function windowsSpelling(path: string): string {
+  const drive = WINDOWS_DRIVE_PATH.exec(path);
+  if (!drive) {
+    return path;
+  }
+  return `${drive[1].toUpperCase()}${path.slice(1).replace(/\\/g, "/")}`;
 }

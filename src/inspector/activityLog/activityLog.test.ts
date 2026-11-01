@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import type { ActivityStep, ActivityTurn } from "../../ipc/bridge.ts";
+import { thisComputer } from "../../platform/os.ts";
 import { setHomeFolder } from "../../state/homeRelative.ts";
 import {
   agentLabel,
@@ -427,7 +428,7 @@ describe("detail helpers", () => {
         sizeBytes: 1,
         sizeCapBytes: 1,
       })
-    ).toBe("Kept 30 days · only on this Mac");
+    ).toBe(`Kept 30 days · only on ${thisComputer()}`);
   });
 
   test("the retention reads in days, singular for one", () => {

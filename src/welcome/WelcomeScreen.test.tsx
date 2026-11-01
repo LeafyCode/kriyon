@@ -6,6 +6,7 @@ import {
   type IntegrationStatus,
   quitApp,
 } from "../ipc/bridge.ts";
+import { thisComputer } from "../platform/os.ts";
 import { useIntegration } from "../state/integration.ts";
 import { DEFAULT_LAYOUT, useLayout } from "../state/layout.ts";
 import { WelcomeScreen } from "./WelcomeScreen.tsx";
@@ -21,8 +22,8 @@ const RE_7 = /organization blocks per-session plugins/;
 const COMES_WITH_HOOKS = /Comes with status hooks/;
 const LOG_EMPTY = /stays empty while status hooks are off/;
 const COMPANION_UNAVAILABLE = /which your setup doesn't allow/;
-const KEPT_14 = /Kept 14 days, only on this Mac\./;
-const KEPT_30 = /Kept 30 days, only on this Mac\./;
+const KEPT_14 = new RegExp(`Kept 14 days, only on ${thisComputer()}\\.`);
+const KEPT_30 = new RegExp(`Kept 30 days, only on ${thisComputer()}\\.`);
 
 vi.mock("../ipc/bridge.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../ipc/bridge.ts")>()),

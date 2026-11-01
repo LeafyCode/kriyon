@@ -6,6 +6,7 @@ import {
   FALLBACK_RETENTION_DAYS,
   quitApp,
 } from "../ipc/bridge.ts";
+import { thisComputer } from "../platform/os.ts";
 import { ON_OFF_OPTIONS } from "../settings/settingsOptions.ts";
 import { useIntegration } from "../state/integration.ts";
 import { type SessionView, useLayout } from "../state/layout.ts";
@@ -328,8 +329,8 @@ export function WelcomeScreen() {
           title="Activity log"
         >
           What Claude did in each session — commands, file changes, web use.{" "}
-          {keptFor(retentionDays)}, only on this Mac. Known secrets are hidden
-          on a best-effort basis.
+          {keptFor(retentionDays)}, only on {thisComputer()}. Known secrets are
+          hidden on a best-effort basis.
           {statusHooks ? null : " It stays empty while status hooks are off."}
         </Item>
         <p style={textStyle}>
