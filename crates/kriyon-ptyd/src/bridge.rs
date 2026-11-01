@@ -70,7 +70,7 @@ pub fn remove_socket() {
     let Some((socket, identity)) = owner.bound.take() else {
         return;
     };
-    let ours = std::fs::symlink_metadata(&socket).is_ok_and(|m| file_identity(&m) == identity);
+    let ours = file_identity(&socket).is_ok_and(|now| now == identity);
     if ours {
         let _ = std::fs::remove_file(socket);
     }
@@ -111,7 +111,7 @@ fn bind(socket: &Path) -> std::io::Result<UnixListener> {
     }
     let _ = std::fs::remove_file(socket);
     let listener = UnixListener::bind(socket)?;
-    let bound = match std::fs::symlink_metadata(socket) {
+    let bound = match file_identity(socket) {
         Ok(bound) => bound,
         Err(e) => {
             // Just made, so ours: nothing would remove it later.
@@ -119,7 +119,7 @@ fn bind(socket: &Path) -> std::io::Result<UnixListener> {
             return Err(e);
         }
     };
-    owner.bound = Some((socket.to_path_buf(), file_identity(&bound)));
+    owner.bound = Some((socket.to_path_buf(), bound));
     drop(owner);
     #[cfg(unix)]
     {

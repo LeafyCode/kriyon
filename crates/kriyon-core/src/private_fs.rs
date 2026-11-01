@@ -11,24 +11,53 @@ use std::io::Write as _;
 use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _};
 use std::path::Path;
 
-/// What tells a file apart from another later made at the same path: its
-/// device and inode on Unix. Windows has no stable equivalent in `std`, so the
-/// volume-independent creation time (to the 100 ns) stands in, which a file
-/// re-made at the same path never shares.
+/// What tells the file at `path` apart from another later made at the same
+/// path: its device and inode on Unix, and on Windows the volume serial number
+/// and file index, which are the same thing. A symlink or reparse point is
+/// identified itself, not followed.
+///
+/// (A file's creation time is not enough on Windows: NTFS gives a file made at
+/// a just-deleted path within about 15 seconds the old file's creation time.)
+///
+/// # Errors
+/// When the file can't be read.
 #[cfg(unix)]
-#[must_use]
-pub fn file_identity(meta: &std::fs::Metadata) -> (u64, u64) {
+pub fn file_identity(path: &Path) -> std::io::Result<(u64, u64)> {
     use std::os::unix::fs::MetadataExt as _;
-    (meta.dev(), meta.ino())
+    let meta = std::fs::symlink_metadata(path)?;
+    Ok((meta.dev(), meta.ino()))
 }
 
-/// What tells a file apart from another later made at the same path. See the
-/// Unix version.
+/// What tells the file at `path` apart from another later made at the same
+/// path. See the Unix version.
+///
+/// # Errors
+/// When the file can't be opened or read.
 #[cfg(windows)]
-#[must_use]
-pub fn file_identity(meta: &std::fs::Metadata) -> (u64, u64) {
-    use std::os::windows::fs::MetadataExt as _;
-    (meta.creation_time(), 0)
+pub fn file_identity(path: &Path) -> std::io::Result<(u64, u64)> {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    use std::os::windows::io::AsRawHandle as _;
+    use windows_sys::Win32::Storage::FileSystem::{
+        GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION, FILE_FLAG_BACKUP_SEMANTICS,
+        FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ,
+        FILE_SHARE_WRITE,
+    };
+    // Attributes only, sharing everything, so it never gets in a writer's or a
+    // deleter's way; backup semantics so a folder opens too.
+    let file = std::fs::OpenOptions::new()
+        .access_mode(FILE_READ_ATTRIBUTES)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)?;
+    // SAFETY: plain-old-data struct; all zeroes is a valid value.
+    let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+    // SAFETY: the handle is open for the call and `info` is valid for writes.
+    let ok = unsafe { GetFileInformationByHandle(file.as_raw_handle(), &raw mut info) };
+    if ok == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let index = (u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow);
+    Ok((u64::from(info.dwVolumeSerialNumber), index))
 }
 
 /// Create `dir` (and its parents) owner-only. An existing folder keeps its
@@ -175,5 +204,22 @@ mod tests {
     fn lock_down_of_a_missing_folder_is_fine() {
         let tmp = tempfile::tempdir().expect("tempdir");
         assert!(lock_down(&tmp.path().join("nope")).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod identity_tests {
+    #[test]
+    fn a_file_made_again_at_the_same_path_is_told_apart() {
+        let dir = tempfile::tempdir().expect("dir");
+        let path = dir.path().join("spool");
+        std::fs::write(&path, "a").expect("first");
+        let first = super::file_identity(&path).expect("identity");
+        assert_eq!(super::file_identity(&path).expect("again"), first);
+        // Keep the old file alive under another name, so its index can't be
+        // reused, then make a new one at the path straight away.
+        std::fs::rename(&path, dir.path().join("old")).expect("move away");
+        std::fs::write(&path, "b").expect("second");
+        assert_ne!(super::file_identity(&path).expect("identity"), first);
     }
 }

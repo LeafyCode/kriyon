@@ -1533,7 +1533,7 @@ pub fn ingest_spool(
         Err(e) => return Err(e.into()),
     };
     let meta = file.metadata()?;
-    let (dev, ino) = kriyon_core::private_fs::file_identity(&meta);
+    let (dev, ino) = kriyon_core::private_fs::file_identity(path)?;
     let (dev, ino, len) = (
         i64::try_from(dev).unwrap_or(0),
         i64::try_from(ino).unwrap_or(0),
@@ -1611,7 +1611,7 @@ fn apply_lines(
 #[must_use]
 pub fn spool_mark(path: &Path) -> Option<SpoolCursor> {
     let meta = std::fs::metadata(path).ok()?;
-    let (dev, ino) = kriyon_core::private_fs::file_identity(&meta);
+    let (dev, ino) = kriyon_core::private_fs::file_identity(path).ok()?;
     Some(SpoolCursor {
         dev: i64::try_from(dev).ok()?,
         ino: i64::try_from(ino).ok()?,

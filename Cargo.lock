@@ -2334,6 +2334,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "uds_windows",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
