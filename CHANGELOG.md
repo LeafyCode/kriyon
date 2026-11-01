@@ -7,7 +7,7 @@ All notable changes to Kriyon are listed here. Dates are YYYY-MM-DD.
 Kriyon now fits the way you work across many projects. Park the ones you're
 not using today so they stop draining your battery, keep todos and ideas next
 to the work, and read and edit code in a Files view that works like an
-editor. There's a light theme and ten community themes, and a short tour
+editor. There's a light theme and nine community themes, and a short tour
 shows new people around.
 
 ### Added
@@ -25,7 +25,7 @@ shows new people around.
   tree, with search, git colours and keyboard navigation. In the editor,
   lines changed this session are tinted, the cursor's line shows who last
   changed it, and you can revert one change at a time.
-- **Light and community themes.** A new light theme, Steel Light, and ten
+- **Light and community themes.** A new light theme, Steel Light, and nine
   well-known palettes, including Catppuccin, Dracula, Gruvbox, Nord, One
   Dark, Rosé Pine, Solarized Light and Tokyo Night. Each brings its own code
   and terminal colours.
