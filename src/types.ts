@@ -2,7 +2,13 @@ export type SessionStatus = "idle" | "running" | "waiting" | "done" | "error";
 
 /** The settings scope whose `disableAllHooks` / `allowManagedHooksOnly` turns
  *  Kriyon's hooks off for a session — [Hooks off] (mirrors Rust `HooksOff`). */
-export type HooksOffScope = "managed" | "local" | "project" | "user" | "kriyon";
+export type HooksOffScope =
+  | "managed"
+  | "local"
+  | "project"
+  | "user"
+  | "kriyon"
+  | "python";
 
 /**
  * The vocabulary the command center renders for a {@link SessionStanding}
@@ -484,4 +490,15 @@ export interface SessionActivity {
   shells: BackgroundShell[];
   subagents: Subagent[];
   tasks: Task[];
+}
+
+/** The language a session's shell reads its launch line in — Rust's `ShellLanguage`. */
+export type ShellLanguage = "posix" | "powerShell";
+
+/** What `create_session` reports about the session it opened — Rust's `SessionOpened`. */
+export interface SessionOpened {
+  /** It reattached to a daemon that survived a previous app run: `claude` is already running. */
+  reattached: boolean;
+  /** The language the session's shell reads its launch line in. */
+  shell: ShellLanguage;
 }

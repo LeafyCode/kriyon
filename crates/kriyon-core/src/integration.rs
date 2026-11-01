@@ -72,6 +72,27 @@ pub fn hook_route(prefs: IntegrationPrefs, policy: SideloadPolicy) -> HookRoute 
     }
 }
 
+/// Whether Kriyon itself keeps a session's hooks from running, and why: the
+/// user turned them off in Kriyon's Settings, or they are on but there is no
+/// Python to run them (`can_run_hooks` false). `None` when Kriyon's side is
+/// fine, or before consent, when there is nothing to report.
+#[must_use]
+pub fn kriyon_hooks_off(
+    prefs: IntegrationPrefs,
+    route: HookRoute,
+    can_run_hooks: bool,
+) -> Option<crate::hooks::HooksOff> {
+    if !prefs.consented {
+        None
+    } else if route == HookRoute::Off {
+        Some(crate::hooks::HooksOff::Kriyon)
+    } else if can_run_hooks {
+        None
+    } else {
+        Some(crate::hooks::HooksOff::Python)
+    }
+}
+
 /// Why the hooks are on the route they are — what the UI explains, decided
 /// by the same rule as [`hook_route`] so the two can't disagree.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -358,6 +379,34 @@ impl RefusalWatch {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn hooks_with_nothing_to_run_them_are_reported_as_off_for_python() {
+        use crate::hooks::HooksOff;
+        let consented = IntegrationPrefs {
+            consented: true,
+            ..IntegrationPrefs::default()
+        };
+        assert_eq!(kriyon_hooks_off(consented, HookRoute::Plugin, true), None);
+        assert_eq!(
+            kriyon_hooks_off(consented, HookRoute::Plugin, false),
+            Some(HooksOff::Python)
+        );
+        assert_eq!(
+            kriyon_hooks_off(consented, HookRoute::Settings, false),
+            Some(HooksOff::Python)
+        );
+        // Turned off in Kriyon says so, Python or not.
+        assert_eq!(
+            kriyon_hooks_off(consented, HookRoute::Off, false),
+            Some(HooksOff::Kriyon)
+        );
+        // Before consent nothing is installed, so nothing is reported.
+        assert_eq!(
+            kriyon_hooks_off(IntegrationPrefs::default(), HookRoute::Off, false),
+            None
+        );
+    }
+
     use super::*;
 
     fn prefs(consented: bool, status_hooks: bool) -> IntegrationPrefs {

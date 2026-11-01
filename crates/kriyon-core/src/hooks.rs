@@ -74,6 +74,9 @@ pub enum HooksOff {
     User,
     /// The user turned Kriyon's hooks off in Kriyon's own Settings.
     Kriyon,
+    /// Not a settings file: the hooks are on, but this computer has no Python
+    /// to run them with (Windows ships none), so Kriyon left them out.
+    Python,
 }
 
 /// The parsed settings that decide whether Kriyon's hooks run for a session,

@@ -24,8 +24,6 @@ const INITIAL_ROWS: u16 = 24;
 /// How long to wait for a freshly-spawned daemon's socket to become connectable.
 const DAEMON_READY_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Resolve the `kriyon-ptyd` binary: `$KRIYON_PTYD_BIN`, else a sibling of the
-/// app executable (where the bundler and the dev build both place it).
 /// The daemon's file name beside the app: `kriyon-ptyd`, `.exe` on Windows.
 const PTYD_NAME: &str = if cfg!(windows) {
     "kriyon-ptyd.exe"
@@ -33,6 +31,10 @@ const PTYD_NAME: &str = if cfg!(windows) {
     "kriyon-ptyd"
 };
 
+/// Resolve the `kriyon-ptyd` binary: `$KRIYON_PTYD_BIN`, else a sibling of the
+/// app executable (where the bundler and the dev build both place it). On
+/// Windows the sibling is run from its per-build copy in the run dir
+/// ([`staged_ptyd`]), so an update can replace the installed one.
 fn ptyd_binary(run: &Path) -> PathBuf {
     if let Ok(path) = std::env::var("KRIYON_PTYD_BIN") {
         return PathBuf::from(path);
@@ -183,8 +185,7 @@ fn detach_daemon(cmd: &mut std::process::Command) {
 fn detach_daemon(cmd: &mut std::process::Command) {
     use std::os::windows::process::CommandExt as _;
     const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    cmd.creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW);
+    cmd.creation_flags(CREATE_NEW_PROCESS_GROUP | crate::spawn::CREATE_NO_WINDOW);
 }
 
 /// Write `<dir>/<name>` with owner-only permissions (`0600` on unix).
@@ -248,10 +249,12 @@ fn note_hooks_off(
 /// tracker, and the pending-ask cache all key on the same id and
 /// `close_session(id)` tears them all down together.
 ///
-/// Returns `true` if it reattached to a daemon that survived a previous app run
-/// (its shell — and the `claude` already launched into it — are still live), and
-/// `false` if it spawned a fresh daemon. The frontend uses this to avoid
-/// re-launching `claude` into a session that already has it running.
+/// Returns [`SessionOpened`]: whether it reattached to a daemon that survived a
+/// previous app run (its shell — and the `claude` already launched into it —
+/// are still live) or spawned a fresh one, and the language of the session's
+/// shell. The frontend uses the first to avoid re-launching `claude` into a
+/// session that already has it running, and the second to write the launch
+/// line.
 ///
 /// # Errors
 /// Returns an error string if writing the temporary `ZDOTDIR` fails, the daemon
@@ -279,7 +282,7 @@ pub async fn create_session(
     // the daemon crashed), so the UI can surface it instead of leaving a
     // silently wedged pane. Never fired for an app-initiated close/handover.
     on_exit: tauri::ipc::Channel<bool>,
-) -> Result<bool, String> {
+) -> Result<SessionOpened, String> {
     // Every byte the session's pty produces passes here, which makes it the one
     // place that knows whether the terminal has actually stopped painting. The
     // notification path reads that to confirm a turn really settled before it
@@ -357,18 +360,17 @@ pub async fn create_session(
     let shell_cwd = kriyon_core::shellinit::SpawnPlan::new(&cwd, &home, None).cwd;
     let kriyon_off = {
         let integration = state.integration.lock();
-        integration.prefs.consented
-            && integration.applied.route == kriyon_core::integration::HookRoute::Off
+        kriyon_core::integration::kriyon_hooks_off(
+            integration.prefs,
+            integration.applied.route,
+            crate::hooks::hook_command_for(&home).is_some(),
+        )
     };
     note_hooks_off(
         &app,
         &state,
         &id,
-        if kriyon_off {
-            Some(kriyon_core::hooks::HooksOff::Kriyon)
-        } else {
-            crate::hooks::hooks_off_for(&home, Path::new(&shell_cwd))
-        },
+        kriyon_off.or_else(|| crate::hooks::hooks_off_for(&home, Path::new(&shell_cwd))),
     );
 
     // Crash-survival fast path: if a daemon is already live for this id, reattach
@@ -403,6 +405,13 @@ pub async fn create_session(
         .await
         .map_err(|e| e.to_string())??
     };
+    // The pure launch policy (cwd, shell, zsh-ness) lives in
+    // kriyon-core::shellinit, unit-tested without a Tauri runtime; the IO
+    // (private ZDOTDIR tempdir, daemon spawn, connect) stays here. A surviving
+    // daemon was started by the same policy, so its shell is this one too.
+    let plan =
+        kriyon_core::shellinit::SpawnPlan::new(&cwd, &home, std::env::var("SHELL").ok().as_deref());
+    let shell = kriyon_core::shellinit::ShellLanguage::of(&plan.shell);
     if let Some(stream) = live {
         // A daemon that survived an app restart serves its bridge, if it was
         // started with one.
@@ -423,14 +432,11 @@ pub async fn create_session(
             .attach(INITIAL_COLS, INITIAL_ROWS)
             .map_err(|e| e.to_string())?;
         register_session(&app, &state, SessionId(id), engine, None)?;
-        return Ok(true);
+        return Ok(SessionOpened {
+            reattached: true,
+            shell,
+        });
     }
-
-    // Fresh session: the pure launch policy (cwd, shell, zsh-ness) lives in
-    // kriyon-core::shellinit, unit-tested without a Tauri runtime; the IO
-    // (private ZDOTDIR tempdir, daemon spawn, connect) stays here.
-    let plan =
-        kriyon_core::shellinit::SpawnPlan::new(&cwd, &home, std::env::var("SHELL").ok().as_deref());
 
     // zsh OSC 133 injection: point ZDOTDIR at a private temp dir whose .zshrc
     // sources the user's real config and adds shell-integration hooks. Because
@@ -519,7 +525,21 @@ pub async fn create_session(
         .map_err(|e| e.to_string())?;
     register_session(&app, &state, SessionId(id), engine, zdotdir)?;
 
-    Ok(false)
+    Ok(SessionOpened {
+        reattached: false,
+        shell,
+    })
+}
+
+/// What [`create_session`] tells the frontend about the session it opened.
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionOpened {
+    /// It reattached to a daemon that survived a previous app run, so `claude`
+    /// is already running in its shell.
+    pub reattached: bool,
+    /// The language the session's shell reads its launch line in.
+    pub shell: kriyon_core::shellinit::ShellLanguage,
 }
 
 /// Register a freshly connected client as `id`'s session — unless the session

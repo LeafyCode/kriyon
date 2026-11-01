@@ -1,3 +1,5 @@
+import type { ShellLanguage } from "../types.ts";
+
 /** What a `claude` launch adds: env for a [Nested session], and its flags. */
 export interface ClaudeLaunch {
   /** Variables the launched `claude` starts with, as `[name, value]`. */
@@ -28,27 +30,47 @@ const PS_NATIVE_ARG =
  * first prompt: the line reads it, removes it, and passes it as `claude`'s
  * argument, so no user text is ever typed into the shell.
  *
- * `windows` picks the session shell's language: PowerShell there, POSIX sh
- * everywhere else.
+ * `shell` is the language of the session's shell, as Rust reported it when the
+ * session opened.
  */
 export function claudeLaunchCommand(
   launch: ClaudeLaunch,
   seedPath: string | null,
-  windows: boolean
+  shell: ShellLanguage
 ): string {
-  if (windows) {
-    const env = launch.env
-      .map(([name, value]) => `$env:${name}=${psQuote(value)}; `)
-      .join("");
-    if (seedPath === null) {
-      return `${env}claude${launch.flags}\r`;
-    }
-    const path = psQuote(seedPath);
-    return `$p = Get-Content -Raw -LiteralPath ${path}; Remove-Item -LiteralPath ${path}; ${env}claude${launch.flags} ${PS_NATIVE_ARG}\r`;
+  if (shell === "powerShell") {
+    return powerShellLaunch(launch, seedPath);
   }
   const env = launch.env.map(([name, value]) => `${name}=${value} `).join("");
   if (seedPath === null) {
     return `${env}claude${launch.flags}\r`;
   }
   return `p="$(cat "${seedPath}")"; rm -f "${seedPath}"; ${env}claude${launch.flags} "$p"\r`;
+}
+
+/**
+ * {@link claudeLaunchCommand} for PowerShell. A `$env:` assignment lasts for
+ * the whole shell, not one command as `NAME=value claude` does in sh, so the
+ * variables are removed again when `claude` ends — even on Ctrl-C — and a
+ * `claude` started later in the same terminal doesn't inherit them. The seed
+ * file is read as UTF-8: Kriyon writes it without a BOM, which Windows
+ * PowerShell would otherwise read in the legacy code page.
+ */
+function powerShellLaunch(
+  launch: ClaudeLaunch,
+  seedPath: string | null
+): string {
+  const read =
+    seedPath === null
+      ? ""
+      : `$p = Get-Content -Raw -Encoding UTF8 -LiteralPath ${psQuote(seedPath)}; Remove-Item -LiteralPath ${psQuote(seedPath)}; `;
+  const claude = `claude${launch.flags}${seedPath === null ? "" : ` ${PS_NATIVE_ARG}`}`;
+  if (launch.env.length === 0) {
+    return `${read}${claude}\r`;
+  }
+  const set = launch.env
+    .map(([name, value]) => `$env:${name}=${psQuote(value)}; `)
+    .join("");
+  const unset = launch.env.map(([name]) => `Env:${name}`).join(", ");
+  return `${read}${set}try { ${claude} } finally { Remove-Item ${unset} -ErrorAction Ignore }\r`;
 }

@@ -58,6 +58,41 @@ pub fn user_shell(_shell_env: Option<&str>) -> String {
 /// The shell Kriyon hosts on Windows. See [`user_shell`].
 pub const WINDOWS_SHELL: &str = "powershell.exe";
 
+/// `text` as one word for a POSIX shell: single-quoted, with each `'` inside
+/// closed, escaped and reopened (`'\''`). Safe for any path — a profile folder
+/// can be `O'Neil`.
+#[must_use]
+pub fn sh_quote(text: &str) -> String {
+    format!("'{}'", text.replace('\'', r"'\''"))
+}
+
+/// The language a session shell reads the line that launches `claude` in.
+/// Decided here, beside the choice of shell, and handed to the frontend with
+/// the session, so the launch line always matches the shell that reads it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ShellLanguage {
+    /// `sh`, `bash`, `zsh` and the like.
+    Posix,
+    /// Windows PowerShell or PowerShell 7.
+    PowerShell,
+}
+
+impl ShellLanguage {
+    /// The language of `shell`, a path or a bare name.
+    #[must_use]
+    pub fn of(shell: &str) -> Self {
+        let base = shell.rsplit(['/', '\\']).next().unwrap_or(shell);
+        let base = base.to_ascii_lowercase();
+        let stem = base.strip_suffix(".exe").unwrap_or(&base);
+        if stem == "powershell" || stem == "pwsh" {
+            Self::PowerShell
+        } else {
+            Self::Posix
+        }
+    }
+}
+
 /// True when the shell path's basename ends with `zsh` (`zsh`, `/bin/zsh`, …).
 #[must_use]
 pub fn is_zsh(shell: &str) -> bool {
@@ -266,6 +301,36 @@ pub fn parse_path_probe(output: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn sh_quote_keeps_a_path_with_an_apostrophe_one_word() {
+        assert_eq!(super::sh_quote("/Users/you/x.py"), "'/Users/you/x.py'");
+        assert_eq!(
+            super::sh_quote("C:/Users/O'Neil/x.py"),
+            r"'C:/Users/O'\''Neil/x.py'"
+        );
+    }
+
+    #[test]
+    fn powershell_by_any_spelling_reads_powershell_and_the_rest_read_posix() {
+        use super::ShellLanguage;
+        for shell in [
+            "powershell.exe",
+            r"C:\Windows\System32\WindowsPowerShell\v1.0\PowerShell.exe",
+            "pwsh",
+            "/usr/local/bin/pwsh",
+            super::WINDOWS_SHELL,
+        ] {
+            assert_eq!(
+                ShellLanguage::of(shell),
+                ShellLanguage::PowerShell,
+                "{shell}"
+            );
+        }
+        for shell in ["/bin/zsh", "bash", "/usr/bin/fish", ""] {
+            assert_eq!(ShellLanguage::of(shell), ShellLanguage::Posix, "{shell}");
+        }
+    }
+
     use super::*;
 
     #[test]

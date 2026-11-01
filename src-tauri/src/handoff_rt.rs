@@ -136,11 +136,9 @@ fn prompt_for(path: &Path, focus: Option<&str>) -> String {
     start_prompt(path, &content, focus)
 }
 
-/// Observe one live hook event for `session_id`; on the turn's end with a
-/// handoff, emit `session-handoff` with the validated path.
 /// The person's temp folder: `$TMPDIR` on macOS. On Windows the profile's
 /// `Temp` folder, resolved — `%TEMP%` often names it by its short 8.3 form
-/// (`LEAFYA~1`), which no path Claude writes would ever start with.
+/// (`JANEDO~1`), which no path Claude writes would ever start with.
 fn temp_dir() -> Option<String> {
     if cfg!(windows) {
         kriyon_core::paths::canonicalize(std::env::temp_dir())
@@ -151,6 +149,8 @@ fn temp_dir() -> Option<String> {
     }
 }
 
+/// Observe one live hook event for `session_id`; on the turn's end with a
+/// handoff, emit `session-handoff` with the validated path.
 pub fn note_hook_event<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     session_id: &SessionId,

@@ -6,8 +6,7 @@ import {
   seedPrompt,
   writeStdin,
 } from "../ipc/bridge.ts";
-import { isWindowsPlatform } from "../platform/os.ts";
-import type { NestedReport } from "../types.ts";
+import type { NestedReport, ShellLanguage } from "../types.ts";
 import { type ClaudeLaunch, claudeLaunchCommand } from "./launchCommand.ts";
 
 function ignore(promise: Promise<unknown>): void {
@@ -80,6 +79,11 @@ interface Host {
   resumeSawBusy: boolean;
   /** The pending resume-timeout, cleared when detection is disarmed or fires. */
   resumeTimer: ReturnType<typeof setTimeout> | undefined;
+  /**
+   * The language of the session's shell, as Rust reported it, for the launch
+   * line. Known only once {@link Host.ready} resolves.
+   */
+  shell: ShellLanguage;
   sink: Sink | undefined;
 }
 
@@ -220,6 +224,7 @@ export function ensureSession(
     launched: false,
     ready: Promise.resolve(),
     reattached: false,
+    shell: "posix",
     awaitingResume: false,
     resumeSawBusy: false,
     resumeTimer: undefined,
@@ -266,8 +271,9 @@ export function ensureSession(
       paneBusyHandler?.(sessionId, false);
       sessionExitedHandler?.(sessionId);
     }
-  ).then((reattached) => {
-    host.reattached = reattached;
+  ).then((opened) => {
+    host.reattached = opened.reattached;
+    host.shell = opened.shell;
     // The pty is born at a default 80x24; push the terminal's real geometry
     // now that it exists (and again after every revive — see registerSizeSync).
     sizeSyncs.get(sessionId)?.();
@@ -416,27 +422,15 @@ export async function launchClaudeOnce(
     // ever shell-escaped. Read it into a var, remove the file, launch claude.
     const path = await seedPrompt(sessionId, seed).catch(() => null);
     if (path) {
-      command = claudeLaunchCommand(
-        nestedLaunch(report),
-        path,
-        isWindowsPlatform()
-      );
+      command = claudeLaunchCommand(nestedLaunch(report), path, host.shell);
     } else {
       // The seed file write failed: the user's first prompt is gone. Launch a
       // usable session anyway and let the caller surface the loss.
-      command = claudeLaunchCommand(
-        nestedLaunch(report),
-        null,
-        isWindowsPlatform()
-      );
+      command = claudeLaunchCommand(nestedLaunch(report), null, host.shell);
       seedDropped = true;
     }
   } else {
-    command = claudeLaunchCommand(
-      nestedLaunch(report),
-      null,
-      isWindowsPlatform()
-    );
+    command = claudeLaunchCommand(nestedLaunch(report), null, host.shell);
   }
 
   let wrote = true;
