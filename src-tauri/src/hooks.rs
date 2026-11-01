@@ -66,33 +66,36 @@ pub fn tasks_dir(home: &Path) -> PathBuf {
     home.join(".claude").join("tasks")
 }
 
-/// The shell command Claude runs for the hook: `python3 '<script>'`.
-fn hook_command(script: &Path) -> String {
+/// The shell command Claude runs for the hook: `python3 '<script>'`, or `None`
+/// when this computer has no Python to run it with.
+fn hook_command(script: &Path) -> Option<String> {
     // Single-quote the path so spaces are safe; paths under ~/.claude won't
     // contain single quotes. Forward slashes, so the Git Bash that Claude Code
     // runs hooks in on Windows reads a Windows path as one.
-    format!(
+    Some(format!(
         "{} '{}'",
-        python_command(),
+        python_command()?,
         script.display().to_string().replace('\\', "/")
-    )
+    ))
 }
 
-/// How a hook command starts Python: `python3` on macOS.
+/// How a hook command starts Python: `python3` on macOS, which ships it.
 #[cfg(not(windows))]
-fn python_command() -> String {
-    "python3".to_string()
+#[allow(clippy::unnecessary_wraps)]
+fn python_command() -> Option<String> {
+    Some("python3".to_string())
 }
 
 /// How a hook command starts Python on Windows: the full path of a real
 /// `python.exe`. Windows has no `python3`, and the `python.exe` / `python3.exe`
 /// in `WindowsApps` are Store stubs that print "Python was not found" — the
 /// hook would fail on every event. Found once per run on the app's PATH; the
-/// `py` launcher when only that is installed; `python3` (which fails loudly in
-/// Claude's hook output) when there is no Python at all.
+/// `py` launcher when only that is installed; `None` when there is no Python
+/// at all — Windows doesn't ship one — and the hooks are then left out rather
+/// than fail on every event.
 #[cfg(windows)]
-fn python_command() -> String {
-    static FOUND: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+fn python_command() -> Option<String> {
+    static FOUND: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
     FOUND
         .get_or_init(|| {
             let path = std::env::var_os("PATH").unwrap_or_default();
@@ -104,11 +107,14 @@ fn python_command() -> String {
                     .find(|exe| exe.is_file())
             };
             if let Some(exe) = real("python.exe") {
-                format!("'{}'", exe.display().to_string().replace('\\', "/"))
+                Some(format!(
+                    "'{}'",
+                    exe.display().to_string().replace('\\', "/")
+                ))
             } else if real("py.exe").is_some() {
-                "py -3".to_string()
+                Some("py -3".to_string())
             } else {
-                "python3".to_string()
+                None
             }
         })
         .clone()
@@ -151,9 +157,10 @@ pub fn hook_script(home: &Path) -> PathBuf {
     kriyon_dir(home).join("kriyon-hook.py")
 }
 
-/// The command a hook entry runs: `python3 '<hook script>'`.
+/// The command a hook entry runs: `python3 '<hook script>'`, or `None` when
+/// there is no Python to run it with.
 #[must_use]
-pub fn hook_command_for(home: &Path) -> String {
+pub fn hook_command_for(home: &Path) -> Option<String> {
     hook_command(&hook_script(home))
 }
 
@@ -185,7 +192,12 @@ pub fn write_scripts(home: &Path) -> std::io::Result<()> {
     write_private(
         &dir.join("kriyon-statusline.sh"),
         STATUSLINE_SCRIPT
-            .replace("__PYTHON__", &python_command())
+            // With no Python the capture lines fail quietly (`|| true`) and
+            // the user's own status line still prints.
+            .replace(
+                "__PYTHON__",
+                &python_command().unwrap_or_else(|| "python3".to_string()),
+            )
             .as_bytes(),
     )?;
     write_private(&dir.join("kriyon-usage.py"), USAGE_SCRIPT.as_bytes())?;

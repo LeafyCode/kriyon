@@ -33,14 +33,60 @@ const PTYD_NAME: &str = if cfg!(windows) {
     "kriyon-ptyd"
 };
 
-fn ptyd_binary() -> PathBuf {
+fn ptyd_binary(run: &Path) -> PathBuf {
     if let Ok(path) = std::env::var("KRIYON_PTYD_BIN") {
         return PathBuf::from(path);
     }
-    std::env::current_exe()
+    let beside_app = std::env::current_exe()
         .ok()
         .and_then(|exe| exe.parent().map(|dir| dir.join(PTYD_NAME)))
-        .unwrap_or_else(|| PathBuf::from(PTYD_NAME))
+        .unwrap_or_else(|| PathBuf::from(PTYD_NAME));
+    if cfg!(windows) {
+        staged_ptyd(&beside_app, run).unwrap_or(beside_app)
+    } else {
+        let _ = run;
+        beside_app
+    }
+}
+
+/// The daemon to run on Windows: a copy of `source` kept in the run dir, one
+/// folder per build of it (`<run>/bin/<size>-<modified>/kriyon-ptyd.exe`).
+///
+/// A daemon outlives the app — through a crash, a quit with work running, an
+/// update. Windows can't replace a running program's file, so a daemon run
+/// from the install folder would make every update fail for as long as any
+/// session is open. Run from its own copy, the install folder is always free
+/// to update; a newer build gets a new folder, and older folders go once no
+/// daemon runs from them (removing a running program fails, and is skipped).
+/// `None` when the copy can't be made; the caller then runs `source` itself.
+fn staged_ptyd(source: &Path, run: &Path) -> Option<PathBuf> {
+    let meta = std::fs::metadata(source).ok()?;
+    let modified = meta
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_nanos();
+    let bin = run.join("bin");
+    let key = format!("{}-{modified:x}", meta.len());
+    let dir = bin.join(&key);
+    let staged = dir.join(PTYD_NAME);
+    if !staged.is_file() {
+        std::fs::create_dir_all(&dir).ok()?;
+        // Copied beside, then renamed in: a daemon is never started from a
+        // half-written file.
+        let partial = dir.join(format!("{PTYD_NAME}.partial"));
+        std::fs::copy(source, &partial).ok()?;
+        std::fs::rename(&partial, &staged).ok()?;
+    }
+    if let Ok(entries) = std::fs::read_dir(&bin) {
+        for entry in entries.flatten() {
+            if entry.file_name() != key.as_str() {
+                let _ = std::fs::remove_dir_all(entry.path());
+            }
+        }
+    }
+    Some(staged)
 }
 
 /// This app's daemon run directory under `~/.claude/kriyon/` — `run` for the
@@ -87,7 +133,7 @@ fn spawn_daemon(socket: &Path, run: &Path, id: &str, spec: &SpawnSpec) -> Result
         let _ = std::fs::remove_file(bridge);
     }
 
-    let mut cmd = std::process::Command::new(ptyd_binary());
+    let mut cmd = std::process::Command::new(ptyd_binary(run));
     cmd.arg("--socket")
         .arg(socket)
         .args(["--id", id, "--cwd", &spec.cwd, "--shell", &spec.shell]);
@@ -1058,6 +1104,30 @@ pub fn home_dir(app: tauri::AppHandle) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_daemon_runs_from_its_own_copy_and_old_copies_go() {
+        let app = tempfile::tempdir().expect("app dir");
+        let run = tempfile::tempdir().expect("run dir");
+        let source = app.path().join(PTYD_NAME);
+        std::fs::write(&source, b"daemon v1").expect("write");
+
+        let first = staged_ptyd(&source, run.path()).expect("staged");
+        assert_ne!(first, source, "never the install folder's own file");
+        assert_eq!(std::fs::read(&first).expect("read"), b"daemon v1");
+        assert_eq!(
+            staged_ptyd(&source, run.path()).expect("staged"),
+            first,
+            "the same build reuses its copy"
+        );
+
+        // An update replaces the daemon beside the app.
+        std::fs::write(&source, b"daemon v2, longer").expect("write");
+        let second = staged_ptyd(&source, run.path()).expect("staged");
+        assert_ne!(second, first);
+        assert_eq!(std::fs::read(&second).expect("read"), b"daemon v2, longer");
+        assert!(!first.exists(), "an unused older copy is removed");
+    }
 
     #[test]
     fn seed_prompt_path_is_contained_and_typed() {

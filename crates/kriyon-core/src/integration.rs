@@ -153,16 +153,22 @@ pub fn plugin_manifest(version: &str) -> String {
 /// The companion folder's `hooks/hooks.json`: Kriyon's command hook for every
 /// registered event, plus the companion mod module when `module` is given.
 #[must_use]
-pub fn plugin_hooks(command: &str, module: Option<&str>) -> String {
-    let hooks: serde_json::Map<String, Value> = REGISTERED_HOOK_EVENTS
-        .iter()
-        .map(|event| {
-            (
-                (*event).to_string(),
-                json!([{ "hooks": [{ "type": "command", "command": command }] }]),
-            )
+pub fn plugin_hooks(command: Option<&str>, module: Option<&str>) -> String {
+    // No command: the hook script can't run on this computer (Windows with no
+    // Python), so only the companion module rides in the folder.
+    let hooks: serde_json::Map<String, Value> = command
+        .map(|command| {
+            REGISTERED_HOOK_EVENTS
+                .iter()
+                .map(|event| {
+                    (
+                        (*event).to_string(),
+                        json!([{ "hooks": [{ "type": "command", "command": command }] }]),
+                    )
+                })
+                .collect()
         })
-        .collect();
+        .unwrap_or_default();
     let mut doc = json!({ "hooks": hooks });
     if let (Some(module), Some(obj)) = (module, doc.as_object_mut()) {
         obj.insert("modules".to_string(), json!([module]));
@@ -438,13 +444,14 @@ mod tests {
 
     #[test]
     fn plugin_hooks_register_every_event_and_the_mod_only_when_asked() {
-        let doc: Value = serde_json::from_str(&plugin_hooks("python3 'x'", None)).expect("JSON");
+        let doc: Value =
+            serde_json::from_str(&plugin_hooks(Some("python3 'x'"), None)).expect("JSON");
         for event in REGISTERED_HOOK_EVENTS {
             assert_eq!(doc["hooks"][event][0]["hooks"][0]["command"], "python3 'x'");
         }
         assert!(doc.get("modules").is_none());
         let doc: Value =
-            serde_json::from_str(&plugin_hooks("c", Some("./companion.js"))).expect("JSON");
+            serde_json::from_str(&plugin_hooks(Some("c"), Some("./companion.js"))).expect("JSON");
         assert_eq!(doc["modules"], json!(["./companion.js"]));
         let manifest: Value = serde_json::from_str(&plugin_manifest("1.2.3")).expect("JSON");
         assert_eq!(manifest["name"], PLUGIN_NAME);
