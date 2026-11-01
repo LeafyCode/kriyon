@@ -1,7 +1,7 @@
 import { ChevronsDownUp, ChevronsUpDown, RotateCw } from "lucide-react";
 import { type CSSProperties, useEffect, useState } from "react";
 import { useChanges } from "../state/changes.ts";
-import { iconButton } from "../theme/recipes.ts";
+import { iconButton, switchThumb, switchTrack } from "../theme/recipes.ts";
 import { accentAlpha, tokens } from "../theme/tokens.ts";
 import type { DiffTotals } from "../types.ts";
 
@@ -116,34 +116,6 @@ const toggleLabelStyle: CSSProperties = {
   fontSize: "12px",
   gap: "8px",
 };
-
-/** The switch's track — accent-filled when on, and off the same sunken well
- * every other input sits in, so "off" reads as an empty groove. */
-function switchTrackStyle(checked: boolean): CSSProperties {
-  return {
-    background: checked ? tokens.color.accent : tokens.color.inputWell,
-    border: `1px solid ${tokens.color.line.base}`,
-    borderRadius: tokens.radius.pill,
-    cursor: "pointer",
-    display: "inline-flex",
-    flex: "none",
-    height: "16px",
-    padding: "1px",
-    transition: `background-color ${tokens.motion.hover}`,
-    width: "28px",
-  };
-}
-
-function switchThumbStyle(checked: boolean): CSSProperties {
-  return {
-    background: tokens.color.onAccent,
-    borderRadius: "50%",
-    height: "12px",
-    transform: checked ? "translateX(12px)" : "translateX(0)",
-    transition: `transform ${tokens.motion.hover}`,
-    width: "12px",
-  };
-}
 
 function filesChangedLabel(files: number): string {
   return `${files} file${files === 1 ? "" : "s"} changed`;
@@ -298,10 +270,10 @@ export function SummaryBar({
             data-testid="my-edits-only-toggle"
             onClick={editsToggle.onToggle}
             role="switch"
-            style={switchTrackStyle(editsToggle.checked)}
+            style={switchTrack(editsToggle.checked)}
             type="button"
           >
-            <span style={switchThumbStyle(editsToggle.checked)} />
+            <span style={switchThumb(editsToggle.checked)} />
           </button>
           <span>Only Claude's edits</span>
         </label>

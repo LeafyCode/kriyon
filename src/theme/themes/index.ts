@@ -17,17 +17,18 @@ import type { Theme } from "./types.ts";
 
 export type { TerminalPalette, Theme, ThemeColors } from "./types.ts";
 
-/**
- * Every shipped theme, in switcher display order: Kriyon's own (the Steel
- * family, then its light side), then the community palettes alphabetically.
- */
-export const THEMES: readonly Theme[] = [
+/** Kriyon's own themes: the Steel family, then its light side. */
+export const KRIYON_THEMES: readonly Theme[] = [
   steel,
   steelLight,
   indigo,
   blue,
   teal,
   graphite,
+];
+
+/** Well-known community palettes, alphabetically. */
+export const COMMUNITY_THEMES: readonly Theme[] = [
   catppuccinMocha,
   catppuccinLatte,
   dracula,
@@ -38,6 +39,10 @@ export const THEMES: readonly Theme[] = [
   solarizedLight,
   tokyoNight,
 ];
+
+/** Every shipped theme, in switcher display order: Kriyon's own, then the
+ *  community palettes. */
+export const THEMES: readonly Theme[] = [...KRIYON_THEMES, ...COMMUNITY_THEMES];
 
 export const DEFAULT_THEME_ID = steel.id;
 

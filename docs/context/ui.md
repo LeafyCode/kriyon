@@ -91,7 +91,11 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
   canvas. A light theme must have one, with white and bright white still readable on its plane;
   the Steel family has none and keeps xterm's defaults. _Avoid_: ANSI theme.
 - **Theme picker** (`ThemePicker`) — Settings' grid of [Theme] previews, each drawn in that
-  theme's own colours rather than the active one's. _Avoid_: theme switcher, theme menu.
+  theme's own colours rather than the active one's, split into Kriyon's own and the community
+  palettes, with a Dark / Light filter. _Avoid_: theme switcher, theme menu.
+- **Settings section** (`SettingsSection`) — one page of the Settings view (Appearance, Layout,
+  Notifications, Sessions, Claude Code, Updates, Activity log), picked from its side menu. The
+  Settings search keeps the sections whose name or keywords match. _Avoid_: settings tab.
 - **Steel** — the default [Theme]: the steel-blue accent of the BisBig direction (ADR-0023),
   converted from the canvas's `oklch(… 225)` to hex because `applyTheme` derives
   `--kr-accent-rgb` from a 6-digit hex. The one [Accent] tuned for the cool chrome rather than
