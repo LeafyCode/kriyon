@@ -1,7 +1,8 @@
 # Releasing Kriyon
 
-How a build gets from `dev` to people's Macs. Why it works this way is in ADR 0045 (versions
-and the changelog) and ADR 0046 (builds, publishing and feeds).
+How a build gets from `dev` to people's Macs and Windows PCs. Why it works this way is in ADR
+0045 (versions and the changelog), ADR 0046 (builds, publishing and feeds) and ADR 0056 (one
+feed per platform).
 
 | Channel | Built from | When | Who publishes |
 |---|---|---|---|
@@ -9,53 +10,114 @@ and the changelog) and ADR 0046 (builds, publishing and feeds).
 | Beta `0.13.0-beta.1` | `dev` | Someone runs the Release workflow, channel beta | The workflow, once its checks pass |
 | Nightly `0.13.0-nightly.20261016.41` | `dev` | Every night at 03:17 UTC, if `dev` changed | The workflow, once its checks pass |
 
-Every build is a universal (Apple Silicon and Intel) Mac app, signed with the Developer ID,
-notarized, and checked by `scripts/check-mac-bundle.sh`. It lands as a draft release with its
-DMG, the signed update file (`Kriyon.app.tar.gz` and its `.sig`) and `latest.json`. Nothing
-reaches anyone until the draft is published, and publishing first checks `latest.json` again.
+Each run makes one draft release, then builds the Mac app and the Windows installer side by
+side into it:
+
+- **Mac:** a universal (Apple Silicon and Intel) app, signed with the Developer ID, notarized,
+  and checked by `scripts/check-mac-bundle.sh`. It adds the DMG, the signed update file
+  (`Kriyon.app.tar.gz` and its `.sig`), `latest.json` and `darwin.json`.
+- **Windows:** an x64 NSIS installer, `Kriyon_0.13.0_x64-setup.exe`, its `.sig` and
+  `windows.json`. Windows builds are not code-signed yet (ADR 0055), so SmartScreen shows
+  "Windows protected your PC" until someone clicks More info, then Run anyway.
+
+Each build checks its feed file and uploads it last, so a `darwin.json` or `windows.json` in the
+draft means that platform passed every check. A build that fails takes its files back out of
+the draft (`scripts/drop-platform.sh`), and **one platform failing never stops the other**: the
+release goes out for the platforms that finished. Nothing reaches anyone until the draft is
+published, and publishing first checks each feed file again.
 
 The DMG is uploaded twice: once with its version in the name (`Kriyon_0.13.0_universal.dmg`,
 which the Homebrew cask uses) and once as `Kriyon.dmg`. The website's download button links to
 `https://github.com/LeafyCode/kriyon/releases/latest/download/Kriyon.dmg`, which always serves
-the newest stable release.
+the newest stable Mac release: only a stable release with a Mac build becomes GitHub's latest
+release. Publishing a Windows build puts its installer on its channel's feed release as
+`Kriyon-setup.exe`, so each channel's newest Windows installer has a fixed link, for example
+`https://github.com/LeafyCode/kriyon/releases/download/feed-beta/Kriyon-setup.exe`. Stable
+lands on `feed-beta` too, so that link is the newest of beta and stable. The website's Windows
+button uses it, with a BETA tag, while Windows is in beta (`WINDOWS_SETUP_URL` in
+`website/src/lib/site.ts`); once Windows ships stable, point it at `feed-stable` and drop the
+tag. Never use `releases/latest/download/…` for Windows: a Mac-only release would leave it
+without one.
 
-Update feeds, which the in-app updater reads (ADR 0047):
+Update feeds, which the in-app updater reads (ADR 0047, ADR 0056), one file per platform on
+each channel's fixed pre-release. The app asks for `{{target}}.json`, which the updater fills in
+as `darwin.json` or `windows.json`:
 
-- Stable: `https://github.com/LeafyCode/kriyon/releases/latest/download/latest.json`
-- Beta: `https://github.com/LeafyCode/kriyon/releases/download/feed-beta/latest.json`
-  (a stable release goes here too, so beta users land on it)
-- Nightly: `https://github.com/LeafyCode/kriyon/releases/download/feed-nightly/latest.json`
+- Stable: `https://github.com/LeafyCode/kriyon/releases/download/feed-stable/darwin.json`
+  (and `windows.json`)
+- Beta: `…/releases/download/feed-beta/darwin.json` (and `windows.json`). A stable release goes
+  here too, so beta users land on it.
+- Nightly: `…/releases/download/feed-nightly/darwin.json` (and `windows.json`)
+
+Every publish run also fills in any of these six files that is still missing, so no build ever
+reads a file that isn't there, which would show as a failed check. A missing `darwin.json` is
+made from that channel's `latest.json`; the first run puts 0.15.0 on `feed-stable`. A missing
+`windows.json` gets the same version with no entries, which the app reads as no update, until
+the first Windows build for that channel replaces it.
+
+Builds up to 0.15.0 read the older single `latest.json`, which carries the Mac entries only:
+stable's from `releases/latest/download/latest.json`, beta's and nightly's from
+`feed-beta/latest.json` and `feed-nightly/latest.json`. Publishing still writes those for every
+Mac build, so those Macs keep updating, and their first update moves them to the new feeds.
+Stop writing them (and delete them from the feed releases) once nobody runs 0.15.0 or older;
+until then they cost nothing. From the fourth stable release after 0.15.0, Publish leaves a
+warning in its run summary as a reminder to check.
+
+### Versions when only one platform ships
+
+Mac and Windows share one version sequence. A release that ships for one platform only uses up
+its number on the other: if 0.16.1 goes out for the Mac alone, Windows goes from 0.16.0 to
+0.16.2. Say "macOS only" or "Windows only" at the top of that version's changelog entry, so
+nobody looks for the other download.
 
 ## Ship a stable release
 
 1. Cut it with the `release` skill or by hand: `pnpm release` from an up-to-date `dev`, PR
    into `dev`, then the release PR from `dev` into `main`.
-2. The merge starts **Release**. It refuses if `main` took a user-facing change the
-   changelog entry doesn't list: add it to the entry in a `chore(release): <version>` PR into
-   `dev`, then take `dev` into `main` again. Otherwise it leaves a draft `v<version>`.
-3. Check the draft on GitHub: notes, files, and if you like, install the DMG. You can edit the
-   notes there. The in-app update dialog shows the notes from `latest.json`, which came from
-   `CHANGELOG.md`, so fix big mistakes in the changelog, not only on the draft. To change the
-   version, delete the draft and cut again: the version is built into the app.
+2. The merge starts **Release**, which builds both platforms. It refuses if `main` took a
+   user-facing change the changelog entry doesn't list: add it to the entry in a
+   `chore(release): <version>` PR into `dev`, then take `dev` into `main` again. Otherwise it
+   leaves a draft `v<version>`.
+3. Check the draft on GitHub: notes, files, and if you like, install the DMG or the setup.exe.
+   You can edit the notes there. The in-app update dialog shows the notes from the feed files,
+   which came from `CHANGELOG.md`, so fix big mistakes in the changelog, not only on the draft.
+   To change the version, delete the draft and cut again: the version is built into the app.
 4. Run **Publish** on `main` with the tag:
-   `gh workflow run publish.yml --ref main -f tag=v0.13.0`. It checks the feed, publishes
-   (GitHub makes the tag), puts the release on the beta feed and bumps the Homebrew tap.
+   `gh workflow run publish.yml --ref main -f tag=v0.13.0`. It checks each feed file,
+   publishes (GitHub makes the tag), moves the stable and beta feeds, puts the Windows installer on
+   `feed-stable/Kriyon-setup.exe` and `feed-beta/Kriyon-setup.exe` and, for a Mac build, bumps the Homebrew tap.
+
+## Ship an urgent fix for one platform
+
+- **Stable:** cut and merge the release as usual; Release builds both. Then publish only the
+  one that needs it: `gh workflow run publish.yml --ref main -f tag=v0.13.1 -f platforms=mac`
+  (or `windows`). The other platform's files are removed from the draft first, so its users
+  are not offered a version that changes nothing for them. If the other platform's build
+  failed, its files are already gone and `platforms=built` publishes what finished.
+- **Beta or nightly:** build one platform only:
+  `gh workflow run release.yml --ref dev -f channel=beta -f platforms=mac` (or `windows`).
 
 ## Betas and nightlies
 
 - Beta: `gh workflow run release.yml --ref dev -f channel=beta`, or Actions → Release → Run
-  workflow. It numbers itself (`x.y.z-beta.N`).
+  workflow. It numbers itself (`x.y.z-beta.N`) and builds both platforms unless you pass
+  `-f platforms=mac` or `windows`.
 - Nightly: runs on its own every night when `dev` changed; start one by hand with
   `-f channel=nightly`. Only the newest 7 are kept.
 
 ## When something fails
 
-- **A build failed.** Re-run it. A re-run gets the same version, even a nightly re-run after
-  midnight (its date is the run's start), deletes the draft the failed run left and builds
-  again. A published release is never replaced.
-- **The feed check failed.** Nothing was published and no feed moved. Read the step's output:
-  it names the platform and the reason (missing entry, wrong key, wrong version). Fix the cause,
-  then re-run.
+- **One platform's build failed, timed out or was cancelled.** Its files come out of the draft:
+  the build removes them when it can, and publishing drops any platform without its feed file. A beta or nightly
+  has gone out for the other platform; the failed one catches up with the next build. For
+  stable, either publish what finished (`platforms=built`) or re-run the whole workflow.
+- **A build failed and you want it again.** Re-run the whole workflow, not only the failed job:
+  a re-run gets the same version, even a nightly re-run after midnight (its date is the run's
+  start), deletes the draft the failed run left and builds again. A published release is never
+  replaced.
+- **A feed check failed.** That platform's build failed, so the line above applies. Read the
+  step's output: it names the platform and the reason (missing entry, another platform's entry,
+  wrong key, wrong version). Fix the cause, then re-run.
 - **A publish failed.** Re-run it, or run **Publish** with the tag (on `dev` for a beta or
   nightly, on `main` for stable). It is safe to run again: once a release is published it skips
   that step and finishes the rest (the feed, old nightlies, the Homebrew tap). Feeds and the
@@ -87,7 +149,7 @@ touch your installed Kriyon, its sessions or `~/.claude/settings.json`.
 
    Check the new `.sig`: `base64 -d < KriyonUpdateTest.app.tar.gz.sig` must show
    `version:0.12.1` in its trusted comment, or the app refuses it.
-3. In a folder with the new `KriyonUpdateTest.app.tar.gz`, write `latest.json` with `version`,
+3. In a folder with the new `KriyonUpdateTest.app.tar.gz`, write `darwin.json` with `version`,
    `notes` and, under `platforms`, `darwin-aarch64-app` and `darwin-aarch64` (`x86_64` on
    Intel), each with the `.sig` file's contents as `signature` and
    `http://127.0.0.1:8765/KriyonUpdateTest.app.tar.gz` as `url`. Serve it:
@@ -95,11 +157,11 @@ touch your installed Kriyon, its sessions or `~/.claude/settings.json`.
 4. Copy the old app somewhere writable and start it:
 
    ```sh
-   HOME=/tmp/kriyon-update-home KRIYON_UPDATE_FEED=http://127.0.0.1:8765/latest.json \
+   HOME=/tmp/kriyon-update-home KRIYON_UPDATE_FEED=http://127.0.0.1:8765/darwin.json \
      KriyonUpdateTest.app/Contents/MacOS/kriyon
    ```
 
-   About 5 seconds in it fetches `latest.json`. Pass the welcome screen, open the
+   About 5 seconds in it fetches `darwin.json`. Pass the welcome screen, open the
    **Update available** pill, and choose **Install & restart**. The app downloads the file,
    restarts, and its `Info.plist` then says the new version.
 

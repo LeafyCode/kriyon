@@ -7,16 +7,26 @@ import assert from "node:assert/strict";
 import { createHash, generateKeyPairSync, sign } from "node:crypto";
 import { describe, test } from "node:test";
 import {
+  assetPlatform,
+  feedPlatform,
   feedProblems,
   homebrewCask,
   keyProblem,
   nightliesNewestFirst,
+  PLATFORMS,
+  platformFeed,
   publicRepoFrom,
   staleNightlies,
   verifyUpdateSignature,
+  windowsFeed,
+  windowsInstaller,
 } from "./publish-lib.mjs";
 
+const NO_INSTALLER = /no Windows installer/;
+const TWO_INSTALLERS = /more than one Windows installer/;
 const MENTIONS_MISMATCH = /signature doesn't match the file/;
+const MENTIONS_LINUX = /linux/;
+const MENTIONS_LINUX_FILE = /linux\.json/;
 const MENTIONS_BOTH_KEYS =
   /signed with key 0202020202020202, but the app trusts 0101010101010101/;
 const MENTIONS_TRUSTED_COMMENT =
@@ -245,43 +255,65 @@ describe("the feed file", () => {
     signature: "c2ln",
     url: "https://example.com/Kriyon.app.tar.gz",
   };
-  const feed = {
+  const mac = {
     version: "0.13.0",
     notes: "",
     pub_date: "2026-10-16T00:00:00Z",
     platforms: { "darwin-aarch64": entry, "darwin-x86_64": entry },
   };
+  const windows = {
+    ...mac,
+    platforms: { "windows-x86_64": entry, "windows-x86_64-nsis": entry },
+  };
 
-  test("each Mac chip's entry is required", () => {
+  test("a Mac feed needs both chips' entries", () => {
     for (const missing of ["darwin-aarch64", "darwin-x86_64"]) {
-      const { [missing]: _, ...rest } = feed.platforms;
-      assert.deepEqual(feedProblems({ ...feed, platforms: rest }, "0.13.0"), [
-        `${missing} is missing`,
-      ]);
+      const { [missing]: _, ...rest } = mac.platforms;
+      assert.deepEqual(
+        feedProblems({ ...mac, platforms: rest }, "0.13.0", "darwin"),
+        [`${missing} is missing`]
+      );
     }
   });
 
-  test("a feed with both Mac entries for the expected version has no problems", () => {
-    assert.deepEqual(feedProblems(feed, "0.13.0"), []);
+  test("a Windows feed needs the x64 entry", () => {
+    const { "windows-x86_64": _, ...rest } = windows.platforms;
+    assert.deepEqual(
+      feedProblems({ ...windows, platforms: rest }, "0.13.0", "windows"),
+      ["windows-x86_64 is missing"]
+    );
+  });
+
+  test("a complete feed for the expected version has no problems", () => {
+    assert.deepEqual(feedProblems(mac, "0.13.0", "darwin"), []);
+    assert.deepEqual(feedProblems(windows, "0.13.0", "windows"), []);
+  });
+
+  test("a platform's feed holds only that platform, so it can move on its own", () => {
+    assert.deepEqual(
+      feedProblems(
+        { ...mac, platforms: { ...mac.platforms, "windows-x86_64": entry } },
+        "0.13.0",
+        "darwin"
+      ),
+      ["windows-x86_64 belongs in another platform's feed"]
+    );
+  });
+
+  test("a platform the release doesn't know is refused", () => {
+    assert.throws(() => feedProblems(mac, "0.13.0", "linux"), MENTIONS_LINUX);
   });
 
   test("a leading v on the feed's version is accepted, as the updater does", () => {
     assert.deepEqual(
-      feedProblems({ ...feed, version: "v0.13.0" }, "0.13.0"),
+      feedProblems({ ...mac, version: "v0.13.0" }, "0.13.0", "darwin"),
       []
     );
   });
 
   test("another version is a problem", () => {
-    assert.deepEqual(feedProblems(feed, "0.13.1"), [
+    assert.deepEqual(feedProblems(mac, "0.13.1", "darwin"), [
       'The feed announces "0.13.0", not 0.13.1',
-    ]);
-  });
-
-  test("a missing Mac entry is a problem", () => {
-    const { "darwin-x86_64": _, ...arm } = feed.platforms;
-    assert.deepEqual(feedProblems({ ...feed, platforms: arm }, "0.13.0"), [
-      "darwin-x86_64 is missing",
     ]);
   });
 
@@ -289,13 +321,11 @@ describe("the feed file", () => {
     assert.deepEqual(
       feedProblems(
         {
-          ...feed,
-          platforms: {
-            ...feed.platforms,
-            "darwin-aarch64": { url: entry.url },
-          },
+          ...mac,
+          platforms: { ...mac.platforms, "darwin-aarch64": { url: entry.url } },
         },
-        "0.13.0"
+        "0.13.0",
+        "darwin"
       ),
       ["darwin-aarch64 has no signature"]
     );
@@ -305,22 +335,107 @@ describe("the feed file", () => {
     assert.deepEqual(
       feedProblems(
         {
-          ...feed,
+          ...mac,
           platforms: {
-            ...feed.platforms,
+            ...mac.platforms,
             "darwin-aarch64-app": { signature: "c2ln" },
           },
         },
-        "0.13.0"
+        "0.13.0",
+        "darwin"
       ),
       ["darwin-aarch64-app has no url"]
     );
   });
 
   test("a feed that isn't an object with platforms is a problem", () => {
-    assert.deepEqual(feedProblems({ version: "0.13.0" }, "0.13.0"), [
+    assert.deepEqual(feedProblems({ version: "0.13.0" }, "0.13.0", "darwin"), [
       "The feed has no platforms",
     ]);
+  });
+
+  test("a feed file's name says its platform; latest.json is the Mac's, as old builds read it", () => {
+    assert.equal(feedPlatform("darwin.json"), "darwin");
+    assert.equal(feedPlatform("/tmp/x/windows.json"), "windows");
+    assert.equal(feedPlatform("latest.json"), "darwin");
+    assert.throws(() => feedPlatform("linux.json"), MENTIONS_LINUX_FILE);
+  });
+
+  test("each release file belongs to the platform that built it", () => {
+    const darwin = [
+      "darwin.json",
+      "latest.json",
+      "Kriyon.dmg",
+      "Kriyon_0.16.0_universal.dmg",
+      "Kriyon_universal.app.tar.gz",
+      "Kriyon_universal.app.tar.gz.sig",
+    ];
+    const windows = [
+      "windows.json",
+      "Kriyon_0.16.0_x64-setup.exe",
+      "Kriyon_0.16.0_x64-setup.exe.sig",
+    ];
+    for (const name of darwin) {
+      assert.equal(assetPlatform(name), "darwin", name);
+    }
+    for (const name of windows) {
+      assert.equal(assetPlatform(name), "windows", name);
+    }
+    assert.equal(assetPlatform("notes.txt"), undefined);
+  });
+
+  test("the platforms Kriyon releases for are the feed files' names", () => {
+    assert.deepEqual(PLATFORMS, ["darwin", "windows"]);
+    for (const platform of PLATFORMS) {
+      assert.equal(feedPlatform(`${platform}.json`), platform);
+    }
+  });
+
+  test("the Windows installer is the one setup.exe among the files, by any path", () => {
+    assert.equal(
+      windowsInstaller([
+        "Kriyon_0.16.0_x64-setup.exe.sig",
+        "dist/nsis/Kriyon_0.16.0_x64-setup.exe",
+        "windows.json",
+      ]),
+      "dist/nsis/Kriyon_0.16.0_x64-setup.exe"
+    );
+    assert.equal(assetPlatform("Kriyon_0.16.0_x64-setup.exe"), "windows");
+    assert.throws(() => windowsInstaller(["Kriyon.dmg"]), NO_INSTALLER);
+    assert.throws(
+      () =>
+        windowsInstaller([
+          "Kriyon_0.16.0_x64-setup.exe",
+          "Kriyon_0.16.0_arm64-setup.exe",
+        ]),
+      TWO_INSTALLERS
+    );
+  });
+
+  test("a platform's feed keeps only that platform's entries", () => {
+    const both = {
+      ...mac,
+      platforms: { ...mac.platforms, ...windows.platforms },
+    };
+    assert.deepEqual(platformFeed(both, "darwin"), mac);
+    assert.deepEqual(platformFeed(both, "windows"), windows);
+  });
+
+  test("a Mac-only feed gives Windows a file with no entries, read as no update", () => {
+    assert.deepEqual(platformFeed(mac, "windows"), { ...mac, platforms: {} });
+  });
+
+  test("the Windows feed lists the setup.exe under both names the updater looks for", () => {
+    assert.deepEqual(
+      windowsFeed({
+        version: "0.13.0",
+        notes: "",
+        pubDate: "2026-10-16T00:00:00Z",
+        url: entry.url,
+        signature: entry.signature,
+      }),
+      windows
+    );
   });
 });
 

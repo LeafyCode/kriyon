@@ -10,7 +10,9 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use kriyon_core::update::{offer, recheck, CheckKind, Offer, UpdateChannel, UpdatePrefs};
+use kriyon_core::update::{
+    has_platform_entry, offer, recheck, CheckKind, Offer, UpdateChannel, UpdatePrefs,
+};
 use parking_lot::Mutex;
 use serde::Serialize;
 use tauri::{Emitter as _, Manager as _};
@@ -236,6 +238,21 @@ fn feed_url(channel: UpdateChannel) -> Result<tauri::Url, String> {
     channel.feed_url().parse().map_err(|e| format!("{e}"))
 }
 
+/// Whether a feed can update this build at all: a static feed lists this
+/// platform, or the server answered for it. The updater would otherwise fail
+/// the check with "target not found" when the feed is newer but lacks this
+/// platform; that reads as no update instead (ADR 0056).
+fn for_this_platform(release: &tauri_plugin_updater::RemoteRelease) -> bool {
+    match &release.data {
+        tauri_plugin_updater::RemoteReleaseInner::Dynamic(_) => true,
+        tauri_plugin_updater::RemoteReleaseInner::Static { platforms } => {
+            tauri_plugin_updater::target().is_some_and(|target| {
+                has_platform_entry(platforms.keys().map(String::as_str), &target)
+            })
+        }
+    }
+}
+
 fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -304,7 +321,7 @@ async fn fetch<R: tauri::Runtime>(
         .map_err(|e| e.to_string())?
         .timeout(CHECK_TIMEOUT)
         .version_comparator(move |current, release| {
-            offer(&current, &release.version, &rules, kind).is_some()
+            for_this_platform(&release) && offer(&current, &release.version, &rules, kind).is_some()
         })
         .build()
         .map_err(|e| e.to_string())?
@@ -509,6 +526,44 @@ pub fn back_up_data(data_dir: &Path, running: &str, now_ms: u64) -> Result<PathB
 mod tests {
     use super::*;
     use crate::store::Store;
+
+    fn release_for(keys: &[&str]) -> tauri_plugin_updater::RemoteRelease {
+        let entry = tauri_plugin_updater::ReleaseManifestPlatform {
+            url: "https://example.com/Kriyon".parse().expect("url"),
+            signature: "c2ln".to_string(),
+        };
+        tauri_plugin_updater::RemoteRelease {
+            version: semver::Version::new(9, 0, 0),
+            notes: None,
+            pub_date: None,
+            data: tauri_plugin_updater::RemoteReleaseInner::Static {
+                platforms: keys
+                    .iter()
+                    .map(|key| ((*key).to_string(), entry.clone()))
+                    .collect(),
+            },
+        }
+    }
+
+    #[test]
+    fn a_newer_feed_without_this_platform_is_no_update_not_an_error() {
+        let target = tauri_plugin_updater::target().expect("a supported platform");
+        assert!(for_this_platform(&release_for(&[&target])));
+        assert!(for_this_platform(&release_for(&[&format!("{target}-app")])));
+        assert!(!for_this_platform(&release_for(&["plan9-mips"])));
+        assert!(!for_this_platform(&release_for(&[])));
+    }
+
+    /// The file `publish-release.sh` seeds for a platform no build has
+    /// reached yet: the channel's version with no entries.
+    #[test]
+    fn a_seeded_feed_with_no_entries_parses_and_is_no_update() {
+        let seed: tauri_plugin_updater::RemoteRelease = serde_json::from_str(
+            r#"{"version":"0.15.0","notes":"","pub_date":"2026-11-01T10:13:24Z","platforms":{}}"#,
+        )
+        .expect("the seeded feed parses");
+        assert!(!for_this_platform(&seed));
+    }
 
     /// An app with no updater config, as debug builds have: no check ever
     /// reaches the network.

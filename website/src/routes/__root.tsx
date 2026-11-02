@@ -65,7 +65,7 @@ const STRUCTURED_DATA = {
   url: `${SITE_URL}/`,
   description: DESCRIPTION,
   applicationCategory: "DeveloperApplication",
-  operatingSystem: "macOS 13 or later",
+  operatingSystem: "macOS 13 or later, Windows 10 or later",
   softwareVersion: APP_VERSION.replace("v", ""),
   license: "https://www.apache.org/licenses/LICENSE-2.0",
   downloadUrl: LATEST_DMG_URL,

@@ -55,7 +55,8 @@ attestations until then, and macOS runners cost ten times the Linux rate.
   Nobody pushes a tag by hand any more; `pnpm release tag` is gone.
 - **Betas and nightlies publish themselves.** A beta runs when someone presses "Run workflow".
   A nightly runs every night, and skips when a nightly tag already points at `dev`'s head. Both
-  set their version with `node scripts/release.mjs beta|nightly --write`. Only the newest 7
+  get their version from `node scripts/release.mjs beta|nightly`, set in each build job with
+  `release.mjs set-version`. Only the newest 7
   nightlies are kept, newest in version order, so the one the nightly feed names is always
   kept.
 - **The feed is checked before it moves.** `scripts/publish-release.sh` runs

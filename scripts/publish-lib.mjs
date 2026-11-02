@@ -10,8 +10,122 @@
 import { createHash, createPublicKey, verify } from "node:crypto";
 import { channelOf, compareVersions, isNightly } from "./release-lib.mjs";
 
-/** The feed entries a universal Mac build must have: one per chip. */
-const MAC_PLATFORMS = ["darwin-aarch64", "darwin-x86_64"];
+const SIG_SUFFIX = /\.sig$/;
+/** The Windows installer, the NSIS setup.exe, by file name. */
+const WINDOWS_INSTALLER = /-setup\.exe$/;
+const MAC_ASSET =
+  /^(darwin\.json|latest\.json|Kriyon(_.*)?\.dmg|.*\.app\.tar\.gz(\.sig)?)$/;
+
+/**
+ * Each platform Kriyon releases for, keyed by the updater's `{{target}}`
+ * value, which also names its feed file (darwin.json, windows.json):
+ *
+ * - `entries`: what its feed file must have (ADR 0056), one per Mac chip for
+ *   the universal build and the Windows x64 installer. A missing entry leaves
+ *   those users on an old version.
+ * - `uploads`: whether a release file is one its build uploads. A failed
+ *   build removes its own files from the draft by this rule, and a release
+ *   published without a platform drops that platform's.
+ *
+ * One table, so a new platform can't have one without the other.
+ */
+const PLATFORM_RULES = {
+  darwin: {
+    entries: ["darwin-aarch64", "darwin-x86_64"],
+    uploads: (name) => MAC_ASSET.test(name),
+  },
+  windows: {
+    entries: ["windows-x86_64"],
+    uploads: (name) =>
+      name === "windows.json" ||
+      WINDOWS_INSTALLER.test(name.replace(SIG_SUFFIX, "")),
+  },
+};
+
+/**
+ * The platforms Kriyon releases for. The release scripts ask
+ * `publish.mjs platforms` for this list instead of writing it out.
+ */
+export const PLATFORMS = Object.keys(PLATFORM_RULES);
+
+/** The feed file builds up to 0.15.0 read; it carries the Mac entries only. */
+const LEGACY_FEED = "latest.json";
+
+const isOf = (key, platform) =>
+  key === platform || key.startsWith(`${platform}-`);
+
+const requiredEntries = (platform) => {
+  const required = PLATFORM_RULES[platform]?.entries;
+  if (!required) {
+    throw new Error(`"${platform}" is not a platform Kriyon releases for`);
+  }
+  return required;
+};
+
+const PATH_SEPARATOR = /[\\/]/;
+const FEED_FILE = /^(.+)\.json$/;
+
+/** The platform a feed file is for, from its name (`…/windows.json`). */
+export const feedPlatform = (file) => {
+  const name = file.split(PATH_SEPARATOR).pop();
+  if (name === LEGACY_FEED) {
+    return "darwin";
+  }
+  const platform = FEED_FILE.exec(name)?.[1];
+  if (platform && Object.hasOwn(PLATFORM_RULES, platform)) {
+    return platform;
+  }
+  throw new Error(`${file} is not a platform's feed file`);
+};
+
+/**
+ * The one Windows installer among `files` (names or paths), as given. The
+ * build, the feed and the fixed download link all find it by this rule.
+ */
+export const windowsInstaller = (files) => {
+  const found = files.filter((file) =>
+    WINDOWS_INSTALLER.test(file.split(PATH_SEPARATOR).pop())
+  );
+  if (found.length === 0) {
+    throw new Error("There is no Windows installer (*-setup.exe)");
+  }
+  if (found.length > 1) {
+    throw new Error(
+      `There is more than one Windows installer: ${found.join(", ")}`
+    );
+  }
+  return found[0];
+};
+
+/** The platform whose build uploaded the release file `name`, or undefined. */
+export const assetPlatform = (name) =>
+  PLATFORMS.find((platform) => PLATFORM_RULES[platform].uploads(name));
+
+/** `feed` with only `platform`'s entries, for that platform's own file. */
+export const platformFeed = (feed, platform) => {
+  requiredEntries(platform);
+  return {
+    ...feed,
+    platforms: Object.fromEntries(
+      Object.entries(feed.platforms).filter(([key]) => isOf(key, platform))
+    ),
+  };
+};
+
+/**
+ * The Windows feed for one NSIS setup.exe. Listed as `windows-x86_64-nsis`,
+ * which the updater looks for first in an NSIS install, and as
+ * `windows-x86_64`, its fallback: the same entries tauri-action writes.
+ */
+export const windowsFeed = ({ version, notes, pubDate, url, signature }) => {
+  const entry = { signature, url };
+  return {
+    version,
+    notes,
+    pub_date: pubDate,
+    platforms: { "windows-x86_64": entry, "windows-x86_64-nsis": entry },
+  };
+};
 
 const LEADING_V = /^v/;
 const SHA256 = /^[0-9a-f]{64}$/;
@@ -147,11 +261,14 @@ export const keyProblem = (publicKey, { publicRepo }) => {
 };
 
 /**
- * What's wrong with a parsed latest.json for `version`, as plain sentences;
- * empty when nothing is. The updater rejects the whole file when any entry is
- * incomplete, so every entry is checked, not only the Mac ones.
+ * What's wrong with a parsed feed file for `platform` at `version`, as plain
+ * sentences; empty when nothing is. The updater rejects the whole file when
+ * any entry is incomplete, so every entry is checked, not only the required
+ * ones. An entry for another platform is a problem too: each platform's file
+ * moves on its own, so it must not carry another's.
  */
-export const feedProblems = (feed, version) => {
+export const feedProblems = (feed, version, platform) => {
+  const required = requiredEntries(platform);
   const problems = [];
   if (
     typeof feed?.version !== "string" ||
@@ -164,9 +281,14 @@ export const feedProblems = (feed, version) => {
     problems.push("The feed has no platforms");
     return problems;
   }
-  for (const name of MAC_PLATFORMS) {
+  for (const name of required) {
     if (!(name in platforms)) {
       problems.push(`${name} is missing`);
+    }
+  }
+  for (const name of Object.keys(platforms)) {
+    if (!isOf(name, platform)) {
+      problems.push(`${name} belongs in another platform's feed`);
     }
   }
   for (const [name, entry] of Object.entries(platforms)) {

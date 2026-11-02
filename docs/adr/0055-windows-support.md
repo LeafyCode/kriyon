@@ -79,5 +79,8 @@ runs natively on Windows and runs hook commands through Git Bash.
 - Status hooks on Windows depend on Python being installed. Porting the hook
   scripts to a small Rust program would remove that dependency; it is the
   largest remaining Windows gap.
-- The release tooling (`scripts/release-mac.sh`, signing, the update feed) is
-  still Mac-only. A Windows installer builds with `tauri build --bundles nsis`.
+- The Release workflow builds the Windows NSIS installer beside the Mac build,
+  into the same draft release, with its own update feed file, `windows.json`
+  (ADR 0056, docs/RELEASING.md). It is not
+  code-signed yet, so SmartScreen warns and Smart App Control can block it;
+  the signing service is still to be chosen.

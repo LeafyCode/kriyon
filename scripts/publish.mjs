@@ -2,11 +2,26 @@
 // Publishing helpers for the release workflows (.github/workflows/release.yml
 // and publish.yml). See ADR 0046 and docs/RELEASING.md.
 //
-//   node scripts/publish.mjs check-feed <latest.json> --version <x.y.z…>
-//       Check an update feed before anyone can get it: both Mac entries are
-//       there, and each file downloads and is signed by the key in
-//       src-tauri/tauri.updater.conf.json for that version. Downloads use
-//       $GH_TOKEN when set, so a draft release's files can be read.
+//   node scripts/publish.mjs check-feed <darwin|windows|latest>.json --version <x.y.z…>
+//       Check one platform's update feed before anyone can get it (ADR 0056):
+//       that platform's entries are there and no other's, and each file
+//       downloads and is signed by the key in src-tauri/tauri.updater.conf.json
+//       for that version. The file's name says the platform; latest.json, the
+//       feed builds up to 0.15.0 read, is the Mac's. Downloads use $GH_TOKEN
+//       when set, so a draft release's files can be read.
+//   node scripts/publish.mjs platforms
+//       Print the platforms Kriyon releases for, one per line (darwin,
+//       windows): the names of their feed files.
+//   node scripts/publish.mjs windows-installer <name or path>…
+//       Print the one Windows installer (*-setup.exe) among them; fail when
+//       there is none or more than one.
+//   node scripts/publish.mjs platform-assets <darwin|windows> <name>…
+//       Print the release file names that platform's build uploads.
+//   node scripts/publish.mjs platform-feed <latest.json> --platform <darwin|windows>
+//       Print the feed with only that platform's entries.
+//   node scripts/publish.mjs windows-feed --version <v> --url <setup.exe url>
+//       --sig <setup.exe.sig> [--notes-file <file>]
+//       Print the Windows feed for one NSIS setup.exe.
 //   node scripts/publish.mjs check-key
 //       Check the updater key parses, before a build spends macOS minutes.
 //
@@ -33,13 +48,19 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import {
+  assetPlatform,
+  feedPlatform,
   feedProblems,
   homebrewCask,
   keyProblem,
   nightliesNewestFirst,
+  PLATFORMS,
+  platformFeed,
   publicRepoFrom,
   staleNightlies,
   verifyUpdateSignature,
+  windowsFeed,
+  windowsInstaller,
 } from "./publish-lib.mjs";
 import { channelOf, isNewest } from "./release-lib.mjs";
 
@@ -86,14 +107,15 @@ const download = async (url) => {
 
 const checkFeed = async (feedFile, version) => {
   if (!(feedFile && version)) {
-    fail("Usage: check-feed <latest.json> --version <version>");
+    fail("Usage: check-feed <darwin|windows|latest>.json --version <version>");
   }
+  const platform = feedPlatform(feedFile);
   const feed = JSON.parse(readFileSync(resolve(feedFile), "utf8"));
-  const problems = feedProblems(feed, version);
+  const problems = feedProblems(feed, version, platform);
   if (problems.length > 0) {
-    fail(`The feed isn't ready:\n  - ${problems.join("\n  - ")}`);
+    fail(`The ${platform} feed isn't ready:\n  - ${problems.join("\n  - ")}`);
   }
-  ok(`The feed announces ${version} with both Mac entries`);
+  ok(`The ${platform} feed announces ${version}`);
   const publicKey = updaterKey();
   // A universal build lists one file under several names; fetch each once.
   const urls = [
@@ -117,18 +139,77 @@ const checkFeed = async (feedFile, version) => {
   }
 };
 
+const printPlatformAssets = ([platform, ...names]) => {
+  if (!platform) {
+    fail("Usage: platform-assets <darwin|windows> <name>…");
+  }
+  for (const name of names) {
+    if (assetPlatform(name) === platform) {
+      console.log(name);
+    }
+  }
+};
+
+const printPlatformFeed = (feedFile, platform) => {
+  if (!(feedFile && platform)) {
+    fail("Usage: platform-feed <latest.json> --platform <darwin|windows>");
+  }
+  const feed = JSON.parse(readFileSync(resolve(feedFile), "utf8"));
+  console.log(JSON.stringify(platformFeed(feed, platform), null, 2));
+};
+
+const printWindowsFeed = (values) => {
+  if (!(values.version && values.url && values.sig)) {
+    fail(
+      "Usage: windows-feed --version <v> --url <url> --sig <file> [--notes-file <file>]"
+    );
+  }
+  const notesFile = values["notes-file"];
+  const feed = windowsFeed({
+    version: values.version,
+    notes: notesFile ? readFileSync(notesFile, "utf8").trim() : "",
+    pubDate: new Date().toISOString(),
+    url: values.url,
+    signature: readFileSync(values.sig, "utf8").trim(),
+  });
+  console.log(JSON.stringify(feed, null, 2));
+};
+
 const main = async () => {
   const { values, positionals } = parseArgs({
     allowPositionals: true,
     options: {
       version: { type: "string" },
       keep: { type: "string", default: String(KEEP_NIGHTLIES) },
+      platform: { type: "string" },
+      url: { type: "string" },
+      sig: { type: "string" },
+      "notes-file": { type: "string" },
     },
   });
   const [command, ...args] = positionals;
   switch (command) {
     case "check-feed":
       await checkFeed(args[0], values.version);
+      break;
+    case "platforms":
+      console.log(PLATFORMS.join("\n"));
+      break;
+    case "windows-installer":
+      try {
+        console.log(windowsInstaller(args));
+      } catch (error) {
+        fail(error.message);
+      }
+      break;
+    case "platform-assets":
+      printPlatformAssets(args);
+      break;
+    case "platform-feed":
+      printPlatformFeed(args[0], values.platform);
+      break;
+    case "windows-feed":
+      printWindowsFeed(values);
       break;
     case "check-key":
       updaterKey();

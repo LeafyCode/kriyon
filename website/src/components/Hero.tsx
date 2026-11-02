@@ -1,5 +1,5 @@
 import { sectionLabel } from "../lib/sections.ts";
-import { GITHUB_URL, LATEST_DMG_URL } from "../lib/site.ts";
+import { GITHUB_URL, LATEST_DMG_URL, WINDOWS_SETUP_URL } from "../lib/site.ts";
 import { LeafyCredit } from "./LeafyCredit.tsx";
 
 /** The headline, as one sentence for tests and the page title to share. */
@@ -77,6 +77,14 @@ export function Hero() {
                   ↓
                 </span>
                 <span className="btn-download-label">DOWNLOAD FOR MAC</span>
+              </a>
+              <a className="btn-download" href={WINDOWS_SETUP_URL}>
+                <span aria-hidden="true" className="btn-download-icon">
+                  ↓
+                </span>
+                <span className="btn-download-label">
+                  DOWNLOAD FOR WINDOWS <span className="tag-beta">BETA</span>
+                </span>
               </a>
               <a
                 className="btn-outline"
