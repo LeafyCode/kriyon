@@ -1,8 +1,8 @@
 name: Release
 
 # Builds a signed, notarized, universal (Apple Silicon + Intel) Mac release
-# as a draft GitHub release, with its update feed checked. See ADR 0046 and
-# docs/RELEASING.md.
+# and a Windows x64 installer as one draft GitHub release, with its update
+# feed checked. See ADR 0046, ADR 0055 and docs/RELEASING.md.
 #
 # - Stable: a push to main that carries a new version (the release PR). The
 #   draft waits for a person to check it and run the Publish workflow.
@@ -135,6 +135,8 @@ jobs:
       attestations: write # build provenance
     outputs:
       tag: ${{ steps.version.outputs.tag }}
+      version: ${{ steps.version.outputs.version }}
+      release-id: ${{ steps.tauri.outputs.releaseId }}
     env:
       CHANNEL: ${{ needs.prepare.outputs.channel }}
       BUNDLE: target/universal-apple-darwin/release/bundle
@@ -295,21 +297,120 @@ jobs:
             ${{ steps.dmg.outputs.path }}
             ${{ env.BUNDLE }}/macos/Kriyon.app.tar.gz
 
-      - name: Check the update feed
-        env:
-          TAG: ${{ steps.version.outputs.tag }}
-          VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          gh release download "$TAG" --pattern latest.json --dir "$RUNNER_TEMP"
-          node scripts/publish.mjs check-feed "$RUNNER_TEMP/latest.json" --version "$VERSION"
+      # The feed is checked in build-windows, once it has the Windows entry.
 
       - name: Remove the App Store Connect key
         if: ${{ always() }}
         run: rm -f "$RUNNER_TEMP/AuthKey.p8"
 
+  # Runs after the Mac build, which made the draft: tauri-action uploads into
+  # it and merges the windows-x86_64 entry into its latest.json. Unsigned
+  # until Windows code signing is chosen (ADR 0055), so SmartScreen warns.
+  build-windows:
+    name: Build for Windows (${{ needs.prepare.outputs.channel }})
+    needs: [prepare, build]
+    runs-on: windows-2025
+    timeout-minutes: 90
+    environment: ${{ needs.prepare.outputs.channel == 'stable' && 'release' || 'prerelease' }}
+    permissions:
+      contents: write # the draft release
+      id-token: write # build provenance
+      attestations: write # build provenance
+    defaults:
+      run:
+        shell: bash
+    env:
+      CHANNEL: ${{ needs.prepare.outputs.channel }}
+      BUNDLE: target/release/bundle
+      GH_TOKEN: ${{ github.token }}
+      PUBLIC_REPO: ${{ needs.prepare.outputs.public }}
+      TAG: ${{ needs.build.outputs.tag }}
+      VERSION: ${{ needs.build.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+      - run: pnpm install --frozen-lockfile
+
+      # The same commands as the Mac job, on the same tags and start time, so
+      # they give the same version; a mismatch stops before anything uploads.
+      - name: Set the version
+        env:
+          STARTED: ${{ needs.prepare.outputs.started }}
+        run: |
+          case "$CHANNEL" in
+            stable) version="$(node -p 'require("./package.json").version')" ;;
+            beta) version="$(node scripts/release.mjs beta --write)" ;;
+            nightly) version="$(node scripts/release.mjs nightly --date "$STARTED" --write)" ;;
+          esac
+          if [[ "$version" != "$VERSION" ]]; then
+            echo "::error::Windows would build $version, but the Mac build is $VERSION."
+            exit 1
+          fi
+
+      - name: Build the installer and upload it to the draft
+        id: tauri
+        uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tauriScript: pnpm tauri
+          # The NSIS setup.exe only: one installer to download, and the one
+          # the updater runs. tauri.updater.conf.json turns on its .sig.
+          args: --bundles nsis --config src-tauri/tauri.updater.conf.json
+          releaseId: ${{ needs.build.outputs.release-id }}
+          updaterJsonPreferNsis: true
+
+      - name: Find the installer
+        id: setup
+        env:
+          BUILT: ${{ steps.tauri.outputs.appVersion }}
+        run: |
+          if [[ "$BUILT" != "$VERSION" ]]; then
+            echo "::error::Tauri built $BUILT, but this release is $VERSION."
+            exit 1
+          fi
+          setups=("$BUNDLE"/nsis/*-setup.exe)
+          if (( ${#setups[@]} != 1 )) || [[ ! -f "${setups[0]}" ]]; then
+            echo "::error::Expected one setup.exe, found: ${setups[*]}"
+            exit 1
+          fi
+          echo "path=${setups[0]}" >> "$GITHUB_OUTPUT"
+
+      # Kriyon-setup.exe is the same file under a name that never changes, so
+      # releases/latest/download/Kriyon-setup.exe always fetches the newest
+      # stable installer, as Kriyon.dmg does for the Mac.
+      - name: Add the fixed-name installer
+        env:
+          SETUP: ${{ steps.setup.outputs.path }}
+        run: |
+          cp "$SETUP" "$RUNNER_TEMP/Kriyon-setup.exe"
+          gh release upload "$TAG" "$RUNNER_TEMP/Kriyon-setup.exe" --clobber
+
+      - name: Record build provenance
+        if: ${{ needs.prepare.outputs.public == 'true' }}
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: ${{ steps.setup.outputs.path }}
+
+      - name: Check the update feed
+        run: |
+          gh release download "$TAG" --pattern latest.json --dir "$RUNNER_TEMP" --clobber
+          node scripts/publish.mjs check-feed "$RUNNER_TEMP/latest.json" --version "$VERSION"
+
   publish:
     name: Publish (${{ needs.prepare.outputs.channel }})
-    needs: [prepare, build]
+    needs: [prepare, build, build-windows]
     # Stable waits for a person: they check the draft, then run publish.yml.
     if: ${{ needs.prepare.outputs.channel != 'stable' }}
     runs-on: ubuntu-24.04

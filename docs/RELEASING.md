@@ -1,6 +1,6 @@
 # Releasing Kriyon
 
-How a build gets from `dev` to people's Macs. Why it works this way is in ADR 0045 (versions
+How a build gets from `dev` to people's Macs and Windows PCs. Why it works this way is in ADR 0045 (versions
 and the changelog) and ADR 0046 (builds, publishing and feeds).
 
 | Channel | Built from | When | Who publishes |
@@ -13,6 +13,14 @@ Every build is a universal (Apple Silicon and Intel) Mac app, signed with the De
 notarized, and checked by `scripts/check-mac-bundle.sh`. It lands as a draft release with its
 DMG, the signed update file (`Kriyon.app.tar.gz` and its `.sig`) and `latest.json`. Nothing
 reaches anyone until the draft is published, and publishing first checks `latest.json` again.
+
+Once the Mac build has made the draft, a second job builds the Windows x64 installer on a
+Windows runner and adds it to the same draft: `Kriyon_0.13.0_x64-setup.exe`, its `.sig`, and the
+`windows-x86_64` entry in `latest.json`. The feed check needs both Mac entries and the Windows
+one. The setup.exe is uploaded again as `Kriyon-setup.exe`, so
+`https://github.com/LeafyCode/kriyon/releases/latest/download/Kriyon-setup.exe` always serves the
+newest stable installer. Windows builds are not code-signed yet (ADR 0055), so SmartScreen shows
+"Windows protected your PC" until someone clicks More info, then Run anyway.
 
 The DMG is uploaded twice: once with its version in the name (`Kriyon_0.13.0_universal.dmg`,
 which the Homebrew cask uses) and once as `Kriyon.dmg`. The website's download button links to

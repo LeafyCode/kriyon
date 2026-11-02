@@ -3,8 +3,8 @@
 // and publish.yml). See ADR 0046 and docs/RELEASING.md.
 //
 //   node scripts/publish.mjs check-feed <latest.json> --version <x.y.z…>
-//       Check an update feed before anyone can get it: both Mac entries are
-//       there, and each file downloads and is signed by the key in
+//       Check an update feed before anyone can get it: both Mac entries and
+//       the Windows entry are there, and each file downloads and is signed by the key in
 //       src-tauri/tauri.updater.conf.json for that version. Downloads use
 //       $GH_TOKEN when set, so a draft release's files can be read.
 //   node scripts/publish.mjs check-key
@@ -93,7 +93,7 @@ const checkFeed = async (feedFile, version) => {
   if (problems.length > 0) {
     fail(`The feed isn't ready:\n  - ${problems.join("\n  - ")}`);
   }
-  ok(`The feed announces ${version} with both Mac entries`);
+  ok(`The feed announces ${version} for Mac and Windows`);
   const publicKey = updaterKey();
   // A universal build lists one file under several names; fetch each once.
   const urls = [

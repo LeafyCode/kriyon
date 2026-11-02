@@ -10,8 +10,16 @@
 import { createHash, createPublicKey, verify } from "node:crypto";
 import { channelOf, compareVersions, isNightly } from "./release-lib.mjs";
 
-/** The feed entries a universal Mac build must have: one per chip. */
-const MAC_PLATFORMS = ["darwin-aarch64", "darwin-x86_64"];
+/**
+ * The feed entries every release must have: one per Mac chip (the universal
+ * build) and the Windows x64 installer. The updater looks up the user's own
+ * platform, so a missing entry leaves those users on an old version.
+ */
+const REQUIRED_PLATFORMS = [
+  "darwin-aarch64",
+  "darwin-x86_64",
+  "windows-x86_64",
+];
 
 const LEADING_V = /^v/;
 const SHA256 = /^[0-9a-f]{64}$/;
@@ -149,7 +157,7 @@ export const keyProblem = (publicKey, { publicRepo }) => {
 /**
  * What's wrong with a parsed latest.json for `version`, as plain sentences;
  * empty when nothing is. The updater rejects the whole file when any entry is
- * incomplete, so every entry is checked, not only the Mac ones.
+ * incomplete, so every entry is checked, not only the required ones.
  */
 export const feedProblems = (feed, version) => {
   const problems = [];
@@ -164,7 +172,7 @@ export const feedProblems = (feed, version) => {
     problems.push("The feed has no platforms");
     return problems;
   }
-  for (const name of MAC_PLATFORMS) {
+  for (const name of REQUIRED_PLATFORMS) {
     if (!(name in platforms)) {
       problems.push(`${name} is missing`);
     }

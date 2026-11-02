@@ -249,11 +249,19 @@ describe("the feed file", () => {
     version: "0.13.0",
     notes: "",
     pub_date: "2026-10-16T00:00:00Z",
-    platforms: { "darwin-aarch64": entry, "darwin-x86_64": entry },
+    platforms: {
+      "darwin-aarch64": entry,
+      "darwin-x86_64": entry,
+      "windows-x86_64": entry,
+    },
   };
 
-  test("each Mac chip's entry is required", () => {
-    for (const missing of ["darwin-aarch64", "darwin-x86_64"]) {
+  test("each Mac chip's entry and the Windows entry are required", () => {
+    for (const missing of [
+      "darwin-aarch64",
+      "darwin-x86_64",
+      "windows-x86_64",
+    ]) {
       const { [missing]: _, ...rest } = feed.platforms;
       assert.deepEqual(feedProblems({ ...feed, platforms: rest }, "0.13.0"), [
         `${missing} is missing`,
@@ -261,7 +269,7 @@ describe("the feed file", () => {
     }
   });
 
-  test("a feed with both Mac entries for the expected version has no problems", () => {
+  test("a feed with every entry for the expected version has no problems", () => {
     assert.deepEqual(feedProblems(feed, "0.13.0"), []);
   });
 
