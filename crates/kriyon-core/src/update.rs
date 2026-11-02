@@ -27,17 +27,21 @@ pub enum UpdateChannel {
 impl UpdateChannel {
     /// The channel's [Update feed]. Fixed: the feed is a trust decision, so
     /// nothing from the webview or the environment chooses it.
+    ///
+    /// One file per platform (ADR 0056): the updater puts `darwin` or
+    /// `windows` in place of `{{target}}`, so a release built for one
+    /// platform moves only that platform's file.
     #[must_use]
     pub const fn feed_url(self) -> &'static str {
         match self {
             Self::Stable => {
-                "https://github.com/LeafyCode/kriyon/releases/latest/download/latest.json"
+                "https://github.com/LeafyCode/kriyon/releases/download/feed-stable/{{target}}.json"
             }
             Self::Beta => {
-                "https://github.com/LeafyCode/kriyon/releases/download/feed-beta/latest.json"
+                "https://github.com/LeafyCode/kriyon/releases/download/feed-beta/{{target}}.json"
             }
             Self::Nightly => {
-                "https://github.com/LeafyCode/kriyon/releases/download/feed-nightly/latest.json"
+                "https://github.com/LeafyCode/kriyon/releases/download/feed-nightly/{{target}}.json"
             }
         }
     }
@@ -190,6 +194,20 @@ pub fn recheck(started: &UpdatePrefs, now: &UpdatePrefs) -> Option<CheckKind> {
     }
 }
 
+/// Whether a feed's platform `keys` have an entry the updater can install on
+/// `target` (`darwin-aarch64`, `windows-x86_64`…): the target itself, or one of
+/// its bundles (`darwin-aarch64-app`, `windows-x86_64-nsis`). A feed without
+/// one is no update rather than a failed check, so a feed that lacks this
+/// platform never shows the person an error.
+pub fn has_platform_entry<'a>(keys: impl IntoIterator<Item = &'a str>, target: &str) -> bool {
+    keys.into_iter().any(|key| {
+        key == target
+            || key
+                .strip_prefix(target)
+                .is_some_and(|rest| rest.starts_with('-'))
+    })
+}
+
 /// Whether `older` can read the data `newer` wrote: the same minor, or the
 /// one before it, within one major.
 fn reads_data_of(older: &Version, newer: &Version) -> bool {
@@ -216,16 +234,16 @@ mod tests {
     }
 
     #[test]
-    fn each_channel_reads_its_own_feed() {
+    fn each_channel_reads_its_own_feed_for_this_platform() {
         assert!(UpdateChannel::Stable
             .feed_url()
-            .ends_with("/releases/latest/download/latest.json"));
+            .ends_with("/releases/download/feed-stable/{{target}}.json"));
         assert!(UpdateChannel::Beta
             .feed_url()
-            .ends_with("/releases/download/feed-beta/latest.json"));
+            .ends_with("/releases/download/feed-beta/{{target}}.json"));
         assert!(UpdateChannel::Nightly
             .feed_url()
-            .ends_with("/releases/download/feed-nightly/latest.json"));
+            .ends_with("/releases/download/feed-nightly/{{target}}.json"));
         for channel in [
             UpdateChannel::Stable,
             UpdateChannel::Beta,
@@ -235,6 +253,20 @@ mod tests {
                 .feed_url()
                 .starts_with("https://github.com/LeafyCode/kriyon/"));
         }
+    }
+
+    #[test]
+    fn a_feed_entry_for_this_platform_is_its_target_or_a_bundle_of_it() {
+        let keys = ["darwin-aarch64", "darwin-aarch64-app", "darwin-x86_64"];
+        assert!(has_platform_entry(keys, "darwin-aarch64"));
+        assert!(has_platform_entry(
+            ["windows-x86_64-nsis"],
+            "windows-x86_64"
+        ));
+        assert!(!has_platform_entry(keys, "windows-x86_64"));
+        // A longer arch that merely starts with this one is another platform.
+        assert!(!has_platform_entry(["linux-armv7l"], "linux-armv7"));
+        assert!(!has_platform_entry([], "darwin-aarch64"));
     }
 
     #[test]

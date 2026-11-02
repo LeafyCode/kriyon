@@ -171,11 +171,13 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
   default), `beta` (from `dev`, run by hand) or `nightly` (from `dev`, every night it changed).
   A version names its channel: `x.y.z`, `x.y.z-beta.N`, `x.y.z-nightly.YYYYMMDD.N` (ADR 0045,
   ADR 0046). _Avoid_: track, ring.
-- **Update feed** — one channel's `latest.json`: the newest version, its notes, and per platform
-  the update file's URL and signature. Stable's is the latest GitHub release's; beta's and
-  nightly's live on the fixed `feed-beta` and `feed-nightly` pre-releases. Checked by
-  `scripts/publish.mjs check-feed` before it moves (ADR 0046). Not the [Diff feed]. _Avoid_:
-  manifest, appcast.
+- **Update feed** — one channel's file for one platform (`darwin.json`, `windows.json`): the
+  newest version built for that platform, its notes, and the update file's URL and signature.
+  Each channel's live on its fixed `feed-stable`, `feed-beta` or `feed-nightly` pre-release, so a
+  release built for one platform moves only that platform's file (ADR 0056). Checked by
+  `scripts/publish.mjs check-feed` before it moves (ADR 0046). Builds before 0.16 read the
+  older single `latest.json`, which still carries the Mac entries. Not the [Diff feed].
+  _Avoid_: manifest, appcast.
 - **Channel step-down** — installing an *older* build from a calmer [Update channel] the user moved
   to (nightly → beta, beta → stable), which plain "only newer" would never offer, since semver
   sorts `x.y.z-nightly.…` after `x.y.z-beta.…`. Offered while the running build is noisier than
