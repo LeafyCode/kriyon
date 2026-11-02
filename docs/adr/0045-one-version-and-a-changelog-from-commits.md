@@ -55,8 +55,8 @@ App; and it opens its own release pull request on `main`, which ADR 0026 doesn't
 - **Pre-releases use the same next version**: `<version>-beta.<N>`, N one past the highest
   existing beta tag of that version, and `<version>-nightly.<YYYYMMDD>.<run>`, with the UTC
   date and the CI run number. When no commit calls for a bump, the base is the next patch.
-  Pre-release tags never close a changelog section or move the base. `--write` sets the
-  version in the working tree for a build and commits nothing.
+  Pre-release tags never close a changelog section or move the base. A build sets the
+  version in its working tree and commits nothing (now `release.mjs set-version`, ADR 0056).
 - **v0.12.0 is the first tag**, on `3e8aaa7`, the merge that took the 0.12.0 release into
   `main`. It predates the merge-base rule, and `dev` already holds that commit, so git-cliff
   on `dev` counts from it all the same. Its `package.json` and `CHANGELOG.md` say 0.12.0.
@@ -72,8 +72,9 @@ App; and it opens its own release pull request on `main`, which ADR 0026 doesn't
 - git-cliff is a pinned dev dependency, so the same version runs locally and in CI.
 - The `release` skill walks an agent through the same steps and stops for the person's yes
   before every push, pull request and tag.
-- Phase 6 builds on this (ADR 0046): the release workflow runs the tag checks, and the beta
-  and nightly jobs call `node scripts/release.mjs beta --write` or `… nightly --write`, which print only the
-  version on stdout (`pnpm release` adds a banner of its own). They set `Cargo.lock` by
-  text, so they need no Rust toolchain, but they do need the full git history and tags
-  (`fetch-depth: 0`) to count betas and find the base.
+- Phase 6 builds on this (ADR 0046): the release workflow runs the tag checks and works out
+  the version once with `node scripts/release.mjs beta` or `… nightly`, which print only the
+  version on stdout (`pnpm release` adds a banner of its own). That needs the full git history
+  and tags (`fetch-depth: 0`) to count betas and find the base. Each build job then sets it
+  with `release.mjs set-version`, which sets `Cargo.lock` by text, so it needs no Rust
+  toolchain.

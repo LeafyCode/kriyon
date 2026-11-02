@@ -9,12 +9,11 @@
 //       Every check runs before the branch is made. Nothing is pushed.
 //   pnpm release next               Print the next release version.
 //   pnpm release draft [x.y.z]      Print git-cliff's draft entry.
-//   pnpm release beta [--write]     Print the next beta (x.y.z-beta.N).
-//   pnpm release nightly [--run N] [--date <ISO time>] [--write]
+//   pnpm release beta               Print the next beta (x.y.z-beta.N).
+//   pnpm release nightly [--run N] [--date <ISO time>]
 //       Print the nightly version (x.y.z-nightly.YYYYMMDD.N). N defaults to
 //       $GITHUB_RUN_NUMBER; the date, the UTC day of --date, to now. CI passes
 //       the run's start time, so a re-run after midnight keeps its version.
-//       --write sets that version in the working tree for a build; no commit.
 //       Read the version with `node scripts/release.mjs …`: pnpm prints a
 //       banner of its own on stdout.
 //   node scripts/release.mjs set-version <version>
@@ -283,17 +282,9 @@ const main = () => {
       fetch: { type: "boolean", default: true },
       notes: { type: "string" },
       run: { type: "string", default: process.env.GITHUB_RUN_NUMBER },
-      write: { type: "boolean", default: false },
     },
   });
   const [command, arg] = positionals;
-
-  const printOrWrite = (version) => {
-    if (values.write) {
-      setVersion(version);
-    }
-    console.log(version);
-  };
 
   switch (command) {
     case "next":
@@ -305,7 +296,7 @@ const main = () => {
       );
       break;
     case "beta":
-      printOrWrite(betaVersion(base(), tags()));
+      console.log(betaVersion(base(), tags()));
       break;
     case "nightly":
       if (!values.run) {
@@ -313,9 +304,7 @@ const main = () => {
           "A nightly needs a run number. Pass --run N or set GITHUB_RUN_NUMBER."
         );
       }
-      printOrWrite(
-        nightlyVersion(base(), nightlyDate(values.date), values.run)
-      );
+      console.log(nightlyVersion(base(), nightlyDate(values.date), values.run));
       break;
     case "set-version":
       // Throws on anything that isn't a stable, beta or nightly version.
