@@ -5,6 +5,7 @@ import {
   ISSUES_URL,
   LATEST_DMG_URL,
   LEAFYCODE_NAME,
+  WINDOWS_SETUP_URL,
 } from "../lib/site.ts";
 
 export function Install() {
@@ -23,12 +24,20 @@ export function Install() {
           </span>
           <span className="btn-download-label">DOWNLOAD THE SIGNED DMG</span>
         </a>
+        <a className="btn-download btn-download-light" href={WINDOWS_SETUP_URL}>
+          <span aria-hidden="true" className="btn-download-icon">
+            ↓
+          </span>
+          <span className="btn-download-label">
+            DOWNLOAD FOR WINDOWS <span className="tag-beta">BETA</span>
+          </span>
+        </a>
       </div>
       <dl className="install-facts">
         <dt>HOMEBREW</dt>
         <dd>{BREW_COMMAND}</dd>
         <dt>REQUIRES</dt>
-        <dd>macOS 13+, claude CLI signed in</dd>
+        <dd>macOS 13+ or Windows 10+, claude CLI signed in</dd>
         <dt>LICENCE</dt>
         <dd>Apache-2.0</dd>
         <dt>REPO</dt>
@@ -44,7 +53,7 @@ export function Install() {
           </a>
         </dd>
         <dt>PLATFORM</dt>
-        <dd>macOS today · Windows, with your help</dd>
+        <dd>macOS · Windows (beta)</dd>
         <dt>AUTHORS</dt>
         <dd>{LEAFYCODE_NAME} and contributors</dd>
         <dt>MADE IN</dt>

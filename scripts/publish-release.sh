@@ -22,9 +22,10 @@
 #   4. Move each built platform's feed file on the channel's fixed
 #      pre-release (feed-stable, feed-beta, feed-nightly), plus the Mac's
 #      latest.json on feed-beta and feed-nightly for older builds. Stable is
-#      put on the beta feeds too, so beta users land on it. A stable Windows
-#      build also puts its installer on feed-stable as Kriyon-setup.exe, the
-#      fixed name the website links to.
+#      put on the beta feeds too, so beta users land on it. A Windows build
+#      also puts its installer on its feed releases as Kriyon-setup.exe, a
+#      fixed name: the website links to feed-beta's while Windows is in beta,
+#      and to feed-stable's once it ships stable.
 #   5. Fill in any feed file still missing on any channel, so no build ever
 #      reads a file that isn't there (a failed check). The Mac's comes from
 #      that channel's latest.json, so it names the Mac's real current
@@ -164,7 +165,7 @@ esac
 for feed in "${feeds[@]}"; do
   for platform in "${platforms[@]}"; do
     moved="$(move_feed "$feed" "$platform.json")"
-    if [[ "$feed" == stable && "$platform" == windows && "$moved" == true ]]; then
+    if [[ "$platform" == windows && "$moved" == true ]]; then
       gh release download "$tag" --pattern 'Kriyon_*_x64-setup.exe' --dir "$work/setup" --clobber
       setups=("$work"/setup/*.exe)
       if (( ${#setups[@]} != 1 )); then
@@ -172,8 +173,8 @@ for feed in "${feeds[@]}"; do
         exit 1
       fi
       cp "${setups[0]}" "$work/Kriyon-setup.exe"
-      gh release upload feed-stable "$work/Kriyon-setup.exe" --clobber
-      echo "  ✓ feed-stable/Kriyon-setup.exe is $version's installer" >&2
+      gh release upload "feed-$feed" "$work/Kriyon-setup.exe" --clobber
+      echo "  ✓ feed-$feed/Kriyon-setup.exe is $version's installer" >&2
     fi
   done
   # Builds up to 0.15.0 read latest.json. Stable's is the latest release's,

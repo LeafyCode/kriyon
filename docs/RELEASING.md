@@ -30,10 +30,14 @@ The DMG is uploaded twice: once with its version in the name (`Kriyon_0.13.0_uni
 which the Homebrew cask uses) and once as `Kriyon.dmg`. The website's download button links to
 `https://github.com/LeafyCode/kriyon/releases/latest/download/Kriyon.dmg`, which always serves
 the newest stable Mac release: only a stable release with a Mac build becomes GitHub's latest
-release. The newest stable Windows installer is always
-`https://github.com/LeafyCode/kriyon/releases/download/feed-stable/Kriyon-setup.exe`, which
-publishing puts there; link the website's Windows button to that, not to
-`releases/latest/download/…`, which a Mac-only release would leave without one.
+release. Publishing a Windows build puts its installer on its channel's feed release as
+`Kriyon-setup.exe`, so each channel's newest Windows installer has a fixed link, for example
+`https://github.com/LeafyCode/kriyon/releases/download/feed-beta/Kriyon-setup.exe`. Stable
+lands on `feed-beta` too, so that link is the newest of beta and stable. The website's Windows
+button uses it, with a BETA tag, while Windows is in beta (`WINDOWS_SETUP_URL` in
+`website/src/lib/site.ts`); once Windows ships stable, point it at `feed-stable` and drop the
+tag. Never use `releases/latest/download/…` for Windows: a Mac-only release would leave it
+without one.
 
 Update feeds, which the in-app updater reads (ADR 0047, ADR 0056), one file per platform on
 each channel's fixed pre-release. The app asks for `{{target}}.json`, which the updater fills in
@@ -80,8 +84,8 @@ nobody looks for the other download.
    To change the version, delete the draft and cut again: the version is built into the app.
 4. Run **Publish** on `main` with the tag:
    `gh workflow run publish.yml --ref main -f tag=v0.13.0`. It checks each feed file,
-   publishes (GitHub makes the tag), moves the stable and beta feeds, puts the installer on
-   `feed-stable/Kriyon-setup.exe` and, for a Mac build, bumps the Homebrew tap.
+   publishes (GitHub makes the tag), moves the stable and beta feeds, puts the Windows installer on
+   `feed-stable/Kriyon-setup.exe` and `feed-beta/Kriyon-setup.exe` and, for a Mac build, bumps the Homebrew tap.
 
 ## Ship an urgent fix for one platform
 

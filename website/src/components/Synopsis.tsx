@@ -34,7 +34,7 @@ export function Synopsis() {
         <dl className="facts">
           <dt>PLATFORM</dt>
           <dd>
-            macOS 13+ · Windows: <a href="#contribute">help wanted</a>
+            macOS 13+ · Windows 10+ <a href="#install">(beta)</a>
           </dd>
           <dt>NEEDS</dt>
           <dd>claude CLI, signed in</dd>

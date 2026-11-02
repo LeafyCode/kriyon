@@ -47,7 +47,7 @@ const CELLS: readonly Cell[] = [
     label: "PLATFORM",
     value: "macOS",
     unit: "13+",
-    note: "WINDOWS: HELP WANTED",
+    note: "WINDOWS: BETA",
   },
   {
     label: "MAKER",

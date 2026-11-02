@@ -20,8 +20,8 @@ const STARTS = [
     n: "02",
     tone: "amber",
     href: HELP_WANTED_URL,
-    title: "Help bring it to Windows",
-    text: "Mac only for now. Tauri runs on Windows; the terminal and process layer need hands.",
+    title: "Help test Windows",
+    text: "Windows is in beta. Try it, report what breaks, or pick up a help-wanted issue.",
   },
   {
     n: "03",
@@ -44,7 +44,7 @@ export function Contribute() {
               {LEAFYCODE_NAME}
             </a>{" "}
             in Sri Lanka, and it gets better with every pull request. Fix a bug,
-            write a test, sharpen the docs, or help bring it to Windows.
+            write a test, sharpen the docs, or help test the Windows beta.
           </p>
         </div>
         <div className="term">

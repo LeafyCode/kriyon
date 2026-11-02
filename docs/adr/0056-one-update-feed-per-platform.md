@@ -54,8 +54,10 @@ Other desktop apps keep platforms apart:
   from that channel's `latest.json`, and any missing `windows.json` with the same version and no
   entries. A missing file would be a 404, which the updater reports as a failed check, for
   example when someone on a new beta switches to stable before the first new stable ships.
-- **The Windows download link** is `feed-stable/Kriyon-setup.exe`, put there when a stable
-  Windows build is published, since `releases/latest` may be a Mac-only release.
+- **The Windows download link** is a fixed `Kriyon-setup.exe` on a feed release, put there
+  whenever a Windows build moves that feed, since `releases/latest` may be a Mac-only release.
+  The website links to `feed-beta`'s, marked BETA, while Windows is in beta, and to
+  `feed-stable`'s once it ships stable.
 
 ## Consequences
 

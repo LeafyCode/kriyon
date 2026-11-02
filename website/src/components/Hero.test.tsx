@@ -6,6 +6,7 @@ const LEAFY_CODE_INTERNATIONAL = /LEAFY CODE INTERNATIONAL/;
 const SANDBOX_CLAIM = /desktop app|sandbox/i;
 const PLATFORM = /mac|windows|linux/i;
 const DOWNLOAD = /DOWNLOAD FOR MAC/;
+const WINDOWS_BETA = /DOWNLOAD FOR WINDOWS\s*BETA/;
 
 test("the headline is the tagline, with no platform in it", () => {
   // Kriyon is Mac-only today but not by design; the tagline must outlive that.
@@ -34,5 +35,14 @@ test("the download button fetches the newest DMG, whatever its version", () => {
 
   expect(download.getAttribute("href")).toBe(
     "https://github.com/LeafyCode/kriyon/releases/latest/download/Kriyon.dmg"
+  );
+});
+
+test("the Windows button fetches the newest beta installer and says it is beta", () => {
+  render(<Hero />);
+  const download = screen.getByRole("link", { name: WINDOWS_BETA });
+
+  expect(download.getAttribute("href")).toBe(
+    "https://github.com/LeafyCode/kriyon/releases/download/feed-beta/Kriyon-setup.exe"
   );
 });

@@ -821,6 +821,14 @@ fieldset {
   background: var(--amber-tint);
 }
 
+/* Marks a download that is still a beta, inside the button's label. */
+.tag-beta {
+  padding: 0 6px;
+  margin-left: 8px;
+  color: var(--amber-ink);
+  background: var(--amber-tint);
+}
+
 .hero-aside {
   display: grid;
   flex: 0 1 360px;

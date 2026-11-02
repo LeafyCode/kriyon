@@ -37,6 +37,11 @@ export const LATEST_RELEASE_URL = `${RELEASES_URL}/latest`;
    its DMG as `Kriyon.dmg` (.github/workflows/release.yml), and GitHub's
    latest/download path serves that name from the newest stable release. */
 export const LATEST_DMG_URL = `${RELEASES_URL}/latest/download/Kriyon.dmg`;
+/* The newest Windows installer, beta or stable: publishing a Windows build
+   puts its setup.exe on the feed-beta release as `Kriyon-setup.exe`
+   (scripts/publish-release.sh), and stable lands there too. Once Windows
+   ships stable, point this at feed-stable instead and drop the BETA tag. */
+export const WINDOWS_SETUP_URL = `${RELEASES_URL}/download/feed-beta/Kriyon-setup.exe`;
 export const CHANGELOG_URL = `${GITHUB_URL}/blob/main/CHANGELOG.md`;
 export const ISSUES_URL = `${GITHUB_URL}/issues`;
 export const DISCUSSIONS_URL = `${GITHUB_URL}/discussions`;
