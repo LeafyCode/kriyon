@@ -17,6 +17,10 @@
 //       --write sets that version in the working tree for a build; no commit.
 //       Read the version with `node scripts/release.mjs …`: pnpm prints a
 //       banner of its own on stdout.
+//   node scripts/release.mjs set-version <version>
+//       Set a version the release workflow already worked out in the working
+//       tree, for a build; no commit. Every build job of a run sets the same
+//       one, so they cannot disagree.
 //   node scripts/release.mjs released [--no-fetch]
 //       For the release workflow, once the release PR reaches main: check
 //       that main took what the entry lists and print the commit to tag
@@ -312,6 +316,11 @@ const main = () => {
       printOrWrite(
         nightlyVersion(base(), nightlyDate(values.date), values.run)
       );
+      break;
+    case "set-version":
+      // Throws on anything that isn't a stable, beta or nightly version.
+      channelOf(arg ?? "");
+      setVersion(arg);
       break;
     case "released":
       released(values.fetch);

@@ -69,7 +69,6 @@ jobs:
       version: ${{ steps.decide.outputs.version }}
       tag: ${{ steps.decide.outputs.tag }}
       public: ${{ steps.visibility.outputs.public }}
-      started: ${{ steps.visibility.outputs.started }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -138,8 +137,7 @@ jobs:
               echo "::notice::No new commits on dev since the last nightly."
               build=false
             fi
-            # The same commands each build job runs with --write, on the same
-            # tags and start time, so every job builds this version.
+            # Each build job sets this version with release.mjs set-version.
             case "$channel" in
               beta) version="$(node scripts/release.mjs beta)" ;;
               nightly) version="$(node scripts/release.mjs nightly --date "$STARTED")" ;;
@@ -273,18 +271,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       - name: Set the version
-        env:
-          STARTED: ${{ needs.prepare.outputs.started }}
-        run: |
-          case "$CHANNEL" in
-            stable) version="$(node -p 'require("./package.json").version')" ;;
-            beta) version="$(node scripts/release.mjs beta --write)" ;;
-            nightly) version="$(node scripts/release.mjs nightly --date "$STARTED" --write)" ;;
-          esac
-          if [[ "$version" != "$VERSION" ]]; then
-            echo "::error::The Mac build would be $version, but this release is $VERSION."
-            exit 1
-          fi
+        run: node scripts/release.mjs set-version "$VERSION"
 
       - name: Write the App Store Connect key
         env:
@@ -388,10 +375,12 @@ jobs:
           node scripts/publish.mjs check-feed "$RUNNER_TEMP/darwin.json" --version "$VERSION"
           gh release upload "$TAG" "$RUNNER_TEMP/darwin.json" --clobber
 
-      # A failed Mac build takes its files back out, so the release can still
-      # go out for Windows without a half-made Mac download in it.
+      # A failed or cancelled Mac build takes its files back out, so the
+      # release can still go out for Windows without a half-made Mac download
+      # in it. A job that times out may not get here; publishing drops any
+      # platform without its feed file anyway (publish-release.sh).
       - name: Remove the Mac files from the draft
-        if: ${{ failure() }}
+        if: ${{ failure() || cancelled() }}
         run: scripts/drop-platform.sh "$TAG" darwin
 
       - name: Remove the App Store Connect key
@@ -436,18 +425,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       - name: Set the version
-        env:
-          STARTED: ${{ needs.prepare.outputs.started }}
-        run: |
-          case "$CHANNEL" in
-            stable) version="$(node -p 'require("./package.json").version')" ;;
-            beta) version="$(node scripts/release.mjs beta --write)" ;;
-            nightly) version="$(node scripts/release.mjs nightly --date "$STARTED" --write)" ;;
-          esac
-          if [[ "$version" != "$VERSION" ]]; then
-            echo "::error::The Windows build would be $version, but this release is $VERSION."
-            exit 1
-          fi
+        run: node scripts/release.mjs set-version "$VERSION"
 
       - name: Build the installer and upload it to the draft
         id: tauri
@@ -475,12 +453,12 @@ jobs:
             echo "::error::Tauri built $BUILT, but this release is $VERSION."
             exit 1
           fi
-          setups=("$BUNDLE"/nsis/*-setup.exe)
-          if (( ${#setups[@]} != 1 )) || [[ ! -f "${setups[0]}" || ! -f "${setups[0]}.sig" ]]; then
-            echo "::error::Expected one setup.exe with its .sig, found: ${setups[*]}"
+          setup="$(node scripts/publish.mjs windows-installer "$BUNDLE"/nsis/*)"
+          if [[ ! -f "$setup.sig" ]]; then
+            echo "::error::$setup has no .sig next to it."
             exit 1
           fi
-          echo "path=${setups[0]}" >> "$GITHUB_OUTPUT"
+          echo "path=$setup" >> "$GITHUB_OUTPUT"
 
       - name: Record build provenance
         if: ${{ needs.prepare.outputs.public == 'true' }}
@@ -496,12 +474,10 @@ jobs:
         env:
           SETUP: ${{ steps.setup.outputs.path }}
         run: |
+          names="$(gh release view "$TAG" --json assets --jq '.assets[].name')"
+          name="$(xargs node scripts/publish.mjs windows-installer <<<"$names")"
           url="$(gh release view "$TAG" --json assets \
-            --jq '.assets[] | select(.name | endswith("-setup.exe")) | .apiUrl')"
-          if [[ -z "$url" || "$url" == *$'\n'* ]]; then
-            echo "::error::Expected one setup.exe on $TAG, found: ${url:-none}"
-            exit 1
-          fi
+            --jq ".assets[] | select(.name == \"$name\") | .apiUrl")"
           gh release view "$TAG" --json body --jq .body > "$RUNNER_TEMP/notes.md"
           node scripts/publish.mjs windows-feed --version "$VERSION" \
             --url "$url" \
@@ -510,10 +486,12 @@ jobs:
           node scripts/publish.mjs check-feed "$RUNNER_TEMP/windows.json" --version "$VERSION"
           gh release upload "$TAG" "$RUNNER_TEMP/windows.json" --clobber
 
-      # A failed Windows build takes its files back out, so the release can
-      # still go out for the Mac without a half-made installer in it.
+      # A failed or cancelled Windows build takes its files back out, so the
+      # release can still go out for the Mac without a half-made installer in
+      # it. A job that times out may not get here; publishing drops any
+      # platform without its feed file anyway (publish-release.sh).
       - name: Remove the Windows files from the draft
-        if: ${{ failure() }}
+        if: ${{ failure() || cancelled() }}
         run: scripts/drop-platform.sh "$TAG" windows
 
   publish:
