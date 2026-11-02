@@ -21,8 +21,17 @@ function psQuote(value: string): string {
  * backslashes ending the prompt are doubled so they can't escape the closing
  * quote PowerShell adds.
  */
-const PS_NATIVE_ARG =
+const PS_ESCAPED_ARG =
   "(($p.TrimEnd(\"`r`n\") -replace '(\\\\*)\"', '$1$1\\\"') -replace '(\\\\+)$', '$1$1')";
+
+/**
+ * The seed as `claude`'s argument. pwsh 7.3+ (a Mac or Linux user's `$SHELL`
+ * can be pwsh) escapes a native argument's quotes itself, which
+ * `$PSNativeCommandArgumentPassing` reports as `Standard`; escaping them again
+ * would hand claude a literal backslash. Windows PowerShell 5.1, which Kriyon
+ * hosts on Windows, has no such variable, so it gets {@link PS_ESCAPED_ARG}.
+ */
+const PS_NATIVE_ARG = `$(if ($PSNativeCommandArgumentPassing -in $null, 'Legacy') { ${PS_ESCAPED_ARG} } else { $p.TrimEnd("\`r\`n") })`;
 
 /**
  * The line typed into a fresh session's shell to start `claude`, ending in a
