@@ -10,49 +10,24 @@ import { thisComputer } from "../platform/os.ts";
 import { ON_OFF_OPTIONS } from "../settings/settingsOptions.ts";
 import { useIntegration } from "../state/integration.ts";
 import { type SessionView, useLayout } from "../state/layout.ts";
-import { button, card, overlayPanel } from "../theme/recipes.ts";
+import { button, card } from "../theme/recipes.ts";
 import { tokens } from "../theme/tokens.ts";
 import { Segmented } from "../ui/Segmented.tsx";
 import { companionHint, hooksHint, liveUsageHint } from "./integrationCopy.ts";
+import {
+  actionsStyle,
+  errorStyle,
+  pageStyle,
+  panelStyle,
+  textStyle,
+  titleStyle,
+} from "./screenStyles.ts";
 
 /**
  * The first-run consent screen: plainly what Kriyon adds to Claude Code, before
  * any of it is written. Continue gives consent with the choices made; Cancel
  * quits, leaving Claude Code exactly as it was.
  */
-
-// The panel centres itself with auto margins, not align-items: a flex-centred
-// child taller than the window overflows upward, past where it can scroll.
-const pageStyle: CSSProperties = {
-  background: tokens.color.chrome.window,
-  display: "flex",
-  height: "100%",
-  overflowY: "auto",
-  padding: tokens.space.xl,
-};
-
-const panelStyle: CSSProperties = {
-  ...overlayPanel(),
-  gap: tokens.space.lg,
-  margin: "auto",
-  maxWidth: "560px",
-  padding: tokens.space.xl,
-  width: "100%",
-};
-
-const titleStyle: CSSProperties = {
-  color: tokens.color.ink.bright,
-  fontSize: "18px",
-  fontWeight: 700,
-  margin: 0,
-};
-
-const textStyle: CSSProperties = {
-  color: tokens.color.ink.muted,
-  fontSize: "12.5px",
-  lineHeight: 1.55,
-  margin: 0,
-};
 
 const itemStyle: CSSProperties = {
   ...card(),
@@ -79,17 +54,6 @@ const tagStyle: CSSProperties = {
   color: tokens.color.ink.muted,
   fontSize: "11.5px",
   whiteSpace: "nowrap",
-};
-
-const actionsStyle: CSSProperties = {
-  display: "flex",
-  gap: tokens.space.sm,
-  justifyContent: "flex-end",
-};
-
-const errorStyle: CSSProperties = {
-  ...textStyle,
-  color: tokens.color.status.error,
 };
 
 /** One thing Kriyon adds: its name, its switch (or why there is none), what it does. */

@@ -4,6 +4,14 @@ Boot, the per-session runtime, memory and process limits, usage numbers, stoppin
 
 Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`](../../CONTEXT.md).
 
+- **Claude CLI check** (`claude_cli.rs`, `state/claudeCli.ts`) — at launch, whether the
+  `claude` command a new session would run is installed: looked up on the PATH a new session's
+  shell gets, read fresh (the [Shell PATH] probed again on macOS; on Windows the PATH from the
+  person's environment settings), so "Check again" sees a `claude` installed a minute ago. Only
+  when nothing is found does the app show the install screen, after the welcome screen, with
+  Claude Code's own recommended install command for that computer; the active session doesn't
+  start meanwhile. A PATH that can't be read counts as unknown, never missing. Continue anyway
+  hides the screen for that run. _Avoid_: dependency check, prerequisites.
 - **Boot phase** (`BootPhase`) — where a [Session] is in launching `claude`: `idle | launching |
   booting | resumeFailed | live`. `launching` covers the pty opening and the launch being
   written. A launch from rest enters it (`open`) and always leaves it, to `booting` once
