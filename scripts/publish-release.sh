@@ -25,7 +25,16 @@
 #      put on the beta feeds too, so beta users land on it. A stable Windows
 #      build also puts its installer on feed-stable as Kriyon-setup.exe, the
 #      fixed name the website links to.
-#   5. Keep only the newest nightlies.
+#   5. Fill in any feed file still missing on any channel, so no build ever
+#      reads a file that isn't there (a failed check). The Mac's comes from
+#      that channel's latest.json, so it names the Mac's real current
+#      version; the first run seeds feed-stable/darwin.json with 0.15.0.
+#      Windows, until its first build reaches the channel, gets the same
+#      version with no entries, which the app reads as no update. A later
+#      build replaces a seed like any older feed file.
+#   6. Keep only the newest nightlies.
+#   7. From the fourth stable release after 0.15.0, warn that latest.json
+#      (step 4's legacy feed) can probably go (ADR 0056).
 #
 # Safe to run again: a release already published skips step 3, so a run that
 # failed after publishing can still finish moving the feeds. A feed only moves
@@ -111,16 +120,21 @@ else
   echo "  ✓ Published $tag" >&2
 fi
 
-# Put $work/<file> on the feed-<feed> pre-release, unless the copy there names
-# a newer version. Prints true when it moved.
-move_feed() {
-  local feed="feed-$1" file="$2"
-  if ! gh release view "$feed" >/dev/null 2>&1; then
-    gh release create "$feed" --prerelease --latest=false \
+# Make the feed-<feed> pre-release if there is none yet.
+ensure_feed_release() {
+  if ! gh release view "feed-$1" >/dev/null 2>&1; then
+    gh release create "feed-$1" --prerelease --latest=false \
       --target "$(git rev-parse HEAD)" \
       --title "Kriyon $1 update feed" \
       --notes "Holds only the $1 channel's update feeds, one file per platform. Downloads are on each version's own release." >&2
   fi
+}
+
+# Put $work/<file> on the feed-<feed> pre-release, unless the copy there names
+# a newer version. Prints true when it moved.
+move_feed() {
+  local feed="feed-$1" file="$2"
+  ensure_feed_release "$1"
   # A new feed release has no files yet; any other failure stops here.
   local current_assets
   current_assets="$(gh release view "$feed" --json assets --jq '.assets[].name')"
@@ -169,6 +183,39 @@ for feed in "${feeds[@]}"; do
   fi
 done
 
+# Fill in each channel's missing feed files from the Mac's latest.json there:
+# stable's is the latest release's, the others' are on their feed release.
+for feed in stable beta nightly; do
+  ensure_feed_release "$feed"
+  present="$(gh release view "feed-$feed" --json assets --jq '.assets[].name')"
+  missing=()
+  for platform in darwin windows; do
+    if ! grep -qx "$platform.json" <<<"$present"; then
+      missing+=("$platform")
+    fi
+  done
+  if (( ${#missing[@]} == 0 )); then
+    continue
+  fi
+  seeds="$work/seed-$feed"
+  mkdir -p "$seeds"
+  # No tag downloads from GitHub's latest release.
+  from=()
+  if [[ "$feed" != stable ]]; then
+    from=("feed-$feed")
+  fi
+  if ! gh release download ${from[@]+"${from[@]}"} --pattern latest.json --dir "$seeds" --clobber; then
+    echo "::warning::feed-$feed has no latest.json to seed ${missing[*]} from; left missing." >&2
+    continue
+  fi
+  for platform in "${missing[@]}"; do
+    node scripts/publish.mjs platform-feed "$seeds/latest.json" --platform "$platform" \
+      >"$seeds/$platform.json"
+    gh release upload "feed-$feed" "$seeds/$platform.json" >&2
+    echo "  ✓ Seeded feed-$feed/$platform.json from its latest.json" >&2
+  done
+done
+
 if [[ "$channel" == nightly ]]; then
   gh release list --limit 200 --exclude-drafts --json tagName --jq '.[].tagName' \
     | xargs node scripts/publish.mjs stale-nightlies \
@@ -176,4 +223,20 @@ if [[ "$channel" == nightly ]]; then
         gh release delete "$old" --cleanup-tag --yes
         echo "  ✓ Deleted the old nightly $old" >&2
       done
+fi
+
+# latest.json only serves builds up to 0.15.0. Once four stable releases have
+# followed it, nag in the run summary to check whether it can go (ADR 0056).
+if [[ "$channel" == stable ]]; then
+  after=0
+  for t in $(gh release list --limit 200 --exclude-drafts --exclude-pre-releases \
+    --json tagName --jq '.[].tagName'); do
+    v="${t#v}"
+    if [[ "$v" != 0.15.0 && "$(printf '%s\n' 0.15.0 "$v" | sort -V | tail -n1)" == "$v" ]]; then
+      after=$((after + 1))
+    fi
+  done
+  if (( after >= 4 )); then
+    echo "::warning::$after stable releases since 0.15.0: time to check whether latest.json (the feed for 0.15.0 and older) can be dropped. See ADR 0056." >&2
+  fi
 fi

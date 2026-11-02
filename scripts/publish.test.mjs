@@ -389,6 +389,10 @@ describe("the feed file", () => {
     assert.deepEqual(platformFeed(both, "windows"), windows);
   });
 
+  test("a Mac-only feed gives Windows a file with no entries, read as no update", () => {
+    assert.deepEqual(platformFeed(mac, "windows"), { ...mac, platforms: {} });
+  });
+
   test("the Windows feed lists the setup.exe under both names the updater looks for", () => {
     assert.deepEqual(
       windowsFeed({

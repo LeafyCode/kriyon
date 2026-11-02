@@ -554,6 +554,17 @@ mod tests {
         assert!(!for_this_platform(&release_for(&[])));
     }
 
+    /// The file `publish-release.sh` seeds for a platform no build has
+    /// reached yet: the channel's version with no entries.
+    #[test]
+    fn a_seeded_feed_with_no_entries_parses_and_is_no_update() {
+        let seed: tauri_plugin_updater::RemoteRelease = serde_json::from_str(
+            r#"{"version":"0.15.0","notes":"","pub_date":"2026-11-01T10:13:24Z","platforms":{}}"#,
+        )
+        .expect("the seeded feed parses");
+        assert!(!for_this_platform(&seed));
+    }
+
     /// An app with no updater config, as debug builds have: no check ever
     /// reaches the network.
     fn mock_app() -> tauri::App<tauri::test::MockRuntime> {

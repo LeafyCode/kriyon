@@ -45,12 +45,19 @@ as `darwin.json` or `windows.json`:
   here too, so beta users land on it.
 - Nightly: `…/releases/download/feed-nightly/darwin.json` (and `windows.json`)
 
+Every publish run also fills in any of these six files that is still missing, so no build ever
+reads a file that isn't there, which would show as a failed check. A missing `darwin.json` is
+made from that channel's `latest.json`; the first run puts 0.15.0 on `feed-stable`. A missing
+`windows.json` gets the same version with no entries, which the app reads as no update, until
+the first Windows build for that channel replaces it.
+
 Builds up to 0.15.0 read the older single `latest.json`, which carries the Mac entries only:
 stable's from `releases/latest/download/latest.json`, beta's and nightly's from
 `feed-beta/latest.json` and `feed-nightly/latest.json`. Publishing still writes those for every
 Mac build, so those Macs keep updating, and their first update moves them to the new feeds.
 Stop writing them (and delete them from the feed releases) once nobody runs 0.15.0 or older;
-until then they cost nothing.
+until then they cost nothing. From the fourth stable release after 0.15.0, Publish leaves a
+warning in its run summary as a reminder to check.
 
 ### Versions when only one platform ships
 

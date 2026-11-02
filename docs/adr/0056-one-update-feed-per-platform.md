@@ -50,6 +50,10 @@ Other desktop apps keep platforms apart:
   build, and publishing copies it to `feed-beta` and `feed-nightly`. Their first update moves
   them to the new feeds. No Windows build has shipped with the old endpoint, so Windows has no
   legacy file.
+- **No feed file is ever missing.** Each publish fills in any channel's missing `darwin.json`
+  from that channel's `latest.json`, and any missing `windows.json` with the same version and no
+  entries. A missing file would be a 404, which the updater reports as a failed check, for
+  example when someone on a new beta switches to stable before the first new stable ships.
 - **The Windows download link** is `feed-stable/Kriyon-setup.exe`, put there when a stable
   Windows build is published, since `releases/latest` may be a Mac-only release.
 
@@ -59,6 +63,7 @@ Other desktop apps keep platforms apart:
 - Two more files per channel to keep in step, and the publish script and its tests grew.
 - Version numbers can skip on a platform; the changelog entry says which platform a version is
   for.
-- `latest.json` is dead weight once no 0.15.0 or older build is left; drop it then.
+- `latest.json` is dead weight once no 0.15.0 or older build is left; drop it then. From the
+  fourth stable release after 0.15.0, Publish warns in its run summary as a reminder.
 - A small update server (rollbacks, staged rollouts) stays possible later: the app's endpoint
   is the only thing that would change.
