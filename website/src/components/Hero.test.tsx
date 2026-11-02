@@ -9,7 +9,7 @@ const DOWNLOAD = /DOWNLOAD FOR MAC/;
 const WINDOWS_BETA = /DOWNLOAD FOR WINDOWS\s*BETA/;
 
 test("the headline is the tagline, with no platform in it", () => {
-  // Kriyon is Mac-only today but not by design; the tagline must outlive that.
+  // The platforms Kriyon runs on change; the tagline must outlive that.
   render(<Hero />);
   const h1 = screen.getByRole("heading", { level: 1 });
 

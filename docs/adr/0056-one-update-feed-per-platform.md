@@ -17,15 +17,10 @@ file for every platform ties them together:
 - The file holds only the newest version. Even with the missing-platform case handled, a
   Windows-only 0.16.2 would hide a Mac-only 0.16.1 from Macs still on 0.16.0.
 
-Other desktop apps keep platforms apart:
-
-- electron-builder writes `latest.yml` (Windows), `latest-mac.yml` and `latest-linux.yml`, one
-  per platform.
-- VS Code asks its update service per platform (`/api/update/<platform>/<quality>/<commit>`),
-  and Zed passes the OS and arch to its server.
-- Tauri apps Yaak (`update.yaak.app/check/{{target}}/{{arch}}/{{current_version}}`) and
-  GitButler (`…/releases/nightly/{{target}}-{{arch}}/{{current_version}}`) use the updater's
-  endpoint templating, which the Tauri docs describe for exactly this.
+The common practice for desktop updaters is to keep platforms apart: one static feed file per
+platform, or an update server asked per platform and architecture. The Tauri updater supports
+both through endpoint templating (`{{target}}`, `{{arch}}`, `{{current_version}}`), which its
+docs describe for exactly this.
 
 ## Decision
 
