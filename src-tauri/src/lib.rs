@@ -3,6 +3,7 @@ pub mod activity_store;
 pub mod appkit_guard;
 pub mod attachment_cmd;
 pub mod bootstrap_cmd;
+pub mod claude_cli;
 pub mod commands;
 pub mod completion_cmd;
 pub mod daemon_client;
@@ -413,6 +414,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             greet,
             activity_rt::activity_turns,
+            claude_cli::find_claude_cli,
             activity_rt::activity_changed_paths,
             activity_rt::activity_step,
             activity_rt::activity_stats,

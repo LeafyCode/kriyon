@@ -21,6 +21,7 @@ import {
 } from "./state/actions.ts";
 import { installSessionListeners } from "./state/backendListeners.ts";
 import { installBridgeMirrors } from "./state/bridgeMirrors.ts";
+import { needsClaudeInstall, useClaudeCli } from "./state/claudeCli.ts";
 import { installCommandCenterListeners } from "./state/commandCenterListeners.ts";
 import { setHomeFolder } from "./state/homeRelative.ts";
 import { useIntegration } from "./state/integration.ts";
@@ -63,6 +64,7 @@ import { SessionLoadingOverlay } from "./ui/SessionLoadingOverlay.tsx";
 import { SessionResumeFailedOverlay } from "./ui/SessionResumeFailedOverlay.tsx";
 import { installStrayCaretGuard } from "./ui/strayCaret.ts";
 import { showToast } from "./ui/Toast.tsx";
+import { InstallClaudeScreen } from "./welcome/InstallClaudeScreen.tsx";
 import { REFUSED_TOAST } from "./welcome/integrationCopy.ts";
 import { WelcomeScreen } from "./welcome/WelcomeScreen.tsx";
 
@@ -249,6 +251,7 @@ function App() {
   const themeId = useLayout((state) => state.layout.themeId);
   // Nothing starts — no session, no Claude Code change — until the welcome
   // screen's consent (the [Integration]).
+  const claudeMissing = useClaudeCli(needsClaudeInstall);
   const consented = useIntegration(
     (state) => state.status?.prefs.consented === true
   );
@@ -288,6 +291,8 @@ function App() {
       })
     );
     ignore(useIntegration.getState().load());
+    // The [Claude CLI check]: the install screen shows only if it finds no `claude`.
+    ignore(useClaudeCli.getState().check());
     const stopIntegrationRefused = onEvent(onIntegrationRefused, (status) => {
       useIntegration.getState().replace(status);
       showToast(REFUSED_TOAST, "error");
@@ -353,13 +358,19 @@ function App() {
   // switch-away: the boot overlay and its timeout belong to the session, not to
   // this effect's lifetime (see launchActiveSession).
   useEffect(() => {
-    if (activeSessionId && consented) {
+    // Not while the install screen shows: with no `claude`, the launch line
+    // would only print "command not found". Check again launches it.
+    if (activeSessionId && consented && !claudeMissing) {
       ignore(launchActiveSession(activeSessionId));
     }
-  }, [activeSessionId, consented]);
+  }, [activeSessionId, consented, claudeMissing]);
 
   if (!consented) {
     return <WelcomeScreen />;
+  }
+
+  if (claudeMissing) {
+    return <InstallClaudeScreen />;
   }
 
   const hasSessions = sessionIds.length > 0;

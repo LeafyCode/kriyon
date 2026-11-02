@@ -63,6 +63,21 @@ pub fn user_path() -> Option<&'static str> {
     .as_deref()
 }
 
+/// The PATH a new session's shell starts with, read now rather than once per
+/// run, so a program installed while Kriyon is open is seen: on macOS the
+/// person's shell PATH probed again (`None` when it can't be read); on Windows
+/// the PATH from their environment settings, which the PTY library reads for
+/// every new session.
+pub fn session_path() -> Option<std::ffi::OsString> {
+    if cfg!(windows) {
+        return portable_pty::CommandBuilder::new("claude")
+            .get_env("PATH")
+            .map(std::ffi::OsStr::to_os_string);
+    }
+    let shell = user_shell(std::env::var("SHELL").ok().as_deref());
+    probe(&shell, PROBE_TIMEOUT).map(std::ffi::OsString::from)
+}
+
 /// Start reading the shell PATH in the background, so the first git call or
 /// worktree setup does not wait for the person's shell to start.
 pub fn warm() {

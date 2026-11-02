@@ -1378,6 +1378,24 @@ export function setAutoSleep(
   return invoke("set_auto_sleep", { enabled, afterSecs });
 }
 
+/**
+ * What the [Claude CLI check] found: `claude` on the PATH a new session gets,
+ * nothing there, or a PATH that couldn't be read. Mirrors Rust `ClaudeCli`.
+ */
+export type ClaudeCli =
+  | { state: "found"; path: string }
+  | { state: "missing" }
+  | { state: "unknown" };
+
+/** Run the [Claude CLI check]. Outside the Tauri webview there is no PATH to
+ * read, so it reports unknown rather than ask for an install. */
+export function findClaudeCli(): Promise<ClaudeCli> {
+  if (!hasTauri()) {
+    return Promise.resolve({ state: "unknown" });
+  }
+  return invoke<ClaudeCli>("find_claude_cli");
+}
+
 /** Resolve the user's home directory as an absolute path string. */
 export function homeDir(): Promise<string> {
   return invoke<string>("home_dir");
