@@ -10,22 +10,43 @@
 import { createHash, createPublicKey, verify } from "node:crypto";
 import { channelOf, compareVersions, isNightly } from "./release-lib.mjs";
 
+const SIG_SUFFIX = /\.sig$/;
+/** The Windows installer, the NSIS setup.exe, by file name. */
+const WINDOWS_INSTALLER = /-setup\.exe$/;
+const MAC_ASSET =
+  /^(darwin\.json|latest\.json|Kriyon(_.*)?\.dmg|.*\.app\.tar\.gz(\.sig)?)$/;
+
 /**
- * The entries each platform's feed file must have (ADR 0056): one per Mac
- * chip for the universal build, and the Windows x64 installer. The keys are
- * the updater's `{{target}}` values, which also name the files (darwin.json,
- * windows.json). A missing entry leaves those users on an old version.
+ * Each platform Kriyon releases for, keyed by the updater's `{{target}}`
+ * value, which also names its feed file (darwin.json, windows.json):
+ *
+ * - `entries`: what its feed file must have (ADR 0056), one per Mac chip for
+ *   the universal build and the Windows x64 installer. A missing entry leaves
+ *   those users on an old version.
+ * - `uploads`: whether a release file is one its build uploads. A failed
+ *   build removes its own files from the draft by this rule, and a release
+ *   published without a platform drops that platform's.
+ *
+ * One table, so a new platform can't have one without the other.
  */
-const REQUIRED_ENTRIES = {
-  darwin: ["darwin-aarch64", "darwin-x86_64"],
-  windows: ["windows-x86_64"],
+const PLATFORM_RULES = {
+  darwin: {
+    entries: ["darwin-aarch64", "darwin-x86_64"],
+    uploads: (name) => MAC_ASSET.test(name),
+  },
+  windows: {
+    entries: ["windows-x86_64"],
+    uploads: (name) =>
+      name === "windows.json" ||
+      WINDOWS_INSTALLER.test(name.replace(SIG_SUFFIX, "")),
+  },
 };
 
 /**
- * The platforms Kriyon releases for, by `{{target}}` name. The release
- * scripts ask `publish.mjs platforms` for this list instead of writing it out.
+ * The platforms Kriyon releases for. The release scripts ask
+ * `publish.mjs platforms` for this list instead of writing it out.
  */
-export const PLATFORMS = Object.keys(REQUIRED_ENTRIES);
+export const PLATFORMS = Object.keys(PLATFORM_RULES);
 
 /** The feed file builds up to 0.15.0 read; it carries the Mac entries only. */
 const LEGACY_FEED = "latest.json";
@@ -34,7 +55,7 @@ const isOf = (key, platform) =>
   key === platform || key.startsWith(`${platform}-`);
 
 const requiredEntries = (platform) => {
-  const required = REQUIRED_ENTRIES[platform];
+  const required = PLATFORM_RULES[platform]?.entries;
   if (!required) {
     throw new Error(`"${platform}" is not a platform Kriyon releases for`);
   }
@@ -43,7 +64,6 @@ const requiredEntries = (platform) => {
 
 const PATH_SEPARATOR = /[\\/]/;
 const FEED_FILE = /^(.+)\.json$/;
-const SIG_SUFFIX = /\.sig$/;
 
 /** The platform a feed file is for, from its name (`…/windows.json`). */
 export const feedPlatform = (file) => {
@@ -52,14 +72,11 @@ export const feedPlatform = (file) => {
     return "darwin";
   }
   const platform = FEED_FILE.exec(name)?.[1];
-  if (platform && Object.hasOwn(REQUIRED_ENTRIES, platform)) {
+  if (platform && Object.hasOwn(PLATFORM_RULES, platform)) {
     return platform;
   }
   throw new Error(`${file} is not a platform's feed file`);
 };
-
-/** The Windows installer, the NSIS setup.exe, by file name. */
-const WINDOWS_INSTALLER = /-setup\.exe$/;
 
 /**
  * The one Windows installer among `files` (names or paths), as given. The
@@ -80,26 +97,9 @@ export const windowsInstaller = (files) => {
   return found[0];
 };
 
-const MAC_ASSET =
-  /^(darwin\.json|latest\.json|Kriyon(_.*)?\.dmg|.*\.app\.tar\.gz(\.sig)?)$/;
-
-/** The release files each platform's build uploads, by name. */
-const PLATFORM_ASSETS = {
-  darwin: (name) => MAC_ASSET.test(name),
-  windows: (name) =>
-    name === "windows.json" ||
-    WINDOWS_INSTALLER.test(name.replace(SIG_SUFFIX, "")),
-};
-
-/**
- * The platform whose build uploaded the release file `name`, or undefined.
- * A failed build removes its own files from the draft by this rule, and a
- * release published for one platform only drops the other's.
- */
+/** The platform whose build uploaded the release file `name`, or undefined. */
 export const assetPlatform = (name) =>
-  Object.keys(PLATFORM_ASSETS).find((platform) =>
-    PLATFORM_ASSETS[platform](name)
-  );
+  PLATFORMS.find((platform) => PLATFORM_RULES[platform].uploads(name));
 
 /** `feed` with only `platform`'s entries, for that platform's own file. */
 export const platformFeed = (feed, platform) => {
