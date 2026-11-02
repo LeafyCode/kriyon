@@ -8,11 +8,14 @@
 #      its feed file (darwin.json, windows.json) only once all its checks
 #      passed, so a file in the draft means that platform is ready. A release
 #      needs at least one. Given a platform, the draft is published for that
-#      one only: the other's files are taken out first
-#      (scripts/drop-platform.sh), so its users are not offered this version.
+#      one only.
 #   2. Check each of those feed files (scripts/publish.mjs check-feed), and
 #      the Mac's latest.json, the feed builds up to 0.15.0 read. Nothing below
-#      runs unless they pass, so no feed ever names a bad file.
+#      runs unless they pass, so no feed ever names a bad file. Then take
+#      every other platform's files out of the draft
+#      (scripts/drop-platform.sh): one not chosen, or one whose build never
+#      finished, even a build that timed out before it could clean up. Its
+#      users are not offered this version, and nothing half-made ships.
 #   3. Publish the draft. GitHub makes the tag now, on the draft's commit.
 #      Stable becomes GitHub's "latest release" only when it has a Mac build
 #      and is the newest stable: older Mac builds read
@@ -52,13 +55,13 @@ if (( $# < 1 || $# > 2 )); then
 fi
 tag="$1"
 only="${2:-}"
-case "$only" in
-  "" | darwin | windows) ;;
-  *)
-    echo "✗ \"$only\" is not darwin or windows" >&2
-    exit 2
-    ;;
-esac
+platform_list="$(node scripts/publish.mjs platforms)"
+# shellcheck disable=SC2206 # one plain word per platform
+all_platforms=($platform_list)
+if [[ -n "$only" && " ${all_platforms[*]} " != *" $only "* ]]; then
+  echo "✗ \"$only\" is not one of: ${all_platforms[*]}" >&2
+  exit 2
+fi
 version="${tag#v}"
 channel="$(node scripts/publish.mjs channel "$tag")"
 work="$(mktemp -d)"
@@ -66,17 +69,10 @@ trap 'rm -rf "$work"' EXIT
 
 # Fails here when there is no release for the tag at all.
 draft="$(gh release view "$tag" --json isDraft --jq .isDraft)"
-if [[ -n "$only" && "$draft" == true ]]; then
-  for other in darwin windows; do
-    if [[ "$other" != "$only" ]]; then
-      scripts/drop-platform.sh "$tag" "$other"
-    fi
-  done
-fi
 assets="$(gh release view "$tag" --json assets --jq '.assets[].name')"
 
 platforms=()
-for platform in darwin windows; do
+for platform in "${all_platforms[@]}"; do
   if [[ -n "$only" && "$platform" != "$only" ]]; then
     continue
   fi
@@ -99,6 +95,16 @@ if has darwin; then
   node scripts/publish.mjs check-feed "$work/latest.json" --version "$version"
 fi
 echo "  ✓ $tag is built for: ${platforms[*]}" >&2
+
+# Only now, with the chosen platforms checked: a failed check above leaves the
+# draft as it was, so a wrong choice never throws away a good build.
+if [[ "$draft" == true ]]; then
+  for platform in "${all_platforms[@]}"; do
+    if ! has "$platform"; then
+      scripts/drop-platform.sh "$tag" "$platform"
+    fi
+  done
+fi
 
 if [[ "$draft" != "true" ]]; then
   echo "  ✓ $tag is already published; finishing the rest" >&2
@@ -132,7 +138,8 @@ ensure_feed_release() {
 }
 
 # Put $work/<file> on the feed-<feed> pre-release, unless the copy there names
-# a newer version. Prints true when it moved.
+# a newer version. Sets `moved` to true when it moved. Called directly, never
+# inside $(...), where set -e is off and a failed gh call would go unnoticed.
 move_feed() {
   local feed="feed-$1" file="$2"
   ensure_feed_release "$1"
@@ -146,13 +153,13 @@ move_feed() {
     forward="$(node scripts/publish.mjs moves-forward "$version" "$current")"
     if [[ "$forward" != true ]]; then
       echo "  ✓ $feed/$file already names a newer version; left as it is" >&2
-      echo false
+      moved=false
       return
     fi
   fi
   gh release upload "$feed" "$work/$file" --clobber >&2
   echo "  ✓ $feed/$file names $version" >&2
-  echo true
+  moved=true
 }
 
 # The feed releases this channel's builds go on: stable lands on beta too.
@@ -164,15 +171,12 @@ esac
 
 for feed in "${feeds[@]}"; do
   for platform in "${platforms[@]}"; do
-    moved="$(move_feed "$feed" "$platform.json")"
+    move_feed "$feed" "$platform.json"
     if [[ "$platform" == windows && "$moved" == true ]]; then
-      gh release download "$tag" --pattern 'Kriyon_*_x64-setup.exe' --dir "$work/setup" --clobber
-      setups=("$work"/setup/*.exe)
-      if (( ${#setups[@]} != 1 )); then
-        echo "✗ Expected one setup.exe on $tag, found: ${setups[*]}" >&2
-        exit 1
-      fi
-      cp "${setups[0]}" "$work/Kriyon-setup.exe"
+      # Fails unless there is exactly one, before anything is downloaded.
+      setup="$(xargs node scripts/publish.mjs windows-installer <<<"$assets")"
+      gh release download "$tag" --pattern "$setup" --dir "$work/setup" --clobber
+      cp "$work/setup/$setup" "$work/Kriyon-setup.exe"
       gh release upload "feed-$feed" "$work/Kriyon-setup.exe" --clobber
       echo "  ✓ feed-$feed/Kriyon-setup.exe is $version's installer" >&2
     fi
@@ -180,7 +184,7 @@ for feed in "${feeds[@]}"; do
   # Builds up to 0.15.0 read latest.json. Stable's is the latest release's,
   # moved above; the others live on their feed release.
   if [[ "$feed" != stable ]] && has darwin; then
-    move_feed "$feed" latest.json >/dev/null
+    move_feed "$feed" latest.json
   fi
 done
 
@@ -190,7 +194,7 @@ for feed in stable beta nightly; do
   ensure_feed_release "$feed"
   present="$(gh release view "feed-$feed" --json assets --jq '.assets[].name')"
   missing=()
-  for platform in darwin windows; do
+  for platform in "${all_platforms[@]}"; do
     if ! grep -qx "$platform.json" <<<"$present"; then
       missing+=("$platform")
     fi

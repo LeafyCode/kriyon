@@ -9,6 +9,12 @@
 //       for that version. The file's name says the platform; latest.json, the
 //       feed builds up to 0.15.0 read, is the Mac's. Downloads use $GH_TOKEN
 //       when set, so a draft release's files can be read.
+//   node scripts/publish.mjs platforms
+//       Print the platforms Kriyon releases for, one per line (darwin,
+//       windows): the names of their feed files.
+//   node scripts/publish.mjs windows-installer <name or path>…
+//       Print the one Windows installer (*-setup.exe) among them; fail when
+//       there is none or more than one.
 //   node scripts/publish.mjs platform-assets <darwin|windows> <name>…
 //       Print the release file names that platform's build uploads.
 //   node scripts/publish.mjs platform-feed <latest.json> --platform <darwin|windows>
@@ -48,11 +54,13 @@ import {
   homebrewCask,
   keyProblem,
   nightliesNewestFirst,
+  PLATFORMS,
   platformFeed,
   publicRepoFrom,
   staleNightlies,
   verifyUpdateSignature,
   windowsFeed,
+  windowsInstaller,
 } from "./publish-lib.mjs";
 import { channelOf, isNewest } from "./release-lib.mjs";
 
@@ -183,6 +191,16 @@ const main = async () => {
   switch (command) {
     case "check-feed":
       await checkFeed(args[0], values.version);
+      break;
+    case "platforms":
+      console.log(PLATFORMS.join("\n"));
+      break;
+    case "windows-installer":
+      try {
+        console.log(windowsInstaller(args));
+      } catch (error) {
+        fail(error.message);
+      }
       break;
     case "platform-assets":
       printPlatformAssets(args);

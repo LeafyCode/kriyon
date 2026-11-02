@@ -16,11 +16,19 @@ if (( $# != 2 )); then
 fi
 tag="$1"
 platform="$2"
+errors="$(mktemp)"
+trap 'rm -f "$errors"' EXIT
 
-# No release yet (the build failed before uploading): nothing to remove.
-if ! draft="$(gh release view "$tag" --json isDraft --jq .isDraft 2>/dev/null)"; then
-  echo "  ✓ $tag has no release yet; nothing to remove" >&2
-  exit 0
+# No release at all: nothing to remove. Any other gh failure (network, rate
+# limit, auth) stops here, so files are never left behind unnoticed.
+if ! draft="$(gh release view "$tag" --json isDraft --jq .isDraft 2>"$errors")"; then
+  if grep -q "release not found" "$errors"; then
+    echo "  ✓ $tag has no release; nothing to remove" >&2
+    exit 0
+  fi
+  cat "$errors" >&2
+  echo "✗ Couldn't read $tag, so its $platform files may still be in the draft." >&2
+  exit 1
 fi
 if [[ "$draft" != true ]]; then
   echo "✗ $tag is already published; its files stay as they are." >&2

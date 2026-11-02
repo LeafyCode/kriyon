@@ -107,7 +107,8 @@ nobody looks for the other download.
 
 ## When something fails
 
-- **One platform's build failed.** Its files are already out of the draft. A beta or nightly
+- **One platform's build failed, timed out or was cancelled.** Its files come out of the draft:
+  the build removes them when it can, and publishing drops any platform without its feed file. A beta or nightly
   has gone out for the other platform; the failed one catches up with the next build. For
   stable, either publish what finished (`platforms=built`) or re-run the whole workflow.
 - **A build failed and you want it again.** Re-run the whole workflow, not only the failed job:

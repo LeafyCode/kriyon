@@ -21,6 +21,12 @@ const REQUIRED_ENTRIES = {
   windows: ["windows-x86_64"],
 };
 
+/**
+ * The platforms Kriyon releases for, by `{{target}}` name. The release
+ * scripts ask `publish.mjs platforms` for this list instead of writing it out.
+ */
+export const PLATFORMS = Object.keys(REQUIRED_ENTRIES);
+
 /** The feed file builds up to 0.15.0 read; it carries the Mac entries only. */
 const LEGACY_FEED = "latest.json";
 
@@ -37,6 +43,7 @@ const requiredEntries = (platform) => {
 
 const PATH_SEPARATOR = /[\\/]/;
 const FEED_FILE = /^(.+)\.json$/;
+const SIG_SUFFIX = /\.sig$/;
 
 /** The platform a feed file is for, from its name (`…/windows.json`). */
 export const feedPlatform = (file) => {
@@ -51,11 +58,37 @@ export const feedPlatform = (file) => {
   throw new Error(`${file} is not a platform's feed file`);
 };
 
+/** The Windows installer, the NSIS setup.exe, by file name. */
+const WINDOWS_INSTALLER = /-setup\.exe$/;
+
+/**
+ * The one Windows installer among `files` (names or paths), as given. The
+ * build, the feed and the fixed download link all find it by this rule.
+ */
+export const windowsInstaller = (files) => {
+  const found = files.filter((file) =>
+    WINDOWS_INSTALLER.test(file.split(PATH_SEPARATOR).pop())
+  );
+  if (found.length === 0) {
+    throw new Error("There is no Windows installer (*-setup.exe)");
+  }
+  if (found.length > 1) {
+    throw new Error(
+      `There is more than one Windows installer: ${found.join(", ")}`
+    );
+  }
+  return found[0];
+};
+
+const MAC_ASSET =
+  /^(darwin\.json|latest\.json|Kriyon(_.*)?\.dmg|.*\.app\.tar\.gz(\.sig)?)$/;
+
 /** The release files each platform's build uploads, by name. */
 const PLATFORM_ASSETS = {
-  darwin:
-    /^(darwin\.json|latest\.json|Kriyon(_.*)?\.dmg|.*\.app\.tar\.gz(\.sig)?)$/,
-  windows: /^(windows\.json|.*-setup\.exe(\.sig)?)$/,
+  darwin: (name) => MAC_ASSET.test(name),
+  windows: (name) =>
+    name === "windows.json" ||
+    WINDOWS_INSTALLER.test(name.replace(SIG_SUFFIX, "")),
 };
 
 /**
@@ -65,7 +98,7 @@ const PLATFORM_ASSETS = {
  */
 export const assetPlatform = (name) =>
   Object.keys(PLATFORM_ASSETS).find((platform) =>
-    PLATFORM_ASSETS[platform].test(name)
+    PLATFORM_ASSETS[platform](name)
   );
 
 /** `feed` with only `platform`'s entries, for that platform's own file. */

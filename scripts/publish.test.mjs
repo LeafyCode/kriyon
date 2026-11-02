@@ -13,13 +13,17 @@ import {
   homebrewCask,
   keyProblem,
   nightliesNewestFirst,
+  PLATFORMS,
   platformFeed,
   publicRepoFrom,
   staleNightlies,
   verifyUpdateSignature,
   windowsFeed,
+  windowsInstaller,
 } from "./publish-lib.mjs";
 
+const NO_INSTALLER = /no Windows installer/;
+const TWO_INSTALLERS = /more than one Windows installer/;
 const MENTIONS_MISMATCH = /signature doesn't match the file/;
 const MENTIONS_LINUX = /linux/;
 const MENTIONS_LINUX_FILE = /linux\.json/;
@@ -378,6 +382,34 @@ describe("the feed file", () => {
       assert.equal(assetPlatform(name), "windows", name);
     }
     assert.equal(assetPlatform("notes.txt"), undefined);
+  });
+
+  test("the platforms Kriyon releases for are the feed files' names", () => {
+    assert.deepEqual(PLATFORMS, ["darwin", "windows"]);
+    for (const platform of PLATFORMS) {
+      assert.equal(feedPlatform(`${platform}.json`), platform);
+    }
+  });
+
+  test("the Windows installer is the one setup.exe among the files, by any path", () => {
+    assert.equal(
+      windowsInstaller([
+        "Kriyon_0.16.0_x64-setup.exe.sig",
+        "dist/nsis/Kriyon_0.16.0_x64-setup.exe",
+        "windows.json",
+      ]),
+      "dist/nsis/Kriyon_0.16.0_x64-setup.exe"
+    );
+    assert.equal(assetPlatform("Kriyon_0.16.0_x64-setup.exe"), "windows");
+    assert.throws(() => windowsInstaller(["Kriyon.dmg"]), NO_INSTALLER);
+    assert.throws(
+      () =>
+        windowsInstaller([
+          "Kriyon_0.16.0_x64-setup.exe",
+          "Kriyon_0.16.0_arm64-setup.exe",
+        ]),
+      TWO_INSTALLERS
+    );
   });
 
   test("a platform's feed keeps only that platform's entries", () => {
