@@ -27,8 +27,11 @@ describe("claudeLaunchCommand on a POSIX shell", () => {
 });
 
 /** The expression that escapes the seed for a native argument (see launchCommand.ts). */
-const PS_ARG =
+const PS_ESCAPED =
   "(($p.TrimEnd(\"`r`n\") -replace '(\\\\*)\"', '$1$1\\\"') -replace '(\\\\+)$', '$1$1')";
+
+/** The seed argument: escaped only where PowerShell passes quotes raw. */
+const PS_ARG = `$(if ($PSNativeCommandArgumentPassing -in $null, 'Legacy') { ${PS_ESCAPED} } else { $p.TrimEnd("\`r\`n") })`;
 
 /** The PowerShell -replace steps of PS_ARG, run as JavaScript: the patterns
  * read the same in .NET and JavaScript, so the rule itself is checked. */
@@ -71,11 +74,27 @@ describe("claudeLaunchCommand on PowerShell", () => {
   });
 
   it("escapes the seed's quotes and trailing backslashes the way claude's parser reads them", () => {
-    expect(PS_ARG).toContain(String.raw`-replace '(\\*)"', '$1$1\"'`);
-    expect(PS_ARG).toContain(String.raw`-replace '(\\+)$', '$1$1'`);
+    expect(PS_ESCAPED).toContain(String.raw`-replace '(\\*)"', '$1$1\"'`);
+    expect(PS_ESCAPED).toContain(String.raw`-replace '(\\+)$', '$1$1'`);
     expect(psEscape('say "hi"\r\n')).toBe('say \\"hi\\"');
     expect(psEscape('a\\"b')).toBe('a\\\\\\"b');
     expect(psEscape("C:\\dir\\")).toBe("C:\\dir\\\\");
+  });
+
+  // pwsh 7.3+ (a Mac user's $SHELL can be pwsh) escapes a native argument's
+  // quotes itself ($PSNativeCommandArgumentPassing = Standard), so escaping
+  // them again would hand claude a literal backslash. Windows PowerShell 5.1,
+  // which Kriyon hosts on Windows, has no such variable and passes them raw.
+  it("escapes the seed only when PowerShell passes quotes raw", () => {
+    const command = claudeLaunchCommand(
+      { env: [], flags: "" },
+      "/tmp/s.prompt",
+      "powerShell"
+    );
+    expect(command).toContain(
+      "$(if ($PSNativeCommandArgumentPassing -in $null, 'Legacy') { "
+    );
+    expect(command).toContain(`} else { $p.TrimEnd("\`r\`n") })\r`);
   });
 
   it("scopes the env around a seeded launch too", () => {
