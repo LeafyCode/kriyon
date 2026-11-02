@@ -80,6 +80,7 @@ runs natively on Windows and runs hook commands through Git Bash.
   scripts to a small Rust program would remove that dependency; it is the
   largest remaining Windows gap.
 - The Release workflow builds the Windows NSIS installer beside the Mac build,
-  into the same draft release and update feed (docs/RELEASING.md). It is not
+  into the same draft release, with its own update feed file, `windows.json`
+  (ADR 0056, docs/RELEASING.md). It is not
   code-signed yet, so SmartScreen warns and Smart App Control can block it;
   the signing service is still to be chosen.

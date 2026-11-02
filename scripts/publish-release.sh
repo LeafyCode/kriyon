@@ -1,31 +1,54 @@
 #!/usr/bin/env bash
-# Publish a draft release and move its channel's update feed. Run by
+# Publish a draft release and move its channel's update feeds. Run by
 # .github/workflows/release.yml (betas and nightlies, straight after the
-# build) and publish.yml (stable, when a person runs it). See ADR 0046.
+# build) and publish.yml (stable, when a person runs it). See ADR 0046 and
+# ADR 0056.
 #
-#   1. Check the draft's latest.json (scripts/publish.mjs check-feed). Nothing
-#      below runs unless it passes, so no feed ever names a bad file.
-#   2. Publish the draft. GitHub makes the tag now, on the draft's commit.
-#   3. Move the feed. Stable's feed is GitHub's "latest release" link, which
-#      moved in step 2; betas and nightlies each have one fixed pre-release
-#      (feed-beta, feed-nightly) that holds only their latest.json. Stable is
-#      put on the beta feed too, so beta users land on it.
-#   4. Keep only the newest nightlies.
+#   1. Find which platforms the release was built for: each build job uploads
+#      its feed file (darwin.json, windows.json) only once all its checks
+#      passed, so a file in the draft means that platform is ready. A release
+#      needs at least one. Given a platform, the draft is published for that
+#      one only: the other's files are taken out first
+#      (scripts/drop-platform.sh), so its users are not offered this version.
+#   2. Check each of those feed files (scripts/publish.mjs check-feed), and
+#      the Mac's latest.json, the feed builds up to 0.15.0 read. Nothing below
+#      runs unless they pass, so no feed ever names a bad file.
+#   3. Publish the draft. GitHub makes the tag now, on the draft's commit.
+#      Stable becomes GitHub's "latest release" only when it has a Mac build
+#      and is the newest stable: older Mac builds read
+#      releases/latest/download/latest.json, and the website links to
+#      releases/latest/download/Kriyon.dmg, so a Windows-only release must
+#      not take that over.
+#   4. Move each built platform's feed file on the channel's fixed
+#      pre-release (feed-stable, feed-beta, feed-nightly), plus the Mac's
+#      latest.json on feed-beta and feed-nightly for older builds. Stable is
+#      put on the beta feeds too, so beta users land on it. A stable Windows
+#      build also puts its installer on feed-stable as Kriyon-setup.exe, the
+#      fixed name the website links to.
+#   5. Keep only the newest nightlies.
 #
-# Safe to run again: a release already published skips step 2, so a run that
-# failed after publishing can still finish moving the feed. A feed only moves
-# forward: an older release never replaces the version a feed names.
+# Safe to run again: a release already published skips step 3, so a run that
+# failed after publishing can still finish moving the feeds. A feed only moves
+# forward: an older release never replaces the version a feed file names.
 #
 # Needs gh with GH_TOKEN (contents: write).
 #
-# Usage: scripts/publish-release.sh <tag>
+# Usage: scripts/publish-release.sh <tag> [darwin|windows]
 set -euo pipefail
 
-if (( $# != 1 )); then
-  echo "usage: $0 <tag>" >&2
+if (( $# < 1 || $# > 2 )); then
+  echo "usage: $0 <tag> [darwin|windows]" >&2
   exit 2
 fi
 tag="$1"
+only="${2:-}"
+case "$only" in
+  "" | darwin | windows) ;;
+  *)
+    echo "✗ \"$only\" is not darwin or windows" >&2
+    exit 2
+    ;;
+esac
 version="${tag#v}"
 channel="$(node scripts/publish.mjs channel "$tag")"
 work="$(mktemp -d)"
@@ -33,63 +56,124 @@ trap 'rm -rf "$work"' EXIT
 
 # Fails here when there is no release for the tag at all.
 draft="$(gh release view "$tag" --json isDraft --jq .isDraft)"
+if [[ -n "$only" && "$draft" == true ]]; then
+  for other in darwin windows; do
+    if [[ "$other" != "$only" ]]; then
+      scripts/drop-platform.sh "$tag" "$other"
+    fi
+  done
+fi
+assets="$(gh release view "$tag" --json assets --jq '.assets[].name')"
 
-gh release download "$tag" --pattern latest.json --dir "$work"
-node scripts/publish.mjs check-feed "$work/latest.json" --version "$version"
+platforms=()
+for platform in darwin windows; do
+  if [[ -n "$only" && "$platform" != "$only" ]]; then
+    continue
+  fi
+  if grep -qx "$platform.json" <<<"$assets"; then
+    platforms+=("$platform")
+  fi
+done
+if (( ${#platforms[@]} == 0 )); then
+  echo "✗ $tag has no platform's feed file (darwin.json or windows.json): no build finished." >&2
+  exit 1
+fi
+has() { [[ " ${platforms[*]} " == *" $1 "* ]]; }
+
+for platform in "${platforms[@]}"; do
+  gh release download "$tag" --pattern "$platform.json" --dir "$work"
+  node scripts/publish.mjs check-feed "$work/$platform.json" --version "$version"
+done
+if has darwin; then
+  gh release download "$tag" --pattern latest.json --dir "$work"
+  node scripts/publish.mjs check-feed "$work/latest.json" --version "$version"
+fi
+echo "  ✓ $tag is built for: ${platforms[*]}" >&2
 
 if [[ "$draft" != "true" ]]; then
   echo "  ✓ $tag is already published; finishing the rest" >&2
 elif [[ "$channel" == "stable" ]]; then
-  # GitHub's latest release is the stable feed, and publish.yml bumps the tap
-  # only for it, so it moves only when this is the newest stable release.
-  stable="$(gh release list --limit 200 --exclude-drafts --exclude-pre-releases \
-    --json tagName --jq '.[].tagName')"
-  # shellcheck disable=SC2086 # one tag per word
-  newest="$(node scripts/publish.mjs moves-forward "$tag" $stable)"
+  newest=false
+  if has darwin; then
+    stable="$(gh release list --limit 200 --exclude-drafts --exclude-pre-releases \
+      --json tagName --jq '.[].tagName')"
+    # shellcheck disable=SC2086 # one tag per word
+    newest="$(node scripts/publish.mjs moves-forward "$tag" $stable)"
+  fi
   gh release edit "$tag" --draft=false --latest="$newest"
   if [[ "$newest" == true ]]; then
     echo "  ✓ Published $tag as the latest release" >&2
   else
-    echo "  ✓ Published $tag; a newer stable release stays the latest" >&2
+    echo "  ✓ Published $tag; the latest release stays on the newest Mac build" >&2
   fi
 else
   gh release edit "$tag" --draft=false --prerelease --latest=false
   echo "  ✓ Published $tag" >&2
 fi
 
+# Put $work/<file> on the feed-<feed> pre-release, unless the copy there names
+# a newer version. Prints true when it moved.
 move_feed() {
-  local feed="feed-$1"
+  local feed="feed-$1" file="$2"
   if ! gh release view "$feed" >/dev/null 2>&1; then
     gh release create "$feed" --prerelease --latest=false \
       --target "$(git rev-parse HEAD)" \
       --title "Kriyon $1 update feed" \
-      --notes "Holds only latest.json, the $1 channel's update feed. Downloads are on each version's own release."
+      --notes "Holds only the $1 channel's update feeds, one file per platform. Downloads are on each version's own release." >&2
   fi
-  # A new feed release has no latest.json yet; any other failure stops here.
-  assets="$(gh release view "$feed" --json assets --jq '.assets[].name')"
-  if grep -qx latest.json <<<"$assets"; then
-    gh release download "$feed" --pattern latest.json --output "$work/current.json"
-    current="$(jq -er .version "$work/current.json")"
+  # A new feed release has no files yet; any other failure stops here.
+  local current_assets
+  current_assets="$(gh release view "$feed" --json assets --jq '.assets[].name')"
+  if grep -qx "$file" <<<"$current_assets"; then
+    gh release download "$feed" --pattern "$file" --output "$work/current-$file" --clobber
+    local current forward
+    current="$(jq -er .version "$work/current-$file")"
     forward="$(node scripts/publish.mjs moves-forward "$version" "$current")"
     if [[ "$forward" != true ]]; then
-      echo "  ✓ The $1 feed already names a newer version; left as it is" >&2
+      echo "  ✓ $feed/$file already names a newer version; left as it is" >&2
+      echo false
       return
     fi
   fi
-  gh release upload "$feed" "$work/latest.json" --clobber
-  echo "  ✓ The $1 feed names $version" >&2
+  gh release upload "$feed" "$work/$file" --clobber >&2
+  echo "  ✓ $feed/$file names $version" >&2
+  echo true
 }
 
+# The feed releases this channel's builds go on: stable lands on beta too.
 case "$channel" in
-  stable) move_feed beta ;;
-  beta) move_feed beta ;;
-  nightly)
-    move_feed nightly
-    gh release list --limit 200 --exclude-drafts --json tagName --jq '.[].tagName' \
-      | xargs node scripts/publish.mjs stale-nightlies \
-      | while read -r old; do
-          gh release delete "$old" --cleanup-tag --yes
-          echo "  ✓ Deleted the old nightly $old" >&2
-        done
-    ;;
+  stable) feeds=(stable beta) ;;
+  beta) feeds=(beta) ;;
+  nightly) feeds=(nightly) ;;
 esac
+
+for feed in "${feeds[@]}"; do
+  for platform in "${platforms[@]}"; do
+    moved="$(move_feed "$feed" "$platform.json")"
+    if [[ "$feed" == stable && "$platform" == windows && "$moved" == true ]]; then
+      gh release download "$tag" --pattern 'Kriyon_*_x64-setup.exe' --dir "$work/setup" --clobber
+      setups=("$work"/setup/*.exe)
+      if (( ${#setups[@]} != 1 )); then
+        echo "✗ Expected one setup.exe on $tag, found: ${setups[*]}" >&2
+        exit 1
+      fi
+      cp "${setups[0]}" "$work/Kriyon-setup.exe"
+      gh release upload feed-stable "$work/Kriyon-setup.exe" --clobber
+      echo "  ✓ feed-stable/Kriyon-setup.exe is $version's installer" >&2
+    fi
+  done
+  # Builds up to 0.15.0 read latest.json. Stable's is the latest release's,
+  # moved above; the others live on their feed release.
+  if [[ "$feed" != stable ]] && has darwin; then
+    move_feed "$feed" latest.json >/dev/null
+  fi
+done
+
+if [[ "$channel" == nightly ]]; then
+  gh release list --limit 200 --exclude-drafts --json tagName --jq '.[].tagName' \
+    | xargs node scripts/publish.mjs stale-nightlies \
+    | while read -r old; do
+        gh release delete "$old" --cleanup-tag --yes
+        echo "  ✓ Deleted the old nightly $old" >&2
+      done
+fi

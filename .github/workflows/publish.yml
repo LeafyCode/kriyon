@@ -1,10 +1,12 @@
 name: Publish
 
-# Publishes a draft release the Release workflow built: checks its update
-# feed again, publishes it (GitHub makes the tag then), moves the feed and,
-# for stable, bumps the Homebrew tap. Run it on main for a stable release
-# once you have checked the draft; run it on dev to retry a beta or nightly
-# whose publish failed. See ADR 0046 and docs/RELEASING.md.
+# Publishes a draft release the Release workflow built: checks each
+# platform's update feed again, publishes it (GitHub makes the tag then),
+# moves the feeds and, for a stable Mac build, bumps the Homebrew tap. Run it
+# on main for a stable release once you have checked the draft; run it on dev
+# to retry a beta or nightly whose publish failed. Choose one platform to
+# publish an urgent fix for it alone. See ADR 0046, ADR 0056 and
+# docs/RELEASING.md.
 
 on:
   workflow_dispatch:
@@ -13,6 +15,11 @@ on:
         description: "The draft release to publish, e.g. v0.13.0"
         required: true
         type: string
+      platforms:
+        description: "Publish for every platform the draft was built for, or one only (the other's files are removed)"
+        type: choice
+        options: [built, mac, windows]
+        default: built
 
 # Nothing by default; each job asks for what it needs.
 permissions: {}
@@ -80,13 +87,29 @@ jobs:
           public="$(gh api "repos/$GITHUB_REPOSITORY" --jq '.private | not')"
           echo "PUBLIC_REPO=$public" >> "$GITHUB_ENV"
 
-      - run: scripts/publish-release.sh "$TAG"
+      - env:
+          PLATFORMS: ${{ inputs.platforms }}
+        run: |
+          case "$PLATFORMS" in
+            built) scripts/publish-release.sh "$TAG" ;;
+            mac) scripts/publish-release.sh "$TAG" darwin ;;
+            windows) scripts/publish-release.sh "$TAG" windows ;;
+            *)
+              echo "::error::Unknown platforms \"$PLATFORMS\"."
+              exit 1
+              ;;
+          esac
 
       - name: Bump the Homebrew tap
         if: ${{ needs.channel.outputs.channel == 'stable' }}
         env:
           TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         run: |
+          # The tap carries the Mac app, so a Windows-only release leaves it.
+          if ! gh release view "$TAG" --json assets --jq '.assets[].name' | grep -qx darwin.json; then
+            echo "::notice::$TAG has no Mac build, so the tap is left as it is."
+            exit 0
+          fi
           if [[ -z "$TAP_TOKEN" ]]; then
             echo "::warning::No HOMEBREW_TAP_TOKEN secret, so the tap still names the last version. See docs/RELEASING.md."
             exit 0

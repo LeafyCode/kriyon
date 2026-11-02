@@ -1,14 +1,22 @@
 name: Release
 
-# Builds a signed, notarized, universal (Apple Silicon + Intel) Mac release
-# and a Windows x64 installer as one draft GitHub release, with its update
-# feed checked. See ADR 0046, ADR 0055 and docs/RELEASING.md.
+# Builds a draft GitHub release with a signed, notarized, universal (Apple
+# Silicon + Intel) Mac app and a Windows x64 installer, each with its own
+# update feed file checked. See ADR 0046, ADR 0055, ADR 0056 and
+# docs/RELEASING.md.
 #
 # - Stable: a push to main that carries a new version (the release PR). The
-#   draft waits for a person to check it and run the Publish workflow.
+#   draft waits for a person to check it and run the Publish workflow, which
+#   can publish it for one platform only.
 # - Nightly: every night from dev, only if dev changed since the last one.
 # - Beta: run by hand from dev ("Run workflow", channel beta).
-# Betas and nightlies publish themselves once the feed check passes.
+# Betas and nightlies publish themselves once a platform's feed check passes.
+#
+# The Mac and Windows builds run side by side and each uploads its feed file
+# (darwin.json, windows.json) last, once all its checks passed. One failing
+# never stops the other: the release is published for the platforms that
+# finished, and the failed one removes its files from the draft. A run by hand
+# can build one platform only, for an urgent fix.
 #
 # Signing secrets are plain repo secrets while the repo is private (the free
 # plan has nothing else). Once public they move into the `prerelease`
@@ -28,6 +36,11 @@ on:
         type: choice
         options: [beta, nightly]
         default: beta
+      platforms:
+        description: "Which platforms to build"
+        type: choice
+        options: [both, mac, windows]
+        default: both
 
 # Nothing by default; each job asks for what it needs.
 permissions: {}
@@ -51,6 +64,10 @@ jobs:
       channel: ${{ steps.decide.outputs.channel }}
       commit: ${{ steps.decide.outputs.commit }}
       build: ${{ steps.decide.outputs.build }}
+      mac: ${{ steps.decide.outputs.mac }}
+      windows: ${{ steps.decide.outputs.windows }}
+      version: ${{ steps.decide.outputs.version }}
+      tag: ${{ steps.decide.outputs.tag }}
       public: ${{ steps.visibility.outputs.public }}
       started: ${{ steps.visibility.outputs.started }}
     steps:
@@ -85,7 +102,10 @@ jobs:
         env:
           EVENT: ${{ github.event_name }}
           CHOSEN: ${{ inputs.channel }}
+          # Only a run by hand chooses; a push to main and the nightly build both.
+          PLATFORMS: ${{ inputs.platforms || 'both' }}
           PUBLIC_REPO: ${{ steps.visibility.outputs.public }}
+          STARTED: ${{ steps.visibility.outputs.started }}
         run: |
           case "$EVENT" in
             push) channel=stable ;;
@@ -118,14 +138,110 @@ jobs:
               echo "::notice::No new commits on dev since the last nightly."
               build=false
             fi
+            # The same commands each build job runs with --write, on the same
+            # tags and start time, so every job builds this version.
+            case "$channel" in
+              beta) version="$(node scripts/release.mjs beta)" ;;
+              nightly) version="$(node scripts/release.mjs nightly --date "$STARTED")" ;;
+            esac
           fi
-          echo "build=$build" >> "$GITHUB_OUTPUT"
-          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+          case "$PLATFORMS" in
+            both) mac=true windows=true ;;
+            mac) mac=true windows=false ;;
+            windows) mac=false windows=true ;;
+            *)
+              echo "::error::Unknown platforms \"$PLATFORMS\"."
+              exit 1
+              ;;
+          esac
+          {
+            echo "build=$build"
+            echo "commit=$commit"
+            echo "mac=$mac"
+            echo "windows=$windows"
+            echo "version=$version"
+            echo "tag=v$version"
+          } >> "$GITHUB_OUTPUT"
 
-  build:
-    name: Build, sign and notarize (${{ needs.prepare.outputs.channel }})
+  # The draft both builds upload into, made once so either can run alone.
+  draft:
+    name: Make the draft release (${{ needs.prepare.outputs.channel }})
     needs: prepare
     if: ${{ needs.prepare.outputs.build == 'true' }}
+    runs-on: ubuntu-24.04
+    environment: ${{ needs.prepare.outputs.channel == 'stable' && 'release' || 'prerelease' }}
+    permissions:
+      contents: write # the draft release
+    outputs:
+      release-id: ${{ steps.create.outputs.id }}
+      notes: ${{ steps.notes.outputs.body }}
+    env:
+      CHANNEL: ${{ needs.prepare.outputs.channel }}
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ needs.prepare.outputs.tag }}
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - run: pnpm install --frozen-lockfile
+
+      - name: Write the release notes
+        id: notes
+        run: |
+          # They become each feed file's notes too, which the update dialog shows.
+          notes="$(node scripts/release.mjs notes "$VERSION")"
+          if [[ "$CHANNEL" != stable ]]; then
+            notes="A $CHANNEL build from dev at ${GITHUB_SHA:0:7}, for testing."$'\n\n'"$notes"
+          fi
+          printf '%s\n' "$notes" > "$RUNNER_TEMP/notes.md"
+          delimiter="notes-$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
+          {
+            echo "body<<$delimiter"
+            echo "$notes"
+            echo "$delimiter"
+          } >> "$GITHUB_OUTPUT"
+
+      # A re-run reuses the version, so a draft a failed run left is replaced.
+      # A published release is never replaced: downloads never change.
+      - name: Clear a draft a failed run left
+        run: |
+          if draft="$(gh release view "$TAG" --json isDraft --jq .isDraft 2>/dev/null)"; then
+            if [[ "$draft" != true ]]; then
+              echo "::error::$TAG is already published."
+              exit 1
+            fi
+            gh release delete "$TAG" --yes
+          fi
+
+      - name: Make the draft
+        id: create
+        env:
+          COMMIT: ${{ needs.prepare.outputs.commit }}
+        run: |
+          prerelease=()
+          if [[ "$CHANNEL" != stable ]]; then
+            prerelease=(--prerelease)
+          fi
+          gh release create "$TAG" --draft "${prerelease[@]}" \
+            --title "Kriyon $VERSION" --notes-file "$RUNNER_TEMP/notes.md" --target "$COMMIT"
+          id="$(gh api "repos/$GITHUB_REPOSITORY/releases" \
+            --jq ".[] | select(.draft and .tag_name == \"$TAG\") | .id" | head -n 1)"
+          if [[ -z "$id" ]]; then
+            echo "::error::Made the draft for $TAG but can't find its id."
+            exit 1
+          fi
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build, sign and notarize for Mac (${{ needs.prepare.outputs.channel }})
+    needs: [prepare, draft]
+    if: ${{ needs.prepare.outputs.mac == 'true' }}
     runs-on: macos-15
     timeout-minutes: 120
     environment: ${{ needs.prepare.outputs.channel == 'stable' && 'release' || 'prerelease' }}
@@ -133,15 +249,13 @@ jobs:
       contents: write # the draft release
       id-token: write # build provenance
       attestations: write # build provenance
-    outputs:
-      tag: ${{ steps.version.outputs.tag }}
-      version: ${{ steps.version.outputs.version }}
-      release-id: ${{ steps.tauri.outputs.releaseId }}
     env:
       CHANNEL: ${{ needs.prepare.outputs.channel }}
       BUNDLE: target/universal-apple-darwin/release/bundle
       GH_TOKEN: ${{ github.token }}
       PUBLIC_REPO: ${{ needs.prepare.outputs.public }}
+      TAG: ${{ needs.prepare.outputs.tag }}
+      VERSION: ${{ needs.prepare.outputs.version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -159,7 +273,6 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       - name: Set the version
-        id: version
         env:
           STARTED: ${{ needs.prepare.outputs.started }}
         run: |
@@ -168,38 +281,9 @@ jobs:
             beta) version="$(node scripts/release.mjs beta --write)" ;;
             nightly) version="$(node scripts/release.mjs nightly --date "$STARTED" --write)" ;;
           esac
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "tag=v$version" >> "$GITHUB_OUTPUT"
-
-      - name: Write the release notes
-        id: notes
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          # They become latest.json's notes too, which the update dialog shows.
-          notes="$(node scripts/release.mjs notes "$VERSION")"
-          if [[ "$CHANNEL" != stable ]]; then
-            notes="A $CHANNEL build from dev at ${GITHUB_SHA:0:7}, for testing."$'\n\n'"$notes"
-          fi
-          delimiter="notes-$(uuidgen)"
-          {
-            echo "body<<$delimiter"
-            echo "$notes"
-            echo "$delimiter"
-          } >> "$GITHUB_OUTPUT"
-
-      # A re-run reuses the version, so a draft a failed run left is replaced.
-      # A published release is never replaced: downloads never change.
-      - name: Clear a draft a failed run left
-        env:
-          TAG: ${{ steps.version.outputs.tag }}
-        run: |
-          if draft="$(gh release view "$TAG" --json isDraft --jq .isDraft 2>/dev/null)"; then
-            if [[ "$draft" != true ]]; then
-              echo "::error::$TAG is already published."
-              exit 1
-            fi
-            gh release delete "$TAG" --yes
+          if [[ "$version" != "$VERSION" ]]; then
+            echo "::error::The Mac build would be $version, but this release is $VERSION."
+            exit 1
           fi
 
       - name: Write the App Store Connect key
@@ -209,7 +293,7 @@ jobs:
           umask 077
           printf '%s' "$APPLE_API_KEY_BASE64" | base64 --decode > "$RUNNER_TEMP/AuthKey.p8"
 
-      - name: Build and sign the app and upload the draft
+      - name: Build and sign the app and upload it to the draft
         id: tauri
         uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
         env:
@@ -227,12 +311,9 @@ jobs:
           tauriScript: pnpm tauri
           # tauri.updater.conf.json turns on the signed update files.
           args: --target universal-apple-darwin --config src-tauri/tauri.updater.conf.json
-          tagName: ${{ steps.version.outputs.tag }}
-          releaseName: Kriyon ${{ steps.version.outputs.version }}
-          releaseBody: ${{ steps.notes.outputs.body }}
-          releaseCommitish: ${{ needs.prepare.outputs.commit }}
-          releaseDraft: true
-          prerelease: ${{ needs.prepare.outputs.channel != 'stable' }}
+          releaseId: ${{ needs.draft.outputs.release-id }}
+          # The notes of latest.json, which darwin.json is made from.
+          releaseBody: ${{ needs.draft.outputs.notes }}
 
       # Apple notarizes the outermost container only; its ticket covers the
       # app inside (see scripts/notarize-dmg.sh).
@@ -253,7 +334,6 @@ jobs:
 
       - name: Check the app and the DMG
         env:
-          VERSION: ${{ steps.version.outputs.version }}
           BUILT: ${{ steps.tauri.outputs.appVersion }}
           DMG: ${{ steps.dmg.outputs.path }}
         run: |
@@ -269,7 +349,6 @@ jobs:
       # Homebrew cask and anyone who wants a specific version.
       - name: Replace the draft's DMG with the notarized one
         env:
-          TAG: ${{ steps.version.outputs.tag }}
           DMG: ${{ steps.dmg.outputs.path }}
         run: |
           gh release upload "$TAG" "$DMG" --clobber
@@ -297,18 +376,34 @@ jobs:
             ${{ steps.dmg.outputs.path }}
             ${{ env.BUNDLE }}/macos/Kriyon.app.tar.gz
 
-      # The feed is checked in build-windows, once it has the Windows entry.
+      # latest.json is what builds up to 0.15.0 read; darwin.json is the same
+      # entries under the per-platform name newer builds read (ADR 0056). Its
+      # upload comes last: it is what tells publishing the Mac build is ready.
+      - name: Check the Mac feed and add darwin.json
+        run: |
+          gh release download "$TAG" --pattern latest.json --dir "$RUNNER_TEMP" --clobber
+          node scripts/publish.mjs check-feed "$RUNNER_TEMP/latest.json" --version "$VERSION"
+          node scripts/publish.mjs platform-feed "$RUNNER_TEMP/latest.json" --platform darwin \
+            > "$RUNNER_TEMP/darwin.json"
+          node scripts/publish.mjs check-feed "$RUNNER_TEMP/darwin.json" --version "$VERSION"
+          gh release upload "$TAG" "$RUNNER_TEMP/darwin.json" --clobber
+
+      # A failed Mac build takes its files back out, so the release can still
+      # go out for Windows without a half-made Mac download in it.
+      - name: Remove the Mac files from the draft
+        if: ${{ failure() }}
+        run: scripts/drop-platform.sh "$TAG" darwin
 
       - name: Remove the App Store Connect key
         if: ${{ always() }}
         run: rm -f "$RUNNER_TEMP/AuthKey.p8"
 
-  # Runs after the Mac build, which made the draft: tauri-action uploads into
-  # it and merges the windows-x86_64 entry into its latest.json. Unsigned
-  # until Windows code signing is chosen (ADR 0055), so SmartScreen warns.
+  # Unsigned until Windows code signing is chosen (ADR 0055), so SmartScreen
+  # warns on install.
   build-windows:
     name: Build for Windows (${{ needs.prepare.outputs.channel }})
-    needs: [prepare, build]
+    needs: [prepare, draft]
+    if: ${{ needs.prepare.outputs.windows == 'true' }}
     runs-on: windows-2025
     timeout-minutes: 90
     environment: ${{ needs.prepare.outputs.channel == 'stable' && 'release' || 'prerelease' }}
@@ -324,8 +419,8 @@ jobs:
       BUNDLE: target/release/bundle
       GH_TOKEN: ${{ github.token }}
       PUBLIC_REPO: ${{ needs.prepare.outputs.public }}
-      TAG: ${{ needs.build.outputs.tag }}
-      VERSION: ${{ needs.build.outputs.version }}
+      TAG: ${{ needs.prepare.outputs.tag }}
+      VERSION: ${{ needs.prepare.outputs.version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -340,8 +435,6 @@ jobs:
           rustup default stable
       - run: pnpm install --frozen-lockfile
 
-      # The same commands as the Mac job, on the same tags and start time, so
-      # they give the same version; a mismatch stops before anything uploads.
       - name: Set the version
         env:
           STARTED: ${{ needs.prepare.outputs.started }}
@@ -352,7 +445,7 @@ jobs:
             nightly) version="$(node scripts/release.mjs nightly --date "$STARTED" --write)" ;;
           esac
           if [[ "$version" != "$VERSION" ]]; then
-            echo "::error::Windows would build $version, but the Mac build is $VERSION."
+            echo "::error::The Windows build would be $version, but this release is $VERSION."
             exit 1
           fi
 
@@ -368,8 +461,10 @@ jobs:
           # The NSIS setup.exe only: one installer to download, and the one
           # the updater runs. tauri.updater.conf.json turns on its .sig.
           args: --bundles nsis --config src-tauri/tauri.updater.conf.json
-          releaseId: ${{ needs.build.outputs.release-id }}
-          updaterJsonPreferNsis: true
+          releaseId: ${{ needs.draft.outputs.release-id }}
+          # windows.json is written below; latest.json stays the Mac's, for
+          # builds up to 0.15.0.
+          uploadUpdaterJson: false
 
       - name: Find the installer
         id: setup
@@ -381,21 +476,11 @@ jobs:
             exit 1
           fi
           setups=("$BUNDLE"/nsis/*-setup.exe)
-          if (( ${#setups[@]} != 1 )) || [[ ! -f "${setups[0]}" ]]; then
-            echo "::error::Expected one setup.exe, found: ${setups[*]}"
+          if (( ${#setups[@]} != 1 )) || [[ ! -f "${setups[0]}" || ! -f "${setups[0]}.sig" ]]; then
+            echo "::error::Expected one setup.exe with its .sig, found: ${setups[*]}"
             exit 1
           fi
           echo "path=${setups[0]}" >> "$GITHUB_OUTPUT"
-
-      # Kriyon-setup.exe is the same file under a name that never changes, so
-      # releases/latest/download/Kriyon-setup.exe always fetches the newest
-      # stable installer, as Kriyon.dmg does for the Mac.
-      - name: Add the fixed-name installer
-        env:
-          SETUP: ${{ steps.setup.outputs.path }}
-        run: |
-          cp "$SETUP" "$RUNNER_TEMP/Kriyon-setup.exe"
-          gh release upload "$TAG" "$RUNNER_TEMP/Kriyon-setup.exe" --clobber
 
       - name: Record build provenance
         if: ${{ needs.prepare.outputs.public == 'true' }}
@@ -403,20 +488,48 @@ jobs:
         with:
           subject-path: ${{ steps.setup.outputs.path }}
 
-      - name: Check the update feed
+      # Its upload comes last: it is what tells publishing the Windows build
+      # is ready. The installer's URL is its API asset URL, as tauri-action
+      # writes for the Mac: it serves a draft's file with a token, and the
+      # published file to the updater, which asks for application/octet-stream.
+      - name: Write and check windows.json
+        env:
+          SETUP: ${{ steps.setup.outputs.path }}
         run: |
-          gh release download "$TAG" --pattern latest.json --dir "$RUNNER_TEMP" --clobber
-          node scripts/publish.mjs check-feed "$RUNNER_TEMP/latest.json" --version "$VERSION"
+          url="$(gh release view "$TAG" --json assets \
+            --jq '.assets[] | select(.name | endswith("-setup.exe")) | .apiUrl')"
+          if [[ -z "$url" || "$url" == *$'\n'* ]]; then
+            echo "::error::Expected one setup.exe on $TAG, found: ${url:-none}"
+            exit 1
+          fi
+          gh release view "$TAG" --json body --jq .body > "$RUNNER_TEMP/notes.md"
+          node scripts/publish.mjs windows-feed --version "$VERSION" \
+            --url "$url" \
+            --sig "$SETUP.sig" --notes-file "$RUNNER_TEMP/notes.md" \
+            > "$RUNNER_TEMP/windows.json"
+          node scripts/publish.mjs check-feed "$RUNNER_TEMP/windows.json" --version "$VERSION"
+          gh release upload "$TAG" "$RUNNER_TEMP/windows.json" --clobber
+
+      # A failed Windows build takes its files back out, so the release can
+      # still go out for the Mac without a half-made installer in it.
+      - name: Remove the Windows files from the draft
+        if: ${{ failure() }}
+        run: scripts/drop-platform.sh "$TAG" windows
 
   publish:
     name: Publish (${{ needs.prepare.outputs.channel }})
-    needs: [prepare, build, build-windows]
+    needs: [prepare, draft, build, build-windows]
     # Stable waits for a person: they check the draft, then run publish.yml.
-    if: ${{ needs.prepare.outputs.channel != 'stable' }}
+    # Otherwise publish as soon as one platform finished: publish-release.sh
+    # moves only the feeds of platforms whose build passed.
+    if: >-
+      ${{ always() && needs.prepare.outputs.channel != 'stable'
+      && needs.draft.result == 'success'
+      && (needs.build.result == 'success' || needs.build-windows.result == 'success') }}
     runs-on: ubuntu-24.04
     environment: prerelease
     permissions:
-      contents: write # publish the release and upload the feed
+      contents: write # publish the release and upload the feeds
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -427,5 +540,5 @@ jobs:
       - env:
           GH_TOKEN: ${{ github.token }}
           PUBLIC_REPO: ${{ needs.prepare.outputs.public }}
-          TAG: ${{ needs.build.outputs.tag }}
+          TAG: ${{ needs.prepare.outputs.tag }}
         run: scripts/publish-release.sh "$TAG"

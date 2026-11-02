@@ -175,7 +175,7 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
   newest version built for that platform, its notes, and the update file's URL and signature.
   Each channel's live on its fixed `feed-stable`, `feed-beta` or `feed-nightly` pre-release, so a
   release built for one platform moves only that platform's file (ADR 0056). Checked by
-  `scripts/publish.mjs check-feed` before it moves (ADR 0046). Builds before 0.16 read the
+  `scripts/publish.mjs check-feed` before it moves (ADR 0046). Builds up to 0.15.0 read the
   older single `latest.json`, which still carries the Mac entries. Not the [Diff feed].
   _Avoid_: manifest, appcast.
 - **Channel step-down** — installing an *older* build from a calmer [Update channel] the user moved
