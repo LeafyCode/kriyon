@@ -25,7 +25,8 @@
 //   node scripts/release.mjs notes <version>
 //       Print the release notes: a release's CHANGELOG.md entry, or for a
 //       beta or nightly git-cliff's draft of what is new since the previous
-//       one on its channel, both without heading or comments.
+//       one on its channel, both without heading or comments, and with
+//       wrapped lines joined, since GitHub shows each newline as a break.
 
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -48,6 +49,7 @@ import {
   preReleaseBase,
   readTagPattern,
   readVersions,
+  reflow,
   setVersions,
   VERSION_FILES,
 } from "./release-lib.mjs";
@@ -266,9 +268,11 @@ const preReleaseDraft = (version) => {
 };
 
 const notes = (version) =>
-  channelOf(version) === "stable"
-    ? changelogEntry(read(CHANGELOG), version)
-    : draftNotes(preReleaseDraft(version));
+  reflow(
+    channelOf(version) === "stable"
+      ? changelogEntry(read(CHANGELOG), version)
+      : draftNotes(preReleaseDraft(version))
+  );
 
 const main = () => {
   const { values, positionals } = parseArgs({

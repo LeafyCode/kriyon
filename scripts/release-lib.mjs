@@ -339,6 +339,51 @@ export const draftNotes = (draft) => {
   return body ? `${body.replace(BLANK_RUN, "\n\n")}\n` : "";
 };
 
+const FENCE = /^\s*(```|~~~)/;
+const BLOCK_START = /^\s*([-*+]\s|\d+[.)]\s|#|\||<)/;
+const QUOTE = /^\s*>\s?/;
+const HARD_BREAK = /( {2}|\\)$/;
+const ENDS_BLOCK = /^\s*(#|\|)/;
+
+/**
+ * Joins wrapped lines into one line per paragraph, list item or quote.
+ * CHANGELOG.md wraps for reading in an editor, but a GitHub release shows
+ * every newline as a line break. Code blocks, tables and hard breaks stay.
+ */
+export const reflow = (markdown) => {
+  const out = [];
+  let inFence = false;
+  let joinable = false;
+  for (const line of markdown.split("\n")) {
+    if (FENCE.test(line)) {
+      inFence = !inFence;
+      joinable = false;
+      out.push(line);
+      continue;
+    }
+    const quoted = QUOTE.test(line);
+    const text = quoted ? line.replace(QUOTE, "") : line;
+    const prev = out.at(-1);
+    const continues =
+      !inFence &&
+      joinable &&
+      text.trim() !== "" &&
+      !BLOCK_START.test(text) &&
+      quoted === QUOTE.test(prev);
+    if (continues) {
+      out[out.length - 1] = `${prev} ${text.trim()}`;
+    } else {
+      out.push(line);
+    }
+    joinable =
+      !inFence &&
+      line.trim() !== "" &&
+      !HARD_BREAK.test(line) &&
+      !ENDS_BLOCK.test(text);
+  }
+  return out.join("\n");
+};
+
 /** True when a git-cliff draft lists any change, i.e. has a group heading. */
 export const listsChanges = (draft) => CHANGE_GROUP.test(draft);
 
