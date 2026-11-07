@@ -15,6 +15,9 @@
 //! it in: the [Worktree bootstrap], creating a worktree, merging one back,
 //! and Discard (its checkout fires post-checkout and the LFS filter).
 //!
+//! Windows needs none of this: every app is started with the PATH the person
+//! set in their environment, so [`user_path`] is always `None` there.
+//!
 //! A slow or broken shell config must never wedge the app, so the probe has a
 //! timeout and a failure falls back to the app's own PATH.
 
@@ -45,6 +48,11 @@ pub fn ready() -> Option<&'static str> {
 /// waits for it, so [`warm`] starts it at launch.
 pub fn user_path() -> Option<&'static str> {
     PATH.get_or_init(|| {
+        // A Windows app gets the person's full PATH from the registry however
+        // it was opened, so there is nothing a shell would add.
+        if cfg!(windows) {
+            return None;
+        }
         let shell = user_shell(std::env::var("SHELL").ok().as_deref());
         let path = probe(&shell, PROBE_TIMEOUT);
         if path.is_none() {

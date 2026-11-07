@@ -1,5 +1,6 @@
 import { ChevronRight, NotebookPen } from "lucide-react";
 import { type CSSProperties, useMemo, useState } from "react";
+import { shortcutLabel } from "../platform/shortcut.ts";
 import {
   type NotesFilter,
   notesView,
@@ -197,7 +198,7 @@ export function NotesTab({ projectId }: { projectId: string }) {
             project, not a session, and are never sent to Claude.
           </span>
           <span>
-            <Kbd>⌘⇧N</Kbd> adds one from anywhere
+            <Kbd>{shortcutLabel("⌘⇧N")}</Kbd> adds one from anywhere
           </span>
         </div>
       ) : (

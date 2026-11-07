@@ -1,12 +1,20 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
-import { beforeEach, expect, test, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, expect, test, vi } from "vitest";
 import { activityDeleteAll, previewNotifySound } from "../ipc/bridge.ts";
 import { useIntegration } from "../state/integration.ts";
 import { DEFAULT_LAYOUT, useLayout } from "../state/layout.ts";
 import { useUpdates } from "../state/updates.ts";
+import { pretendPlatform } from "../test/platform.ts";
 import { THEMES } from "../theme/themes/index.ts";
 import { SettingsView } from "./SettingsView.tsx";
 import { matchingSections, SETTINGS_SECTIONS } from "./settingsSections.ts";
+
+// The copy asserted here is the macOS wording; os.test.ts covers Windows.
+let restorePlatform: () => void = () => undefined;
+beforeAll(() => {
+  restorePlatform = pretendPlatform("mac");
+});
+afterAll(() => restorePlatform());
 
 const NOW_THREE = /Now 3 sessions, 2\.0 MB/;
 const KEPT_14 = /^Kept 14 days and up to 500\.0 MB, only on this Mac\./;

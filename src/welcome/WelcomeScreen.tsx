@@ -6,6 +6,7 @@ import {
   FALLBACK_RETENTION_DAYS,
   quitApp,
 } from "../ipc/bridge.ts";
+import { thisComputer } from "../platform/os.ts";
 import { ON_OFF_OPTIONS } from "../settings/settingsOptions.ts";
 import { useIntegration } from "../state/integration.ts";
 import { type SessionView, useLayout } from "../state/layout.ts";
@@ -20,12 +21,12 @@ import { companionHint, hooksHint, liveUsageHint } from "./integrationCopy.ts";
  * quits, leaving Claude Code exactly as it was.
  */
 
+// The panel centres itself with auto margins, not align-items: a flex-centred
+// child taller than the window overflows upward, past where it can scroll.
 const pageStyle: CSSProperties = {
-  alignItems: "center",
   background: tokens.color.chrome.window,
   display: "flex",
   height: "100%",
-  justifyContent: "center",
   overflowY: "auto",
   padding: tokens.space.xl,
 };
@@ -33,6 +34,7 @@ const pageStyle: CSSProperties = {
 const panelStyle: CSSProperties = {
   ...overlayPanel(),
   gap: tokens.space.lg,
+  margin: "auto",
   maxWidth: "560px",
   padding: tokens.space.xl,
   width: "100%",
@@ -328,8 +330,8 @@ export function WelcomeScreen() {
           title="Activity log"
         >
           What Claude did in each session — commands, file changes, web use.{" "}
-          {keptFor(retentionDays)}, only on this Mac. Known secrets are hidden
-          on a best-effort basis.
+          {keptFor(retentionDays)}, only on {thisComputer()}. Known secrets are
+          hidden on a best-effort basis.
           {statusHooks ? null : " It stays empty while status hooks are off."}
         </Item>
         <p style={textStyle}>

@@ -9,6 +9,8 @@ import type {
   ActivityTurn,
   StepKind,
 } from "../../ipc/bridge.ts";
+import { thisComputer } from "../../platform/os.ts";
+import { pathBasename, pathDirname } from "../../platform/path.ts";
 import { homeRelative } from "../../state/homeRelative.ts";
 import { relativizeTouchedPath } from "../../state/sessions.ts";
 import { durationLabel } from "../activity/toolLabel.ts";
@@ -440,12 +442,11 @@ function fileVerb(step: ActivityStep): string | undefined {
 }
 
 function fileName(path: string): string {
-  return path.slice(path.lastIndexOf("/") + 1) || path;
+  return pathBasename(path);
 }
 
 function folderOf(path: string): string {
-  const cut = path.lastIndexOf("/");
-  return cut > 0 ? path.slice(0, cut) : "";
+  return pathDirname(path);
 }
 
 /** The scheme a fetched address starts with, left off where it's shown. */
@@ -1041,7 +1042,7 @@ export function keptFor(retentionDays: number): string {
 
 /** The footer's "Kept 30 days · only on this Mac". */
 export function retentionNote(stats: ActivityStats): string {
-  return `${keptFor(stats.retentionDays)} · only on this Mac`;
+  return `${keptFor(stats.retentionDays)} · only on ${thisComputer()}`;
 }
 
 /**

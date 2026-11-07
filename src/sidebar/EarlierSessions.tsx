@@ -7,6 +7,7 @@ import {
   useState,
 } from "react";
 import { listPastSessions } from "../ipc/bridge.ts";
+import { pathBasename } from "../platform/path.ts";
 import { resumePastSession } from "../state/actions.ts";
 import { useSessions } from "../state/sessions.ts";
 import { createSwrResource } from "../state/swrResource.ts";
@@ -132,7 +133,7 @@ function rowLabel(past: PastSession): string {
   if (past.preview) {
     return past.preview;
   }
-  const base = past.cwd?.split("/").filter(Boolean).pop() ?? "session";
+  const base = (past.cwd ? pathBasename(past.cwd) : undefined) ?? "session";
   return `${base} — ${new Date(past.lastActiveMs).toLocaleDateString()}`;
 }
 

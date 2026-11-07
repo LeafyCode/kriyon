@@ -15,6 +15,7 @@
 //! settling at once used to queue several blocking `git status` runs onto the
 //! run loop. None of these touch `AppKit`, so none need the main thread.
 
+use kriyon_core::paths::Canonical as _;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -114,7 +115,10 @@ fn is_worktree_on(path: &str, branch: &str) -> bool {
     };
     // Canonical on both sides: `rev-parse` walks up to a parent repo when
     // `path` is not a worktree, and macOS's `/tmp` is `/private/tmp`.
-    let same_dir = match (std::fs::canonicalize(top), std::fs::canonicalize(path)) {
+    let same_dir = match (
+        kriyon_core::paths::canonicalize(top),
+        kriyon_core::paths::canonicalize(path),
+    ) {
         (Ok(a), Ok(b)) => a == b,
         _ => false,
     };
@@ -497,7 +501,7 @@ const MAX_NAMED_UNTRACKED_ROOTS: usize = 20;
 /// only invited them to disagree. The per-file cap stays, because it is also the
 /// last line of defence for a file that grew between planning and reading.
 fn read_untracked_content(repo_path: &str, rel_path: &str) -> Option<String> {
-    let repo_root = std::path::Path::new(repo_path).canonicalize().ok()?;
+    let repo_root = std::path::Path::new(repo_path).canonical().ok()?;
     let full_path = repo_root.join(rel_path);
     // `symlink_metadata` (lstat), never `metadata` (stat): never follow a
     // symlink. git itself exposes an untracked symlink as a link entry (its
@@ -517,7 +521,7 @@ fn read_untracked_content(repo_path: &str, rel_path: &str) -> Option<String> {
     // which the final-component lstat above wouldn't catch: require the fully
     // resolved path to still sit within the (canonical) repo root before the
     // read, mirroring `SandboxRoot::resolve`'s component-wise containment.
-    let resolved = full_path.canonicalize().ok()?;
+    let resolved = full_path.canonical().ok()?;
     if !resolved.starts_with(&repo_root) {
         return None;
     }
@@ -1074,9 +1078,9 @@ fn repo_root_is_home(repo_path: &str, home: &Path) -> bool {
     };
     let toplevel = Path::new(&toplevel);
     let toplevel_canonical = toplevel
-        .canonicalize()
+        .canonical()
         .unwrap_or_else(|_| toplevel.to_path_buf());
-    let home_canonical = home.canonicalize().unwrap_or_else(|_| home.to_path_buf());
+    let home_canonical = home.canonical().unwrap_or_else(|_| home.to_path_buf());
     toplevel_canonical == home_canonical
 }
 
@@ -1957,7 +1961,7 @@ mod tests {
     }
 
     fn canonical(path: &std::path::Path) -> String {
-        path.canonicalize()
+        path.canonical()
             .expect("canonical")
             .to_string_lossy()
             .into_owned()
@@ -1991,8 +1995,7 @@ mod tests {
         git_setup(repo, &["checkout", "-b", "feature"]);
         std::fs::write(dir.path().join("f.txt"), "two\n").expect("write");
         git_setup(repo, &["commit", "-am", "change"]);
-        let store =
-            store_with_project_root(&dir.path().canonicalize().expect("c").to_string_lossy());
+        let store = store_with_project_root(&dir.path().canonical().expect("c").to_string_lossy());
 
         let diff = diff_worktree_for(&store, repo, "main").expect("diff");
         assert_eq!(diff.base, "main");
@@ -2015,8 +2018,7 @@ mod tests {
         std::fs::rename(dir.path().join("f.txt"), dir.path().join("renamed.txt")).expect("rename");
         git_setup(repo, &["add", "-A"]);
         git_setup(repo, &["commit", "-m", "rename"]);
-        let store =
-            store_with_project_root(&dir.path().canonicalize().expect("c").to_string_lossy());
+        let store = store_with_project_root(&dir.path().canonical().expect("c").to_string_lossy());
 
         let diff = diff_worktree_for(&store, repo, "main").expect("diff");
 
@@ -2044,8 +2046,7 @@ mod tests {
         std::fs::write(dir.path().join("big.txt"), "x\n".repeat(900_000)).expect("write");
         git_setup(repo, &["add", "-A"]);
         git_setup(repo, &["commit", "-m", "big"]);
-        let store =
-            store_with_project_root(&dir.path().canonicalize().expect("c").to_string_lossy());
+        let store = store_with_project_root(&dir.path().canonical().expect("c").to_string_lossy());
 
         let diff = diff_worktree_for(&store, repo, "main").expect("diff");
 
@@ -2089,8 +2090,7 @@ mod tests {
         let dir = init_repo_with_commit();
         let repo = dir.path().to_str().expect("utf8");
         git_setup(repo, &["checkout", "-b", "feature"]);
-        let store =
-            store_with_project_root(&dir.path().canonicalize().expect("c").to_string_lossy());
+        let store = store_with_project_root(&dir.path().canonical().expect("c").to_string_lossy());
 
         let diff = diff_worktree_for(&store, repo, "main").expect("diff");
         assert_eq!(diff.base_sha, None);
@@ -2254,6 +2254,7 @@ mod tests {
         assert_eq!(file.hunks[0].lines[0].text, "hi");
     }
 
+    #[cfg(unix)]
     #[test]
     fn diff_working_tree_does_not_read_untracked_symlink_target() {
         if !git_available() {
@@ -2463,7 +2464,7 @@ mod tests {
             return;
         }
         let dir = init_repo_with_commit();
-        let repo = dir.path().canonicalize().expect("canonicalize");
+        let repo = dir.path().canonical().expect("canonicalize");
         let repo_str = repo.to_str().expect("utf8");
         let store = store_with_project_root(repo_str);
 
@@ -2480,7 +2481,7 @@ mod tests {
             return;
         }
         let dir = tempfile::tempdir().expect("temp non-git dir");
-        let cwd = dir.path().canonicalize().expect("canonicalize");
+        let cwd = dir.path().canonical().expect("canonicalize");
         let cwd_str = cwd.to_str().expect("utf8");
         std::fs::write(cwd.join("loose.txt"), "not tracked\n").expect("write");
         let store = store_with_project_root(cwd_str);
@@ -3105,7 +3106,7 @@ mod tests {
         }
         let dir = init_repo_with_commit(); // commits f.txt = "one\n"
         std::fs::write(dir.path().join("f.txt"), "two\n").expect("write");
-        let root = dir.path().canonicalize().expect("canonicalize");
+        let root = dir.path().canonical().expect("canonicalize");
         let store = store_with_project_root(&root.to_string_lossy());
 
         let result = read_baseline_sync(&sandbox_root(&store, root.to_str().unwrap()), "f.txt")
@@ -3127,7 +3128,7 @@ mod tests {
         }
         let dir = init_repo_with_commit();
         std::fs::write(dir.path().join("new.txt"), "brand new").expect("write");
-        let root = dir.path().canonicalize().expect("canonicalize");
+        let root = dir.path().canonical().expect("canonicalize");
         let store = store_with_project_root(&root.to_string_lossy());
 
         let result = read_baseline_sync(&sandbox_root(&store, root.to_str().unwrap()), "new.txt")
@@ -3146,7 +3147,7 @@ mod tests {
     fn read_baseline_reports_a_non_git_dir_as_not_a_repo() {
         let dir = tempfile::tempdir().expect("temp dir");
         std::fs::write(dir.path().join("f.txt"), "plain\n").expect("write");
-        let root = dir.path().canonicalize().expect("canonicalize");
+        let root = dir.path().canonical().expect("canonicalize");
         let store = store_with_project_root(&root.to_string_lossy());
 
         let result = read_baseline_sync(&sandbox_root(&store, root.to_str().unwrap()), "f.txt")
@@ -3167,7 +3168,7 @@ mod tests {
             return;
         }
         let dir = init_repo_with_commit();
-        let repo = dir.path().canonicalize().expect("canonicalize");
+        let repo = dir.path().canonical().expect("canonicalize");
         let registered = tempfile::tempdir().expect("registered root");
         let store = store_with_project_root(&registered.path().to_string_lossy());
 
@@ -3234,7 +3235,7 @@ mod tests {
         std::fs::write(dir.path().join("image.bin"), &bytes).expect("write");
         git_setup(repo, &["add", "."]);
         git_setup(repo, &["commit", "-m", "binary"]);
-        let root = dir.path().canonicalize().expect("canonicalize");
+        let root = dir.path().canonical().expect("canonicalize");
         let store = store_with_project_root(&root.to_string_lossy());
 
         let result = read_baseline_sync(&sandbox_root(&store, root.to_str().unwrap()), "image.bin")
@@ -3268,7 +3269,7 @@ mod tests {
         std::fs::write(dir.path().join("latin.txt"), &bytes).expect("write");
         git_setup(repo, &["add", "."]);
         git_setup(repo, &["commit", "-m", "latin1"]);
-        let root = dir.path().canonicalize().expect("canonicalize");
+        let root = dir.path().canonical().expect("canonicalize");
         let store = store_with_project_root(&root.to_string_lossy());
 
         let result = read_baseline_sync(&sandbox_root(&store, root.to_str().unwrap()), "latin.txt")
@@ -3289,7 +3290,7 @@ mod tests {
         }
         let dir = init_repo_with_commit();
         std::fs::create_dir(dir.path().join("subdir")).expect("mkdir");
-        let root = dir.path().canonicalize().expect("canonicalize");
+        let root = dir.path().canonical().expect("canonicalize");
         let store = store_with_project_root(&root.to_string_lossy());
 
         let err = read_baseline_sync(&sandbox_root(&store, root.to_str().unwrap()), "subdir")
@@ -3314,7 +3315,7 @@ mod tests {
         std::fs::write(dir.path().join("big.txt"), &big).expect("write");
         git_setup(repo, &["add", "."]);
         git_setup(repo, &["commit", "-m", "big"]);
-        let root = dir.path().canonicalize().expect("canonicalize");
+        let root = dir.path().canonical().expect("canonicalize");
         let store = store_with_project_root(&root.to_string_lossy());
 
         let result = read_baseline_sync(&sandbox_root(&store, root.to_str().unwrap()), "big.txt")
@@ -3335,7 +3336,7 @@ mod tests {
         }
         let dir = init_repo_with_commit(); // commits f.txt = "one\n"
         std::fs::write(dir.path().join("f.txt"), "scribbled over\n").expect("write");
-        let root = dir.path().canonicalize().expect("canonicalize");
+        let root = dir.path().canonical().expect("canonicalize");
         let store = store_with_project_root(&root.to_string_lossy());
 
         discard_file_changes_sync(&sandbox_root(&store, root.to_str().unwrap()), "f.txt", None)
@@ -3364,7 +3365,7 @@ mod tests {
             &format!("kriyon-hook-tool '{}'", marker.display()),
         );
         std::fs::write(dir.path().join("f.txt"), "scribbled over\n").expect("write");
-        let root = dir.path().canonicalize().expect("canonicalize");
+        let root = dir.path().canonical().expect("canonicalize");
         let store = store_with_project_root(&root.to_string_lossy());
 
         discard_file_changes_sync(
@@ -3388,7 +3389,7 @@ mod tests {
         }
         let dir = init_repo_with_commit();
         std::fs::write(dir.path().join("new.txt"), "brand new").expect("write");
-        let root = dir.path().canonicalize().expect("canonicalize");
+        let root = dir.path().canonical().expect("canonicalize");
         let store = store_with_project_root(&root.to_string_lossy());
 
         let err = discard_file_changes_sync(
@@ -3471,7 +3472,7 @@ mod tests {
         git_setup(repo, &["commit", "-m", "routes"]);
         std::fs::write(dir.path().join("app/[slug]/page.tsx"), "target edit\n").expect("write");
         std::fs::write(dir.path().join("app/s/page.tsx"), "BYSTANDER WORK\n").expect("write");
-        let root = dir.path().canonicalize().expect("canonicalize");
+        let root = dir.path().canonical().expect("canonicalize");
         let store = store_with_project_root(&root.to_string_lossy());
 
         discard_file_changes_sync(
@@ -3498,6 +3499,7 @@ mod tests {
     /// inside the root makes the two disagree, in the escaping direction. The
     /// pathspec handed to git must therefore be derived from the resolved path,
     /// never from the raw string the frontend sent.
+    #[cfg(unix)]
     #[test]
     fn discard_file_changes_does_not_escape_via_a_symlink_and_dotdot() {
         if !git_available() {
@@ -3523,7 +3525,7 @@ mod tests {
         let cwd = dir
             .path()
             .join("frontend")
-            .canonicalize()
+            .canonical()
             .expect("canonicalize");
         let store = store_with_project_root(&cwd.to_string_lossy());
 
@@ -3558,7 +3560,7 @@ mod tests {
             return;
         }
         let dir = init_repo_with_commit();
-        let repo = dir.path().canonicalize().expect("canonicalize");
+        let repo = dir.path().canonical().expect("canonicalize");
         let repo_str = repo.to_str().expect("utf8");
         let store = store_with_project_root(repo_str);
 
@@ -3577,7 +3579,7 @@ mod tests {
             return;
         }
         let dir = init_repo_with_commit(); // commits f.txt = "one\n"
-        let repo = dir.path().canonicalize().expect("canonicalize");
+        let repo = dir.path().canonical().expect("canonicalize");
         let repo_str = repo.to_str().expect("utf8");
         let store = store_with_project_root(repo_str);
         std::fs::write(repo.join("f.txt"), "session start\n").expect("write");
@@ -3602,7 +3604,7 @@ mod tests {
     #[test]
     fn read_session_baseline_rejects_a_baseline_that_is_not_an_oid() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let root = dir.path().canonicalize().expect("canonicalize");
+        let root = dir.path().canonical().expect("canonicalize");
         let store = store_with_project_root(&root.to_string_lossy());
         for bad in ["HEAD", "--output=x", "main~1"] {
             let err = read_session_baseline_for(&store, root.to_str().unwrap(), bad, "f.txt")
@@ -3617,7 +3619,7 @@ mod tests {
             return;
         }
         let dir = init_repo_with_commit(); // commits f.txt = "one\n"
-        let root = dir.path().canonicalize().expect("canonicalize");
+        let root = dir.path().canonical().expect("canonicalize");
         let store = store_with_project_root(&root.to_string_lossy());
         std::fs::write(root.join("f.txt"), "one\ntwo\n").expect("write");
 
@@ -3637,7 +3639,7 @@ mod tests {
             return;
         }
         let dir = init_repo_with_commit();
-        let root = dir.path().canonicalize().expect("canonicalize");
+        let root = dir.path().canonical().expect("canonicalize");
         let store = store_with_project_root(&root.to_string_lossy());
         std::fs::write(root.join("new.txt"), "fresh\n").expect("write");
 
@@ -3649,7 +3651,7 @@ mod tests {
     #[test]
     fn blame_file_refuses_paths_outside_the_root() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let root = dir.path().canonicalize().expect("canonicalize");
+        let root = dir.path().canonical().expect("canonicalize");
         let store = store_with_project_root(&root.to_string_lossy());
         assert!(blame_file_sync(
             &sandbox_root(&store, root.to_str().unwrap()),
@@ -3666,7 +3668,7 @@ mod tests {
             return;
         }
         let dir = init_repo_with_commit();
-        let repo = dir.path().canonicalize().expect("canonicalize");
+        let repo = dir.path().canonical().expect("canonicalize");
         let repo_str = repo.to_str().expect("utf8");
         let store = store_with_project_root(repo_str);
         let baseline = snapshot_tree(repo_str, Budget::DEFAULT).expect("snapshot");
@@ -3888,8 +3890,8 @@ mod tests {
 
         let top = repo_toplevel_sync(repo).expect("repo_toplevel");
         assert_eq!(
-            std::fs::canonicalize(&top).expect("canonicalize top"),
-            std::fs::canonicalize(repo).expect("canonicalize repo")
+            kriyon_core::paths::canonicalize(&top).expect("canonicalize top"),
+            kriyon_core::paths::canonicalize(repo).expect("canonicalize repo")
         );
     }
 
@@ -3939,6 +3941,7 @@ mod tests {
 
     /// Make `main` and `feature` diverge (no conflict), so merging needs a
     /// merge commit — the case that runs the commit hooks.
+    #[cfg(unix)]
     fn diverge_feature(dir: &std::path::Path) {
         let repo = dir.to_str().expect("utf8");
         git_setup(repo, &["checkout", "-b", "feature"]);

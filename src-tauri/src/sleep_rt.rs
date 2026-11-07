@@ -67,8 +67,13 @@ fn terminate(pid: i32) {
     crate::daemon_rt::signal_gated(pid, libc::SIGTERM);
 }
 
-#[cfg(not(unix))]
-fn terminate(_pid: i32) {}
+/// Windows has no polite stop for a console program that isn't attached to our
+/// console: the `claude` is ended outright, as a closing terminal would. Its
+/// conversation is already on disk, which is what waking resumes from.
+#[cfg(windows)]
+fn terminate(pid: i32) {
+    crate::daemon_rt::terminate_gated(pid);
+}
 
 /// One sleep pass, run from the background ticker alongside the memory
 /// sampler: refresh idle clocks, confirm pending stops, retry a focused

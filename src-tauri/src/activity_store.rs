@@ -1526,7 +1526,6 @@ pub fn ingest_spool(
     path: &Path,
 ) -> Result<bool, ActivityError> {
     use std::io::{Read as _, Seek as _, SeekFrom};
-    use std::os::unix::fs::MetadataExt as _;
 
     let mut file = match std::fs::File::open(path) {
         Ok(file) => file,
@@ -1534,9 +1533,10 @@ pub fn ingest_spool(
         Err(e) => return Err(e.into()),
     };
     let meta = file.metadata()?;
+    let (dev, ino) = kriyon_core::private_fs::file_identity(path)?;
     let (dev, ino, len) = (
-        i64::try_from(meta.dev()).unwrap_or(0),
-        i64::try_from(meta.ino()).unwrap_or(0),
+        i64::try_from(dev).unwrap_or(0),
+        i64::try_from(ino).unwrap_or(0),
         i64::try_from(meta.len()).unwrap_or(i64::MAX),
     );
     let start = match store.cursor(spool, session_id)? {
@@ -1610,11 +1610,11 @@ fn apply_lines(
 /// Where `path` ends right now (device, inode, length): an exit mark.
 #[must_use]
 pub fn spool_mark(path: &Path) -> Option<SpoolCursor> {
-    use std::os::unix::fs::MetadataExt as _;
     let meta = std::fs::metadata(path).ok()?;
+    let (dev, ino) = kriyon_core::private_fs::file_identity(path).ok()?;
     Some(SpoolCursor {
-        dev: i64::try_from(meta.dev()).ok()?,
-        ino: i64::try_from(meta.ino()).ok()?,
+        dev: i64::try_from(dev).ok()?,
+        ino: i64::try_from(ino).ok()?,
         offset: i64::try_from(meta.len()).ok()?,
     })
 }

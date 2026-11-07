@@ -2319,18 +2319,22 @@ dependencies = [
  "thiserror 2.0.21",
  "uuid",
  "window-vibrancy",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
 name = "kriyon-core"
 version = "0.15.0"
 dependencies = [
+ "dunce",
  "regex",
  "semver",
  "serde",
  "serde_json",
  "tempfile",
  "thiserror 2.0.21",
+ "uds_windows",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2343,6 +2347,7 @@ dependencies = [
  "portable-pty",
  "tempfile",
  "vt100",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

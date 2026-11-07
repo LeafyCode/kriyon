@@ -1024,6 +1024,10 @@ mod tests {
         fs::write(&path, r#"{"usedPercentage":10.0}"#).expect("write");
         assert!(src.poll().is_some(), "first snapshot emits");
         assert!(src.poll().is_none(), "unchanged snapshot is suppressed");
+        // Past one mtime tick (Windows advances file times every few ms), as
+        // statusLine ticks always are: a same-length rewrite inside one tick is
+        // the documented blind spot of the gate.
+        std::thread::sleep(std::time::Duration::from_millis(30));
         fs::write(&path, r#"{"usedPercentage":20.0}"#).expect("write2");
         assert!(src.poll().is_some(), "changed snapshot emits");
     }
@@ -1858,8 +1862,8 @@ mod tests {
         )
         .expect("rewrite transcript with title");
         let line = format!(
-            r#"{{"event":"Stop","session_id":"claude-x","transcript_path":"{}"}}"#,
-            transcript.display()
+            r#"{{"event":"Stop","session_id":"claude-x","transcript_path":{}}}"#,
+            serde_json::Value::String(transcript.display().to_string())
         );
         fs::write(events_dir.join("sess-1.jsonl"), format!("{line}\n")).expect("write event");
         // The statusLine wrapper writes a live usage snapshot.

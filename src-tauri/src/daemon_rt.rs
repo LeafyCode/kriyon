@@ -7,9 +7,9 @@
 //! [`kriyon_core::tree_stop`]. This module gathers their inputs (the store, the
 //! process table, the run dir) and carries out their answers.
 
+use kriyon_core::uds::UnixStream;
 use std::collections::{HashMap, HashSet};
 use std::io::Write as _;
-use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -43,6 +43,17 @@ pub(crate) fn signal_gated(pid: i32, signal: libc::c_int) {
         unsafe {
             libc::kill(pid, signal);
         }
+    }
+}
+
+/// End `pid` outright if the [Signal gate] allows it — Windows has no signals,
+/// so this is the one way the app ends a process there, and every one passes
+/// the gate. Best-effort: a vanished pid is fine.
+#[cfg(windows)]
+pub(crate) fn terminate_gated(pid: i32) {
+    let own_pid = i32::try_from(std::process::id()).unwrap_or(0);
+    if may_signal(pid, &[own_pid]) {
+        crate::proc_win::terminate(pid);
     }
 }
 
@@ -108,9 +119,31 @@ fn claim_run_dir(held: &parking_lot::Mutex<Option<std::fs::File>>, run: &Path) -
     true
 }
 
-#[cfg(not(unix))]
-fn claim_run_dir(_held: &parking_lot::Mutex<Option<std::fs::File>>, _run: &Path) -> bool {
-    false
+/// [`claim_run_dir`] on Windows: the lock file opened with no sharing at all,
+/// so a second instance's open fails with a sharing violation until the owner
+/// exits — which, as with `flock`, the system ends for it however it exits.
+#[cfg(windows)]
+fn claim_run_dir(held: &parking_lot::Mutex<Option<std::fs::File>>, run: &Path) -> bool {
+    use std::os::windows::fs::OpenOptionsExt as _;
+
+    let mut held = held.lock();
+    if held.is_some() {
+        return true;
+    }
+    if std::fs::create_dir_all(run).is_err() {
+        return false;
+    }
+    let Ok(file) = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .share_mode(0)
+        .open(run.join(OWNER_LOCK))
+    else {
+        return false;
+    };
+    *held = Some(file);
+    true
 }
 
 /// Whether this instance owns its [Run dir] — claiming it if nobody does.
@@ -158,6 +191,14 @@ fn terminate_daemon(pid: i32) {
     signal_gated(pid, libc::SIGTERM);
 }
 
+/// Stop a daemon the app cannot talk to. Ending the daemon closes its Job
+/// Object, which is the Windows [Tree stop]: its shell and everything under it
+/// go too.
+#[cfg(windows)]
+fn terminate_daemon(pid: i32) {
+    terminate_gated(pid);
+}
+
 /// End a daemon that was asked to stop and did not: SIGKILL everything under it
 /// in `tree`, then the daemon. `tree` must be the sweep `daemon_pid` came from,
 /// so the pid is known to still be that daemon.
@@ -167,6 +208,16 @@ fn force_stop(tree: &ProcessTree, daemon_pid: i32) {
         signal_gated(pid, libc::SIGKILL);
     }
     signal_gated(daemon_pid, libc::SIGKILL);
+}
+
+/// [`force_stop`] on Windows: end the daemon. Its Job Object closes with it and
+/// takes the shell and everything under it — the Windows [Tree stop]. The sweep
+/// is not walked: Windows never updates a parent pid when the parent exits, and
+/// pids are reused, so a process whose long-gone parent had the daemon's pid
+/// would read as its child and be ended.
+#[cfg(windows)]
+fn force_stop(_tree: &ProcessTree, daemon_pid: i32) {
+    terminate_daemon(daemon_pid);
 }
 
 /// How many times a connect to a daemon that is demonstrably alive is retried
@@ -181,7 +232,6 @@ const RETIRE_POLL: Duration = Duration::from_millis(250);
 /// restored from the store but its pane never mounted, so no [Daemon client]
 /// holds it. Without this, closing such a session deleted its row and left the
 /// daemon, shell and `claude` running forever with nothing able to reach them.
-#[cfg(unix)]
 pub(crate) fn stop_unattached(run: &Path, id: &str) {
     let Some(socket) = kriyon_core::daemon::session_socket_path(run, id) else {
         return;
@@ -199,9 +249,6 @@ pub(crate) fn stop_unattached(run: &Path, id: &str) {
         terminate_daemon(pid);
     }
 }
-
-#[cfg(not(unix))]
-pub(crate) fn stop_unattached(_run: &Path, _id: &str) {}
 
 /// `create_session` could not connect to `id`'s socket. That alone does not
 /// mean the daemon is gone: its socket file may have been deleted, or the
@@ -221,7 +268,6 @@ pub(crate) fn stop_unattached(_run: &Path, _id: &str) {}
 /// # Errors
 /// Returns an error string when a live daemon holds the socket and this
 /// instance is not the [Run dir]'s owner.
-#[cfg(unix)]
 pub(crate) fn recover_unreachable_daemon(
     id: &str,
     socket: &Path,
@@ -271,15 +317,6 @@ pub(crate) fn recover_unreachable_daemon(
             force_stop(&tree, pid);
         }
     }
-    Ok(None)
-}
-
-#[cfg(not(unix))]
-pub(crate) fn recover_unreachable_daemon(
-    _id: &str,
-    _socket: &Path,
-    _may_retire: bool,
-) -> Result<Option<UnixStream>, String> {
     Ok(None)
 }
 
@@ -356,7 +393,6 @@ pub(crate) fn lifecycle_pass<R: tauri::Runtime>(app: &tauri::AppHandle<R>, at_la
 /// daemon is unambiguous and is asked at once) and on the ticker (where an
 /// orphan must be seen on consecutive passes first). Never blocks on a daemon
 /// and never touches an owned one.
-#[cfg(unix)]
 pub(crate) fn reap_pass<R: tauri::Runtime>(app: &tauri::AppHandle<R>, at_launch: bool) {
     // Another running instance owns this run dir: its sessions are not in this
     // instance's memory, and one it created a moment ago is not in the store
@@ -394,10 +430,6 @@ pub(crate) fn reap_pass<R: tauri::Runtime>(app: &tauri::AppHandle<R>, at_launch:
     forget_closed(app, &swept);
 }
 
-#[cfg(not(unix))]
-pub(crate) fn reap_pass<R: tauri::Runtime>(_app: &tauri::AppHandle<R>, _at_launch: bool) {}
-
-#[cfg(unix)]
 fn carry_out(tree: &ProcessTree, run: &Path, orphan: &OrphanDaemon, step: ReapStep) {
     match step {
         ReapStep::Wait => {}
@@ -561,10 +593,10 @@ pub(crate) fn adopt_live_daemons<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kriyon_core::uds::UnixListener;
     use kriyon_core::wire::FrameDecoder;
     use parking_lot::Mutex;
     use std::io::Read as _;
-    use std::os::unix::net::UnixListener;
 
     fn mock_app() -> tauri::App<tauri::test::MockRuntime> {
         let app = tauri::test::mock_app();

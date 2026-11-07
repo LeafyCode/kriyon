@@ -52,11 +52,22 @@ pub struct IntegrationState {
 
 use kriyon_core::paths::companion_root;
 
+/// Write `bytes` to `path` owner-only, unless it already holds exactly them.
+/// Claude Code watches the companion folder and reloads the plugin, in every
+/// live session, whenever a file in it is written — so an unchanged file is
+/// left alone, and a launch no longer prints "plugin.json changed" in each.
+fn write_if_changed(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    if std::fs::read(path).is_ok_and(|current| current == bytes) {
+        return Ok(());
+    }
+    kriyon_core::private_fs::write_private(path, bytes)
+}
+
 /// Write the companion folder for `version` — owner-only, never a symlink.
 /// Claude Code writes `.claude-plugin/types/`
 /// into it at load, so the folder stays writable.
 fn write_companion(home: &Path, version: &str, with_mod: bool) -> std::io::Result<PathBuf> {
-    use kriyon_core::private_fs::{create_private_dir, write_private};
+    use kriyon_core::private_fs::create_private_dir;
     let root = companion_root(home);
     let dir = root.join(version);
     // The code that runs must be the code Kriyon wrote: never write through a
@@ -69,23 +80,23 @@ fn write_companion(home: &Path, version: &str, with_mod: bool) -> std::io::Resul
     for d in [dir.join(".claude-plugin"), dir.join("hooks")] {
         create_private_dir(&d)?;
     }
-    write_private(
+    write_if_changed(
         &dir.join(".claude-plugin").join("plugin.json"),
         plugin_manifest(version).as_bytes(),
     )?;
     let module = dir.join("hooks").join("companion.js");
     if with_mod {
-        write_private(
+        write_if_changed(
             &module,
             kriyon_core::integration::COMPANION_MODULE.as_bytes(),
         )?;
     } else {
         let _ = std::fs::remove_file(&module);
     }
-    write_private(
+    write_if_changed(
         &dir.join("hooks").join("hooks.json"),
         plugin_hooks(
-            &hooks::hook_command_for(home),
+            hooks::hook_command_for(home).as_deref(),
             with_mod.then_some(kriyon_core::integration::COMPANION_MODULE_PATH),
         )
         .as_bytes(),
@@ -116,10 +127,11 @@ pub fn apply(
     }
     hooks::write_scripts(home)?;
     hooks::edit_settings(home, |settings| {
-        if route == HookRoute::Settings {
+        let command = hooks::hook_command_for(home);
+        if let (HookRoute::Settings, Some(command)) = (route, command) {
             kriyon_core::hooks::merge_hook_config(
                 settings,
-                &hooks::hook_command_for(home),
+                &command,
                 kriyon_core::hooks::REGISTERED_HOOK_EVENTS,
             );
         } else {
@@ -462,6 +474,26 @@ pub fn integration_set(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_relaunch_leaves_an_unchanged_companion_folder_untouched() {
+        // Claude Code reloads the plugin in every live session whenever a file
+        // in the folder is written, so rewriting identical files is not free.
+        let home = tempfile::tempdir().expect("home");
+        let dir = write_companion(home.path(), "1.2.3", true).expect("first write");
+        let manifest = dir.join(".claude-plugin").join("plugin.json");
+        let before = std::fs::metadata(&manifest)
+            .expect("meta")
+            .modified()
+            .expect("mtime");
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        write_companion(home.path(), "1.2.3", true).expect("second write");
+        let after = std::fs::metadata(&manifest)
+            .expect("meta")
+            .modified()
+            .expect("mtime");
+        assert_eq!(before, after, "an identical manifest is not rewritten");
+    }
+
     use super::*;
     use serde_json::Value;
 

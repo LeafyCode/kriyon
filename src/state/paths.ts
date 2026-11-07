@@ -1,3 +1,5 @@
+import { isWindowsPath } from "../platform/path.ts";
+
 /** `path` without a trailing slash, so `/repo` and `/repo/` compare equal
  * and joining never produces a doubled separator. */
 function withoutTrailingSlash(path: string): string {
@@ -17,5 +19,27 @@ const MACOS_FIRMLINK_PREFIX = /^\/private(?=\/(?:etc|tmp|var)(?:\/|$))/;
  * Collapses toward the short form, which makes it direction-agnostic: either
  * operand may be the canonicalized one. */
 export function canonicalDir(path: string): string {
-  return withoutTrailingSlash(path).replace(MACOS_FIRMLINK_PREFIX, "");
+  return withoutTrailingSlash(windowsSpelling(path)).replace(
+    MACOS_FIRMLINK_PREFIX,
+    ""
+  );
+}
+
+/** A drive letter written in lower case (`c:`). */
+const LOWER_DRIVE = /^[a-z]:/;
+
+/** Windows writes one folder several ways: git's `rev-parse --show-toplevel`
+ * says `C:/dev/app` or `//server/share/app`, while Claude and the folder
+ * picker say `C:\dev\app` or `\\server\share\app`, and the drive letter's
+ * case varies. One spelling for a Windows path ({@link isWindowsPath}): `/`
+ * between parts and an upper-case drive letter. Any other path is left alone —
+ * a backslash is a legal character in a macOS file name. */
+function windowsSpelling(path: string): string {
+  if (!isWindowsPath(path)) {
+    return path;
+  }
+  const slashed = path.replace(/\\/g, "/");
+  return LOWER_DRIVE.test(slashed)
+    ? `${slashed[0].toUpperCase()}${slashed.slice(1)}`
+    : slashed;
 }

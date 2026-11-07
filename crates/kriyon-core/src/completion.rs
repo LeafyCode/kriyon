@@ -15,11 +15,34 @@ use std::path::{Path, PathBuf};
 /// canonicalizes the frontend-supplied `cwd` and every known session/project
 /// root, then gates `@` file walks and `claude` probes on this returning `true`
 /// — never walking or spawning in a blindly-trusted path.
+///
+/// Either side may be a verbatim Windows path (`\\?\C:\…`): `dunce` keeps
+/// that form for a path too long for the ordinary one, so a deep file under an
+/// ordinary root would otherwise never match it. Both are compared in the
+/// ordinary form.
 #[must_use]
 pub fn path_within_roots(candidate: &Path, roots: &[PathBuf]) -> bool {
-    roots
-        .iter()
-        .any(|root| candidate == root.as_path() || candidate.starts_with(root))
+    let candidate = without_verbatim(candidate);
+    roots.iter().any(|root| {
+        let root = without_verbatim(root);
+        candidate == root || candidate.starts_with(&root)
+    })
+}
+
+/// A verbatim Windows path (`\\?\C:\dev`, `\\?\UNC\server\share`) in its
+/// ordinary form (`C:\dev`, `\\server\share`); any other path as it is.
+fn without_verbatim(path: &Path) -> PathBuf {
+    let text = path.to_string_lossy();
+    if let Some(share) = text.strip_prefix(r"\\?\UNC\") {
+        PathBuf::from(format!(r"\\{share}"))
+    } else if let Some(rest) = text
+        .strip_prefix(r"\\?\")
+        .filter(|rest| rest.as_bytes().get(1) == Some(&b':'))
+    {
+        PathBuf::from(rest)
+    } else {
+        path.to_path_buf()
+    }
 }
 
 /// Description + argument hint read from a command/skill markdown file's
@@ -344,6 +367,24 @@ pub fn merge_commands(
 
 #[cfg(test)]
 mod tests {
+    #[cfg(windows)]
+    #[test]
+    fn a_long_verbatim_path_still_sits_under_its_ordinary_root() {
+        let root = PathBuf::from(r"C:\dev\app");
+        assert!(path_within_roots(
+            Path::new(r"\\?\C:\dev\app\node_modules\deep\file.js"),
+            std::slice::from_ref(&root)
+        ));
+        assert!(!path_within_roots(
+            Path::new(r"\\?\C:\dev\other\file.js"),
+            std::slice::from_ref(&root)
+        ));
+        assert!(path_within_roots(
+            Path::new(r"\\?\UNC\server\share\app\a.js"),
+            &[PathBuf::from(r"\\server\share\app")]
+        ));
+    }
+
     use super::*;
 
     #[test]

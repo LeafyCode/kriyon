@@ -75,7 +75,7 @@ impl AttachmentRegistry {
     /// When the path doesn't exist, can't be read, isn't valid text, or has a
     /// control character in it.
     pub fn admit(&self, path: &Path) -> Result<Attachment, String> {
-        let real = std::fs::canonicalize(path)
+        let real = kriyon_core::paths::canonicalize(path)
             .map_err(|e| format!("Can't attach {}: {e}", path.display()))?;
         let text = real
             .to_str()
@@ -276,7 +276,15 @@ fn unique_path(dir: &Path, stem: &str, ext: &str) -> PathBuf {
     path
 }
 
+/// Windows has no `sips`: the picture is attached as a file, with the caution
+/// that says Claude may not be able to see it.
+#[cfg(not(target_os = "macos"))]
+fn convert_with_sips(_src: &Path, _out: &Path, _format: &str) -> Result<(), String> {
+    Err("picture conversion needs macOS".to_string())
+}
+
 /// Convert `src` to `format` at `out` with macOS's own `sips`, owner-only.
+#[cfg(target_os = "macos")]
 fn convert_with_sips(src: &Path, out: &Path, format: &str) -> Result<(), String> {
     use std::os::unix::fs::PermissionsExt as _;
     let mut command = std::process::Command::new("/usr/bin/sips");
@@ -301,13 +309,14 @@ fn convert_with_sips(src: &Path, out: &Path, format: &str) -> Result<(), String>
 
 fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     use std::io::Write as _;
-    use std::os::unix::fs::OpenOptionsExt as _;
-    std::fs::OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .mode(0o600)
-        .open(path)?
-        .write_all(bytes)
+    let mut options = std::fs::OpenOptions::new();
+    options.create_new(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(0o600);
+    }
+    options.open(path)?.write_all(bytes)
 }
 
 fn paste_dir<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<PathBuf, String> {
@@ -500,6 +509,8 @@ mod tests {
         assert_eq!(registry.admit_all(&[png, dir.path().join("gone")]).len(), 1);
     }
 
+    /// Windows file names can't hold control characters at all.
+    #[cfg(unix)]
     #[test]
     fn a_path_that_would_be_read_as_keys_is_refused() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -626,7 +637,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let slip = dir.path().join("My slip.pdf");
         std::fs::write(&slip, b"%PDF").expect("write");
-        let real = std::fs::canonicalize(&slip).expect("real");
+        let real = kriyon_core::paths::canonicalize(&slip).expect("real");
         let mut cb = arboard::Clipboard::new().expect("clipboard");
         cb.set().file_list(&[&slip]).expect("copy");
         assert_eq!(
@@ -638,15 +649,23 @@ mod tests {
 
     #[test]
     fn only_file_urls_name_paths() {
+        let (url, path) = if cfg!(windows) {
+            (
+                "file:///C:/Users/me/My%20Docs/slip.pdf",
+                r"C:\Users\me\My Docs\slip.pdf",
+            )
+        } else {
+            (
+                "file:///Users/me/My%20Docs/slip.pdf",
+                "/Users/me/My Docs/slip.pdf",
+            )
+        };
         let urls = [
-            "file:///Users/me/My%20Docs/slip.pdf".to_string(),
+            url.to_string(),
             "https://example.com/a.pdf".to_string(),
             "not a url".to_string(),
         ];
-        assert_eq!(
-            file_url_paths(&urls),
-            [PathBuf::from("/Users/me/My Docs/slip.pdf")]
-        );
+        assert_eq!(file_url_paths(&urls), [PathBuf::from(path)]);
     }
 
     #[test]

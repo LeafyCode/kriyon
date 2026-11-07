@@ -5,7 +5,15 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
-import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  expect,
+  test,
+  vi,
+} from "vitest";
 import type { CommandCatalog } from "../ipc/bridge.ts";
 import { promptHistory, submitPrompt, writeStdin } from "../ipc/bridge.ts";
 import { useAttachments } from "../state/attachments.ts";
@@ -16,7 +24,15 @@ import { useSentPrompts } from "../state/sentPrompts.ts";
 import { useSessions } from "../state/sessions.ts";
 import { useUi } from "../state/ui.ts";
 import { useUsageCards } from "../state/usageCards.ts";
+import { pretendPlatform } from "../test/platform.ts";
 import { PromptBar } from "./PromptBar.tsx";
+
+// The copy asserted here is the macOS wording; os.test.ts covers Windows.
+let restorePlatform: () => void = () => undefined;
+beforeAll(() => {
+  restorePlatform = pretendPlatform("mac");
+});
+afterAll(() => restorePlatform());
 
 vi.mock("../ipc/bridge", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../ipc/bridge.ts")>()),

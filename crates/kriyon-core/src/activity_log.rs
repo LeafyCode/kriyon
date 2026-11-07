@@ -198,22 +198,82 @@ fn is_secret_path(text: &str) -> bool {
 /// An absolute path not under `cwd`. A relative path is inside by definition;
 /// with no `cwd` known nothing is flagged.
 fn is_outside(path: &str, cwd: Option<&str>) -> bool {
-    let Some(cwd) = cwd.filter(|c| c.starts_with('/')) else {
+    let Some(cwd) = cwd.and_then(absolute) else {
         return false;
     };
-    if !path.starts_with('/') {
+    // Under a Windows folder, Git Bash's `/c/…` is the drive path `c:/…`.
+    let path = match git_bash_drive(path) {
+        Some(drive_path) if is_drive_path(&cwd) => absolute(&drive_path),
+        _ => absolute(path),
+    };
+    let Some(path) = path else {
         return false;
-    }
+    };
     let root = cwd.trim_end_matches('/');
     !(path == root || path.starts_with(&format!("{root}/")))
 }
 
+/// Whether `path` starts with a drive (`C:`), as a Windows path does.
+fn is_drive_path(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':'
+}
+
+/// Git Bash's spelling of a drive path, `/c/dev`, as `c:/dev`; `None` for any
+/// other path.
+fn git_bash_drive(path: &str) -> Option<String> {
+    let rest = path.strip_prefix('/')?;
+    let mut chars = rest.chars();
+    let drive = chars.next().filter(char::is_ascii_alphabetic)?;
+    let tail = chars.as_str();
+    tail.starts_with('/').then(|| format!("{drive}:{tail}"))
+}
+
+/// The home folder an absolute, comparable `cwd` (see [`absolute`]) sits in:
+/// `/Users/<name>` on macOS, `c:/users/<name>` on Windows.
+fn home_of(cwd: &str) -> Option<String> {
+    let (prefix, rest) = if let Some(rest) = cwd.strip_prefix("/Users/") {
+        ("/Users/".to_string(), rest)
+    } else if is_drive_path(cwd) {
+        let rest = cwd.get(2..)?.strip_prefix("/users/")?;
+        (format!("{}/users/", &cwd[..2]), rest)
+    } else {
+        return None;
+    };
+    let user = rest.split('/').next().filter(|user| !user.is_empty())?;
+    Some(format!("{prefix}{user}"))
+}
+
+/// An absolute path in one comparable form, or `None` for a relative one. A
+/// Windows path — a drive path (`C:\dev\app`) or a network share
+/// (`\\server\share`), either separator — is written with `/` and in lower
+/// case, since Windows paths ignore case. The frontend's `isWindowsPath`
+/// recognises the same shapes.
+fn absolute(path: &str) -> Option<String> {
+    let bytes = path.as_bytes();
+    let share = path.starts_with("\\\\") || (path.starts_with("//") && !path.starts_with("///"));
+    if share
+        || (bytes.len() >= 3
+            && bytes[0].is_ascii_alphabetic()
+            && bytes[1] == b':'
+            && matches!(bytes[2], b'\\' | b'/'))
+    {
+        Some(path.replace('\\', "/").to_lowercase())
+    } else if path.starts_with('/') {
+        Some(path.to_string())
+    } else {
+        None
+    }
+}
+
 /// A path a command names in the home folder or the system's own: `~/…`,
-/// `$HOME/…`, `/Users/…`, `/etc/…`, `/Volumes/…`. Scratch places (`/tmp`,
-/// `/dev/null`) and tools (`/usr/bin`) are left out: using them is routine.
+/// `$HOME/…`, `/Users/…`, `/etc/…`, `/Volumes/…`, and on Windows
+/// `C:\Users\…`, `C:\Windows\…` and `C:\ProgramData\…` (either slash, or
+/// Git Bash's `/c/Users/…`). Scratch places (`/tmp`, `/dev/null`) and tools
+/// (`/usr/bin`) are left out: using them is routine.
 static COMMAND_PATH: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r#"(?:^|[\s'"=(<>|;&])((?:~|\$HOME|\$\{HOME\})/[^\s'"<>|;&)]*|/(?:Users|etc|private/etc|Volumes)/[^\s'"<>|;&)]*)"#,
+        r#"(?:^|[\s'"=(<>|;&])((?:~|\$HOME|\$\{HOME\})/[^\s'"<>|;&)]*|/(?:Users|etc|private/etc|Volumes)/[^\s'"<>|;&)]*|(?:[A-Za-z]:[\\/]|/[A-Za-z]/)(?i:Users|Windows|ProgramData)[\\/][^\s'"<>|;&)]*)"#,
     )
     .expect("a constant pattern")
 });
@@ -225,10 +285,7 @@ fn reaches_outside(command: &str, cwd: Option<&str>) -> bool {
     let Some(cwd) = cwd else {
         return false;
     };
-    let home = cwd
-        .strip_prefix("/Users/")
-        .and_then(|rest| rest.split('/').next())
-        .map(|user| format!("/Users/{user}"));
+    let home = absolute(cwd).as_deref().and_then(home_of);
     COMMAND_PATH.captures_iter(command).any(|c| {
         let path = &c[1];
         let rest = ["~", "$HOME", "${HOME}"]
@@ -763,6 +820,24 @@ mod tests {
     }
 
     #[test]
+    fn a_windows_path_outside_the_project_is_flagged_and_one_inside_is_not() {
+        let cwd = Some(r"C:\dev\app");
+        assert!(is_outside(r"C:\Users\me\.ssh\id_rsa", cwd));
+        assert!(!is_outside(r"C:\dev\app\src\a.ts", cwd));
+        assert!(
+            !is_outside("c:/DEV/app/b.ts", cwd),
+            "Windows paths ignore case"
+        );
+        assert!(!is_outside("src/a.ts", cwd), "a relative path is inside");
+        let share = Some(r"\\Server\share\app");
+        assert!(
+            !is_outside("//server/share/app/a.ts", share),
+            "git's spelling"
+        );
+        assert!(is_outside(r"\\server\share\other\a.ts", share));
+    }
+
+    #[test]
     fn parses_the_hook_scripts_timestamps() {
         assert_eq!(parse_iso_ms("1970-01-01T00:00:00+00:00"), Some(0));
         assert_eq!(parse_iso_ms("1970-01-01T00:00:01.5Z"), Some(1500));
@@ -908,6 +983,22 @@ mod tests {
             0,
             "no home known"
         );
+    }
+
+    #[test]
+    fn a_windows_command_that_reaches_outside_the_project_is_flagged() {
+        let run = |cmd: &str| {
+            step_flags(StepKind::Command, Some(cmd), None, Some(r"C:\Users\me\app"))
+                & flags::OUTSIDE_PROJECT
+        };
+        assert_ne!(run(r"type C:\Users\me\.ssh\id_rsa"), 0);
+        assert_ne!(run("cat C:/Users/me/.ssh/id_rsa"), 0);
+        assert_ne!(run("cat /c/Users/me/.ssh/id_rsa"), 0, "Git Bash spelling");
+        assert_ne!(run("cat ~/.claude/settings.json"), 0);
+        assert_eq!(run("cat ~/app/src/a.js"), 0, "inside, spelled from home");
+        assert_eq!(run(r"type C:\Users\me\app\src\a.js"), 0);
+        assert_eq!(run("cat /c/Users/me/app/src/a.js"), 0, "Git Bash, inside");
+        assert_eq!(run("cat /tmp/out.txt"), 0, "scratch places");
     }
 
     #[test]

@@ -13,13 +13,14 @@ export interface ContextLine {
   tone: ContextTone;
 }
 
-/** Where to look for the setting that turned a session's hooks off. */
-const HOOKS_OFF_WHERE: Record<HooksOffScope, string> = {
-  kriyon: "in Kriyon settings",
-  local: "in .claude/settings.local.json",
-  managed: "by managed settings",
-  project: "in .claude/settings.json",
-  user: "in ~/.claude/settings.json",
+/** Why a session's hooks can't run: where the setting is, or what is missing. */
+const HOOKS_OFF_WHY: Record<HooksOffScope, string> = {
+  kriyon: "hooks off in Kriyon settings",
+  local: "hooks off in .claude/settings.local.json",
+  managed: "hooks off by managed settings",
+  project: "hooks off in .claude/settings.json",
+  python: "hooks need Python, which isn't installed",
+  user: "hooks off in ~/.claude/settings.json",
 };
 
 function agentPhrase(count: number): string {
@@ -41,7 +42,7 @@ export function contextLine(
   if (hooksOff) {
     // No hook can ever fire, so the status is a guess: say why instead.
     return {
-      text: `Status unavailable · hooks off ${HOOKS_OFF_WHERE[hooksOff]}`,
+      text: `Status unavailable · ${HOOKS_OFF_WHY[hooksOff]}`,
       tone: "muted",
     };
   }

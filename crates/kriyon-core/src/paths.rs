@@ -64,8 +64,57 @@ pub fn companion_root(home: &Path) -> PathBuf {
     kriyon_dir(home).join("companion")
 }
 
+/// `canonicalize`, as every path Kriyon compares or shows should be resolved.
+///
+/// On Windows the standard library's `canonicalize` returns a verbatim path
+/// (`\\?\C:\dev\app`), which no path Windows hands us elsewhere — a file
+/// watcher's event, a path Claude wrote, the folder picker's choice — ever
+/// matches, and which most programs cannot open. `dunce` gives the ordinary
+/// `C:\dev\app` whenever that names the same file, and is the standard
+/// library's `canonicalize` everywhere else. Clippy forbids the standard one.
+pub trait Canonical {
+    /// The absolute path with every symlink and `..` resolved.
+    ///
+    /// # Errors
+    /// When the path does not exist or can't be read.
+    fn canonical(&self) -> std::io::Result<PathBuf>;
+}
+
+impl Canonical for Path {
+    #[allow(clippy::disallowed_methods)]
+    fn canonical(&self) -> std::io::Result<PathBuf> {
+        dunce::canonicalize(self)
+    }
+}
+
+/// [`Canonical::canonical`] for anything path-like.
+///
+/// # Errors
+/// When the path does not exist or can't be read.
+pub fn canonicalize(path: impl AsRef<Path>) -> std::io::Result<PathBuf> {
+    path.as_ref().canonical()
+}
+
+/// A relative path written with `/` between its parts, on every platform:
+/// how git names a repo path, how Claude reads an `@` mention, and how the
+/// frontend splits one. A Windows `Path` would print `src\\app.ts`.
+#[must_use]
+pub fn slash_path(relative: &Path) -> String {
+    relative
+        .components()
+        .map(|part| part.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn slash_path_joins_parts_with_slashes() {
+        let rel: std::path::PathBuf = ["src", "ui", "app.ts"].iter().collect();
+        assert_eq!(super::slash_path(&rel), "src/ui/app.ts");
+    }
+
     use super::*;
 
     #[test]
