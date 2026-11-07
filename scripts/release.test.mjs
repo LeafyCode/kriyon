@@ -38,6 +38,7 @@ import {
   preReleaseBase,
   readTagPattern,
   readVersions,
+  reflow,
   setVersions,
   workspaceCrates,
 } from "./release-lib.mjs";
@@ -517,6 +518,63 @@ describe("the changelog entry", () => {
         "## 0.13.0-beta.1 — 2026-10-16\n\n<!-- One short paragraph. -->\n"
       ),
       ""
+    );
+  });
+
+  test("notes join wrapped lines, since GitHub shows each newline as a break", () => {
+    assert.equal(
+      reflow(
+        [
+          "A summary that wraps",
+          "onto a second line.",
+          "",
+          "### Added",
+          "",
+          "- **A thing.** It wraps",
+          "  onto the next line.",
+          "- Another thing.",
+          "1. A numbered",
+          "   item.",
+          "",
+          "```sh",
+          "keep this",
+          "as is",
+          "```",
+          "",
+          "> A quote that",
+          "> wraps.",
+          "",
+          "| a | b |",
+          "| - | - |",
+          "",
+          "A hard break  ",
+          "stays.",
+          "",
+        ].join("\n")
+      ),
+      [
+        "A summary that wraps onto a second line.",
+        "",
+        "### Added",
+        "",
+        "- **A thing.** It wraps onto the next line.",
+        "- Another thing.",
+        "1. A numbered item.",
+        "",
+        "```sh",
+        "keep this",
+        "as is",
+        "```",
+        "",
+        "> A quote that wraps.",
+        "",
+        "| a | b |",
+        "| - | - |",
+        "",
+        "A hard break  ",
+        "stays.",
+        "",
+      ].join("\n")
     );
   });
 
