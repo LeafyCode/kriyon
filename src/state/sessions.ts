@@ -487,6 +487,25 @@ export function isParked(session: UiSession): boolean {
   return session.archivedAt === null && (session.parkedAt ?? null) !== null;
 }
 
+/** Whether a project is pinned: drawn in Pinned, never in a folder's list. */
+export function isPinnedProject(project: ProjectRow): boolean {
+  return (project.pinnedAt ?? null) !== null;
+}
+
+/**
+ * Whether a session asks for the person where the rail draws it: blocked
+ * (waiting or errored) and live. A pinned session is left out — it is drawn,
+ * and flagged, in Pinned — so a project's or folder's dot and triage's rank
+ * all agree on what "needs you" means.
+ */
+export function needsYouOnRail(session: UiSession): boolean {
+  return (
+    (session.status === "waiting" || session.status === "error") &&
+    !isPutAway(session) &&
+    !isPinnedSession(session)
+  );
+}
+
 /**
  * Whether a session shows in the sidebar's Pinned section instead of under its
  * project: pinned, and still live (a parked or archived pin waits where put-away
@@ -935,10 +954,14 @@ export const useSessions = create<SessionsState>((set, get) => ({
       ),
     })),
 
+  // Pinned projects live outside folders: moving one would save a folder it
+  // never shows in (Pinned draws it), so the store refuses.
   setProjectFolder: (projectId, folderId) =>
     set((state) => ({
       projects: state.projects.map((project) =>
-        project.id === projectId ? { ...project, folderId } : project
+        project.id === projectId && !isPinnedProject(project)
+          ? { ...project, folderId }
+          : project
       ),
     })),
 
@@ -949,13 +972,19 @@ export const useSessions = create<SessionsState>((set, get) => ({
       ),
     })),
 
+  // Pinning takes a project out of its folder: Pinned is then its one place,
+  // so no reader of `folderId` can find a pinned project inside a folder.
+  // Unpinning puts it back on the plain list.
   setProjectPinned: (projectId, pinned) =>
     set((state) => ({
-      projects: state.projects.map((project) =>
-        project.id === projectId
-          ? { ...project, pinnedAt: pinned ? Date.now() : null }
-          : project
-      ),
+      projects: state.projects.map((project) => {
+        if (project.id !== projectId) {
+          return project;
+        }
+        return pinned
+          ? { ...project, folderId: null, pinnedAt: Date.now() }
+          : { ...project, pinnedAt: null };
+      }),
     })),
 
   setSessionPinned: (sessionId, pinned) =>

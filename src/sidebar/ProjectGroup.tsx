@@ -42,8 +42,10 @@ import {
   useProjectNotes,
 } from "../state/projectNotes.ts";
 import {
+  isPinnedProject,
   isPutAway,
   isWorktreeSession,
+  needsYouOnRail,
   useSessions,
 } from "../state/sessions.ts";
 import { useUi } from "../state/ui.ts";
@@ -650,8 +652,7 @@ function ProjectHeader({
           }}
           onNewFolder={() => {
             actionsMenu.close();
-            const id = createProjectFolder(DEFAULT_FOLDER_NAME, project.id);
-            useProjectFolders.getState().setEditingFolder(id);
+            createProjectFolder(DEFAULT_FOLDER_NAME, project.id);
           }}
           onOpenNotes={() => {
             actionsMenu.close();
@@ -677,12 +678,9 @@ function ProjectHeader({
             actionsMenu.close();
             useSessions
               .getState()
-              .setProjectPinned(
-                project.id,
-                (project.pinnedAt ?? null) === null
-              );
+              .setProjectPinned(project.id, !isPinnedProject(project));
           }}
-          pinned={(project.pinnedAt ?? null) !== null}
+          pinned={isPinnedProject(project)}
           projectId={project.id}
         />
       ) : null}
@@ -826,10 +824,7 @@ const ProjectGroup = memo(function ProjectGroup({
   };
   const attention = useSessions((state) =>
     Object.values(state.sessions).some(
-      (session) =>
-        session.projectId === project.id &&
-        (session.status === "waiting" || session.status === "error") &&
-        !isPutAway(session)
+      (session) => session.projectId === project.id && needsYouOnRail(session)
     )
   );
   // How many of this project's open sessions run in their own [Worktree] —

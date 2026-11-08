@@ -24,6 +24,7 @@ vi.mock("../state/actions.ts", async (importOriginal) => ({
 
 const EMPTY_HINT = /No open sessions/;
 const MOVE_HINT = /Move to folder/;
+const PARKED_HINT = /^Parked/;
 
 function project(id: string, extra: Partial<ProjectRow> = {}): ProjectRow {
   return {
@@ -226,4 +227,97 @@ test("deleting a folder returns its projects to the plain list", () => {
   fireEvent.click(screen.getByTestId("delete-folder-f1"));
   expect(screen.queryByTestId("folder-f1")).toBeNull();
   expect(screen.getByTestId("project-header-p1")).toBeInTheDocument();
+});
+
+test("Parked stays open when the last open project is parked", () => {
+  seed(
+    [project("p1"), project("p2")],
+    [session("a", "p1"), session("b", "p2", { parkedAt: 3 })]
+  );
+  renderSidebar();
+  const toggle = () =>
+    within(screen.getByTestId("parked-group")).getByRole("button", {
+      name: PARKED_HINT,
+    });
+  fireEvent.click(toggle());
+  expect(toggle()).toHaveAttribute("aria-expanded", "true");
+  act(() => {
+    useSessions.setState((state) => ({
+      sessions: {
+        ...state.sessions,
+        a: { ...session("a", "p1"), parkedAt: 4 },
+      },
+    }));
+  });
+  expect(toggle()).toHaveAttribute("aria-expanded", "true");
+});
+
+test("a pinned project's menu does not offer Move to folder", () => {
+  seed([project("p1", { pinnedAt: 5 })], [session("a", "p1")]);
+  renderSidebar();
+  fireEvent.click(screen.getByLabelText("More actions for Project p1"));
+  expect(screen.queryByTestId("move-to-folder-p1")).toBeNull();
+});
+
+test("New folder while a folder is focused leaves focus and shows the name field", () => {
+  useProjectFolders.setState({ folders: [{ id: "f1", name: "Acme" }] });
+  seed([project("p1", { folderId: "f1" })], [session("a", "p1")]);
+  useLayout.getState().setFocusedFolder("f1");
+  renderSidebar();
+  fireEvent.click(screen.getByTestId("new-folder"));
+  const made = useProjectFolders
+    .getState()
+    .folders.find((folder) => folder.id !== "f1");
+  expect(screen.getByTestId(`folder-name-${made?.id}`)).toBeInTheDocument();
+  expect(screen.queryByTestId("focus-banner")).toBeNull();
+});
+
+test("searching a project's name keeps its pinned sessions", () => {
+  seed(
+    [project("p1", { name: "Billing" })],
+    [session("pin", "p1", { pinnedAt: 5, title: "Fix login" })]
+  );
+  renderSidebar();
+  fireEvent.change(screen.getByLabelText("Filter sessions"), {
+    target: { value: "billing" },
+  });
+  expect(screen.getByText("Fix login")).toBeInTheDocument();
+});
+
+test("the focus chord does nothing when another handler already took the keypress", () => {
+  useProjectFolders.setState({ folders: [{ id: "f1", name: "Acme" }] });
+  seed([project("p1", { folderId: "f1" })], [session("a", "p1")]);
+  useSessions.setState({ activeSessionId: "a" });
+  renderSidebar();
+  const event = new KeyboardEvent("keydown", {
+    bubbles: true,
+    cancelable: true,
+    ctrlKey: true,
+    key: "F",
+    metaKey: true,
+    shiftKey: true,
+  });
+  event.preventDefault();
+  act(() => {
+    window.dispatchEvent(event);
+  });
+  expect(useLayout.getState().layout.focusedFolderId).toBeNull();
+});
+
+test("double-click renames the focused folder too", () => {
+  useProjectFolders.setState({ folders: [{ id: "f1", name: "Acme" }] });
+  seed([project("p1", { folderId: "f1" })], [session("a", "p1")]);
+  useLayout.getState().setFocusedFolder("f1");
+  renderSidebar();
+  fireEvent.doubleClick(screen.getByTestId("folder-header-f1"));
+  expect(screen.getByTestId("folder-name-f1")).toBeInTheDocument();
+});
+
+test("pinning a folder's only project keeps the folder on the rail", () => {
+  useProjectFolders.setState({ folders: [{ id: "f1", name: "Acme" }] });
+  seed([project("p1", { folderId: "f1" })], [session("a", "p1")]);
+  renderSidebar();
+  fireEvent.click(screen.getByLabelText("More actions for Project p1"));
+  fireEvent.click(screen.getByTestId("pin-project-p1"));
+  expect(screen.getByTestId("folder-f1")).toBeInTheDocument();
 });

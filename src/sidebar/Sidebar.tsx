@@ -40,18 +40,23 @@ import type { ProjectRow } from "../types.ts";
 import { useAnchoredMenu } from "../ui/AnchoredMenu.tsx";
 import { ArchivedGroup } from "./ArchivedGroup.tsx";
 import { FocusBanner, FolderGroup } from "./FolderGroup.tsx";
-import { folderAwareCollision, railPlaces } from "./folderDrop.ts";
+import { folderAwareCollision } from "./folderDrop.ts";
 import { NeedsYouSection } from "./NeedsYouSection.tsx";
 import { ParkedGroup } from "./ParkedGroup.tsx";
 import { ProjectGroup } from "./ProjectGroup.tsx";
 import { projectLabels } from "./projectLabel.ts";
 import { ResizeHandle } from "./ResizeHandle.tsx";
-import { folderFocusTarget, railSections } from "./railSections.ts";
+import { folderFocusTarget, railPlaces, railSections } from "./railSections.ts";
 import { SessionRow } from "./SessionRow.tsx";
 import { SidebarFooter } from "./SidebarFooter.tsx";
 import { SidebarHeader } from "./SidebarHeader.tsx";
 import { SortMenu } from "./SortMenu.tsx";
-import { inactiveProjectIds, sortProjects } from "./sessionOrder.ts";
+import {
+  inactiveProjectIds,
+  projectNameMatches,
+  sessionMatchesSearch,
+  sortProjects,
+} from "./sessionOrder.ts";
 import { useFolderDrag } from "./useFolderDrag.ts";
 
 export interface SidebarProps {
@@ -125,7 +130,8 @@ const looseDividerStyle: CSSProperties = {
 function useFolderFocusChord(): void {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (!isFolderFocusChord(event)) {
+      // Another handler (the prompt picker's ⌘F) may have taken the press.
+      if (event.defaultPrevented || !isFolderFocusChord(event)) {
         return;
       }
       event.preventDefault();
@@ -152,22 +158,17 @@ function useFolderFocusChord(): void {
 }
 
 /**
- * The rail's one drag area, mounted only while there is a project to drag:
- * dnd-kit adds a live region (`role="status"`) for screen readers, and an
- * empty rail has nothing for it to announce.
+ * The rail's one drag area. Always mounted, even on an empty rail: it wraps
+ * Pinned, Parked and Archived too, and swapping it in and out as the rail
+ * empties would remount them and drop their open state mid-click.
  */
 function RailDrag({
   children,
   drag,
-  enabled,
 }: {
   children: ReactNode;
   drag: ReturnType<typeof useFolderDrag>;
-  enabled: boolean;
 }) {
-  if (!enabled) {
-    return <>{children}</>;
-  }
   return (
     <DndContext
       collisionDetection={folderAwareCollision}
@@ -333,6 +334,7 @@ export function Sidebar({
   );
   const sessionSort = useLayout((state) => state.layout.sessionSort);
   const folders = useProjectFolders((state) => state.folders);
+  const editingFolderId = useProjectFolders((state) => state.editingFolderId);
   const focusedFolderId = useLayout((state) => state.layout.focusedFolderId);
   // Folders some project belongs to (on the rail or not): the rest are brand
   // new and get drawn empty, so the person can fill them.
@@ -355,15 +357,23 @@ export function Sidebar({
   const [query, setQuery] = useState("");
   const [showInactive, setShowInactive] = useState(false);
   const filter = query.trim().toLowerCase();
-  // Pinned sessions, oldest pin first, narrowed by the search like any row.
+  // Pinned sessions, oldest pin first, narrowed by the search like any row
+  // (a match on its project's name keeps it, as it keeps a group's rows).
   const pinnedSessionIds = useSessions(
     useShallow((state) =>
       Object.values(state.sessions)
-        .filter(
-          (session) =>
-            isPinnedSession(session) &&
-            (filter === "" || session.title.toLowerCase().includes(filter))
-        )
+        .filter((session) => {
+          if (!isPinnedSession(session)) {
+            return false;
+          }
+          const name =
+            state.projects.find((p) => p.id === session.projectId)?.name ?? "";
+          return sessionMatchesSearch(
+            session,
+            projectNameMatches(name, filter),
+            filter
+          );
+        })
         .sort((a, b) => (a.pinnedAt ?? 0) - (b.pinnedAt ?? 0))
         .map((session) => session.id)
     )
@@ -410,6 +420,7 @@ export function Sidebar({
   // out of `orderedProjects`, and a stale id here would leave dnd-kit tracking
   // a sortable with no DOM node.
   const sections = railSections({
+    editingFolderId,
     filledFolderIds: new Set(filledFolderIdList),
     focusedFolderId,
     folders,
@@ -480,7 +491,7 @@ export function Sidebar({
     >
       <SidebarHeader query={query} setQuery={setQuery} />
       <NeedsYouSection />
-      <RailDrag drag={projectDrag} enabled={projects.length > 0}>
+      <RailDrag drag={projectDrag}>
         {hasPinned ? (
           <section aria-label="Pinned" data-testid="pinned-section">
             <div style={pinnedLabelRowStyle}>
@@ -551,10 +562,7 @@ export function Sidebar({
             aria-label="New folder"
             className="kr-reveal kr-hover-surface"
             data-testid="new-folder"
-            onClick={() => {
-              const id = createProjectFolder(DEFAULT_FOLDER_NAME);
-              useProjectFolders.getState().setEditingFolder(id);
-            }}
+            onClick={() => createProjectFolder(DEFAULT_FOLDER_NAME)}
             style={iconButton()}
             title="New folder"
             type="button"

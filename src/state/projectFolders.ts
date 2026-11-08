@@ -82,17 +82,27 @@ function newFolderId(): string {
 }
 
 /**
- * Make a folder. With `projectId` the folder is born holding that project, so
- * the menu path never leaves an empty folder on the rail. Returns the new id.
+ * Make a folder and open its name field. With `projectIds` the folder is born
+ * holding those projects, so the menu and drag paths never leave an empty
+ * folder on the rail. A [Folder focus] on another folder ends, or the new one
+ * (and its name field) would be hidden. Returns the new id.
  */
-export function createProjectFolder(name: string, projectId?: string): string {
+export function createProjectFolder(
+  name: string,
+  ...projectIds: string[]
+): string {
   const id = newFolderId();
   const { folders } = useProjectFolders.getState();
   useProjectFolders
     .getState()
     .setFolders([...folders, { id, name: cleanFolderName(name) }]);
-  if (projectId) {
+  for (const projectId of projectIds) {
     useSessions.getState().setProjectFolder(projectId, id);
+  }
+  useProjectFolders.getState().setEditingFolder(id);
+  const layout = useLayout.getState();
+  if (layout.layout.focusedFolderId !== null) {
+    layout.setFocusedFolder(null);
   }
   return id;
 }

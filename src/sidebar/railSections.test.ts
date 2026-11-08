@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 import type { ProjectFolder } from "../state/projectFolders.ts";
 import type { ProjectRow } from "../types.ts";
-import { folderFocusTarget, railSections } from "./railSections.ts";
+import { folderFocusTarget, railPlaces, railSections } from "./railSections.ts";
 
 function project(id: string, extra: Partial<ProjectRow> = {}): ProjectRow {
   return {
@@ -147,4 +147,44 @@ test("a folder no project has joined yet is drawn, so the person can fill it", (
   expect(sections.folders.map((f) => [f.folder.id, ids(f.projects)])).toEqual([
     ["f-acme", []],
   ]);
+});
+
+test("the folder being named is drawn even when its projects are off the rail", () => {
+  const sections = railSections({
+    editingFolderId: "f-acme",
+    filledFolderIds: new Set(["f-acme", "f-side"]),
+    focusedFolderId: null,
+    folders,
+    inactiveIds: new Set(["a"]),
+    projects: [project("a", { folderId: "f-acme" })],
+  });
+  expect(sections.folders.map((section) => section.folder.id)).toEqual([
+    "f-acme",
+  ]);
+});
+
+test("railPlaces reads pins first, then folders that exist, else the plain list", () => {
+  const row = (id: string, extra: object) => ({
+    color: null,
+    id,
+    name: id,
+    path: `/${id}`,
+    setupCommand: null,
+    ...extra,
+  });
+  const map = railPlaces(
+    [
+      row("p", { folderId: "acme", pinnedAt: 1 }),
+      row("f", { folderId: "acme" }),
+      row("gone", { folderId: "deleted" }),
+      row("l", {}),
+    ],
+    [{ id: "acme", name: "Acme" }]
+  );
+  expect(Object.fromEntries(map)).toEqual({
+    f: { folderId: "acme", kind: "folder" },
+    gone: { kind: "loose" },
+    l: { kind: "loose" },
+    p: { kind: "pinned" },
+  });
 });

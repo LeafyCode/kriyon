@@ -9,8 +9,7 @@ import {
   pointerWithin,
 } from "@dnd-kit/core";
 
-import type { ProjectFolder } from "../state/projectFolders.ts";
-import type { ProjectRow } from "../types.ts";
+import type { RailPlace } from "./railSections.ts";
 
 /** How long a project must hover over another before a drop merges them. */
 export const MERGE_DWELL_MS = 500;
@@ -28,12 +27,6 @@ export function folderOfDropId(id: string): string | null {
     ? id.slice(FOLDER_DROP_PREFIX.length)
     : null;
 }
-
-/** Where a project sits on the rail. */
-export type RailPlace =
-  | { kind: "pinned" }
-  | { kind: "loose" }
-  | { folderId: string; kind: "folder" };
 
 export type ProjectDropAction =
   | { kind: "none" }
@@ -118,21 +111,3 @@ export const folderAwareCollision: CollisionDetection = (args) => {
     ),
   });
 };
-
-/** Where each project sits: Pinned, a folder that exists, or the plain list. */
-export function railPlaces(
-  projects: ProjectRow[],
-  folders: ProjectFolder[]
-): Map<string, RailPlace> {
-  const known = new Set(folders.map((folder) => folder.id));
-  return new Map(
-    projects.map((project): [string, RailPlace] => {
-      if ((project.pinnedAt ?? null) !== null) {
-        return [project.id, { kind: "pinned" }];
-      }
-      return project.folderId && known.has(project.folderId)
-        ? [project.id, { folderId: project.folderId, kind: "folder" }]
-        : [project.id, { kind: "loose" }];
-    })
-  );
-}

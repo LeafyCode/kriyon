@@ -72,3 +72,11 @@ test("parse drops malformed and duplicate entries but keeps the rest", () => {
   expect(parseProjectFolders(JSON.stringify({ id: "a" }))).toEqual([]);
   expect(parseProjectFolders(null)).toEqual([]);
 });
+
+test("making a folder opens its name, and leaves focus on another folder so it shows", () => {
+  useProjectFolders.setState({ folders: [{ id: "old", name: "Old" }] });
+  useLayout.getState().setFocusedFolder("old");
+  const id = createProjectFolder("New");
+  expect(useProjectFolders.getState().editingFolderId).toBe(id);
+  expect(useLayout.getState().layout.focusedFolderId).toBeNull();
+});

@@ -1,10 +1,6 @@
 import { expect, test } from "vitest";
-import {
-  folderDropId,
-  projectDropAction,
-  type RailPlace,
-  railPlaces,
-} from "./folderDrop.ts";
+import { folderDropId, projectDropAction } from "./folderDrop.ts";
+import type { RailPlace } from "./railSections.ts";
 
 const places = new Map<string, RailPlace>([
   ["a1", { folderId: "acme", kind: "folder" }],
@@ -65,30 +61,4 @@ test("pinned projects only reorder: they never join or make folders", () => {
   expect(drop("pin", "l1", "l1")).toEqual({ kind: "none" });
   expect(drop("l1", "pin", "pin")).toEqual({ kind: "none" });
   expect(drop("pin", folderDropId("acme"))).toEqual({ kind: "none" });
-});
-
-test("railPlaces reads pins first, then folders that exist, else the plain list", () => {
-  const row = (id: string, extra: object) => ({
-    color: null,
-    id,
-    name: id,
-    path: `/${id}`,
-    setupCommand: null,
-    ...extra,
-  });
-  const map = railPlaces(
-    [
-      row("p", { folderId: "acme", pinnedAt: 1 }),
-      row("f", { folderId: "acme" }),
-      row("gone", { folderId: "deleted" }),
-      row("l", {}),
-    ],
-    [{ id: "acme", name: "Acme" }]
-  );
-  expect(Object.fromEntries(map)).toEqual({
-    f: { folderId: "acme", kind: "folder" },
-    gone: { kind: "loose" },
-    l: { kind: "loose" },
-    p: { kind: "pinned" },
-  });
 });

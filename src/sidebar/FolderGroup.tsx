@@ -20,16 +20,18 @@ import {
   renameProjectFolder,
   useProjectFolders,
 } from "../state/projectFolders.ts";
-import { isPutAway, useSessions } from "../state/sessions.ts";
+import { needsYouOnRail, useSessions } from "../state/sessions.ts";
 import { sectionLabel } from "../theme/recipes.ts";
 import { accentAlpha, tokens } from "../theme/tokens.ts";
-import {
-  anchoredMenuSurfaceStyle,
-  useAnchoredMenu,
-} from "../ui/AnchoredMenu.tsx";
+import { useAnchoredMenu } from "../ui/AnchoredMenu.tsx";
 import { folderDropId } from "./folderDrop.ts";
 import { HeaderAction } from "./HeaderAction.tsx";
 import { InlineRename } from "./InlineRename.tsx";
+import {
+  headerMenuDividerStyle,
+  headerMenuItemStyle,
+  headerMenuSurfaceStyle,
+} from "./ProjectMenu.tsx";
 
 const headerStyle: CSSProperties = {
   alignItems: "center",
@@ -116,32 +118,6 @@ const emptyHintStyle: CSSProperties = {
   padding: "4px 8px 6px",
 };
 
-const menuSurfaceStyle: CSSProperties = {
-  ...anchoredMenuSurfaceStyle,
-  padding: "4px",
-  width: "186px",
-};
-
-const menuItemStyle: CSSProperties = {
-  background: "transparent",
-  border: "none",
-  borderRadius: tokens.radius.sm,
-  color: tokens.color.ink.primary,
-  cursor: "pointer",
-  display: "flex",
-  fontFamily: tokens.font.sans,
-  fontSize: "12px",
-  padding: "6px 8px",
-  textAlign: "left",
-  width: "100%",
-};
-
-const menuDividerStyle: CSSProperties = {
-  border: "none",
-  borderTop: `1px solid ${tokens.color.line.soft}`,
-  margin: "4px 0",
-};
-
 interface FolderGroupProps {
   children: ReactNode;
   /** Some project belongs to it, even if none is on the rail right now. */
@@ -169,9 +145,7 @@ export function FolderGroup({
   const attention = useSessions((state) =>
     Object.values(state.sessions).some(
       (session) =>
-        projectIds.includes(session.projectId) &&
-        (session.status === "waiting" || session.status === "error") &&
-        !isPutAway(session)
+        projectIds.includes(session.projectId) && needsYouOnRail(session)
     )
   );
   const menu = useAnchoredMenu<HTMLDivElement>();
@@ -218,10 +192,13 @@ export function FolderGroup({
             aria-expanded={expanded}
             className="kr-hover-surface"
             data-testid={`folder-header-${folder.id}`}
-            disabled={focused}
-            onClick={() =>
-              useLayout.getState().toggleFolderCollapsed(folder.id)
-            }
+            // Not `disabled` under focus: a disabled button drops the
+            // right-click menu and double-click rename too.
+            onClick={() => {
+              if (!focused) {
+                useLayout.getState().toggleFolderCollapsed(folder.id);
+              }
+            }}
             onContextMenu={(event) => {
               event.preventDefault();
               if (!menu.open) {
@@ -257,7 +234,7 @@ export function FolderGroup({
           <MoreHorizontal size={13} />
         </HeaderAction>
         {menu.open ? (
-          <div role="menu" style={menuSurfaceStyle}>
+          <div role="menu" style={headerMenuSurfaceStyle}>
             <button
               className="kr-hover-surface"
               data-testid={`focus-folder-${folder.id}`}
@@ -268,7 +245,7 @@ export function FolderGroup({
                   .setFocusedFolder(focused ? null : folder.id);
               }}
               role="menuitem"
-              style={menuItemStyle}
+              style={headerMenuItemStyle}
               type="button"
             >
               {focused ? "Leave focus" : "Focus on this folder"}
@@ -280,12 +257,12 @@ export function FolderGroup({
                 useProjectFolders.getState().setEditingFolder(folder.id);
               }}
               role="menuitem"
-              style={menuItemStyle}
+              style={headerMenuItemStyle}
               type="button"
             >
               Rename
             </button>
-            <hr style={menuDividerStyle} />
+            <hr style={headerMenuDividerStyle} />
             <button
               className="kr-hover-surface"
               data-testid={`delete-folder-${folder.id}`}
@@ -294,7 +271,10 @@ export function FolderGroup({
                 deleteProjectFolder(folder.id);
               }}
               role="menuitem"
-              style={{ ...menuItemStyle, color: tokens.color.status.error }}
+              style={{
+                ...headerMenuItemStyle,
+                color: tokens.color.status.error,
+              }}
               title="Its projects go back to the plain list"
               type="button"
             >

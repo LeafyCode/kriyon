@@ -1,4 +1,5 @@
 import type { ProjectFolder } from "../state/projectFolders.ts";
+import { isPinnedProject } from "../state/sessions.ts";
 import type { ProjectRow } from "../types.ts";
 
 export interface FolderSection {
@@ -21,6 +22,9 @@ export interface RailSections {
 }
 
 interface RailSectionsInput {
+  /** The folder whose name field is open: drawn whatever it holds, so the
+   *  field the person is typing in never sits in a hidden header. */
+  editingFolderId?: string | null;
   /** Folders at least one project (on the rail or not) belongs to. A folder
    *  outside this set is brand new and empty, and is drawn so it can be filled. */
   filledFolderIds: ReadonlySet<string>;
@@ -38,6 +42,7 @@ interface RailSectionsInput {
  * so the Sidebar only draws what comes back.
  */
 export function railSections({
+  editingFolderId = null,
   filledFolderIds,
   focusedFolderId,
   folders,
@@ -73,7 +78,12 @@ export function railSections({
 
   return {
     focus: focused ? { folder: focused, hiddenCount } : null,
-    folders: drawnFolders(folders, inFolder, filledFolderIds, focused),
+    folders: drawnFolders(
+      folders,
+      inFolder,
+      new Set([...filledFolderIds].filter((id) => id !== editingFolderId)),
+      focused
+    ),
     inactive,
     loose,
     pinned,
@@ -90,6 +100,41 @@ type Place =
   | "dropped"
   | { folderId: string };
 
+/** Where a project sits on the rail, before focus and the inactive fold. */
+export type RailPlace =
+  | { kind: "pinned" }
+  | { kind: "loose" }
+  | { folderId: string; kind: "folder" };
+
+/**
+ * The one placement rule: Pinned first, then a folder that exists, else the
+ * plain list. A `folderId` no folder answers to reads as no folder. Both the
+ * drawing ({@link railSections}) and the drag rules ({@link railPlaces}) ask
+ * this, so a drop always acts on where the project is drawn.
+ */
+function basePlace(
+  project: ProjectRow,
+  folderIds: { has: (id: string) => boolean }
+): RailPlace {
+  if (isPinnedProject(project)) {
+    return { kind: "pinned" };
+  }
+  return project.folderId && folderIds.has(project.folderId)
+    ? { folderId: project.folderId, kind: "folder" }
+    : { kind: "loose" };
+}
+
+/** Where each project sits, for the drag rules. */
+export function railPlaces(
+  projects: ProjectRow[],
+  folders: ProjectFolder[]
+): Map<string, RailPlace> {
+  const known = new Set(folders.map((folder) => folder.id));
+  return new Map(
+    projects.map((project) => [project.id, basePlace(project, known)] as const)
+  );
+}
+
 /** Which section one project belongs in. */
 function placeOf(
   project: ProjectRow,
@@ -97,11 +142,11 @@ function placeOf(
   focused: ProjectFolder | undefined,
   inactiveIds: ReadonlySet<string>
 ): Place {
-  if ((project.pinnedAt ?? null) !== null) {
+  const base = basePlace(project, byId);
+  if (base.kind === "pinned") {
     return "pinned";
   }
-  const folderId =
-    project.folderId && byId.has(project.folderId) ? project.folderId : null;
+  const folderId = base.kind === "folder" ? base.folderId : null;
   const isInactive = inactiveIds.has(project.id);
   if (focused && folderId !== focused.id) {
     return isInactive ? "dropped" : "hidden";

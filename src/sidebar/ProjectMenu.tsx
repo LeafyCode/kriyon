@@ -18,14 +18,15 @@ import { tokens } from "../theme/tokens.ts";
 import { anchoredMenuSurfaceStyle } from "../ui/AnchoredMenu.tsx";
 
 /** A fixed width, not a `minWidth`: a surface sized to its own content drifts
- *  wider than the other header popovers for no reason. */
-const surfaceStyle: CSSProperties = {
+ *  wider than the other header popovers for no reason. Shared with the folder
+ *  header's menu, so the two header popovers stay alike. */
+export const headerMenuSurfaceStyle: CSSProperties = {
   ...anchoredMenuSurfaceStyle,
   padding: "4px",
   width: "186px",
 };
 
-const itemStyle: CSSProperties = {
+export const headerMenuItemStyle: CSSProperties = {
   background: "transparent",
   border: "none",
   borderRadius: tokens.radius.sm,
@@ -40,12 +41,12 @@ const itemStyle: CSSProperties = {
 };
 
 const destructiveItemStyle: CSSProperties = {
-  ...itemStyle,
+  ...headerMenuItemStyle,
   color: tokens.color.status.error,
 };
 
 const folderItemStyle: CSSProperties = {
-  ...itemStyle,
+  ...headerMenuItemStyle,
   alignItems: "center",
   gap: "6px",
 };
@@ -67,7 +68,7 @@ const folderNameStyle: CSSProperties = {
   whiteSpace: "nowrap",
 };
 
-const dividerStyle: CSSProperties = {
+export const headerMenuDividerStyle: CSSProperties = {
   border: "none",
   borderTop: `1px solid ${tokens.color.line.soft}`,
   margin: "4px 0",
@@ -162,7 +163,7 @@ export function ProjectMenu({
     { label: "Sort sessions…", onClick: onSort },
   ];
   return (
-    <div role="menu" style={surfaceStyle}>
+    <div role="menu" style={headerMenuSurfaceStyle}>
       {items.slice(0, 1).map((item) => (
         <button
           className="kr-hover-surface"
@@ -170,25 +171,29 @@ export function ProjectMenu({
           key={item.label}
           onClick={item.onClick}
           role="menuitem"
-          style={itemStyle}
+          style={headerMenuItemStyle}
           type="button"
         >
           {item.label}
         </button>
       ))}
-      <button
-        aria-haspopup="menu"
-        className="kr-hover-surface"
-        data-testid={`move-to-folder-${projectId}`}
-        onClick={() => setShowFolders(true)}
-        role="menuitem"
-        style={folderItemStyle}
-        type="button"
-      >
-        <span style={folderNameStyle}>Move to folder</span>
-        <ChevronRight color={tokens.color.ink.dim} size={12} />
-      </button>
-      <hr style={dividerStyle} />
+      {/* Pinned projects live outside folders (Pinned draws them), so the
+        move is offered only once the project is unpinned. */}
+      {pinned ? null : (
+        <button
+          aria-haspopup="menu"
+          className="kr-hover-surface"
+          data-testid={`move-to-folder-${projectId}`}
+          onClick={() => setShowFolders(true)}
+          role="menuitem"
+          style={folderItemStyle}
+          type="button"
+        >
+          <span style={folderNameStyle}>Move to folder</span>
+          <ChevronRight color={tokens.color.ink.dim} size={12} />
+        </button>
+      )}
+      <hr style={headerMenuDividerStyle} />
       {items.slice(1).map((item) => (
         <button
           className="kr-hover-surface"
@@ -196,14 +201,14 @@ export function ProjectMenu({
           key={item.label}
           onClick={item.onClick}
           role="menuitem"
-          style={itemStyle}
+          style={headerMenuItemStyle}
           title={item.title}
           type="button"
         >
           {item.label}
         </button>
       ))}
-      <hr style={dividerStyle} />
+      <hr style={headerMenuDividerStyle} />
       <button
         className="kr-hover-surface"
         data-testid={`clear-project-${projectId}`}
@@ -242,7 +247,7 @@ function FolderList({
       aria-label="Move to folder"
       data-testid={`folder-list-${projectId}`}
       role="menu"
-      style={surfaceStyle}
+      style={headerMenuSurfaceStyle}
     >
       {sorted.map((folder) => (
         <button
@@ -260,7 +265,7 @@ function FolderList({
           <span style={folderNameStyle}>{folder.name}</span>
         </button>
       ))}
-      {sorted.length > 0 ? <hr style={dividerStyle} /> : null}
+      {sorted.length > 0 ? <hr style={headerMenuDividerStyle} /> : null}
       <button
         className="kr-hover-surface"
         data-testid={`new-folder-for-${projectId}`}

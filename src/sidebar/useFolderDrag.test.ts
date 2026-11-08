@@ -5,7 +5,8 @@ import { DEFAULT_LAYOUT, useLayout } from "../state/layout.ts";
 import { useProjectFolders } from "../state/projectFolders.ts";
 import { useSessions } from "../state/sessions.ts";
 import type { ProjectRow } from "../types.ts";
-import { folderDropId, MERGE_DWELL_MS, railPlaces } from "./folderDrop.ts";
+import { folderDropId, MERGE_DWELL_MS } from "./folderDrop.ts";
+import { railPlaces } from "./railSections.ts";
 import { useFolderDrag } from "./useFolderDrag.ts";
 
 function project(id: string, folderId: string | null = null): ProjectRow {

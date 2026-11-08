@@ -1413,3 +1413,23 @@ test("setSessionPinned stamps and clears pinnedAt", () => {
   useSessions.getState().setSessionPinned("s", false);
   expect(useSessions.getState().sessions.s?.pinnedAt).toBeNull();
 });
+
+test("setProjectPinned stamps and clears pinnedAt", () => {
+  useSessions.setState({ projects: [makeProject("p")] });
+  useSessions.getState().setProjectPinned("p", true);
+  expect(useSessions.getState().projects[0]?.pinnedAt).toBeGreaterThan(0);
+  useSessions.getState().setProjectPinned("p", false);
+  expect(useSessions.getState().projects[0]?.pinnedAt).toBeNull();
+});
+
+test("a pinned project stays out of folders: setProjectFolder leaves it alone", () => {
+  useSessions.setState({ projects: [{ ...makeProject("p"), pinnedAt: 5 }] });
+  useSessions.getState().setProjectFolder("p", "f1");
+  expect(useSessions.getState().projects[0]?.folderId ?? null).toBeNull();
+});
+
+test("pinning a project takes it out of its folder: Pinned is its one place", () => {
+  useSessions.setState({ projects: [{ ...makeProject("p"), folderId: "f1" }] });
+  useSessions.getState().setProjectPinned("p", true);
+  expect(useSessions.getState().projects[0]?.folderId ?? null).toBeNull();
+});

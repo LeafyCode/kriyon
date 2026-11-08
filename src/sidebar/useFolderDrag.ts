@@ -18,8 +18,8 @@ import {
   MERGE_DWELL_MS,
   type ProjectDropAction,
   projectDropAction,
-  type RailPlace,
 } from "./folderDrop.ts";
+import type { RailPlace } from "./railSections.ts";
 
 interface FolderDrag {
   /** Project ids as displayed — frozen to the drag-start snapshot mid-drag. */
@@ -126,9 +126,7 @@ export function useFolderDrag(
         base.onDragCancel();
         return;
       case "merge": {
-        const id = createProjectFolder(DEFAULT_FOLDER_NAME, action.withId);
-        sessions.setProjectFolder(activeId, id);
-        useProjectFolders.getState().setEditingFolder(id);
+        createProjectFolder(DEFAULT_FOLDER_NAME, action.withId, activeId);
         base.onDragCancel();
         return;
       }
