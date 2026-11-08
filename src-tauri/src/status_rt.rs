@@ -17,18 +17,12 @@ use crate::{AppState, StoreState};
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct StatusUpdate {
-    /// When the newest replayed event actually happened (the hook's ISO
-    /// timestamp), for a seeded update. `None` on a live update, and on a
-    /// replay whose events carry no timestamp.
-    ///
-    /// Without it the frontend can only stamp a seeded status with "now", which
-    /// tells the recency projection that every session was active at launch —
-    /// burying the age-based "N older" fold, since nothing is ever old enough.
-    last_event_at: Option<String>,
     /// True when this status was reconstructed by replaying the events file at
     /// launch rather than observed live. The frontend needs the distinction for
     /// the same reason [`SessionRuntime`] does: a replayed finish is output the
     /// user saw days ago, so it must not relight "needs you" on every launch.
+    /// It carries no time on purpose: when a session last did work comes from
+    /// the [Activity log] (`activity_last_active`), one rule for every session.
     seeded: bool,
     session_id: String,
     status: SessionStatus,
@@ -87,7 +81,6 @@ pub fn recompute_and_emit<R: tauri::Runtime>(app: &tauri::AppHandle<R>, session_
     };
     if let Some(change) = outcome.change {
         let payload = StatusUpdate {
-            last_event_at: None, // live: it is happening now
             seeded: false,
             session_id: session_id.0.clone(),
             status: change.status,
@@ -499,9 +492,6 @@ pub fn seed_from_history<R: tauri::Runtime>(
     let _ = app.emit(
         "session-status",
         StatusUpdate {
-            // Newest-last file, so the last timestamped event is the session's
-            // real last activity — what the age fold must measure from.
-            last_event_at: events.iter().rev().find_map(|e| e.ts.clone()),
             seeded: true,
             session_id: session_id.0.clone(),
             status,

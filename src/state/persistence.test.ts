@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import {
+  activityLastActive,
   listProjectNotes,
   listProjects,
   listPrompts,
@@ -16,6 +17,7 @@ import type {
   SessionRow,
 } from "../types.ts";
 import { showToast } from "../ui/Toast.tsx";
+import { useCommandCenter } from "./commandCenter.ts";
 import { DEFAULT_LAYOUT, useLayout } from "./layout.ts";
 import {
   hydrate,
@@ -30,6 +32,7 @@ import { sessionRow, type UiSession, useSessions } from "./sessions.ts";
 import { useTerminals } from "./terminals.ts";
 
 vi.mock("../ipc/bridge", () => ({
+  activityLastActive: vi.fn(),
   listProjectNotes: vi.fn(),
   listPrompts: vi.fn(),
   listProjects: vi.fn(),
@@ -118,6 +121,8 @@ beforeEach(() => {
   vi.mocked(loadLayout).mockResolvedValue(null);
   mockedListPrompts.mockResolvedValue([]);
   mockedListProjectNotes.mockResolvedValue([]);
+  vi.mocked(activityLastActive).mockResolvedValue({});
+  useCommandCenter.setState({ lastChangeMs: {}, lastSeenMs: {} });
   usePromptLibrary.setState({ prompts: [] });
   useProjectNotes.setState({ notes: [] });
   useSessions.setState({
@@ -168,6 +173,46 @@ test("hydrate populates the store from the bridge", async () => {
   expect(useLayout.getState().layout.view).toBe("focus");
   expect(state.activeSessionId).toBe("s1");
   expect(usePromptLibrary.getState().prompts).toContainEqual(samplePrompt());
+});
+
+test("hydrate restores every session's last activity, not only the watched one", async () => {
+  // Only the active session's watch starts at launch, so a session created
+  // days ago but used today would otherwise be aged from its creation and
+  // folded away — taking its whole project off the sidebar.
+  mockedListProjects.mockResolvedValue([project("p1")]);
+  mockedListSessions.mockResolvedValue([
+    sessionRow(session("s1", "p1")),
+    sessionRow(session("s2", "p1")),
+  ]);
+  vi.mocked(activityLastActive).mockResolvedValue({ s1: 5000, s2: 7000 });
+
+  await hydrate();
+
+  expect(useCommandCenter.getState().lastChangeMs).toEqual({
+    s1: 5000,
+    s2: 7000,
+  });
+});
+
+test("hydrate still loads sessions when the activity log is unavailable", async () => {
+  mockedListProjects.mockResolvedValue([project("p1")]);
+  mockedListSessions.mockResolvedValue([sessionRow(session("s1", "p1"))]);
+  vi.mocked(activityLastActive).mockRejectedValue("unavailable");
+  const logged = vi.spyOn(console, "error").mockImplementation(() => {
+    // Asserted below; keep the test output clean.
+  });
+
+  await hydrate();
+
+  expect(useSessions.getState().sessions.s1).toBeDefined();
+  expect(useCommandCenter.getState().lastChangeMs).toEqual({});
+  // The fold silently going back to creation times is the bug this load
+  // fixes, so its failure must leave a trace.
+  expect(logged).toHaveBeenCalledWith(
+    "could not load session activity",
+    "unavailable"
+  );
+  logged.mockRestore();
 });
 
 test("hydrate round-trips a persisted notifyPreference and command view", async () => {
