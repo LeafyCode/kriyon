@@ -44,6 +44,7 @@ import {
   WORKTREE_RECHECK_MS,
 } from "../state/useActiveSession.ts";
 import { unseenCount } from "../state/viewedMarker.ts";
+import { projectSquareStyle } from "../theme/projectColor.ts";
 import { row30 } from "../theme/recipes.ts";
 import {
   statusDotStyle,
@@ -51,7 +52,7 @@ import {
   statusRingStyle,
 } from "../theme/status.ts";
 import { tokens } from "../theme/tokens.ts";
-import type { SessionStatus } from "../types.ts";
+import type { ProjectRow, SessionStatus } from "../types.ts";
 import {
   anchoredMenuSurfaceStyle,
   useAnchoredMenu,
@@ -346,18 +347,36 @@ function SessionTitleLine({
   branchLabel,
   color,
   emphasis,
+  project,
   sessionId,
   title,
 }: {
   branchLabel: string | null;
   color: string;
   emphasis: boolean;
+  /** Set on a pinned row: the project it belongs to, named after the title. */
+  project?: ProjectRow;
   sessionId: string;
   title: string;
 }): ReactNode {
   return (
     <span style={titleLineStyle}>
       <span style={sessionTitleStyle(color, emphasis)}>{title}</span>
+      {project ? (
+        <span
+          data-testid={`pinned-project-${sessionId}`}
+          style={pinnedProjectStyle}
+        >
+          <span
+            style={{
+              ...projectSquareStyle(project),
+              height: "6px",
+              width: "6px",
+            }}
+          />
+          <span style={pinnedProjectNameStyle}>{project.name}</span>
+        </span>
+      ) : null}
       {/* No `title`: the row's content is click-through, so a tooltip here
           never shows, and making the mark hoverable would swallow clicks
           meant for the row. The branch name is on the line below. */}
@@ -769,6 +788,24 @@ const worktreeChipStyle: CSSProperties = {
 };
 
 /** The title line: the title clips, the worktree mark beside it never does. */
+/** A pinned row's project: its colour and name, quiet, after the title. */
+const pinnedProjectStyle: CSSProperties = {
+  alignItems: "center",
+  color: tokens.color.ink.muted,
+  display: "flex",
+  flex: "0 1 auto",
+  fontSize: "10.5px",
+  gap: "4px",
+  marginLeft: "auto",
+  minWidth: 0,
+};
+
+const pinnedProjectNameStyle: CSSProperties = {
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+};
+
 const titleLineStyle: CSSProperties = {
   alignItems: "center",
   display: "flex",
@@ -985,6 +1022,49 @@ function nestedContentStyle(depth: number): CSSProperties {
  * {@link SessionRow} so its per-item handlers and the worktree conditional stay
  * out of the row's own cognitive-complexity budget.
  */
+/** The session's own project row, when its row names the project (Pinned). */
+function useRowProject(
+  sessionId: string,
+  showProject: boolean
+): ProjectRow | undefined {
+  return useSessions((state) => {
+    if (!showProject) {
+      return;
+    }
+    const projectId = state.sessions[sessionId]?.projectId;
+    return state.projects.find((row) => row.id === projectId);
+  });
+}
+
+/** Pin to top / Unpin — the session menu's first item. */
+function PinSessionItem({
+  close,
+  sessionId,
+}: {
+  close: () => void;
+  sessionId: string;
+}): ReactNode {
+  const pinned = useSessions(
+    (state) => (state.sessions[sessionId]?.pinnedAt ?? null) !== null
+  );
+  return (
+    <button
+      className="kr-hover-surface"
+      data-testid={`pin-session-${sessionId}`}
+      onClick={(event) => {
+        event.stopPropagation();
+        close();
+        useSessions.getState().setSessionPinned(sessionId, !pinned);
+      }}
+      role="menuitem"
+      style={menuItemStyle}
+      type="button"
+    >
+      {pinned ? "Unpin" : "Pin to top"}
+    </button>
+  );
+}
+
 function SessionActionsMenu({
   close,
   onDeleteActivity,
@@ -1002,6 +1082,7 @@ function SessionActionsMenu({
 }): ReactNode {
   return (
     <div data-no-dnd="true" role="menu" style={menuStyle}>
+      <PinSessionItem close={close} sessionId={sessionId} />
       <button
         className="kr-hover-surface"
         data-testid={`rename-session-menu-${sessionId}`}
@@ -1105,6 +1186,9 @@ interface SessionRowProps {
   onCloseSession: (id: string) => void;
   onSelect: (id: string) => void;
   sessionId: string;
+  /** Name the session's project on the row — for a pinned session, which is
+   *  drawn away from its project's group. */
+  showProject?: boolean;
   /** Row may be drag-reordered — off while filtering and for folded Done rows. */
   sortable: boolean;
 }
@@ -1122,10 +1206,12 @@ export const SessionRow = memo(function SessionRow({
   onCloseSession,
   onSelect,
   sessionId,
+  showProject = false,
   sortable,
 }: SessionRowProps) {
   const sortableRow = useSortable({ disabled: !sortable, id: sessionId });
   const session = useSessions((state) => state.sessions[sessionId]);
+  const project = useRowProject(sessionId, showProject);
   const active = useSessions((state) => state.activeSessionId === sessionId);
   const activity = useSessions((state) => state.activity[sessionId]);
   const hooksOff = useSessions((state) => state.hooksOff[sessionId]);
@@ -1279,6 +1365,7 @@ export const SessionRow = memo(function SessionRow({
                   : titleInk(active, session.status, view.doneUnseen)
               }
               emphasis={active}
+              project={project}
               sessionId={sessionId}
               title={session.title}
             />

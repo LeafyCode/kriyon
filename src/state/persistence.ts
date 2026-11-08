@@ -31,6 +31,7 @@ import {
   TERMINAL_DOCK_HEIGHT_DEFAULT,
   useLayout,
 } from "./layout.ts";
+import { parseProjectFolders, useProjectFolders } from "./projectFolders.ts";
 import { useProjectNotes } from "./projectNotes.ts";
 import { usePromptLibrary } from "./promptLibrary.ts";
 import {
@@ -44,6 +45,8 @@ import { type ScopeTerminals, useTerminals } from "./terminals.ts";
 
 const LAYOUT_KEY = "layout";
 const TERMINALS_KEY = "terminals";
+/** The [Project folder] list: its own key, so a layout reset never loses it. */
+const PROJECT_FOLDERS_KEY = "projectFolders";
 const PERSIST_DEBOUNCE_MS = 300;
 
 function ignore(promise: Promise<unknown>): void {
@@ -112,6 +115,13 @@ function recordOf<V>(
     }
     return out;
   };
+}
+
+/** A persisted id list: the strings in it, or `[]` for anything else. */
+function stringList(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === "string")
+    : [];
 }
 
 const NOTIFY_SOUNDS: readonly NotifySound[] = [
@@ -301,9 +311,14 @@ export function parseLayout(json: string | null): Layout | undefined {
   // Each field is validated independently, so one unrecognized value (e.g. a
   // view added in a newer build) can never discard the rest of the layout.
   return {
+    collapsedFolderIds: stringList(parsed.collapsedFolderIds),
     collapsedProjectIds: Array.isArray(parsed.collapsedProjectIds)
       ? parsed.collapsedProjectIds
       : [],
+    focusedFolderId:
+      typeof parsed.focusedFolderId === "string"
+        ? parsed.focusedFolderId
+        : null,
     composerCollapsed: parsed.composerCollapsed === true,
     hideOlderThan: parseHideOlderThan(parsed.hideOlderThan),
     inspectorChangesOpen: parseInspectorChangesOpen(
@@ -415,12 +430,15 @@ export async function hydrate(): Promise<void> {
     return [];
   });
 
-  const [projects, sessionRows, layoutJson, terminalsJson] = await Promise.all([
-    listProjects(),
-    listSessions(),
-    loadLayout(LAYOUT_KEY),
-    loadLayout(TERMINALS_KEY),
-  ]);
+  const [projects, sessionRows, layoutJson, terminalsJson, foldersJson] =
+    await Promise.all([
+      listProjects(),
+      listSessions(),
+      loadLayout(LAYOUT_KEY),
+      loadLayout(TERMINALS_KEY),
+      loadLayout(PROJECT_FOLDERS_KEY),
+    ]);
+  useProjectFolders.getState().setFolders(parseProjectFolders(foldersJson));
 
   const sessions: Record<string, UiSession> = {};
   let newest: SessionRow | undefined;
@@ -603,7 +621,30 @@ export function installPersistence(): () => void {
     );
   });
 
+  // The folder list is small and changes only on a person's action, so it is
+  // written whole on each change, with the same debounce.
+  let foldersTimer: ReturnType<typeof setTimeout> | undefined;
+  let prevFolders = useProjectFolders.getState().folders;
+  const unsubscribeFolders = useProjectFolders.subscribe((state) => {
+    if (state.folders === prevFolders) {
+      return;
+    }
+    prevFolders = state.folders;
+    if (foldersTimer !== undefined) {
+      clearTimeout(foldersTimer);
+    }
+    foldersTimer = setTimeout(
+      () =>
+        ignore(saveLayout(PROJECT_FOLDERS_KEY, JSON.stringify(prevFolders))),
+      PERSIST_DEBOUNCE_MS
+    );
+  });
+
   return () => {
+    if (foldersTimer !== undefined) {
+      clearTimeout(foldersTimer);
+    }
+    unsubscribeFolders();
     if (timer !== undefined) {
       clearTimeout(timer);
     }

@@ -24,6 +24,7 @@ import {
   persistKey as persistKeyForTest,
   pruneSortState,
 } from "./persistence.ts";
+import { useProjectFolders } from "./projectFolders.ts";
 import { useProjectNotes } from "./projectNotes.ts";
 import { usePromptLibrary } from "./promptLibrary.ts";
 import { sessionRow, type UiSession, useSessions } from "./sessions.ts";
@@ -129,6 +130,7 @@ beforeEach(() => {
     usage: {},
   });
   useLayout.setState({ layout: DEFAULT_LAYOUT });
+  useProjectFolders.setState({ folders: [] });
 });
 
 test("hydrate populates the store from the bridge", async () => {
@@ -906,4 +908,44 @@ test("a layout saved before the app tour existed has not seen it", () => {
   expect(parseLayoutForTest(JSON.stringify({ view: "studio" }))?.tourSeen).toBe(
     false
   );
+});
+
+test("hydrate restores project folders from their own key", async () => {
+  mockedListProjects.mockResolvedValue([]);
+  mockedListSessions.mockResolvedValue([]);
+  mockedLoadLayout.mockImplementation((key: string) =>
+    Promise.resolve(
+      key === "projectFolders"
+        ? JSON.stringify([{ id: "f1", name: "Acme" }])
+        : null
+    )
+  );
+  await hydrate();
+  expect(useProjectFolders.getState().folders).toEqual([
+    { id: "f1", name: "Acme" },
+  ]);
+});
+
+test("installPersistence saves the folder list under its own key", () => {
+  vi.useFakeTimers();
+  const stop = install();
+  useProjectFolders.getState().setFolders([{ id: "f1", name: "Acme" }]);
+  vi.runAllTimers();
+  expect(saveLayout).toHaveBeenCalledWith(
+    "projectFolders",
+    JSON.stringify([{ id: "f1", name: "Acme" }])
+  );
+  stop();
+  vi.useRealTimers();
+});
+
+test("parseLayout restores folder collapse and focus, tolerating junk", () => {
+  const layout = parseLayoutForTest(
+    JSON.stringify({ collapsedFolderIds: ["f1", 2], focusedFolderId: "f1" })
+  );
+  expect(layout?.collapsedFolderIds).toEqual(["f1"]);
+  expect(layout?.focusedFolderId).toBe("f1");
+  const old = parseLayoutForTest(JSON.stringify({ view: "studio" }));
+  expect(old?.collapsedFolderIds).toEqual([]);
+  expect(old?.focusedFolderId).toBeNull();
 });

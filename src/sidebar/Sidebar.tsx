@@ -3,23 +3,44 @@ import {
   SortableContext,
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
-import { ArrowUpDown, ChevronRight, Clock, Plus } from "lucide-react";
+import {
+  ArrowUpDown,
+  ChevronRight,
+  Clock,
+  FolderPlus,
+  Pin,
+  Plus,
+} from "lucide-react";
 import { type CSSProperties, useEffect, useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useCommandCenter } from "../state/commandCenter.ts";
 import { useLayout } from "../state/layout.ts";
-import { isPutAway, type UiSession, useSessions } from "../state/sessions.ts";
+import {
+  createProjectFolder,
+  DEFAULT_FOLDER_NAME,
+  useProjectFolders,
+} from "../state/projectFolders.ts";
+import {
+  isPinnedSession,
+  isPutAway,
+  type UiSession,
+  useSessions,
+} from "../state/sessions.ts";
+import { isFolderFocusChord } from "../terminal/reservedChords.ts";
 import { iconButton, sectionLabel } from "../theme/recipes.ts";
 import { tokens } from "../theme/tokens.ts";
 import type { ProjectRow } from "../types.ts";
 import { useAnchoredMenu } from "../ui/AnchoredMenu.tsx";
 import { ArchivedGroup } from "./ArchivedGroup.tsx";
 import { useProjectDrag } from "./dragCommit.ts";
+import { FocusBanner, FolderGroup } from "./FolderGroup.tsx";
 import { NeedsYouSection } from "./NeedsYouSection.tsx";
 import { ParkedGroup } from "./ParkedGroup.tsx";
 import { ProjectGroup } from "./ProjectGroup.tsx";
 import { projectLabels } from "./projectLabel.ts";
 import { ResizeHandle } from "./ResizeHandle.tsx";
+import { folderFocusTarget, railSections } from "./railSections.ts";
+import { SessionRow } from "./SessionRow.tsx";
 import { SidebarFooter } from "./SidebarFooter.tsx";
 import { SidebarHeader } from "./SidebarHeader.tsx";
 import { SortMenu } from "./SortMenu.tsx";
@@ -65,6 +86,62 @@ const projectsLabelRowStyle: CSSProperties = {
   gap: "2px",
   padding: "22px 10px 6px 18px",
 };
+
+const pinnedLabelRowStyle: CSSProperties = {
+  alignItems: "center",
+  display: "flex",
+  gap: "5px",
+  padding: "18px 10px 6px 18px",
+};
+
+/** Pinned sits above the scrolling list, so a long pin list scrolls on its
+ *  own instead of pushing every project off the rail. */
+const pinnedListStyle: CSSProperties = {
+  maxHeight: "40vh",
+  overflowX: "hidden",
+  overflowY: "auto",
+  padding: "0 8px",
+};
+
+/** Between the folders and the projects in none: a line, never a header. */
+const looseDividerStyle: CSSProperties = {
+  border: "none",
+  borderTop: `1px solid ${tokens.color.line.soft}`,
+  margin: "6px 10px",
+};
+
+/**
+ * ⌘⇧F: focus the active session's folder, or leave focus. A session in no
+ * folder has nothing to focus, so the chord does nothing then.
+ */
+function useFolderFocusChord(): void {
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!isFolderFocusChord(event)) {
+        return;
+      }
+      event.preventDefault();
+      const sessions = useSessions.getState();
+      const active = sessions.activeSessionId
+        ? sessions.sessions[sessions.activeSessionId]
+        : undefined;
+      const activeFolderId =
+        sessions.projects.find((project) => project.id === active?.projectId)
+          ?.folderId ?? null;
+      const layout = useLayout.getState();
+      const target = folderFocusTarget(
+        layout.layout.focusedFolderId,
+        activeFolderId,
+        useProjectFolders.getState().folders
+      );
+      if (target !== null || layout.layout.focusedFolderId !== null) {
+        layout.setFocusedFolder(target);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+}
 
 const listStyle: CSSProperties = {
   flex: "1 1 auto",
@@ -190,7 +267,9 @@ export function Sidebar({
     useShallow((state) => {
       const byProject = new Map<string, UiSession[]>();
       for (const session of Object.values(state.sessions)) {
-        if (isPutAway(session)) {
+        // A pinned session is drawn in Pinned; alone it does not hold its
+        // project's group open.
+        if (isPutAway(session) || isPinnedSession(session)) {
           continue;
         }
         const bucket = byProject.get(session.projectId);
@@ -211,6 +290,21 @@ export function Sidebar({
     })
   );
   const sessionSort = useLayout((state) => state.layout.sessionSort);
+  const folders = useProjectFolders((state) => state.folders);
+  const focusedFolderId = useLayout((state) => state.layout.focusedFolderId);
+  // Folders some project belongs to (on the rail or not): the rest are brand
+  // new and get drawn empty, so the person can fill them.
+  const filledFolderIdList = useSessions(
+    useShallow((state) =>
+      [
+        ...new Set(
+          state.projects.flatMap((project) =>
+            project.folderId ? [project.folderId] : []
+          )
+        ),
+      ].sort()
+    )
+  );
   const setActiveSession = useSessions((state) => state.setActiveSession);
   const width = useLayout((state) => state.layout.sidebarWidth);
   const hideOlderThan = useLayout((state) => state.layout.hideOlderThan);
@@ -219,6 +313,20 @@ export function Sidebar({
   const [query, setQuery] = useState("");
   const [showInactive, setShowInactive] = useState(false);
   const filter = query.trim().toLowerCase();
+  // Pinned sessions, oldest pin first, narrowed by the search like any row.
+  const pinnedSessionIds = useSessions(
+    useShallow((state) =>
+      Object.values(state.sessions)
+        .filter(
+          (session) =>
+            isPinnedSession(session) &&
+            (filter === "" || session.title.toLowerCase().includes(filter))
+        )
+        .sort((a, b) => (a.pinnedAt ?? 0) - (b.pinnedAt ?? 0))
+        .map((session) => session.id)
+    )
+  );
+  useFolderFocusChord();
   const lastChangeMs = useCommandCenter((state) => state.lastChangeMs);
   // Whole groups the staleness threshold has emptied. A searched rail answers
   // the query, not the policy — the same `off` a filter forces on the
@@ -256,14 +364,14 @@ export function Sidebar({
   // frozen drag snapshot: if a project's last session closes mid-drag it drops
   // out of `orderedProjects`, and a stale id here would leave dnd-kit tracking
   // a sortable with no DOM node.
-  const inactive = new Set(inactiveIds);
-  const railProjects = orderedProjects.filter(
-    (project) => !inactive.has(project.id)
-  );
-  const inactiveProjects = orderedProjects.filter((project) =>
-    inactive.has(project.id)
-  );
-  const orderedProjectIds = railProjects.map((project) => project.id);
+  const sections = railSections({
+    filledFolderIds: new Set(filledFolderIdList),
+    focusedFolderId,
+    folders,
+    inactiveIds: new Set(inactiveIds),
+    projects: orderedProjects,
+  });
+  const inactiveProjects = sections.inactive;
   const projectsSortable = filter === "";
   // Disambiguation is a property of the whole rail, not of one group: a name
   // only needs a parent path once something else on the rail answers to it.
@@ -298,6 +406,27 @@ export function Sidebar({
     />
   );
 
+  // Each section is its own reorder surface; a drop merges into the one global
+  // manual order, so moving a project inside a folder keeps the rest in place.
+  const renderSortable = (list: ProjectRow[]) =>
+    list.length > 0 ? (
+      <DndContext
+        collisionDetection={closestCenter}
+        onDragCancel={projectDrag.onDragCancel}
+        onDragEnd={projectDrag.onDragEnd}
+        onDragStart={projectDrag.onDragStart}
+        sensors={projectDrag.sensors}
+      >
+        <SortableContext
+          items={list.map((project) => project.id)}
+          strategy={verticalListSortingStrategy}
+        >
+          {list.map((project) => renderGroup(project, projectsSortable))}
+        </SortableContext>
+      </DndContext>
+    ) : null;
+  const hasPinned = sections.pinned.length > 0 || pinnedSessionIds.length > 0;
+
   return (
     <aside
       data-testid="sidebar"
@@ -306,6 +435,36 @@ export function Sidebar({
     >
       <SidebarHeader query={query} setQuery={setQuery} />
       <NeedsYouSection />
+      {hasPinned ? (
+        <section aria-label="Pinned" data-testid="pinned-section">
+          <div style={pinnedLabelRowStyle}>
+            <Pin
+              aria-hidden="true"
+              color={tokens.color.ink.muted}
+              size={10}
+              strokeWidth={2}
+            />
+            <span style={{ ...sectionLabel(), flex: 1 }}>Pinned</span>
+          </div>
+          <div style={pinnedListStyle}>
+            {renderSortable(sections.pinned)}
+            {pinnedSessionIds.map((sessionId) => (
+              <SessionRow
+                key={sessionId}
+                mode={mode}
+                onCloseSession={onCloseSession}
+                onSelect={(id) => {
+                  setActiveSession(id);
+                  useLayout.getState().revealSessionView();
+                }}
+                sessionId={sessionId}
+                showProject={true}
+                sortable={false}
+              />
+            ))}
+          </div>
+        </section>
+      ) : null}
       <div className="kr-reveal-parent" style={projectsLabelRowStyle}>
         <span style={{ ...sectionLabel(), flex: 1 }}>Projects</span>
         <div
@@ -342,6 +501,20 @@ export function Sidebar({
             />
           ) : null}
         </div>
+        <button
+          aria-label="New folder"
+          className="kr-reveal kr-hover-surface"
+          data-testid="new-folder"
+          onClick={() => {
+            const id = createProjectFolder(DEFAULT_FOLDER_NAME);
+            useProjectFolders.getState().setEditingFolder(id);
+          }}
+          style={iconButton()}
+          title="New folder"
+          type="button"
+        >
+          <FolderPlus size={13} strokeWidth={1.75} />
+        </button>
         {/* Not hover-revealed, unlike the sort beside it: this is the only
             way to start a session from the rail, and the empty state directly
             below says "Press + to start one" — a + that appears on hover
@@ -358,31 +531,33 @@ export function Sidebar({
         </button>
       </div>
       <div style={listStyle}>
-        {projects.length === 0 ? (
+        {sections.focus ? (
+          <FocusBanner
+            folder={sections.focus.folder}
+            hiddenCount={sections.focus.hiddenCount}
+          />
+        ) : null}
+        {projects.length === 0 && pinnedSessionIds.length === 0 ? (
           <div style={emptyHintStyle}>
             No open sessions.
             <br />
             Press + to start one.
           </div>
         ) : null}
-        {railProjects.length > 0 ? (
-          <DndContext
-            collisionDetection={closestCenter}
-            onDragCancel={projectDrag.onDragCancel}
-            onDragEnd={projectDrag.onDragEnd}
-            onDragStart={projectDrag.onDragStart}
-            sensors={projectDrag.sensors}
+        {sections.folders.map(({ folder, projects: inFolder }) => (
+          <FolderGroup
+            filled={filledFolderIdList.includes(folder.id)}
+            folder={folder}
+            key={folder.id}
+            projectIds={inFolder.map((project) => project.id)}
           >
-            <SortableContext
-              items={orderedProjectIds}
-              strategy={verticalListSortingStrategy}
-            >
-              {railProjects.map((project) =>
-                renderGroup(project, projectsSortable)
-              )}
-            </SortableContext>
-          </DndContext>
+            {renderSortable(inFolder)}
+          </FolderGroup>
+        ))}
+        {sections.folders.length > 0 && sections.loose.length > 0 ? (
+          <hr data-testid="loose-divider" style={looseDividerStyle} />
         ) : null}
+        {renderSortable(sections.loose)}
         {inactiveProjects.length > 0 ? (
           <>
             <button

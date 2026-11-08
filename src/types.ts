@@ -93,9 +93,14 @@ export interface UsageSnapshot {
 /** A persisted project (mirrors Rust `ProjectRow`). */
 export interface ProjectRow {
   color: string | null;
+  /** The [Project folder] it sits in, or null/absent (mirrors Rust `folder_id`). */
+  folderId?: string | null;
   id: string;
   name: string;
   path: string;
+  /** When it was pinned to the top of the sidebar (ms since epoch), or
+   *  null/absent (mirrors Rust `pinned_at`). */
+  pinnedAt?: number | null;
   /** Optional per-worktree setup command (mirrors Rust `setup_command`). */
   setupCommand: string | null;
 }
@@ -185,6 +190,9 @@ export interface SessionRow {
    *  session is stopped and off the rail until opened (mirrors Rust
    *  `parked_at`, ADR-0052). */
   parkedAt?: number | null;
+  /** When the session was pinned to the top of the sidebar (ms since epoch),
+   *  or null/absent (mirrors Rust `pinned_at`). Display only. */
+  pinnedAt?: number | null;
   projectId: string;
   title: string;
   /** The user renamed this session by hand; Claude's `ai-title` must not

@@ -31,6 +31,11 @@ import {
   useLayout,
 } from "../state/layout.ts";
 import {
+  createProjectFolder,
+  DEFAULT_FOLDER_NAME,
+  useProjectFolders,
+} from "../state/projectFolders.ts";
+import {
   openProjectNotes,
   openTodoCount,
   useProjectNotes,
@@ -430,6 +435,7 @@ function ProjectHeader({
     openTodoCount(state.notes, project.id)
   );
   const actionsMenu = useAnchoredMenu<HTMLDivElement>();
+  const folders = useProjectFolders((state) => state.folders);
   const [editing, setEditing] = useState(false);
   // The header popovers share one anchor — opening one must close the others
   // or they'd stack at the identical spot.
@@ -614,9 +620,20 @@ function ProjectHeader({
       ) : null}
       {actionsMenu.open ? (
         <ProjectMenu
+          folderId={project.folderId ?? null}
+          folders={folders}
           onColour={() => {
             actionsMenu.close();
             picker.toggle();
+          }}
+          onMoveToFolder={(folderId) => {
+            actionsMenu.close();
+            useSessions.getState().setProjectFolder(project.id, folderId);
+          }}
+          onNewFolder={() => {
+            actionsMenu.close();
+            const id = createProjectFolder(DEFAULT_FOLDER_NAME, project.id);
+            useProjectFolders.getState().setEditingFolder(id);
           }}
           onOpenNotes={() => {
             actionsMenu.close();
@@ -638,6 +655,16 @@ function ProjectHeader({
             actionsMenu.close();
             sortMenu.toggle();
           }}
+          onTogglePin={() => {
+            actionsMenu.close();
+            useSessions
+              .getState()
+              .setProjectPinned(
+                project.id,
+                (project.pinnedAt ?? null) === null
+              );
+          }}
+          pinned={(project.pinnedAt ?? null) !== null}
           projectId={project.id}
         />
       ) : null}

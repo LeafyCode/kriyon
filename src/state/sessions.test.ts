@@ -22,6 +22,7 @@ import {
   badgeCount,
   fullyParkedProjectIds,
   idleSession,
+  isPinnedSession,
   isPutAway,
   isWorktreeSession,
   LIVE_TOUCH_GRACE_MS,
@@ -90,6 +91,7 @@ function fullyPopulatedSession(): UiSession {
     nestedUnder: "s-lead",
     parentSessionId: "s-parent",
     parkedAt: 1_730_000_000_000,
+    pinnedAt: 1_740_000_000_000,
     projectId: "p-full",
     status: "running",
     summary: "mid-turn",
@@ -1394,4 +1396,20 @@ test("closing the active session never hands the selection to a parked one", () 
 
   // Selecting it would launch it while it still sits in the Parked list.
   expect(useSessions.getState().activeSessionId).toBe("s0");
+});
+
+test("a pinned session shows in Pinned only while it is live", () => {
+  const live = { ...makeSession("pin", 1), pinnedAt: 5 };
+  expect(isPinnedSession(live)).toBe(true);
+  expect(isPinnedSession({ ...live, parkedAt: 6 })).toBe(false);
+  expect(isPinnedSession({ ...live, archivedAt: 6 })).toBe(false);
+  expect(isPinnedSession(makeSession("plain", 1))).toBe(false);
+});
+
+test("setSessionPinned stamps and clears pinnedAt", () => {
+  useSessions.setState({ sessions: { s: makeSession("s", 1) } });
+  useSessions.getState().setSessionPinned("s", true);
+  expect(useSessions.getState().sessions.s?.pinnedAt).toBeGreaterThan(0);
+  useSessions.getState().setSessionPinned("s", false);
+  expect(useSessions.getState().sessions.s?.pinnedAt).toBeNull();
 });

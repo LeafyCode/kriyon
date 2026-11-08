@@ -110,6 +110,8 @@ export interface UiSession {
   parentSessionId?: string | null;
   /** When the session was parked (see {@link SessionRow.parkedAt}). */
   parkedAt?: number | null;
+  /** When the session was pinned (see {@link SessionRow.pinnedAt}). */
+  pinnedAt?: number | null;
   projectId: string;
   status: SessionStatus;
   summary: string;
@@ -150,6 +152,7 @@ export function sessionRow(session: UiSession): SessionRow {
     nestedUnder: session.nestedUnder ?? null,
     parentSessionId: session.parentSessionId ?? null,
     parkedAt: session.parkedAt ?? null,
+    pinnedAt: session.pinnedAt ?? null,
     projectId: session.projectId,
     title: session.title,
     titleLocked: session.titleLocked,
@@ -238,6 +241,8 @@ export interface SessionsState {
   /** Each session's [Boot phase]; absent ⇒ `idle`. */
   bootPhase: Record<string, BootPhase>;
   clearEvents: (sessionId: string) => void;
+  /** Takes every project out of a deleted [Project folder]. */
+  clearProjectFolder: (folderId: string) => void;
   /** Reads and removes a [Nested session]'s report address (one-shot at launch). */
   consumePendingReport: (id: string) => NestedReport | undefined;
   /** Reads and removes a session's seed prompt, if any (one-shot at launch). */
@@ -343,6 +348,10 @@ export interface SessionsState {
   setPendingSeedPrompt: (id: string, text: string) => void;
   /** Sets a project's identity color; null returns it to the automatic hue. */
   setProjectColor: (projectId: string, color: string | null) => void;
+  /** Puts a project in a [Project folder], or back in the plain list (null). */
+  setProjectFolder: (projectId: string, folderId: string | null) => void;
+  /** Pins a project to the top of the sidebar, or unpins it. */
+  setProjectPinned: (projectId: string, pinned: boolean) => void;
   /**
    * Record what the [Changes refresh coordinator]'s `ensureRepoToplevel`
    * learned about `id`'s repo, in the two calls that lookup makes — both
@@ -367,6 +376,8 @@ export interface SessionsState {
    * not made here.)
    */
   setRepoToplevel: (id: string, cwd: string, toplevel?: string) => void;
+  /** Pins a session to the top of the sidebar, or unpins it. */
+  setSessionPinned: (sessionId: string, pinned: boolean) => void;
   /** Make the files the [Activity log] saw Claude change in `id` (absolute
    * paths) its `touchedFiles`. The log is the one owner of that answer: it
    * counts only finished steps, including subagents' edits, the files a
@@ -474,6 +485,15 @@ export function badgeCount(activity: SessionActivity | undefined): number {
 /** Whether a session is parked: stopped and off the rail until opened. */
 export function isParked(session: UiSession): boolean {
   return session.archivedAt === null && (session.parkedAt ?? null) !== null;
+}
+
+/**
+ * Whether a session shows in the sidebar's Pinned section instead of under its
+ * project: pinned, and still live (a parked or archived pin waits where put-away
+ * sessions wait, and comes back to Pinned with them).
+ */
+export function isPinnedSession(session: UiSession): boolean {
+  return (session.pinnedAt ?? null) !== null && !isPutAway(session);
 }
 
 /**
@@ -914,6 +934,43 @@ export const useSessions = create<SessionsState>((set, get) => ({
         project.id === projectId ? { ...project, color } : project
       ),
     })),
+
+  setProjectFolder: (projectId, folderId) =>
+    set((state) => ({
+      projects: state.projects.map((project) =>
+        project.id === projectId ? { ...project, folderId } : project
+      ),
+    })),
+
+  clearProjectFolder: (folderId) =>
+    set((state) => ({
+      projects: state.projects.map((project) =>
+        project.folderId === folderId ? { ...project, folderId: null } : project
+      ),
+    })),
+
+  setProjectPinned: (projectId, pinned) =>
+    set((state) => ({
+      projects: state.projects.map((project) =>
+        project.id === projectId
+          ? { ...project, pinnedAt: pinned ? Date.now() : null }
+          : project
+      ),
+    })),
+
+  setSessionPinned: (sessionId, pinned) =>
+    set((state) => {
+      const session = state.sessions[sessionId];
+      if (!session) {
+        return state;
+      }
+      return {
+        sessions: {
+          ...state.sessions,
+          [sessionId]: { ...session, pinnedAt: pinned ? Date.now() : null },
+        },
+      };
+    }),
 
   renameProject: (projectId, name) =>
     set((state) => {

@@ -1,6 +1,7 @@
 import { expect, test } from "vitest";
 import {
   isCopyChord,
+  isFolderFocusChord,
   isNewlineChord,
   isNoteCaptureChord,
   isReservedAppChord,
@@ -147,4 +148,14 @@ test("the note capture chord is the platform's app modifier + Shift + N", () => 
     isNoteCaptureChord(ev({ ctrlKey: true, key: "N", shiftKey: true }), true)
   ).toBe(false);
   expect(isNoteCaptureChord(ev({ key: "n", metaKey: true }), true)).toBe(false);
+});
+
+test("cmd+shift+F is reserved (folder focus), bare cmd+F is not", () => {
+  const chord = ev({ key: "F", metaKey: true, shiftKey: true });
+  expect(isFolderFocusChord(chord, true)).toBe(true);
+  expect(isReservedAppChord(chord, true)).toBe(true);
+  expect(isFolderFocusChord(ev({ key: "f", metaKey: true }), true)).toBe(false);
+  expect(
+    isFolderFocusChord(ev({ ctrlKey: true, key: "F", shiftKey: true }), true)
+  ).toBe(false);
 });
