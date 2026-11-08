@@ -68,13 +68,6 @@ function subscribe<T>(
 /** A status update emitted by the backend for one session. */
 export interface StatusUpdate {
   /**
-   * For a seeded update, when the newest replayed event actually happened (ISO
-   * timestamp). Absent on a live update, and on a replay with no timestamps.
-   * The recency projection stamps this instead of "now", so a launch replay
-   * doesn't make every session look freshly active.
-   */
-  lastEventAt?: string | null;
-  /**
    * True when the backend reconstructed this status by replaying the session's
    * events file at launch, rather than observing it live. A replayed finish is
    * output the user saw days ago — see {@link SessionsState.seededStatus}.
