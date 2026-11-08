@@ -198,11 +198,21 @@ test("hydrate still loads sessions when the activity log is unavailable", async 
   mockedListProjects.mockResolvedValue([project("p1")]);
   mockedListSessions.mockResolvedValue([sessionRow(session("s1", "p1"))]);
   vi.mocked(activityLastActive).mockRejectedValue("unavailable");
+  const logged = vi.spyOn(console, "error").mockImplementation(() => {
+    // Asserted below; keep the test output clean.
+  });
 
   await hydrate();
 
   expect(useSessions.getState().sessions.s1).toBeDefined();
   expect(useCommandCenter.getState().lastChangeMs).toEqual({});
+  // The fold silently going back to creation times is the bug this load
+  // fixes, so its failure must leave a trace.
+  expect(logged).toHaveBeenCalledWith(
+    "could not load session activity",
+    "unavailable"
+  );
+  logged.mockRestore();
 });
 
 test("hydrate round-trips a persisted notifyPreference and command view", async () => {

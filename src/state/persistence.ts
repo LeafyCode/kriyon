@@ -421,8 +421,13 @@ export async function hydrate(): Promise<void> {
   // session's watch starts at launch (sessionPaneMounts), so without this every
   // other session would be aged from its creation by the sidebar's
   // `hideOlderThan` fold — hiding a session made days ago but used today, and
-  // with it a whole project. Best-effort: the fold falls back to `createdAt`.
-  const lastActivePromise = activityLastActive().catch(() => ({}));
+  // with it a whole project. Best-effort: the fold falls back to `createdAt`,
+  // which is the bug this load fixes, so the failure must leave a trace.
+  const lastActivePromise = activityLastActive().catch((error: unknown) => {
+    // biome-ignore lint/suspicious/noConsole: a silent fallback re-hides recently used sessions.
+    console.error("could not load session activity", error);
+    return {};
+  });
 
   const [projects, sessionRows, layoutJson, terminalsJson] = await Promise.all([
     listProjects(),
