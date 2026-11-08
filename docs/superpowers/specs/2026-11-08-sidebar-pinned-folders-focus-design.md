@@ -2,7 +2,6 @@
 
 **Date:** 2026-11-08
 **Status:** Accepted. First version built; see "Built in the first version" at the end.
-**Mockups:** design canvas "Sidebar: Pinned, Folders, Focus" (private claude.ai artifact)
 
 ## Goal
 
@@ -12,33 +11,34 @@ Someone who never makes a folder or pins anything must see exactly the sidebar t
 
 ## What people ask for (research, 2026-11-08)
 
-1. **A fixed order** that does not jump around as sessions get busy. The top complaint about
-   Claude Code Desktop (anthropics/claude-code #70104, #72126, #66196). Kriyon already has
-   drag-to-reorder for projects; this design keeps it.
-2. **Pin whole projects**, not only chats (Cursor forum; Codex already has it).
-3. **Folders above projects.** Cursor staff call it one of their most common requests. People
-   ask for one level, sometimes two, never deeper.
-4. **Pin single sessions.** ChatGPT and Cursor shipped it after demand. Small caps (ChatGPT
-   allows about three) draw complaints.
-5. **A closed folder still shows when something inside needs you** (Discord folder requests),
-   and users ask to mute a noisy folder.
+From public feature requests and forum threads for AI coding tools, chat apps, editors,
+browsers and issue trackers:
 
-**Folders, not tags.** Tag-based sidebars (VS Code Project Manager) show a project once per
-tag, and research on personal filing finds tags are rarely kept up. Search covers the cases
-where a project fits more than one bucket.
+1. **A fixed order** that does not jump around as sessions get busy. The most common
+   complaint about agent sidebars. Kriyon already has drag-to-reorder for projects; this
+   design keeps it.
+2. **Pin whole projects**, not only chats.
+3. **Folders above projects.** People ask for one level, sometimes two, never deeper.
+4. **Pin single sessions.** Small caps on pins (around three) draw complaints.
+5. **A closed folder still shows when something inside needs you**, and some ask to mute a
+   noisy folder.
 
-**Empty headers are a known irritant.** Users of VS Code Project Manager, 1Password and Claude
-Code Desktop (claudeissues #95979) ask to hide empty groups and the "no tags / uncategorized"
-header. So: no "Ungrouped" header, and a folder with nothing to show is not drawn.
+**Folders, not tags.** Tag-based sidebars show a project once per tag, and research on
+personal filing finds tags are rarely kept up. Search covers the cases where a project fits
+more than one bucket.
 
-**How other tools let people make the first folder.**
+**Empty headers are a known irritant.** People ask to hide empty groups and the "no tags /
+uncategorized" header. So: no "Ungrouped" header, and a folder with nothing to show is not
+drawn.
 
-| Tool | How a folder is made |
+**How tools let people make the first folder.** Four patterns recur:
+
+| Pattern | How a folder is made |
 | --- | --- |
-| Discord | Hold one server over another, then drop. Users also ask for a right-click "add to folder". |
-| Chrome tab groups | Right-click a tab, "Add tab to new group", name it. |
-| Linear favorites | Hover the Favorites heading, click the new-folder icon; drag items in. |
-| Arc | `+` at the sidebar foot, "New folder", in the Pinned area. |
+| Drag onto another item | Hold one item over another, then drop: both go into a new folder. |
+| From the item's menu | Right-click an item, "Add to new folder", name it. |
+| A button on the section heading | Hover the heading, click the new-folder icon, then drag items in. |
+| A "+" menu | "New folder" from a create menu at the foot of the sidebar. |
 
 The pattern that works: start from the item ("put this in a new folder"), so a folder is born
 holding something, plus drag for people who prefer it, plus one quiet button.
@@ -143,7 +143,7 @@ colours. Revisit after people use v1.
 ## Build order
 
 1. Pinned (store columns, commands, section, menus).
-2. Folders (table, commands, rendering, three ways to make one, roll-up dot).
+2. Folders (storage, rendering, three ways to make one, roll-up dot).
 3. Focus.
 
 Each step is a test-first, separately reviewable commit on `feat/group-projects`. An ADR records
@@ -159,6 +159,21 @@ and ⌘⇧F.
 
 Changed from the design above:
 
-- Folders are ordered by name. Dragging folders into order is not built yet.
+- Folders are ordered by name. Dragging folders into order, and triage floating busy
+  folders up, are not built yet.
 - While a held hover marks a drop target, the lists stop making room, so the target stays
   under the pointer and is outlined with what dropping will do.
+- Pinned projects stay out of folders: pinning takes the project out of its folder
+  (unpinning puts it on the plain list), the menu does not offer Move to folder for one, and
+  drag does not drop one into a folder.
+- Making a folder, from any of the three ways, ends a focus on another folder, so the new
+  folder and its name field are on screen.
+- A new folder left with an empty name is kept as "New folder", in its place by name. It
+  does not vanish on blur or sit at the top.
+- There is one inactive fold for the whole rail, not one inside each folder.
+- Clear project keeps the project's folder and pin, so it comes back where it was.
+
+Not built yet:
+
+- Needs-you marking items outside the focus.
+- Search scoped to the focused folder, and the banner's "Show all".

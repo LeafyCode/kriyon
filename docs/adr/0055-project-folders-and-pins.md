@@ -7,8 +7,8 @@
 
 People with many projects want a calmer sidebar: their most important work at
 the top, the rest in a few buckets they choose, and a way to see only one
-bucket at a time. Research across Claude Code Desktop, Cursor, ChatGPT, Codex,
-Slack, Discord, Linear, Arc and VS Code Project Manager (see the design spec,
+bucket at a time. Research into how people organise long lists in chat apps,
+editors, browsers and issue trackers (see the design spec,
 `docs/superpowers/specs/2026-11-08-sidebar-pinned-folders-focus-design.md`)
 found the same requests: pin whole projects and single sessions, group
 projects into folders one level deep, and keep a closed folder showing when
@@ -43,11 +43,17 @@ them lets the person sort projects into named groups.
 - **Pins are display only.** A pinned session runs exactly as before. A
   parked or archived pin waits where put-away sessions wait and comes back to
   Pinned with them.
+- **Pinned projects stay out of folders.** Pinned draws them, so a folder
+  could never show one. Pinning takes the project out of its folder (unpinning
+  puts it on the plain list), the store refuses to move a pinned project, and
+  the menu and drag do not offer it.
 
 ## Consequences
 
 - One pure function (`railSections`) decides what each section shows, so the
-  sidebar only draws its result.
+  sidebar only draws its result. The drag rules read where a project sits
+  from the same placement rule (`railPlaces`), so a drop acts on where the
+  project is drawn.
 - The rail has one drag area, so a project can be dragged across sections:
   onto a folder header to join it, or held over another project for half a
   second to make a folder of the two. The drop rules are one pure function
