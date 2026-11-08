@@ -439,6 +439,17 @@ pub fn activity_turns(session_id: String, limit: Option<u32>) -> Result<Vec<Acti
     with_store(|s| s.turns(&session_id, limit))
 }
 
+/// When each session last did work, per the [Activity log] (see
+/// [`ActivityStore::last_active`]). Loaded once at launch so the sidebar's age
+/// fold measures every session from its real last activity, not its creation.
+///
+/// # Errors
+/// On a database error, or when the activity log is unavailable.
+#[tauri::command]
+pub fn activity_last_active() -> Result<std::collections::HashMap<String, i64>, String> {
+    with_store(|s| s.last_active())
+}
+
 /// Every file Claude changed in `session_id` (absolute paths): what the
 /// Files view's AI changes tab keeps to. See
 /// [`ActivityStore::changed_paths`](crate::activity_store::ActivityStore::changed_paths).

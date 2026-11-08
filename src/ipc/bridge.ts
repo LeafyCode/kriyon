@@ -1578,6 +1578,18 @@ export function activityTurns(
   return invoke("activity_turns", { limit, sessionId });
 }
 
+/**
+ * When each session last did work (ms since the epoch, by session id), from the
+ * Activity log: its newest turn's end, or its start while still open. Sessions
+ * with no turns are absent. Empty outside Tauri.
+ */
+export function activityLastActive(): Promise<Record<string, number>> {
+  if (!hasTauri()) {
+    return Promise.resolve({});
+  }
+  return invoke("activity_last_active");
+}
+
 /** One step in full, or `null` once it has been pruned. */
 export function activityStep(
   sessionId: string,

@@ -133,6 +133,12 @@ interface CommandCenterState {
   recordSeen: (id: string, nowMs: number) => void;
   /** A status change updates recency and proves liveness. */
   recordStatusChange: (id: string, nowMs: number) => void;
+  /**
+   * Restore recency from history at launch (each session's last activity, by
+   * id): keep the max, so a live change recorded first is never lowered. Not
+   * liveness — history says when a session worked, not that it is alive now.
+   */
+  seedLastChange: (lastActiveMs: Record<string, number>) => void;
 }
 
 function maxSeen(
@@ -161,5 +167,13 @@ export const useCommandCenter = create<CommandCenterState>((set) => ({
     set((state) => ({
       lastChangeMs: { ...state.lastChangeMs, [id]: nowMs },
       lastSeenMs: maxSeen(state.lastSeenMs, id, nowMs),
+    })),
+
+  seedLastChange: (lastActiveMs) =>
+    set((state) => ({
+      lastChangeMs: Object.entries(lastActiveMs).reduce(
+        (acc, [id, ms]) => maxSeen(acc, id, ms),
+        state.lastChangeMs
+      ),
     })),
 }));
