@@ -48,6 +48,9 @@ them lets the person sort projects into named groups.
 
 - One pure function (`railSections`) decides what each section shows, so the
   sidebar only draws its result.
-- Folder order is by name in this first version. Dragging a project onto
-  another to make a folder, and dragging folders into order, are left for a
-  later change; the project menu and the header button cover making folders.
+- The rail has one drag area, so a project can be dragged across sections:
+  onto a folder header to join it, or held over another project for half a
+  second to make a folder of the two. The drop rules are one pure function
+  (`projectDropAction`).
+- Folder order is by name in this first version; dragging folders into order
+  is left for a later change.

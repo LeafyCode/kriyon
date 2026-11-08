@@ -10,6 +10,7 @@ import {
   Check,
   ChevronRight,
   Clock,
+  FolderPlus,
   GitBranch,
   GripVertical,
   ListTodo,
@@ -47,7 +48,7 @@ import {
 } from "../state/sessions.ts";
 import { useUi } from "../state/ui.ts";
 import { projectSquareStyle } from "../theme/projectColor.ts";
-import { tokens } from "../theme/tokens.ts";
+import { accentAlpha, tokens } from "../theme/tokens.ts";
 import type { ProjectRow } from "../types.ts";
 import { useAnchoredMenu } from "../ui/AnchoredMenu.tsx";
 import {
@@ -110,6 +111,23 @@ function projectGripStyle(dragging: boolean): CSSProperties {
  * and `CSS.Transform` would fold dnd-kit's `scaleX/scaleY` into the moved group
  * and skew/stretch its text mid-drag. Translate-only moves it cleanly.
  */
+/** A held hover: the target project reads as a drop zone, not a row. */
+const mergeTargetStyle: CSSProperties = {
+  background: accentAlpha(0.07),
+  borderRadius: tokens.radius.lg,
+  outline: `1px dashed ${tokens.color.accentBright}`,
+  outlineOffset: "1px",
+};
+
+const mergeHintStyle: CSSProperties = {
+  alignItems: "center",
+  color: tokens.color.accentInk,
+  display: "flex",
+  fontSize: "11px",
+  gap: "6px",
+  padding: "4px 10px 0",
+};
+
 function sortableGroupStyle(
   sortableGroup: ReturnType<typeof useSortable>
 ): CSSProperties {
@@ -751,6 +769,9 @@ interface ProjectGroupProps {
   filter: string;
   /** Name plus the parent path that separates it from its same-named twins. */
   label: ProjectLabel;
+  /** Another project has rested on this one mid-drag: what dropping does
+   *  ("Drop to make a folder"), or null. */
+  mergeHint?: string | null;
   /** Minute-quantized clock for the staleness fold; 0 when hiding is off. */
   nowMinute: number;
   onCloseSession: (id: string) => void;
@@ -769,6 +790,7 @@ const ProjectGroup = memo(function ProjectGroup({
   dormant,
   filter,
   label,
+  mergeHint = null,
   nowMinute,
   onCloseSession,
   onSelect,
@@ -870,10 +892,20 @@ const ProjectGroup = memo(function ProjectGroup({
 
   return (
     <div
+      data-merge-target={mergeHint ? "true" : undefined}
       data-testid="project-group"
       ref={sortableGroup.setNodeRef}
-      style={sortableGroupStyle(sortableGroup)}
+      style={{
+        ...sortableGroupStyle(sortableGroup),
+        ...(mergeHint ? mergeTargetStyle : null),
+      }}
     >
+      {mergeHint ? (
+        <span data-testid={`merge-hint-${project.id}`} style={mergeHintStyle}>
+          <FolderPlus aria-hidden="true" size={11} />
+          {mergeHint}
+        </span>
+      ) : null}
       <ProjectHeader
         attention={attention}
         collapsed={collapsed}

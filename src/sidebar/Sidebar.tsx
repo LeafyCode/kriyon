@@ -1,6 +1,7 @@
-import { closestCenter, DndContext } from "@dnd-kit/core";
+import { DndContext } from "@dnd-kit/core";
 import {
   SortableContext,
+  type SortingStrategy,
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import {
@@ -11,7 +12,13 @@ import {
   Pin,
   Plus,
 } from "lucide-react";
-import { type CSSProperties, useEffect, useMemo, useState } from "react";
+import {
+  type CSSProperties,
+  type ReactNode,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useCommandCenter } from "../state/commandCenter.ts";
 import { useLayout } from "../state/layout.ts";
@@ -32,8 +39,8 @@ import { tokens } from "../theme/tokens.ts";
 import type { ProjectRow } from "../types.ts";
 import { useAnchoredMenu } from "../ui/AnchoredMenu.tsx";
 import { ArchivedGroup } from "./ArchivedGroup.tsx";
-import { useProjectDrag } from "./dragCommit.ts";
 import { FocusBanner, FolderGroup } from "./FolderGroup.tsx";
+import { folderAwareCollision, railPlaces } from "./folderDrop.ts";
 import { NeedsYouSection } from "./NeedsYouSection.tsx";
 import { ParkedGroup } from "./ParkedGroup.tsx";
 import { ProjectGroup } from "./ProjectGroup.tsx";
@@ -45,6 +52,7 @@ import { SidebarFooter } from "./SidebarFooter.tsx";
 import { SidebarHeader } from "./SidebarHeader.tsx";
 import { SortMenu } from "./SortMenu.tsx";
 import { inactiveProjectIds, sortProjects } from "./sessionOrder.ts";
+import { useFolderDrag } from "./useFolderDrag.ts";
 
 export interface SidebarProps {
   onCloseSession: (id: string) => void;
@@ -142,6 +150,40 @@ function useFolderFocusChord(): void {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 }
+
+/**
+ * The rail's one drag area, mounted only while there is a project to drag:
+ * dnd-kit adds a live region (`role="status"`) for screen readers, and an
+ * empty rail has nothing for it to announce.
+ */
+function RailDrag({
+  children,
+  drag,
+  enabled,
+}: {
+  children: ReactNode;
+  drag: ReturnType<typeof useFolderDrag>;
+  enabled: boolean;
+}) {
+  if (!enabled) {
+    return <>{children}</>;
+  }
+  return (
+    <DndContext
+      collisionDetection={folderAwareCollision}
+      onDragCancel={drag.onDragCancel}
+      onDragEnd={drag.onDragEnd}
+      onDragOver={drag.onDragOver}
+      onDragStart={drag.onDragStart}
+      sensors={drag.sensors}
+    >
+      {children}
+    </DndContext>
+  );
+}
+
+/** A sorting strategy that moves nothing (see the merge hover above). */
+const holdStill: SortingStrategy = () => null;
 
 const listStyle: CSSProperties = {
   flex: "1 1 auto",
@@ -353,7 +395,10 @@ export function Sidebar({
   // Project reorder wiring: the frozen drag order (`displayIds`) is mapped back
   // to project rows for rendering, so a triage re-rank mid-drag can't shuffle
   // the list under the pointer. A searched rail isn't a reorder surface.
-  const projectDrag = useProjectDrag(projects.map((project) => project.id));
+  const projectDrag = useFolderDrag(
+    projects.map((project) => project.id),
+    railPlaces(projects, folders)
+  );
   const projectById = new Map(
     projects.map((project) => [project.id, project] as const)
   );
@@ -388,6 +433,11 @@ export function Sidebar({
       filter={filter}
       key={project.id}
       label={labels.get(project.id) ?? { name: project.name, qualifier: null }}
+      mergeHint={
+        projectDrag.merge?.targetId === project.id
+          ? projectDrag.merge.hint
+          : null
+      }
       nowMinute={nowMinute}
       onCloseSession={onCloseSession}
       onSelect={(id) => {
@@ -406,24 +456,19 @@ export function Sidebar({
     />
   );
 
-  // Each section is its own reorder surface; a drop merges into the one global
-  // manual order, so moving a project inside a folder keeps the rest in place.
+  // Each section is its own sortable list inside the rail's one drag area, so
+  // a project can be dragged across sections (into or out of a folder). A drop
+  // merges into the one global manual order. While a held hover marks a merge
+  // target, the lists stop making room, so the target stays under the pointer.
+  const strategy = projectDrag.merge ? holdStill : verticalListSortingStrategy;
   const renderSortable = (list: ProjectRow[]) =>
     list.length > 0 ? (
-      <DndContext
-        collisionDetection={closestCenter}
-        onDragCancel={projectDrag.onDragCancel}
-        onDragEnd={projectDrag.onDragEnd}
-        onDragStart={projectDrag.onDragStart}
-        sensors={projectDrag.sensors}
+      <SortableContext
+        items={list.map((project) => project.id)}
+        strategy={strategy}
       >
-        <SortableContext
-          items={list.map((project) => project.id)}
-          strategy={verticalListSortingStrategy}
-        >
-          {list.map((project) => renderGroup(project, projectsSortable))}
-        </SortableContext>
-      </DndContext>
+        {list.map((project) => renderGroup(project, projectsSortable))}
+      </SortableContext>
     ) : null;
   const hasPinned = sections.pinned.length > 0 || pinnedSessionIds.length > 0;
 
@@ -435,169 +480,171 @@ export function Sidebar({
     >
       <SidebarHeader query={query} setQuery={setQuery} />
       <NeedsYouSection />
-      {hasPinned ? (
-        <section aria-label="Pinned" data-testid="pinned-section">
-          <div style={pinnedLabelRowStyle}>
-            <Pin
-              aria-hidden="true"
-              color={tokens.color.ink.muted}
-              size={10}
-              strokeWidth={2}
-            />
-            <span style={{ ...sectionLabel(), flex: 1 }}>Pinned</span>
-          </div>
-          <div style={pinnedListStyle}>
-            {renderSortable(sections.pinned)}
-            {pinnedSessionIds.map((sessionId) => (
-              <SessionRow
-                key={sessionId}
-                mode={mode}
-                onCloseSession={onCloseSession}
-                onSelect={(id) => {
-                  setActiveSession(id);
-                  useLayout.getState().revealSessionView();
-                }}
-                sessionId={sessionId}
-                showProject={true}
-                sortable={false}
+      <RailDrag drag={projectDrag} enabled={projects.length > 0}>
+        {hasPinned ? (
+          <section aria-label="Pinned" data-testid="pinned-section">
+            <div style={pinnedLabelRowStyle}>
+              <Pin
+                aria-hidden="true"
+                color={tokens.color.ink.muted}
+                size={10}
+                strokeWidth={2}
               />
-            ))}
-          </div>
-        </section>
-      ) : null}
-      <div className="kr-reveal-parent" style={projectsLabelRowStyle}>
-        <span style={{ ...sectionLabel(), flex: 1 }}>Projects</span>
-        <div
-          className="kr-reveal"
-          ref={sortMenu.anchorRef}
-          style={{ position: "relative" }}
-        >
-          <button
-            aria-label="Sort sessions"
-            className="kr-hover-surface"
-            onClick={() => sortMenu.toggle()}
-            style={iconButton()}
-            title="Sort sessions"
-            type="button"
-            {...sortMenu.triggerAria}
+              <span style={{ ...sectionLabel(), flex: 1 }}>Pinned</span>
+            </div>
+            <div style={pinnedListStyle}>
+              {renderSortable(sections.pinned)}
+              {pinnedSessionIds.map((sessionId) => (
+                <SessionRow
+                  key={sessionId}
+                  mode={mode}
+                  onCloseSession={onCloseSession}
+                  onSelect={(id) => {
+                    setActiveSession(id);
+                    useLayout.getState().revealSessionView();
+                  }}
+                  sessionId={sessionId}
+                  showProject={true}
+                  sortable={false}
+                />
+              ))}
+            </div>
+          </section>
+        ) : null}
+        <div className="kr-reveal-parent" style={projectsLabelRowStyle}>
+          <span style={{ ...sectionLabel(), flex: 1 }}>Projects</span>
+          <div
+            className="kr-reveal"
+            ref={sortMenu.anchorRef}
+            style={{ position: "relative" }}
           >
-            <ArrowUpDown size={13} strokeWidth={1.75} />
-          </button>
-          {sortMenu.open ? (
-            <SortMenu
-              current={sessionSort}
-              hide={{
-                current: hideOlderThan,
-                onPick: (value) => {
-                  useLayout.getState().setHideOlderThan(value);
+            <button
+              aria-label="Sort sessions"
+              className="kr-hover-surface"
+              onClick={() => sortMenu.toggle()}
+              style={iconButton()}
+              title="Sort sessions"
+              type="button"
+              {...sortMenu.triggerAria}
+            >
+              <ArrowUpDown size={13} strokeWidth={1.75} />
+            </button>
+            {sortMenu.open ? (
+              <SortMenu
+                current={sessionSort}
+                hide={{
+                  current: hideOlderThan,
+                  onPick: (value) => {
+                    useLayout.getState().setHideOlderThan(value);
+                    sortMenu.close();
+                  },
+                }}
+                onFollowGlobal={null}
+                onPick={(mode) => {
+                  useLayout.getState().setSessionSort(mode);
                   sortMenu.close();
-                },
-              }}
-              onFollowGlobal={null}
-              onPick={(mode) => {
-                useLayout.getState().setSessionSort(mode);
-                sortMenu.close();
-              }}
-            />
-          ) : null}
-        </div>
-        <button
-          aria-label="New folder"
-          className="kr-reveal kr-hover-surface"
-          data-testid="new-folder"
-          onClick={() => {
-            const id = createProjectFolder(DEFAULT_FOLDER_NAME);
-            useProjectFolders.getState().setEditingFolder(id);
-          }}
-          style={iconButton()}
-          title="New folder"
-          type="button"
-        >
-          <FolderPlus size={13} strokeWidth={1.75} />
-        </button>
-        {/* Not hover-revealed, unlike the sort beside it: this is the only
+                }}
+              />
+            ) : null}
+          </div>
+          <button
+            aria-label="New folder"
+            className="kr-reveal kr-hover-surface"
+            data-testid="new-folder"
+            onClick={() => {
+              const id = createProjectFolder(DEFAULT_FOLDER_NAME);
+              useProjectFolders.getState().setEditingFolder(id);
+            }}
+            style={iconButton()}
+            title="New folder"
+            type="button"
+          >
+            <FolderPlus size={13} strokeWidth={1.75} />
+          </button>
+          {/* Not hover-revealed, unlike the sort beside it: this is the only
             way to start a session from the rail, and the empty state directly
             below says "Press + to start one" — a + that appears on hover
             makes that sentence a dead end. */}
-        <button
-          aria-label="New session"
-          className="kr-hover-surface"
-          data-tour="new-session"
-          onClick={onNewSession}
-          style={iconButton()}
-          type="button"
-        >
-          <Plus size={14} strokeWidth={1.75} />
-        </button>
-      </div>
-      <div style={listStyle}>
-        {sections.focus ? (
-          <FocusBanner
-            folder={sections.focus.folder}
-            hiddenCount={sections.focus.hiddenCount}
-          />
-        ) : null}
-        {projects.length === 0 && pinnedSessionIds.length === 0 ? (
-          <div style={emptyHintStyle}>
-            No open sessions.
-            <br />
-            Press + to start one.
-          </div>
-        ) : null}
-        {sections.folders.map(({ folder, projects: inFolder }) => (
-          <FolderGroup
-            filled={filledFolderIdList.includes(folder.id)}
-            folder={folder}
-            key={folder.id}
-            projectIds={inFolder.map((project) => project.id)}
+          <button
+            aria-label="New session"
+            className="kr-hover-surface"
+            data-tour="new-session"
+            onClick={onNewSession}
+            style={iconButton()}
+            type="button"
           >
-            {renderSortable(inFolder)}
-          </FolderGroup>
-        ))}
-        {sections.folders.length > 0 && sections.loose.length > 0 ? (
-          <hr data-testid="loose-divider" style={looseDividerStyle} />
-        ) : null}
-        {renderSortable(sections.loose)}
-        {inactiveProjects.length > 0 ? (
-          <>
-            <button
-              aria-expanded={showInactive}
-              className="kr-hover-surface"
-              data-testid="inactive-projects-summary"
-              onClick={() => setShowInactive((open) => !open)}
-              style={inactiveSummaryStyle}
-              type="button"
+            <Plus size={14} strokeWidth={1.75} />
+          </button>
+        </div>
+        <div style={listStyle}>
+          {sections.focus ? (
+            <FocusBanner
+              folder={sections.focus.folder}
+              hiddenCount={sections.focus.hiddenCount}
+            />
+          ) : null}
+          {projects.length === 0 && pinnedSessionIds.length === 0 ? (
+            <div style={emptyHintStyle}>
+              No open sessions.
+              <br />
+              Press + to start one.
+            </div>
+          ) : null}
+          {sections.folders.map(({ folder, projects: inFolder }) => (
+            <FolderGroup
+              filled={filledFolderIdList.includes(folder.id)}
+              folder={folder}
+              key={folder.id}
+              projectIds={inFolder.map((project) => project.id)}
             >
-              <span style={inactiveChevronStyle(showInactive)}>
-                <ChevronRight size={11} />
-              </span>
-              <Clock
-                size={9}
-                style={{ color: tokens.color.ink.dim, flex: "none" }}
-              />
-              <span style={{ flex: 1 }}>
-                {inactiveProjects.length} inactive{" "}
-                {inactiveProjects.length === 1 ? "project" : "projects"}
-              </span>
-            </button>
-            {/* Revealed groups sit outside the SortableContext: a project the
+              {renderSortable(inFolder)}
+            </FolderGroup>
+          ))}
+          {sections.folders.length > 0 && sections.loose.length > 0 ? (
+            <hr data-testid="loose-divider" style={looseDividerStyle} />
+          ) : null}
+          {renderSortable(sections.loose)}
+          {inactiveProjects.length > 0 ? (
+            <>
+              <button
+                aria-expanded={showInactive}
+                className="kr-hover-surface"
+                data-testid="inactive-projects-summary"
+                onClick={() => setShowInactive((open) => !open)}
+                style={inactiveSummaryStyle}
+                type="button"
+              >
+                <span style={inactiveChevronStyle(showInactive)}>
+                  <ChevronRight size={11} />
+                </span>
+                <Clock
+                  size={9}
+                  style={{ color: tokens.color.ink.dim, flex: "none" }}
+                />
+                <span style={{ flex: 1 }}>
+                  {inactiveProjects.length} inactive{" "}
+                  {inactiveProjects.length === 1 ? "project" : "projects"}
+                </span>
+              </button>
+              {/* Revealed groups sit outside the SortableContext: a project the
                 threshold has hidden is not a reorder target, exactly as the
                 folded-away sessions inside a group are not. */}
-            {showInactive ? (
-              <>
-                <div data-testid="inactive-block" style={inactiveBlockStyle}>
-                  {inactiveProjects.map((project) =>
-                    renderGroup(project, false, true)
-                  )}
-                </div>
-                <span style={inactiveBlockEndStyle} />
-              </>
-            ) : null}
-          </>
-        ) : null}
-        <ParkedGroup nowMinute={nowMinute} />
-        <ArchivedGroup />
-      </div>
+              {showInactive ? (
+                <>
+                  <div data-testid="inactive-block" style={inactiveBlockStyle}>
+                    {inactiveProjects.map((project) =>
+                      renderGroup(project, false, true)
+                    )}
+                  </div>
+                  <span style={inactiveBlockEndStyle} />
+                </>
+              ) : null}
+            </>
+          ) : null}
+          <ParkedGroup nowMinute={nowMinute} />
+          <ArchivedGroup />
+        </div>
+      </RailDrag>
       <SidebarFooter onShowAbout={onShowAbout} />
       <ResizeHandle />
     </aside>

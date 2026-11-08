@@ -151,11 +151,14 @@ the storage decision and the folders-not-tags choice.
 
 ## Built in the first version
 
-Built: Pinned (projects and sessions), folders from the project menu and the header button,
-rename and delete, the collapsed-folder needs-you dot, Focus with its banner and ⌘⇧F.
+Built: Pinned (projects and sessions); folders from the project menu, the header button and
+drag (drop on a folder header to join it; hold over another project for half a second to make
+a folder of the two, or to join that project's folder; drop among another section's projects
+to move there); rename and delete; the collapsed-folder needs-you dot; Focus with its banner
+and ⌘⇧F.
 
 Changed from the design above:
 
 - Folders are ordered by name. Dragging folders into order is not built yet.
-- Dragging a project onto another to make a folder, and dragging a project in or out of a
-  folder, are not built yet. Projects still drag into order inside their own section.
+- While a held hover marks a drop target, the lists stop making room, so the target stays
+  under the pointer and is outlined with what dropping will do.

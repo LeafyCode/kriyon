@@ -4,6 +4,7 @@
  * its project groups. Plus the [Folder focus] banner that names the folder the
  * rail is narrowed to. Sorting only — nothing here stops or starts work.
  */
+import { useDroppable } from "@dnd-kit/core";
 import {
   ChevronRight,
   Crosshair,
@@ -26,6 +27,7 @@ import {
   anchoredMenuSurfaceStyle,
   useAnchoredMenu,
 } from "../ui/AnchoredMenu.tsx";
+import { folderDropId } from "./folderDrop.ts";
 import { HeaderAction } from "./HeaderAction.tsx";
 import { InlineRename } from "./InlineRename.tsx";
 
@@ -34,6 +36,13 @@ const headerStyle: CSSProperties = {
   display: "flex",
   gap: "2px",
   position: "relative",
+};
+
+/** A dragged project is over the header: it reads as the place to let go. */
+const dropOverStyle: CSSProperties = {
+  background: accentAlpha(0.1),
+  borderRadius: tokens.radius.md,
+  outline: `1px dashed ${tokens.color.accentBright}`,
 };
 
 const headerButtonStyle: CSSProperties = {
@@ -166,6 +175,9 @@ export function FolderGroup({
     )
   );
   const menu = useAnchoredMenu<HTMLDivElement>();
+  // The header is a drop target: let go of a dragged project on it to put the
+  // project in this folder.
+  const drop = useDroppable({ id: folderDropId(folder.id) });
   const stopEditing = () => useProjectFolders.getState().setEditingFolder(null);
   const expanded = focused || !collapsed;
 
@@ -176,8 +188,12 @@ export function FolderGroup({
     >
       <div
         className="kr-reveal-parent"
-        ref={menu.anchorRef}
-        style={headerStyle}
+        data-drop-over={drop.isOver ? "true" : undefined}
+        ref={(node: HTMLDivElement | null) => {
+          menu.anchorRef.current = node;
+          drop.setNodeRef(node);
+        }}
+        style={drop.isOver ? { ...headerStyle, ...dropOverStyle } : headerStyle}
       >
         {editing ? (
           <span style={{ ...headerButtonStyle, cursor: "default" }}>
