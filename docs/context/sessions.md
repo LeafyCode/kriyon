@@ -47,8 +47,10 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
   [Session] has folded away under the sidebar's `hideOlderThan` threshold, so the whole
   group leaves the rail for one "N inactive projects" disclosure. The exemptions that keep
   a row visible (the active session, running/waiting/error work, an unread finish) each
-  keep the group visible too, and a filter turns the fold off. _Avoid_: hidden project,
-  stale project.
+  keep the group visible too, and a filter turns the fold off. Age runs from each
+  session's last activity, restored at launch from the [Activity log] for every session
+  (not only the watched one); `createdAt` is the fallback only for a session with no
+  logged turn. _Avoid_: hidden project, stale project.
 - **Parked project** — a [Project (Workspace)] the user has put away for now with *Park
   project*: every [Session] still on its rail group is parked and stopped, and so is every
   [Project terminal] it owns (the same stop archiving uses). Rows, titles, order, [Archived

@@ -130,37 +130,35 @@ test("activity, title, claude-id, ready, handoff, and focus subscribers are inst
   expect(onFocusSession).toHaveBeenCalled();
 });
 
-test("a launch replay reports when it happened, not now", () => {
-  // The bug this guards: the seed emits a status for every session at launch.
-  // Stamping those "now" told the recency projection that every session had
-  // just been active, so the age-based "N older" fold could never fire again
-  // after a restart — nothing was ever old enough.
-  const threeDaysAgo = "2026-07-17T09:15:00.000Z";
-  expect(
-    statusChangeAt({
-      lastEventAt: threeDaysAgo,
-      seeded: true,
-      sessionId: "s1",
-      status: "idle",
-      summary: "",
-    })
-  ).toBe(Date.parse(threeDaysAgo));
+test("a launch replay never moves a session's recency", async () => {
+  // A replay is history, not a change: stamping it "now" made every session
+  // look just active after a restart, and stamping it with its own older
+  // timestamp let opening a session make it look older than the Activity log
+  // says. Past activity has one source, seeded for every session at hydrate.
+  stops.push(installCommandCenterListeners());
+  await Promise.resolve();
+  useCommandCenter.getState().seedLastChange({ s1: 5000 });
 
-  // A replay with no usable timestamp records nothing at all, so the fold
-  // falls back to the session's createdAt rather than to "now".
-  for (const lastEventAt of [undefined, null, "not-a-date"]) {
-    expect(
-      statusChangeAt({
-        lastEventAt,
-        seeded: true,
-        sessionId: "s1",
-        status: "idle",
-        summary: "",
-      })
-    ).toBeNull();
-  }
+  const cb = captured<StatusUpdate>(
+    onSessionStatus as unknown as { mock: { calls: unknown[][] } }
+  );
+  // Shaped as an older backend sent it, with the replay's own timestamp.
+  const replay = {
+    lastEventAt: "1970-01-01T00:00:01.000Z",
+    seeded: true,
+    sessionId: "s1",
+    status: "idle" as const,
+    summary: "",
+  };
+  cb(replay);
 
-  // A live update is happening now.
+  const cc = useCommandCenter.getState();
+  expect(cc.lastChangeMs.s1).toBe(5000);
+  // Nor is it liveness: a replay proves nothing about the watcher now.
+  expect(cc.lastSeenMs.s1).toBeUndefined();
+});
+
+test("a live status update is recorded as now", () => {
   const live = statusChangeAt({
     seeded: false,
     sessionId: "s1",
