@@ -443,10 +443,23 @@ pub fn activity_turns(session_id: String, limit: Option<u32>) -> Result<Vec<Acti
 /// [`ActivityStore::last_active`]). Loaded once at launch so the sidebar's age
 /// fold measures every session from its real last activity, not its creation.
 ///
+/// Reads the pending spools first: Claude may have worked while the app was
+/// closed, and the ingester's first pass races the webview's first load. Each
+/// spool is read under the store lock from its saved position, so this pass
+/// and the ingester's never apply a line twice. Async, so that read stays off
+/// the main thread.
+///
 /// # Errors
 /// On a database error, or when the activity log is unavailable.
-#[tauri::command]
-pub fn activity_last_active() -> Result<std::collections::HashMap<String, i64>, String> {
+#[allow(clippy::needless_pass_by_value)]
+#[tauri::command(async)]
+pub fn activity_last_active(
+    app: tauri::AppHandle,
+) -> Result<std::collections::HashMap<String, i64>, String> {
+    use tauri::Manager as _;
+    if let Ok(home) = app.path().home_dir() {
+        ingest_pass(&app, &home);
+    }
     with_store(|s| s.last_active())
 }
 
