@@ -671,21 +671,30 @@ impl ActivityStore {
         Ok(ids)
     }
 
-    /// When each session last did work, in ms since the epoch: its newest
-    /// turn's end, or its start while that turn is still open. Sessions with
-    /// no turns are left out. One indexed pass over `turns`, cheap enough for
-    /// launch, where it restores the sidebar's age fold for every session —
-    /// not only the ones whose watch has started.
+    /// When each session last did work, in ms since the epoch — the one rule
+    /// for a session's past activity. Per turn: when it really ended (a hook
+    /// said so); otherwise, for a turn left open or closed only because its
+    /// terminal or Claude went away, the newest of its start and its steps'
+    /// starts. A forced close is when the session stopped, not when it worked,
+    /// so its stamp never counts. Sessions with no turns are left out.
+    ///
+    /// Cheap enough for launch: one pass over `turns` by its session index,
+    /// reaching into `steps` (by `turn_id`) only for turns with no real end.
     ///
     /// # Errors
     /// On a database error.
     pub fn last_active(&self) -> Result<HashMap<String, i64>, ActivityError> {
         let mut stmt = self.conn.prepare(
-            "SELECT session_id, MAX(COALESCE(ended_ms, started_ms)) FROM turns
-             GROUP BY session_id",
+            "SELECT session_id, MAX(
+                 CASE WHEN ended_ms IS NOT NULL AND end_reason IS NOT ?1 THEN ended_ms
+                      ELSE MAX(started_ms, COALESCE(
+                          (SELECT MAX(s.started_ms) FROM steps s WHERE s.turn_id = turns.id),
+                          0))
+                 END)
+             FROM turns GROUP BY session_id",
         )?;
         let last = stmt
-            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .query_map([SESSION_ENDED], |r| Ok((r.get(0)?, r.get(1)?)))?
             .collect::<Result<HashMap<String, i64>, _>>()?;
         Ok(last)
     }
@@ -2123,6 +2132,33 @@ mod tests {
         assert_eq!(last.get("s1"), Some(&4000));
         assert_eq!(last.get("s2"), Some(&9000));
         assert_eq!(last.len(), 2, "a session with no turns is left out");
+    }
+
+    #[test]
+    fn last_active_ignores_a_forced_close_and_counts_an_open_turns_steps() {
+        let mut store = ActivityStore::open_in_memory().expect("opens");
+        let step = |secs| {
+            line(&serde_json::json!({
+                "event": "PreToolUse", "tool_name": "Bash", "tool_use_id": "t9",
+                "prompt_id": "p2", "command": "make", "ts": at(secs),
+            }))
+        };
+        ingest(
+            &mut store,
+            &[
+                prompt("p1", "x", 1),
+                line(&serde_json::json!({"event":"Stop","prompt_id":"p1","ts":at(4)})),
+                // Interrupted: no Stop ever comes, but it kept working until 12.
+                prompt("p2", "y", 9),
+                step(12),
+            ],
+        );
+        // The terminal dies much later; that stamps the open turn and step
+        // closed, but it is not work the session did.
+        store.close_open("s1", 50_000, &[]).expect("closes");
+
+        let last = store.last_active().expect("reads");
+        assert_eq!(last.get("s1"), Some(&12_000));
     }
 
     #[test]
