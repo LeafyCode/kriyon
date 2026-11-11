@@ -2,6 +2,33 @@
 
 All notable changes to Kriyon are listed here. Dates are YYYY-MM-DD.
 
+## 0.16.0 — 2026-11-11
+
+A calmer sidebar for people with many projects. Pin what matters to the top,
+sort projects into folders, and focus on one folder while you work. Sessions
+you used recently also stay in view after Kriyon restarts.
+
+### Added
+
+- **Pin projects and sessions.** "Pin to top" in a project's or session's
+  menu puts it in a Pinned section above Projects. Pinned items never fold
+  away as inactive, and a pinned session shows its project's name and colour.
+- **Project folders.** Group projects into folders from a project's menu
+  (Move to folder), the new-folder button beside the Projects label, or by
+  dragging a project onto a folder. Hold a dragged project over another for a
+  moment to make a folder of the two. Folders can be renamed, collapsed and
+  deleted; deleting a folder keeps its projects. A collapsed folder still
+  shows when something inside it needs you.
+- **Focus a folder.** "Focus" in a folder's menu hides everything outside
+  that folder until you close the banner; ⌘⇧F focuses the folder of the
+  session you're in. Kriyon remembers it across restarts.
+
+### Fixed
+
+- **Recently used sessions stay visible after a restart.** The sidebar now
+  ages a session from when it last did work, not from when it was created, so
+  projects no longer seem to vanish into the inactive fold after a restart.
+
 ## 0.15.0 — 2026-11-01
 
 Kriyon now fits the way you work across many projects. Park the ones you're
