@@ -3389,7 +3389,7 @@ test("a project header's hover row is new worktree, new session, then ⋯ last",
   ]);
 });
 
-test("the project menu leads with Park and holds notes, rename, colour, sort and close", () => {
+test("the project menu leads with Pin and Move to folder, then Park and the rest", () => {
   seed();
   renderSidebar();
 
@@ -3398,6 +3398,8 @@ test("the project menu leads with Park and holds notes, rename, colour, sort and
   expect(
     screen.getAllByRole("menuitem").map((item) => item.textContent)
   ).toEqual([
+    "Pin to top",
+    "Move to folder",
     "Park project",
     "Open notes",
     "Rename",

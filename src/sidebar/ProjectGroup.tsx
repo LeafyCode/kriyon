@@ -10,6 +10,7 @@ import {
   Check,
   ChevronRight,
   Clock,
+  FolderPlus,
   GitBranch,
   GripVertical,
   ListTodo,
@@ -31,18 +32,25 @@ import {
   useLayout,
 } from "../state/layout.ts";
 import {
+  createProjectFolder,
+  DEFAULT_FOLDER_NAME,
+  useProjectFolders,
+} from "../state/projectFolders.ts";
+import {
   openProjectNotes,
   openTodoCount,
   useProjectNotes,
 } from "../state/projectNotes.ts";
 import {
+  isPinnedProject,
   isPutAway,
   isWorktreeSession,
+  needsYouOnRail,
   useSessions,
 } from "../state/sessions.ts";
 import { useUi } from "../state/ui.ts";
 import { projectSquareStyle } from "../theme/projectColor.ts";
-import { tokens } from "../theme/tokens.ts";
+import { accentAlpha, tokens } from "../theme/tokens.ts";
 import type { ProjectRow } from "../types.ts";
 import { useAnchoredMenu } from "../ui/AnchoredMenu.tsx";
 import {
@@ -105,6 +113,23 @@ function projectGripStyle(dragging: boolean): CSSProperties {
  * and `CSS.Transform` would fold dnd-kit's `scaleX/scaleY` into the moved group
  * and skew/stretch its text mid-drag. Translate-only moves it cleanly.
  */
+/** A held hover: the target project reads as a drop zone, not a row. */
+const mergeTargetStyle: CSSProperties = {
+  background: accentAlpha(0.07),
+  borderRadius: tokens.radius.lg,
+  outline: `1px dashed ${tokens.color.accentBright}`,
+  outlineOffset: "1px",
+};
+
+const mergeHintStyle: CSSProperties = {
+  alignItems: "center",
+  color: tokens.color.accentInk,
+  display: "flex",
+  fontSize: "11px",
+  gap: "6px",
+  padding: "4px 10px 0",
+};
+
 function sortableGroupStyle(
   sortableGroup: ReturnType<typeof useSortable>
 ): CSSProperties {
@@ -430,6 +455,7 @@ function ProjectHeader({
     openTodoCount(state.notes, project.id)
   );
   const actionsMenu = useAnchoredMenu<HTMLDivElement>();
+  const folders = useProjectFolders((state) => state.folders);
   const [editing, setEditing] = useState(false);
   // The header popovers share one anchor — opening one must close the others
   // or they'd stack at the identical spot.
@@ -614,9 +640,19 @@ function ProjectHeader({
       ) : null}
       {actionsMenu.open ? (
         <ProjectMenu
+          folderId={project.folderId ?? null}
+          folders={folders}
           onColour={() => {
             actionsMenu.close();
             picker.toggle();
+          }}
+          onMoveToFolder={(folderId) => {
+            actionsMenu.close();
+            useSessions.getState().setProjectFolder(project.id, folderId);
+          }}
+          onNewFolder={() => {
+            actionsMenu.close();
+            createProjectFolder(DEFAULT_FOLDER_NAME, project.id);
           }}
           onOpenNotes={() => {
             actionsMenu.close();
@@ -638,6 +674,13 @@ function ProjectHeader({
             actionsMenu.close();
             sortMenu.toggle();
           }}
+          onTogglePin={() => {
+            actionsMenu.close();
+            useSessions
+              .getState()
+              .setProjectPinned(project.id, !isPinnedProject(project));
+          }}
+          pinned={isPinnedProject(project)}
           projectId={project.id}
         />
       ) : null}
@@ -724,6 +767,9 @@ interface ProjectGroupProps {
   filter: string;
   /** Name plus the parent path that separates it from its same-named twins. */
   label: ProjectLabel;
+  /** Another project has rested on this one mid-drag: what dropping does
+   *  ("Drop to make a folder"), or null. */
+  mergeHint?: string | null;
   /** Minute-quantized clock for the staleness fold; 0 when hiding is off. */
   nowMinute: number;
   onCloseSession: (id: string) => void;
@@ -742,6 +788,7 @@ const ProjectGroup = memo(function ProjectGroup({
   dormant,
   filter,
   label,
+  mergeHint = null,
   nowMinute,
   onCloseSession,
   onSelect,
@@ -777,10 +824,7 @@ const ProjectGroup = memo(function ProjectGroup({
   };
   const attention = useSessions((state) =>
     Object.values(state.sessions).some(
-      (session) =>
-        session.projectId === project.id &&
-        (session.status === "waiting" || session.status === "error") &&
-        !isPutAway(session)
+      (session) => session.projectId === project.id && needsYouOnRail(session)
     )
   );
   // How many of this project's open sessions run in their own [Worktree] —
@@ -843,10 +887,20 @@ const ProjectGroup = memo(function ProjectGroup({
 
   return (
     <div
+      data-merge-target={mergeHint ? "true" : undefined}
       data-testid="project-group"
       ref={sortableGroup.setNodeRef}
-      style={sortableGroupStyle(sortableGroup)}
+      style={{
+        ...sortableGroupStyle(sortableGroup),
+        ...(mergeHint ? mergeTargetStyle : null),
+      }}
     >
+      {mergeHint ? (
+        <span data-testid={`merge-hint-${project.id}`} style={mergeHintStyle}>
+          <FolderPlus aria-hidden="true" size={11} />
+          {mergeHint}
+        </span>
+      ) : null}
       <ProjectHeader
         attention={attention}
         collapsed={collapsed}

@@ -1741,6 +1741,8 @@ mod tests {
                 path: path.to_string(),
                 color: None,
                 setup_command: None,
+                pinned_at: None,
+                folder_id: None,
             })
             .unwrap();
         StoreState(Mutex::new(store))

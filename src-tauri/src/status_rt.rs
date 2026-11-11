@@ -582,6 +582,7 @@ mod tests {
             parent_session_id: None,
             nested_under: None,
             parked_at: None,
+            pinned_at: None,
         }
     }
 
@@ -592,6 +593,8 @@ mod tests {
             path: "/tmp".to_string(),
             color: None,
             setup_command: None,
+            pinned_at: None,
+            folder_id: None,
         }
     }
 

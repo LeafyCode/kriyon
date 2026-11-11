@@ -3,7 +3,13 @@ import type {
   SessionSort,
   SidebarMode,
 } from "../state/layout.ts";
-import { isParked, isPutAway, type UiSession } from "../state/sessions.ts";
+import {
+  isParked,
+  isPinnedSession,
+  isPutAway,
+  needsYouOnRail,
+  type UiSession,
+} from "../state/sessions.ts";
 import { unseenOutput, type ViewedMarker } from "../state/viewedMarker.ts";
 import type { ProjectRow, SessionStatus } from "../types.ts";
 
@@ -48,10 +54,11 @@ export function sessionRank(status: SessionStatus): number {
 export function projectUrgency(sessions: UiSession[]): number {
   let best = 3;
   for (const session of sessions) {
-    if (isPutAway(session)) {
+    // A pinned session is drawn in Pinned, not in its project's group.
+    if (isPutAway(session) || isPinnedSession(session)) {
       continue;
     }
-    if (session.status === "waiting" || session.status === "error") {
+    if (needsYouOnRail(session)) {
       return 0;
     }
     if (session.status === "running") {
@@ -435,7 +442,7 @@ export function inactiveProjectIds(
   }
   const byProject = new Map<string, string[]>();
   for (const session of Object.values(input.sessions)) {
-    if (isPutAway(session)) {
+    if (isPutAway(session) || isPinnedSession(session)) {
       continue;
     }
     const bucket = byProject.get(session.projectId);
@@ -466,6 +473,26 @@ export function inactiveProjectIds(
   return inactive.sort((a, b) => (a < b ? -1 : 1));
 }
 
+/** Whether a search matches a project's name: then its sessions all show. */
+export function projectNameMatches(name: string, filter: string): boolean {
+  return filter !== "" && name.toLowerCase().includes(filter);
+}
+
+/**
+ * Whether a session survives the rail's search: no search, a match on its
+ * project's name ({@link projectNameMatches}), or a match on its title. The
+ * one rule for every list the search narrows.
+ */
+export function sessionMatchesSearch(
+  session: UiSession,
+  nameMatch: boolean,
+  filter: string
+): boolean {
+  return (
+    filter === "" || nameMatch || session.title.toLowerCase().includes(filter)
+  );
+}
+
 function computeMatched(
   input: OrderInputs,
   project: ProjectRow,
@@ -482,9 +509,9 @@ function computeMatched(
       session.projectId === project.id &&
       session.archivedAt === null &&
       isParked(session) === parked &&
-      (filter === "" ||
-        nameMatch ||
-        session.title.toLowerCase().includes(filter))
+      // Pinned sessions are drawn in Pinned; on the rail they would show twice.
+      (parked || !isPinnedSession(session)) &&
+      sessionMatchesSearch(session, nameMatch, filter)
   );
   const unseen = unseenFrom(input);
   const ordered = orderSessions(list, unseen, mode, sort, manual);
