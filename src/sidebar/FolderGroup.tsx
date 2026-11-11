@@ -62,7 +62,10 @@ const headerButtonStyle: CSSProperties = {
   gap: "7px",
   letterSpacing: "0.02em",
   minWidth: 0,
-  padding: "6px 8px",
+  // PROJECT_GRIP_WIDTH (13px) + the project header's 2px gap + its button's 8px
+  // left padding: the chevron lands in the same column as a project header's,
+  // like the "N inactive projects" fold, so folders and loose projects line up.
+  padding: "6px 8px 6px 23px",
   textAlign: "left",
 };
 
@@ -107,7 +110,8 @@ const childrenStyle: CSSProperties = {
   display: "flex",
   flexDirection: "column",
   marginBottom: "4px",
-  marginLeft: "14px",
+  // The hairline drops from under the header's chevron (23px in, 11px wide).
+  marginLeft: "29px",
   paddingLeft: "4px",
 };
 

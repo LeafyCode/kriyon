@@ -25,6 +25,7 @@ vi.mock("../state/actions.ts", async (importOriginal) => ({
 const EMPTY_HINT = /No open sessions/;
 const MOVE_HINT = /Move to folder/;
 const PARKED_HINT = /^Parked/;
+const PROJECT_P2 = /Project p2/;
 
 function project(id: string, extra: Partial<ProjectRow> = {}): ProjectRow {
   return {
@@ -320,4 +321,30 @@ test("pinning a folder's only project keeps the folder on the rail", () => {
   fireEvent.click(screen.getByLabelText("More actions for Project p1"));
   fireEvent.click(screen.getByTestId("pin-project-p1"));
   expect(screen.getByTestId("folder-f1")).toBeInTheDocument();
+});
+
+test("a folder header's chevron sits in the same column as a loose project's", () => {
+  // jsdom has no layout, so this sums the declared insets in front of each
+  // chevron: the project header's grip, gap and button padding against the
+  // folder header button's own padding.
+  const px = (value: string) => Number.parseFloat(value) || 0;
+  useProjectFolders.setState({ folders: [{ id: "f1", name: "Acme" }] });
+  seed(
+    [project("p1", { folderId: "f1" }), project("p2")],
+    [session("a", "p1"), session("b", "p2")]
+  );
+  renderSidebar();
+  const grip = screen.getByTestId("project-drag-handle-p2");
+  const projectButton = screen
+    .getAllByRole("button", { name: PROJECT_P2 })
+    .find((button) => button.hasAttribute("aria-expanded"));
+  if (!projectButton?.parentElement) {
+    throw new Error("missing project disclosure button");
+  }
+  const projectInset =
+    px(grip.style.width) +
+    px(projectButton.parentElement.style.gap) +
+    px(projectButton.style.paddingLeft);
+  const folderButton = screen.getByTestId("folder-header-f1");
+  expect(px(folderButton.style.paddingLeft)).toBe(projectInset);
 });
