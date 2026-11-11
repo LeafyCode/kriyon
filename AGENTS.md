@@ -59,6 +59,9 @@ How people work with AI here is in `docs/AI.md`.
   running app for its sockets. Build and test with `pnpm check`.
 - **Keep history and branches intact.** Use `git stash` or a new branch instead of
   `git reset --hard`, and leave branch deletion to the person. Lost work can't be recovered.
+- **Don't hard-wrap text you post to GitHub.** A pull request body, comment or release note
+  shows every line break, so write one line per paragraph or list item. Files in the repo
+  stay wrapped.
 - **Review and fix pull requests only when asked.** → `skill: pr-review` (posts comments, never
   edits) or `skill: pr-fix` (your own PR). Both post to GitHub under the person's name.
 
