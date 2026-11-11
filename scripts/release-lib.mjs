@@ -18,6 +18,9 @@ const COMMENT = /<!--[\s\S]*?-->\n?/g;
 const BLANK_RUN = /\n{3,}/g;
 const CHANGE_GROUP = /^### /m;
 const HEADING_LINE = /^## .*\n?/;
+// A line that starts its own block: heading, list item, quote, table or fence.
+const BLOCK_START = /^(#{1,6} |[-*+] |\d+[.)] |>|\||```)/;
+const FENCE = /^\s*```/;
 
 const PACKAGE_VERSION = /^(\s*"version":\s*")([^"]+)(")/m;
 const CARGO_WORKSPACE_VERSION =
@@ -328,6 +331,33 @@ export const cleanEntry = (text, version) => {
     throw new Error("The changelog entry is empty under its heading");
   }
   return entry;
+};
+
+/**
+ * Joins hard-wrapped lines back into one line per paragraph or list item.
+ * CHANGELOG.md wraps its text, which Markdown files ignore, but GitHub shows
+ * every line break in a release or pull request body. Code blocks are kept.
+ */
+export const unwrapMarkdown = (text) => {
+  const out = [];
+  let inFence = false;
+  let canJoin = false;
+  for (const line of text.split("\n")) {
+    const trimmed = line.trim();
+    if (FENCE.test(line)) {
+      inFence = !inFence;
+      out.push(line);
+      canJoin = false;
+    } else if (inFence) {
+      out.push(line);
+    } else if (canJoin && trimmed && !BLOCK_START.test(trimmed)) {
+      out[out.length - 1] += ` ${trimmed}`;
+    } else {
+      out.push(line);
+      canJoin = Boolean(trimmed) && !trimmed.startsWith("#");
+    }
+  }
+  return out.join("\n");
 };
 
 /**

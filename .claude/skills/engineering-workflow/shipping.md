@@ -18,7 +18,8 @@ fix it, never skip it.
 gh pr create --base dev --title "<type>(<scope>): <subject>" --body-file <file>
 ```
 
-Write the body to a file first, the same as a commit message.
+Write the body to a file first, the same as a commit message, but with one line per paragraph
+or list item: GitHub shows every line break in a body, so hard-wrapped text renders ragged.
 
 **The title is the commit.** Pull requests into `dev` are squash-merged, so the title becomes
 the one commit on `dev`, and the changelog and version bump are built from it. CI

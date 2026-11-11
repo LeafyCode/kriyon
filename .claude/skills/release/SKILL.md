@@ -54,7 +54,9 @@ the branch: fix what it reported and commit with the same message.
 With the person's yes, push the branch (`env -u KRIYON_TTY -u CLAUDE_PID git push -u origin
 <branch>`) and open a PR into `dev` titled `chore(release): <version>`, as
 `engineering-workflow/shipping.md` says. After it's merged, offer to open the release PR from
-`dev` into `main`, titled `chore(release): <version>`, its body the changelog entry.
+`dev` into `main`, titled `chore(release): <version>`, its body the output of
+`node scripts/release.mjs notes <version>`: the changelog entry with its wrapped lines joined,
+since GitHub shows every line break. The PR into `dev` takes the same unwrapped text.
 `docs/AI.md` asks for `/code-review ultra` on that PR; remind the person. Merging is theirs.
 
 ## 5. Publish
