@@ -69,22 +69,53 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # The packages come from GitHub's cache, not Ubuntu's mirrors, which
-      # can stall for hours (on 2026-11-11 their name stopped resolving on
-      # GitHub's runners). The mirrors are needed only when this list
-      # changes or the cache expires; the limit stops a stall then.
-      - name: Install Tauri system dependencies
-        uses: awalsh128/cache-apt-pkgs-action@553a35bb8ebd9fcabcb1c9451aa4c98e1b4ca8a9 # v1.6.3
-        timeout-minutes: 15
-        with:
-          packages: >-
-            libwebkit2gtk-4.1-dev
-            librsvg2-dev
-            patchelf
-            libxdo-dev
-            libssl-dev
+      # Tauri's Linux packages come from GitHub's cache, not Ubuntu's mirrors,
+      # which can stall for hours (on 2026-11-11 their name stopped resolving
+      # on GitHub's runners). The cache holds the .deb files apt downloaded,
+      # keyed on the runner image and this list, so the mirrors are needed
+      # only once per image (about weekly) or when the list changes.
+      - name: Pick the system package cache
+        id: apt-key
+        env:
+          PACKAGES: >-
+            libwebkit2gtk-4.1-dev librsvg2-dev patchelf libxdo-dev libssl-dev
             libayatana-appindicator3-dev
-          version: "1"
+        run: |
+          echo "packages=$PACKAGES" >> "$GITHUB_OUTPUT"
+          hash="$(echo "$PACKAGES" | sha256sum | cut -c1-16)"
+          echo "key=apt-debs-$ImageOS-$ImageVersion-$RUNNER_ARCH-$hash" >> "$GITHUB_OUTPUT"
+      - name: Restore system packages
+        id: apt-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/apt-debs
+          key: ${{ steps.apt-key.outputs.key }}
+      - name: Install Tauri system dependencies
+        timeout-minutes: 15
+        env:
+          CACHE_HIT: ${{ steps.apt-cache.outputs.cache-hit }}
+          PACKAGES: ${{ steps.apt-key.outputs.packages }}
+        run: |
+          if [[ "$CACHE_HIT" == true ]]; then
+            sudo dpkg -i ~/apt-debs/*.deb
+          else
+            mkdir -p ~/apt-debs/partial
+            apt_opts=(-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o "Dir::Cache::archives=$HOME/apt-debs")
+            sudo apt-get "${apt_opts[@]}" update
+            # shellcheck disable=SC2086 # PACKAGES is a word list
+            sudo apt-get "${apt_opts[@]}" install -y $PACKAGES
+            sudo rm -rf ~/apt-debs/partial ~/apt-debs/lock
+            sudo chown -R "$USER" ~/apt-debs
+          fi
+          # Fail here, not at link time, if anything is missing.
+          pkg-config --exists webkit2gtk-4.1 gtk+-3.0 librsvg-2.0 ayatana-appindicator3-0.1 openssl
+          command -v patchelf
+      - name: Save system packages
+        if: steps.apt-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/apt-debs
+          key: ${{ steps.apt-key.outputs.key }}
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
