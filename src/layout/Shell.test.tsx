@@ -296,9 +296,13 @@ test("the toast host is mounted regardless of view (e.g. the Prompts tab)", () =
     showToast("Inserted into the session draft");
   });
 
-  expect(screen.getByRole("status")).toHaveTextContent(
-    "Inserted into the session draft"
-  );
+  // The sidebar's drag area keeps its own (empty) live region, so pick the
+  // toast's out by its text.
+  expect(
+    screen
+      .getByText("Inserted into the session draft")
+      .closest('[role="status"]')
+  ).toBeInTheDocument();
 });
 
 test("the gear button opens the dedicated Settings view", () => {

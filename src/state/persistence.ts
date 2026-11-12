@@ -1,4 +1,5 @@
 import {
+  activityLastActive,
   listProjectNotes,
   listProjects,
   listPrompts,
@@ -17,6 +18,7 @@ import type {
   SessionRow,
 } from "../types.ts";
 import { showToast } from "../ui/Toast.tsx";
+import { useCommandCenter } from "./commandCenter.ts";
 import {
   clampFileTreeWidth,
   clampSidebarWidth,
@@ -31,6 +33,7 @@ import {
   TERMINAL_DOCK_HEIGHT_DEFAULT,
   useLayout,
 } from "./layout.ts";
+import { parseProjectFolders, useProjectFolders } from "./projectFolders.ts";
 import { useProjectNotes } from "./projectNotes.ts";
 import { usePromptLibrary } from "./promptLibrary.ts";
 import {
@@ -44,6 +47,8 @@ import { type ScopeTerminals, useTerminals } from "./terminals.ts";
 
 const LAYOUT_KEY = "layout";
 const TERMINALS_KEY = "terminals";
+/** The [Project folder] list: its own key, so a layout reset never loses it. */
+const PROJECT_FOLDERS_KEY = "projectFolders";
 const PERSIST_DEBOUNCE_MS = 300;
 
 function ignore(promise: Promise<unknown>): void {
@@ -112,6 +117,13 @@ function recordOf<V>(
     }
     return out;
   };
+}
+
+/** A persisted id list: the strings in it, or `[]` for anything else. */
+function stringList(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === "string")
+    : [];
 }
 
 const NOTIFY_SOUNDS: readonly NotifySound[] = [
@@ -301,9 +313,14 @@ export function parseLayout(json: string | null): Layout | undefined {
   // Each field is validated independently, so one unrecognized value (e.g. a
   // view added in a newer build) can never discard the rest of the layout.
   return {
+    collapsedFolderIds: stringList(parsed.collapsedFolderIds),
     collapsedProjectIds: Array.isArray(parsed.collapsedProjectIds)
       ? parsed.collapsedProjectIds
       : [],
+    focusedFolderId:
+      typeof parsed.focusedFolderId === "string"
+        ? parsed.focusedFolderId
+        : null,
     composerCollapsed: parsed.composerCollapsed === true,
     hideOlderThan: parseHideOlderThan(parsed.hideOlderThan),
     inspectorChangesOpen: parseInspectorChangesOpen(
@@ -415,12 +432,27 @@ export async function hydrate(): Promise<void> {
     return [];
   });
 
-  const [projects, sessionRows, layoutJson, terminalsJson] = await Promise.all([
-    listProjects(),
-    listSessions(),
-    loadLayout(LAYOUT_KEY),
-    loadLayout(TERMINALS_KEY),
-  ]);
+  // Each session's last activity, from the Activity log. Only the active
+  // session's watch starts at launch (sessionPaneMounts), so without this every
+  // other session would be aged from its creation by the sidebar's
+  // `hideOlderThan` fold — hiding a session made days ago but used today, and
+  // with it a whole project. Best-effort: the fold falls back to `createdAt`,
+  // which is the bug this load fixes, so the failure must leave a trace.
+  const lastActivePromise = activityLastActive().catch((error: unknown) => {
+    // biome-ignore lint/suspicious/noConsole: a silent fallback re-hides recently used sessions.
+    console.error("could not load session activity", error);
+    return {};
+  });
+
+  const [projects, sessionRows, layoutJson, terminalsJson, foldersJson] =
+    await Promise.all([
+      listProjects(),
+      listSessions(),
+      loadLayout(LAYOUT_KEY),
+      loadLayout(TERMINALS_KEY),
+      loadLayout(PROJECT_FOLDERS_KEY),
+    ]);
+  useProjectFolders.getState().setFolders(parseProjectFolders(foldersJson));
 
   const sessions: Record<string, UiSession> = {};
   let newest: SessionRow | undefined;
@@ -437,6 +469,9 @@ export async function hydrate(): Promise<void> {
   }
 
   const layout = parseLayout(layoutJson);
+  // Before the sessions land, so the first sidebar paint already measures age
+  // from real activity instead of flashing groups into the inactive fold.
+  useCommandCenter.getState().seedLastChange(await lastActivePromise);
   useSessions.setState((state) => ({
     // Only set which session is active; the pane-mount rule (sessionPaneMounts)
     // makes exactly the active session resume on boot, with every background
@@ -603,7 +638,30 @@ export function installPersistence(): () => void {
     );
   });
 
+  // The folder list is small and changes only on a person's action, so it is
+  // written whole on each change, with the same debounce.
+  let foldersTimer: ReturnType<typeof setTimeout> | undefined;
+  let prevFolders = useProjectFolders.getState().folders;
+  const unsubscribeFolders = useProjectFolders.subscribe((state) => {
+    if (state.folders === prevFolders) {
+      return;
+    }
+    prevFolders = state.folders;
+    if (foldersTimer !== undefined) {
+      clearTimeout(foldersTimer);
+    }
+    foldersTimer = setTimeout(
+      () =>
+        ignore(saveLayout(PROJECT_FOLDERS_KEY, JSON.stringify(prevFolders))),
+      PERSIST_DEBOUNCE_MS
+    );
+  });
+
   return () => {
+    if (foldersTimer !== undefined) {
+      clearTimeout(foldersTimer);
+    }
+    unsubscribeFolders();
     if (timer !== undefined) {
       clearTimeout(timer);
     }

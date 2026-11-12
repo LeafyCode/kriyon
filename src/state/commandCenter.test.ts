@@ -230,6 +230,17 @@ test("recordStatusChange updates both lastChange and lastSeen", () => {
   expect(useCommandCenter.getState().lastSeenMs.s1).toBe(300);
 });
 
+test("seedLastChange restores recency without lowering a newer value", () => {
+  const cc = useCommandCenter.getState();
+  cc.recordStatusChange("live", 900);
+  cc.seedLastChange({ dormant: 400, live: 100 });
+  const { lastChangeMs, lastSeenMs } = useCommandCenter.getState();
+  expect(lastChangeMs.dormant).toBe(400);
+  expect(lastChangeMs.live).toBe(900);
+  // History says when a session worked, not that its watcher is alive now.
+  expect(lastSeenMs.dormant).toBeUndefined();
+});
+
 test("buildStandings reads unknown for a session whose hooks are off", () => {
   const now = 100_000;
   const sessions: Record<string, UiSession> = {

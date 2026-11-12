@@ -856,3 +856,51 @@ describe("nestRows", () => {
     ).toBe(rows);
   });
 });
+
+test("a pinned session leaves its project's rail list (it shows in Pinned)", () => {
+  const state = inputs([
+    session("a", "idle", 3, "p1"),
+    { ...session("pin", "idle", 2, "p1"), pinnedAt: 9 },
+  ]);
+  const { rows } = orderMatched(
+    state,
+    p1,
+    "",
+    false,
+    "calm",
+    "date",
+    EMPTY_ORDER,
+    OFF_HIDE
+  );
+  expect(rows).toEqual(["a"]);
+});
+
+test("a pinned session neither keeps its project active nor makes it inactive", () => {
+  const input: OrderInputs = {
+    appendSeq: {},
+    sessions: sessionsMap([
+      session("old", "idle", NOW - 5 * DAY, "p"),
+      { ...session("pin", "running", NOW - 5 * DAY, "p"), pinnedAt: 1 },
+      { ...session("only-pin", "idle", NOW - 5 * DAY, "q"), pinnedAt: 1 },
+    ]),
+    statusOrigin: {},
+    viewed: {},
+  };
+  expect(
+    inactiveProjectIds(input, {
+      activeSessionId: null,
+      lastChangeMs: {},
+      now: NOW,
+      threshold: "1d",
+    })
+  ).toEqual(["p"]);
+});
+
+test("projectUrgency ignores pinned sessions", () => {
+  expect(
+    projectUrgency([
+      session("a", "idle", 1),
+      { ...session("pin", "waiting", 1), pinnedAt: 1 },
+    ])
+  ).toBe(2);
+});
