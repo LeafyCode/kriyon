@@ -274,9 +274,13 @@ for remote starts, because it runs scripts.
    token hash (1 a minute, 30 a day) and a cap on the sealed size, opens the
    token in memory, sends one visible alert "A session needs you" through APNs
    or FCM, and forgets it.
-5. The sender could notice one phone's token arriving from several hosts. Not
+5. Field types: `key_id` u32; `request_id` 16 random bytes; `at` and
+   `expires` Unix seconds; `platform` APNs = 0, FCM = 1. `sealed` is
+   `enc (32 bytes) ‖ ciphertext`, at most 1 KiB. Test vectors made
+   independently of our code are in `crates/kriyon-remote/tests/push_vectors.json`.
+6. The sender could notice one phone's token arriving from several hosts. Not
    linking them is a policy promise; the crypto doesn't prevent it.
-6. Alerts are a hint. The app re-checks the host each time it opens.
+7. Alerts are a hint. The app re-checks the host each time it opens.
 
 ## 11. Fault tests (CI)
 
