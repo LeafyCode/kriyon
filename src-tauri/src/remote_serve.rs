@@ -25,10 +25,12 @@ use kriyon_remote::authorize::{
 use kriyon_remote::codec::{encode, Decoded};
 use kriyon_remote::compress::Packer;
 use kriyon_remote::control::{Change, Control};
+use kriyon_remote::entries::{EntryBook, EntryReader};
 use kriyon_remote::fanout::{pack_snapshot, Pop, RequesterId, SessionFanout, SnapshotToPack};
 use kriyon_remote::link_policy::CloseCode;
 use kriyon_remote::message::{
-    EndpointId, FromDevice, ProjectInfo, RefuseReason, Role, SessionInfo, ToDevice,
+    EndpointId, EntriesUnavailable, FromDevice, ProjectInfo, RefuseReason, Role, SessionInfo,
+    ToDevice,
 };
 use kriyon_remote::queue::{ControlQueue, CONTROL_QUEUE_LIMIT, SESSION_QUEUE_LIMIT};
 use kriyon_remote_link::framed::{MessageReader, MessageWriter};
@@ -90,6 +92,12 @@ pub trait ServeHost: Send + Sync + 'static {
     /// ten-second rule refused it: the person can let it type. Called at
     /// most once per `CONTROL_ASK_EVERY` for a device and session.
     fn control_asked(&self, _id: &str, _device: &EndpointId) {}
+    /// Session `id`'s [Readable view] entries (`kriyon_core::readable`), or
+    /// `Unchanged` when nothing they come from changed since the build
+    /// `stamp` names. Blocking: it may read the transcript. None by default.
+    fn entries(&self, _id: &str, _stamp: Option<u64>) -> EntriesBuilt {
+        EntriesBuilt::Unavailable(EntriesUnavailable::CompanionOff)
+    }
     /// A line for the host's log (stderr unless told otherwise). Never given
     /// a message's payload.
     fn log(&self, line: &str) {
@@ -180,6 +188,141 @@ struct Served {
     /// Snapshots to compress, on the session's own packing thread (one
     /// thread, one compressor, reused), never the daemon's reader.
     packs: Mutex<Option<std::sync::mpsc::Sender<SnapshotToPack>>>,
+    /// The devices reading the session as [Readable view] entries, and the
+    /// entries, numbered. Lock order: readers, then the book, then the
+    /// fan-out.
+    readers: Mutex<HashMap<EndpointId, EntryReader>>,
+    book: Mutex<EntryBook>,
+    /// The session's entries thread is running ([`reading`]).
+    reading: std::sync::atomic::AtomicBool,
+}
+
+impl Served {
+    /// Bring every reader up to the book: through each device's session
+    /// queue, beside its screen. A queue dropped since starts its reader
+    /// over; one that overflows asks for a fresh snapshot and starts over
+    /// at the next round.
+    fn send_entries(&self) {
+        let mut readers = self.readers.lock();
+        let book = self.book.lock();
+        let mut asks = Vec::new();
+        let mut sent = Vec::new();
+        for (device, reader) in readers.iter_mut() {
+            let mut fanout = self.fanout.lock();
+            if fanout.dropped(device) {
+                reader.start_over();
+            }
+            let messages = reader.next(&book);
+            if messages.is_empty() {
+                continue;
+            }
+            for frame in messages.iter().filter_map(|message| encode(message).ok()) {
+                if let Some(ask) = fanout.send(device, frame) {
+                    asks.push(ask);
+                    fanout.dropped(device);
+                    reader.start_over();
+                    break;
+                }
+            }
+            sent.push(*device);
+        }
+        drop(book);
+        drop(readers);
+        self.ask_all(asks);
+        self.wake(&sent);
+    }
+
+    /// Tell every reader there are no entries, and forget them: each asks
+    /// again when it reopens the readable view.
+    fn entries_unavailable(&self, reason: EntriesUnavailable) {
+        let readers: Vec<EndpointId> = self
+            .readers
+            .lock()
+            .drain()
+            .map(|(device, _)| device)
+            .collect();
+        let Ok(frame) = encode(&ToDevice::EntriesUnavailable { reason }) else {
+            return;
+        };
+        let mut asks = Vec::new();
+        {
+            let mut fanout = self.fanout.lock();
+            for device in &readers {
+                asks.extend(fanout.send(device, frame.clone()));
+            }
+        }
+        self.ask_all(asks);
+        self.wake(&readers);
+    }
+
+    fn wake(&self, devices: &[EndpointId]) {
+        let wakers = self.wakers.lock();
+        for device in devices {
+            if let Some(wake) = wakers.get(device) {
+                wake.notify_one();
+            }
+        }
+    }
+}
+
+/// How often a session being read is looked at for new or changed entries:
+/// at most two batches a second per device (spec §6).
+pub const ENTRIES_EVERY: Duration = Duration::from_millis(500);
+
+/// The entries thread of `served`, session `id`: while a device reads it,
+/// build its entries when they changed and send each reader what it lacks.
+/// It ends when nobody reads, or the session went.
+fn reading(served: &std::sync::Weak<Served>, host: &Arc<dyn ServeHost>, id: &str) {
+    let mut stamp = None;
+    loop {
+        let Some(served) = served.upgrade() else {
+            return;
+        };
+        if served.ended.load(Ordering::Relaxed) || served.readers.lock().is_empty() {
+            served.reading.store(false, Ordering::Relaxed);
+            // A reader that came in meanwhile keeps this going, unless it
+            // started a thread of its own.
+            if served.ended.load(Ordering::Relaxed)
+                || served.readers.lock().is_empty()
+                || served.reading.swap(true, Ordering::Relaxed)
+            {
+                return;
+            }
+        }
+        match host.entries(id, stamp) {
+            EntriesBuilt::Unchanged | EntriesBuilt::Waiting => {}
+            EntriesBuilt::Unavailable(reason) => {
+                stamp = None;
+                served.entries_unavailable(reason);
+            }
+            EntriesBuilt::Built {
+                stamp: now,
+                entries,
+            } => {
+                stamp = Some(now);
+                served.book.lock().update(entries);
+            }
+        }
+        served.send_entries();
+        drop(served);
+        std::thread::sleep(ENTRIES_EVERY);
+    }
+}
+
+/// What building a session's [Readable view] entries came to.
+#[derive(Debug)]
+pub enum EntriesBuilt {
+    /// Nothing changed since the build `stamp` names.
+    Unchanged,
+    /// Not yet: the companion is starting.
+    Waiting,
+    /// None can be built (exact or off).
+    Unavailable(EntriesUnavailable),
+    /// Built: `stamp` names this build, for the next call.
+    Built {
+        stamp: u64,
+        entries: Vec<kriyon_core::readable::Keyed>,
+    },
 }
 
 /// The packing thread of `served`: snapshots in, queued for their devices.
@@ -359,6 +502,9 @@ impl Serve {
             wakers: Mutex::new(HashMap::new()),
             ended: std::sync::atomic::AtomicBool::new(false),
             packs: Mutex::new(None),
+            readers: Mutex::default(),
+            book: Mutex::default(),
+            reading: std::sync::atomic::AtomicBool::new(false),
         });
         let (packs, snapshots) = std::sync::mpsc::channel();
         let weak = Arc::downgrade(&served);
@@ -1014,15 +1160,12 @@ impl Serve {
             let answers_write = is_write(&message);
             let answer = match (checked, message) {
                 (Err(reason), _) => Some(ToDevice::Refused { reason }),
-                (Ok(()), Decoded::Message(FromDevice::Resync)) => {
-                    let ask = served.fanout.lock().resync(&device, Instant::now());
-                    if let Some(ask) = ask {
-                        (served.ask)(ask);
-                    }
-                    None
-                }
                 (Ok(()), Decoded::Message(message)) => {
-                    self.write(&id, device, role, &message).await
+                    if self.stream_request(&served, &id, device, &message) {
+                        None
+                    } else {
+                        self.write(&id, device, role, &message).await
+                    }
                 }
                 (Ok(()), Decoded::Unknown { .. }) => Some(ToDevice::Refused {
                     reason: RefuseReason::UnknownMessage,
@@ -1127,7 +1270,53 @@ impl Serve {
         })
     }
 
+    /// A device's `Resync` (a fresh snapshot) or `RequestEntries` (start
+    /// reading entries) on session `id`'s stream, done; `false` for any
+    /// other message (a write).
+    fn stream_request(
+        &self,
+        served: &Arc<Served>,
+        id: &str,
+        device: EndpointId,
+        request: &FromDevice,
+    ) -> bool {
+        match request {
+            FromDevice::RequestEntries { since } => {
+                served
+                    .readers
+                    .lock()
+                    .insert(device, EntryReader::new(*since));
+                self.start_reading(served, id);
+            }
+            FromDevice::Resync => {
+                let ask = served.fanout.lock().resync(&device, Instant::now());
+                if let Some(ask) = ask {
+                    (served.ask)(ask);
+                }
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    /// Start session `id`'s entries thread, unless it runs.
+    fn start_reading(&self, served: &Arc<Served>, id: &str) {
+        if served.reading.swap(true, Ordering::Relaxed) {
+            return;
+        }
+        let weak = Arc::downgrade(served);
+        let host = Arc::clone(&self.0.host);
+        let id = id.to_string();
+        let started = std::thread::Builder::new()
+            .name("kriyon-remote-entries".into())
+            .spawn(move || reading(&weak, &host, &id));
+        if started.is_err() {
+            served.reading.store(false, Ordering::Relaxed);
+        }
+    }
+
     fn close_session(&self, served: &Served, id: &str, device: &EndpointId) {
+        served.readers.lock().remove(device);
         let open = {
             let mut fanout = served.fanout.lock();
             fanout.close(device);
@@ -1212,6 +1401,7 @@ mod tests {
     use kriyon_remote_link::device::DeviceLink;
 
     use super::*;
+    use kriyon_remote::message::{Entry, EntryKind};
 
     use crate::remote_test_support::*;
 
@@ -1474,6 +1664,87 @@ mod tests {
             let asks = world.fake.control_asks.lock().clone();
             assert_eq!(asks.len(), 1, "{asks:?}");
             assert_eq!(asks[0].0, "s");
+        });
+    }
+
+    fn note(key: &str, text: &str) -> kriyon_core::readable::Keyed {
+        kriyon_core::readable::Keyed {
+            key: key.into(),
+            kind: EntryKind::Note { text: text.into() },
+        }
+    }
+
+    /// The next `Entries` or `EntriesUnavailable` on a session stream,
+    /// past screen frames.
+    async fn next_entries(sr: &mut MessageReader<ToDevice>) -> ToDevice {
+        loop {
+            let message = next(sr).await;
+            if matches!(
+                message,
+                ToDevice::Entries { .. } | ToDevice::EntriesUnavailable { .. }
+            ) {
+                return message;
+            }
+        }
+    }
+
+    #[test]
+    fn a_viewer_reading_a_session_gets_its_entries_then_only_what_changed() {
+        run(async {
+            let world = world().await;
+            *world.fake.entries.lock() = Ok(vec![note("a", "A")]);
+            let (_phone, link, _cw, _cr) = device(&world, 3, Role::Viewer).await;
+            let (mut sw, mut sr) = open(&link).await;
+            let id = asked(&world).await;
+            answer(&world, id, b"x");
+            sw.send(&FromDevice::RequestEntries { since: 0 })
+                .await
+                .expect("asked");
+            let ToDevice::Entries { entries, reset } = next_entries(&mut sr).await else {
+                panic!("entries");
+            };
+            assert!(reset);
+            assert_eq!(entries.len(), 1);
+            *world.fake.entries.lock() = Ok(vec![note("a", "A"), note("b", "B")]);
+            let ToDevice::Entries { entries, reset } = next_entries(&mut sr).await else {
+                panic!("entries");
+            };
+            assert!(!reset);
+            assert_eq!(
+                entries,
+                vec![Entry {
+                    seq: 2,
+                    kind: EntryKind::Note { text: "B".into() }
+                }]
+            );
+            // Unchanged: not built again.
+            let builds = world.fake.builds.load(std::sync::atomic::Ordering::Relaxed);
+            tokio::time::sleep(ENTRIES_EVERY * 3).await;
+            assert_eq!(
+                world.fake.builds.load(std::sync::atomic::Ordering::Relaxed),
+                builds
+            );
+        });
+    }
+
+    #[test]
+    fn with_the_companion_off_a_device_is_told_entries_are_unavailable() {
+        run(async {
+            let world = world().await;
+            *world.fake.entries.lock() = Err(EntriesUnavailable::CompanionOff);
+            let (_phone, link, _cw, _cr) = device(&world, 3, Role::Controller).await;
+            let (mut sw, mut sr) = open(&link).await;
+            let id = asked(&world).await;
+            answer(&world, id, b"x");
+            sw.send(&FromDevice::RequestEntries { since: 0 })
+                .await
+                .expect("asked");
+            assert_eq!(
+                next_entries(&mut sr).await,
+                ToDevice::EntriesUnavailable {
+                    reason: EntriesUnavailable::CompanionOff
+                }
+            );
         });
     }
 

@@ -26,8 +26,9 @@ use parking_lot::Mutex;
 use kriyon_remote::device_view::HostView;
 
 use crate::daemon_client::DaemonEvent;
-use crate::remote_serve::{LiveSession, RemoteStart, Serve, ServeHost};
+use crate::remote_serve::{EntriesBuilt, LiveSession, RemoteStart, Serve, ServeHost};
 use kriyon_remote::authorize::ProjectFolder;
+use kriyon_remote::message::EntriesUnavailable;
 use kriyon_remote_link::device_runtime::{DeviceEvents, DeviceRuntime};
 
 /// The app, faked: one session "s", paired devices in a map.
@@ -50,6 +51,10 @@ pub(crate) struct FakeHost {
     pub(crate) control_asks: Mutex<Vec<(String, EndpointId)>>,
     /// What the serving layer logged, in order.
     pub(crate) logged: Mutex<Vec<String>>,
+    /// Session "s"'s readable-view entries as built now, and how often they
+    /// were built.
+    pub(crate) entries: Mutex<Result<Vec<kriyon_core::readable::Keyed>, EntriesUnavailable>>,
+    pub(crate) builds: std::sync::atomic::AtomicUsize,
     /// How many times the serving layer called the app.
     pub(crate) calls: std::sync::atomic::AtomicUsize,
     /// How long a start takes, so a test can drop the link mid-start.
@@ -87,6 +92,8 @@ impl Default for FakeHost {
             start_delay: Mutex::new(Duration::ZERO),
             calls: std::sync::atomic::AtomicUsize::new(0),
             logged: Mutex::default(),
+            entries: Mutex::new(Ok(Vec::new())),
+            builds: std::sync::atomic::AtomicUsize::new(0),
             control_asks: Mutex::default(),
             projects: Mutex::new(vec![ProjectInfo {
                 id: "p".into(),
@@ -197,6 +204,34 @@ impl ServeHost for FakeHost {
         self.tell(change);
         Ok(())
     }
+    fn entries(&self, _id: &str, stamp: Option<u64>) -> EntriesBuilt {
+        self.called();
+        let entries = self.entries.lock().clone();
+        match entries {
+            Err(reason) => EntriesBuilt::Unavailable(reason),
+            Ok(entries) => {
+                let now = {
+                    use std::hash::{Hash as _, Hasher as _};
+                    let mut hasher = std::hash::DefaultHasher::new();
+                    for entry in &entries {
+                        entry.key.hash(&mut hasher);
+                        entry.kind.hash(&mut hasher);
+                    }
+                    hasher.finish()
+                };
+                if stamp == Some(now) {
+                    return EntriesBuilt::Unchanged;
+                }
+                self.builds
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                EntriesBuilt::Built {
+                    stamp: now,
+                    entries,
+                }
+            }
+        }
+    }
+
     fn control_asked(&self, id: &str, device: &EndpointId) {
         self.called();
         self.control_asks.lock().push((id.to_string(), *device));

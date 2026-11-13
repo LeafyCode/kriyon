@@ -273,13 +273,26 @@ pub struct CompanionStatus {
 #[tauri::command]
 pub fn companion_status(
     app: tauri::AppHandle,
-    state: tauri::State<'_, crate::AppState>,
     session_id: String,
 ) -> Result<CompanionStatus, String> {
     kriyon_core::daemon::check_session_id(&session_id)?;
-    let home = crate::commands::resolve_home(&app)?;
+    session_companion(&app, session_id)
+}
+
+/// Session `session_id`'s [Companion state] (a checked id), as the session
+/// header shows it.
+///
+/// # Errors
+/// On a missing HOME.
+pub fn session_companion(
+    app: &tauri::AppHandle,
+    session_id: String,
+) -> Result<CompanionStatus, String> {
+    use tauri::Manager as _;
+    let state = app.state::<crate::AppState>();
+    let home = crate::commands::resolve_home(app)?;
     // The session's own conversation, as Kriyon recorded it.
-    let conversation = tauri::Manager::state::<crate::StoreState>(&app)
+    let conversation = tauri::Manager::state::<crate::StoreState>(app)
         .0
         .lock()
         .session_row(&session_id)

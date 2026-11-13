@@ -270,6 +270,10 @@ impl ServeHost for AppServeHost {
         }
     }
 
+    fn entries(&self, id: &str, stamp: Option<u64>) -> crate::remote_serve::EntriesBuilt {
+        crate::readable_rt::entries(&self.0, id, stamp)
+    }
+
     fn control_asked(&self, id: &str, device: &EndpointId) {
         control_asked(&self.0, id, device);
     }
