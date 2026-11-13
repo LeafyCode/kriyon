@@ -6,6 +6,8 @@
   "main": "index.ts",
   "scripts": {
     "android": "pnpm terminal-page && expo run:android",
+    "eas-build-post-install": "node ../../scripts/mobile/eas-build.mjs post-install",
+    "eas-build-pre-install": "node ../../scripts/mobile/eas-build.mjs pre-install",
     "ios": "pnpm terminal-page && expo run:ios",
     "start": "pnpm terminal-page && expo start --dev-client",
     "terminal-page": "node scripts/terminal-page.mjs",

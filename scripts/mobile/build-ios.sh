@@ -8,7 +8,9 @@
 #   mobile/app/modules/kriyon-native/ios/Rust/KriyonMobile.xcframework
 #   mobile/app/modules/kriyon-native/ios/Rust/Generated/*.swift
 #
-# Usage: scripts/mobile/build-ios.sh [--debug]
+# Usage: scripts/mobile/build-ios.sh [--debug] [--device-only]
+#   --device-only  iPhones only, no Simulator slice: for store and shared
+#                  builds (EAS), which only ever install on phones.
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -16,13 +18,19 @@ cd "$root"
 
 profile=release
 cargo_profile=(--release)
-if [[ "${1:-}" == "--debug" ]]; then
-  profile=debug
-  cargo_profile=()
-fi
+targets=(aarch64-apple-ios aarch64-apple-ios-sim)
+for arg in "$@"; do
+  case "$arg" in
+    --debug)
+      profile=debug
+      cargo_profile=()
+      ;;
+    --device-only) targets=(aarch64-apple-ios) ;;
+    *) echo "build-ios: unknown option $arg" >&2; exit 1 ;;
+  esac
+done
 
 out="$root/mobile/app/modules/kriyon-native/ios/Rust"
-targets=(aarch64-apple-ios aarch64-apple-ios-sim)
 
 command -v xcodebuild >/dev/null || { echo "build-ios: Xcode is needed" >&2; exit 1; }
 for target in "${targets[@]}"; do
@@ -59,9 +67,10 @@ cargo run -q -p kriyon-mobile --features bindgen --bin uniffi-bindgen -- \
 rm -rf "$out/Headers"
 
 rm -rf "$out/KriyonMobile.xcframework"
-xcodebuild -create-xcframework \
-  -library "$target_dir/aarch64-apple-ios/$profile/libkriyon_mobile.a" \
-  -library "$target_dir/aarch64-apple-ios-sim/$profile/libkriyon_mobile.a" \
-  -output "$out/KriyonMobile.xcframework"
+libraries=()
+for target in "${targets[@]}"; do
+  libraries+=(-library "$target_dir/$target/$profile/libkriyon_mobile.a")
+done
+xcodebuild -create-xcframework "${libraries[@]}" -output "$out/KriyonMobile.xcframework"
 
 echo "build-ios: $out"

@@ -87,5 +87,9 @@ crates/kriyon-push/push.env
 /mobile/app/modules/kriyon-native/android/rust
 /mobile/app/modules/kriyon-native/android/build
 
-# Firebase's file for Android push: the person's own, never committed
-/mobile/app/google-services.json
+# Firebase's files and EAS's store credentials: kept by EAS or the person,
+# never committed, wherever they land (docs/mobile-builds.md)
+google-services.json
+GoogleService-Info.plist
+credentials.json
+*.keystore
