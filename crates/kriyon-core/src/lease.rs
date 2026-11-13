@@ -14,8 +14,8 @@
 //! stopping costs nothing a `claude --resume` will not bring back. Claude Code's
 //! own background sessions draw the same line.
 //!
-//! One client, not a count of [Watcher]s: the desktop app is the daemon's only
-//! client (ADR-0057), and a remote device watches through it. While the app is
+//! One client, not a count of [Onlooker]s: the desktop app is the daemon's only
+//! client (ADR-0057), and a remote device looks on through it. While the app is
 //! attached the lease cannot lapse, whoever is looking.
 //!
 //! This is the pure clock; the daemon feeds it and acts on [`lapsed`].

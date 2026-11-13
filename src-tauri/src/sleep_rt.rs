@@ -12,12 +12,12 @@
 
 use std::time::Instant;
 
+use kriyon_core::onlooker::{Onlooker, Onlookers};
 use kriyon_core::proc::{ProcessTree, PtyForeground};
 use kriyon_core::session::{SessionEngine as _, SessionId, SessionStatus};
 use kriyon_core::sleep::{
     can_type_resume, is_quiescent, should_sleep, SleepCandidate, SleepState, SleepTransition,
 };
-use kriyon_core::watch::{Watcher, Watchers};
 use serde::Serialize;
 use tauri::{Emitter as _, Manager as _};
 
@@ -121,7 +121,7 @@ pub fn sleep_pass<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
         &state,
         &ids,
         &tree,
-        &watchers(focused.as_ref()),
+        &onlookers(focused.as_ref()),
         &policy,
     );
 }
@@ -147,18 +147,18 @@ pub fn sleep_idle_now<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> usize {
         &state,
         &ids,
         &tree,
-        &watchers(focused.as_ref()),
+        &onlookers(focused.as_ref()),
         &kriyon_core::sleep::AutoSleep::NOW,
     )
 }
 
-/// Everyone looking at a session right now, for the "never sleep a watched
-/// session" gate. Only the desktop's focused pane today; a remote device
-/// becomes another [`Watcher`] here and is counted without touching the gate.
-fn watchers(desktop_focus: Option<&SessionId>) -> Watchers {
-    let mut watchers = Watchers::default();
-    watchers.look(Watcher::Desktop, desktop_focus.map(|id| id.0.as_str()));
-    watchers
+/// Everyone looking at a session right now, for the "never sleep a session
+/// someone is looking at" gate. Only the desktop's focused pane today; a remote device
+/// becomes another [`Onlooker`] here and is counted without touching the gate.
+fn onlookers(desktop_focus: Option<&SessionId>) -> Onlookers {
+    let mut onlookers = Onlookers::default();
+    onlookers.look(Onlooker::Desktop, desktop_focus.map(|id| id.0.as_str()));
+    onlookers
 }
 
 /// Stop the `claude` of every session `policy` approves, and return how many.
@@ -168,7 +168,7 @@ fn stop_candidates<R: tauri::Runtime>(
     state: &AppState,
     ids: &[SessionId],
     tree: &ProcessTree,
-    watchers: &Watchers,
+    onlookers: &Onlookers,
     policy: &kriyon_core::sleep::AutoSleep,
 ) -> usize {
     if !policy.enabled {
@@ -204,7 +204,7 @@ fn stop_candidates<R: tauri::Runtime>(
         let quiescent = SleepCandidate {
             foreground: tree.foreground(&id.0),
             idle_secs,
-            watched: watchers.is_watched(&id.0),
+            has_onlooker: onlookers.has_onlooker(&id.0),
             has_running_shells,
             has_running_subagents,
             claude_id: None,

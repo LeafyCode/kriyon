@@ -87,7 +87,7 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
   its terminal foreground, which pid is its `claude`, and every pid it costs.
 - **Sleeping session** — a [Session] whose `claude` process Kriyon stopped to reclaim its
   [Session footprint], while the daemon, shell, and sidebar row stay. Only quiescent sessions
-  (idle at the shell prompt, no busy state, no live background shells, no [Watcher]) are ever
+  (idle at the shell prompt, no busy state, no live background shells, no [Onlooker]) are ever
   slept; waking resumes via `claude --resume` with the same [Claude session id].
 - **Sleep ledger** (`SleepLedger`) — where every [Session] sits in the [Sleeping session]
   lifecycle: `Awake` → `Stopping` (signalled, shell not yet seen back at its prompt) →
@@ -148,12 +148,13 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
   [Tree stop]s itself. Output or an attach renews it. What bounds a [Handover] nobody returns to.
   The desktop app is the daemon's only client (ADR-0057), so a remote device keeps the lease held
   through the app's connection, not one of its own.
-- **Watcher** (`Watcher`, `Watchers`) — anything that counts as someone looking at a [Session]
-  for auto-sleep: the desktop app's focused pane today, a remote device later. A watched session
-  is never slept. The sleep gate asks "is anyone watching?", never "is the desktop?", so a new kind
-  of watcher counts without changing it. Waking a sleeping session still follows the desktop's
-  focus only. _Avoid_: viewer (reserved for the remote device role), client (a daemon
-  connection), focused (that is only the desktop's watcher).
+- **Onlooker** (`Onlooker`, `Onlookers`) — anything that counts as someone looking at a [Session]
+  for auto-sleep: the desktop app's focused pane today, a remote device later. A session with an
+  onlooker is never slept. The sleep gate asks "is anyone looking?", never "is the desktop?", so a
+  new kind of onlooker counts without changing it. Waking a sleeping session still follows the
+  desktop's focus only. _Avoid_: watcher (taken by the hook-events watch and the [Watch route]),
+  viewer (reserved for the remote device role), client (a daemon connection), focused (that is
+  only the desktop's onlooker).
 - **Stop cost** (`StopCost`) — what stopping a [Session] would destroy right now: its [Session
   engagement], running [Background shell]s (named), unsent work. The one answer the close confirm,
   the archive action, the quit gate and *Stop all sessions* all read, so they can never disagree.
