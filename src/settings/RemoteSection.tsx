@@ -23,6 +23,7 @@ import {
   countdownText,
   useRemote,
 } from "../state/remote.ts";
+import { type HostPairing, useRemoteHosts } from "../state/remoteHosts.ts";
 import { button, inputBox } from "../theme/recipes.ts";
 import { tokens } from "../theme/tokens.ts";
 import {
@@ -32,6 +33,7 @@ import {
 } from "../ui/ConfirmDialog.tsx";
 import { Segmented } from "../ui/Segmented.tsx";
 import { Switch } from "../ui/Switch.tsx";
+import { showToast } from "../ui/Toast.tsx";
 import {
   errorTextStyle,
   rowHintStyle,
@@ -319,6 +321,7 @@ function endedLine(pairing: RemotePairing): string | null {
 
 function PairingGroup({ pairing }: { pairing: RemotePairing }) {
   const qr = useRemote((state) => state.qr);
+  const qrText = useRemote((state) => state.qrText);
   const { stopPairing } = useRemote.getState();
   if (pairing.state === "waiting") {
     return (
@@ -333,6 +336,25 @@ function PairingGroup({ pairing }: { pairing: RemotePairing }) {
             </span>
             <Countdown expiresAtMs={pairing.expiresAtMs} />
             <div style={actionsStyle}>
+              {qrText ? (
+                <button
+                  className="kr-hover-surface"
+                  onClick={() => {
+                    navigator.clipboard
+                      .writeText(qrText)
+                      .then(() =>
+                        showToast(
+                          "Pairing code copied. Paste it on the other computer."
+                        )
+                      )
+                      .catch(() => undefined);
+                  }}
+                  style={button("secondary")}
+                  type="button"
+                >
+                  Copy pairing code
+                </button>
+              ) : null}
               <button
                 className="kr-hover-surface"
                 onClick={() => {
@@ -488,6 +510,91 @@ function DevicesGroup({ devices }: { devices: RemoteDevice[] }) {
   );
 }
 
+/** Where a pairing with another computer, started here, stands. */
+function hostPairingLine(pairing: HostPairing): string | null {
+  switch (pairing.phase) {
+    case "working":
+      return "Connecting…";
+    case "paired":
+      return `Paired with ${pairing.name}. Its sessions are under Other computers in the sidebar.`;
+    case "failed":
+      return pairing.reason;
+    default:
+      return null;
+  }
+}
+
+/** Pairing this computer with another, as a device, and the ones it has. */
+function OtherComputersGroup() {
+  const [invite, setInvite] = useState("");
+  const pairing = useRemoteHosts((state) => state.pairing);
+  const hosts = useRemoteHosts((state) => state.hosts);
+  const { forget, pair } = useRemoteHosts.getState();
+  const line = hostPairingLine(pairing);
+  return (
+    <SettingGroup label="Use another computer from here">
+      <div style={pairingStyle}>
+        <div style={pairingTextStyle}>
+          <span style={rowHintStyle}>
+            On the other computer, open Remote access and Pair a device, then
+            Copy pairing code and paste it here.
+          </span>
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              pair(invite).catch(() => undefined);
+              setInvite("");
+            }}
+            style={actionsStyle}
+          >
+            <input
+              aria-label="Pairing code from the other computer"
+              onChange={(event) => setInvite(event.target.value)}
+              spellCheck={false}
+              style={nameInputStyle}
+              value={invite}
+            />
+            <button
+              className="kr-hover-surface"
+              style={button("secondary")}
+              type="submit"
+            >
+              Connect
+            </button>
+          </form>
+          {pairing.phase === "code" ? (
+            <span style={rowHintStyle}>
+              Type this code on the other computer:{" "}
+              <span style={countdownStyle}>{pairing.code}</span>
+            </span>
+          ) : null}
+          {line ? <span style={rowHintStyle}>{line}</span> : null}
+        </div>
+      </div>
+      {hosts.map((host) => (
+        <SettingRow
+          control={
+            <button
+              aria-label={`Forget ${host.name}`}
+              className="kr-hover-surface"
+              onClick={() => {
+                forget(host.hostId).catch(() => undefined);
+              }}
+              style={button("ghost", "sm")}
+              type="button"
+            >
+              Forget
+            </button>
+          }
+          hint={`${host.name}, paired ${new Date(host.pairedAt).toLocaleDateString()}.`}
+          key={host.hostId}
+          label="Paired computer"
+        />
+      ))}
+    </SettingGroup>
+  );
+}
+
 export function RemoteSection() {
   const status = useRemote((state) => state.status);
   const devices = useRemote((state) => state.devices);
@@ -537,6 +644,7 @@ export function RemoteSection() {
       {enabled && status ? <PairingGroup pairing={status.pairing} /> : null}
       {/* Always: a lost device must be removable without turning access on. */}
       <DevicesGroup devices={devices} />
+      <OtherComputersGroup />
       {consentOpen ? <ConsentDialog /> : null}
     </SectionPage>
   );

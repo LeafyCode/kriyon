@@ -41,6 +41,8 @@ interface RemoteStore {
   load: () => Promise<void>;
   /** The pairing's QR code while one is shown. */
   qr: QrGrid | null;
+  /** The same invite as text, for a computer that can't scan: paste it. */
+  qrText: string | null;
   /** Re-read the switch and the pairing, as after `remote-pairing-code-wanted`. */
   refresh: () => Promise<void>;
   remove: (id: string) => Promise<void>;
@@ -105,6 +107,7 @@ export const useRemote = create<RemoteStore>((set, get) => {
         set({ devices, status });
       }),
     qr: null,
+    qrText: null,
     refresh: () =>
       attempt(async () => {
         set({ status: await remoteStatus() });
@@ -129,7 +132,7 @@ export const useRemote = create<RemoteStore>((set, get) => {
       await attempt(async () => {
         const text = await remoteStartPairing(role);
         try {
-          set({ qr: await remotePairingQr(text) });
+          set({ qr: await remotePairingQr(text), qrText: text });
         } catch (error) {
           // A pairing nobody can scan is only an open door: end it.
           await remoteStopPairing().catch(() => undefined);
@@ -145,7 +148,7 @@ export const useRemote = create<RemoteStore>((set, get) => {
     stopPairing: () =>
       attempt(async () => {
         await remoteStopPairing();
-        set({ codeError: null, codeResult: null, qr: null });
+        set({ codeError: null, codeResult: null, qr: null, qrText: null });
         set({ status: await remoteStatus() });
       }),
     turnOff: () =>

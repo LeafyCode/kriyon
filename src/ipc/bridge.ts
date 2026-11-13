@@ -24,6 +24,7 @@ import type {
   SessionDiff,
   SessionRow,
   SessionStatus,
+  StandingState,
   StudioEvent,
   UsageSnapshot,
 } from "../types.ts";
@@ -1842,4 +1843,121 @@ export function remoteSetDeviceRole(
  */
 export const onRemoteCodeWanted = subscribe<{ deviceName: string }>(
   "remote-pairing-code-wanted"
+);
+
+// This computer as a remote device of another. Mirrors
+// `src-tauri/src/remote_device_cmd.rs`.
+
+/** Where the link to a paired computer stands. */
+export type HostLinkState = "connecting" | "connected" | "lost" | "removed";
+
+/** A session on a paired computer. */
+export interface HostSession {
+  dialogOpen: boolean;
+  id: string;
+  lastChangeMs: number;
+  /** This computer holds its typing control. */
+  mine: boolean;
+  needsYou: boolean;
+  standing: StandingState;
+  status: SessionStatus;
+  title: string;
+}
+
+/** A paired computer's link, as `remote-host-changed` reports it. */
+export interface HostLink {
+  hostId: string;
+  /** The name it said; empty until it has. */
+  name: string;
+  role: RemoteRole | null;
+  sessions: HostSession[];
+  state: HostLinkState;
+}
+
+/** A computer this one paired with, as stored. */
+export interface PairedHost {
+  hostId: string;
+  name: string;
+  pairedAt: number;
+}
+
+/** How a pairing started here ended. */
+export type HostPairingEnded =
+  | { hostId: string; name: string; outcome: "paired" }
+  | { outcome: "failed"; reason: string };
+
+/**
+ * Pair with the computer whose pairing code (the QR code's text) was pasted.
+ * Resolves to the six-digit code to type into that computer.
+ */
+export function remoteHostPair(invite: string): Promise<string> {
+  return invoke("remote_host_pair", { invite });
+}
+
+/** Every computer this one paired with. None outside the Tauri webview. */
+export function remoteHosts(): Promise<PairedHost[]> {
+  if (!hasTauri()) {
+    return Promise.resolve([]);
+  }
+  return invoke("remote_hosts");
+}
+
+/** Forget a paired computer. */
+export function remoteHostForget(hostId: string): Promise<void> {
+  return invoke("remote_host_forget", { hostId });
+}
+
+/**
+ * Open a session on a paired computer; its screen arrives as raw frames
+ * (see `decodeScreenFrame` in `state/remoteHosts.ts`).
+ */
+export function remoteHostOpenSession(
+  hostId: string,
+  sessionId: string,
+  onFrame: (frame: Uint8Array) => void
+): Promise<void> {
+  const onScreen = new Channel<ArrayBuffer>();
+  onScreen.onmessage = (message) => onFrame(new Uint8Array(message));
+  return invoke("remote_host_open_session", { hostId, onScreen, sessionId });
+}
+
+/** Close a paired computer's session here; it keeps running there. */
+export function remoteHostCloseSession(
+  hostId: string,
+  sessionId: string
+): Promise<void> {
+  return invoke("remote_host_close_session", { hostId, sessionId });
+}
+
+/** Ask for typing control of a paired computer's session. */
+export function remoteHostTakeControl(
+  hostId: string,
+  sessionId: string
+): Promise<void> {
+  return invoke("remote_host_take_control", { hostId, sessionId });
+}
+
+/** Type into a paired computer's session this one controls. */
+export function remoteHostInput(
+  hostId: string,
+  sessionId: string,
+  text: string
+): Promise<void> {
+  return invoke("remote_host_input", { hostId, sessionId, text });
+}
+
+/** Retry waiting reconnects at once (the app came to the front). */
+export function remoteHostsWake(): Promise<void> {
+  if (!hasTauri()) {
+    return Promise.resolve();
+  }
+  return invoke("remote_hosts_wake");
+}
+
+/** Subscribe to `remote-host-changed`: a paired computer's link or sessions. */
+export const onRemoteHostChanged = subscribe<HostLink>("remote-host-changed");
+
+/** Subscribe to `remote-host-pairing-ended`. */
+export const onRemoteHostPairingEnded = subscribe<HostPairingEnded>(
+  "remote-host-pairing-ended"
 );

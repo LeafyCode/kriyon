@@ -4,6 +4,9 @@ import {
   type RemoteStatus,
   remoteDevices,
   remoteEnterCode,
+  remoteHostForget,
+  remoteHostPair,
+  remoteHosts,
   remotePairingQr,
   remoteRemoveDevice,
   remoteRenameDevice,
@@ -13,11 +16,15 @@ import {
   remoteStatus,
 } from "../ipc/bridge.ts";
 import { CONSENT_LINES, useRemote } from "../state/remote.ts";
+import { useRemoteHosts } from "../state/remoteHosts.ts";
 import { RemoteSection } from "./RemoteSection.tsx";
 
 vi.mock("../ipc/bridge.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../ipc/bridge.ts")>()),
   onRemoteCodeWanted: vi.fn(() => Promise.resolve(() => undefined)),
+  remoteHostForget: vi.fn(),
+  remoteHostPair: vi.fn(),
+  remoteHosts: vi.fn(),
   remoteDevices: vi.fn(),
   remoteEnterCode: vi.fn(),
   remotePairingQr: vi.fn(),
@@ -37,6 +44,7 @@ const SHELL_ACCESS = /full shell access as you/;
 const NAMED_BY_DEVICE = /named by the device/;
 const RECONNECTS = /reconnects/;
 const DARK_MODULE = /h1v1h-1z/g;
+const TYPE_THIS_CODE = /Type this code on the other computer/;
 
 const off: RemoteStatus = {
   enabled: false,
@@ -54,8 +62,10 @@ const phone = {
 beforeEach(() => {
   vi.resetAllMocks();
   useRemote.setState(useRemote.getInitialState());
+  useRemoteHosts.setState(useRemoteHosts.getInitialState());
   vi.mocked(remoteStatus).mockResolvedValue(off);
   vi.mocked(remoteDevices).mockResolvedValue([]);
+  vi.mocked(remoteHosts).mockResolvedValue([]);
 });
 
 test("turning on shows the consent screen, and Cancel leaves it off", async () => {
@@ -258,4 +268,54 @@ test("removing a device asks first", async () => {
   await waitFor(() =>
     expect(remoteRemoveDevice).toHaveBeenCalledWith(phone.id)
   );
+});
+
+test("this computer pairs with another from its pasted code, with remote access off", async () => {
+  vi.mocked(remoteHostPair).mockResolvedValue("654321");
+  render(<RemoteSection />);
+  const field = await screen.findByRole("textbox", {
+    name: "Pairing code from the other computer",
+  });
+  fireEvent.change(field, { target: { value: "kriyon-pair:1:00" } });
+  fireEvent.click(screen.getByRole("button", { name: "Connect" }));
+  await waitFor(() =>
+    expect(remoteHostPair).toHaveBeenCalledWith("kriyon-pair:1:00")
+  );
+  expect(await screen.findByText("654321")).toBeTruthy();
+  expect(screen.getByText(TYPE_THIS_CODE)).toBeTruthy();
+});
+
+test("a paired computer is listed and can be forgotten", async () => {
+  vi.mocked(remoteHosts).mockResolvedValue([
+    { hostId: "ab".repeat(32), name: "Studio", pairedAt: 0 },
+  ]);
+  vi.mocked(remoteHostForget).mockResolvedValue();
+  render(<RemoteSection />);
+  await useRemoteHosts.getState().load();
+  fireEvent.click(await screen.findByRole("button", { name: "Forget Studio" }));
+  await waitFor(() =>
+    expect(remoteHostForget).toHaveBeenCalledWith("ab".repeat(32))
+  );
+});
+
+test("a pairing can be copied as text for a computer that can't scan", async () => {
+  const writeText = vi.fn(() => Promise.resolve());
+  Object.assign(navigator, { clipboard: { writeText } });
+  vi.mocked(remoteStatus).mockResolvedValue({
+    ...on,
+    pairing: {
+      expiresAtMs: Date.now() + 300_000,
+      role: "viewer",
+      state: "waiting",
+    },
+  });
+  useRemote.setState({
+    qr: { dark: "1", size: 1 },
+    qrText: "kriyon-pair:1:ab",
+  });
+  render(<RemoteSection />);
+  fireEvent.click(
+    await screen.findByRole("button", { name: "Copy pairing code" })
+  );
+  expect(writeText).toHaveBeenCalledWith("kriyon-pair:1:ab");
 });
