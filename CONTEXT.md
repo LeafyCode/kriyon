@@ -60,3 +60,9 @@ Boot phase, Main session lock, Session runtime, Watch route, Event subscription 
 The window chrome, menus, themes and the WebKit guards that keep the UI responsive.
 
 App tour, Stray caret, DOM weight, Collapsible section, Mascot, Wordmark, Nav row, Anchored menu, Header action, Sort menu, Palette menu, Project menu, Confirm dialog, Theme, Theme registry, Palette spec, Terminal palette, Theme picker, Steel, Style recipe, Accent.
+
+## [Remote access](docs/context/remote.md)
+
+Watching and typing into a host's sessions from a phone or another computer.
+
+Remote access, Host, Remote device, Device key, Pairing, Pairing code, Paired device, Viewer, Controller, Remote link, Typing control, Session run, Screen update, Skip ahead, Relay pass, Sealed push token, Push sender.
