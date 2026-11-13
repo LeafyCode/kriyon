@@ -391,6 +391,124 @@ pub fn host_summary(
     }
 }
 
+/// A session's [Readable view] entries, on the device, as the host sends
+/// them: in `seq` order, an entry that comes again replacing its own.
+#[derive(Debug, Default)]
+pub struct ReadableEntries {
+    entries: std::collections::BTreeMap<u64, crate::message::EntryKind>,
+}
+
+/// What a readable view should show now.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum EntriesEvent {
+    /// Every entry, in order.
+    Entries(Vec<crate::message::Entry>),
+    /// The host can't send entries: show the terminal, with a note.
+    Unavailable(crate::message::EntriesUnavailable),
+}
+
+impl ReadableEntries {
+    /// Take in `message`: what to show now, or `None` for a message that
+    /// isn't about entries.
+    pub fn apply(&mut self, message: &ToDevice) -> Option<EntriesEvent> {
+        match message {
+            ToDevice::Entries { entries, reset } => {
+                if *reset {
+                    self.entries.clear();
+                }
+                for entry in entries {
+                    self.entries.insert(entry.seq, entry.kind.clone());
+                }
+                Some(EntriesEvent::Entries(self.all()))
+            }
+            ToDevice::EntriesUnavailable { reason } => Some(EntriesEvent::Unavailable(*reason)),
+            _ => None,
+        }
+    }
+
+    /// Every entry, in order.
+    #[must_use]
+    pub fn all(&self) -> Vec<crate::message::Entry> {
+        self.entries
+            .iter()
+            .map(|(seq, kind)| crate::message::Entry {
+                seq: *seq,
+                kind: kind.clone(),
+            })
+            .collect()
+    }
+
+    /// The highest `seq` here, for `RequestEntries { since }`; 0 for none.
+    #[must_use]
+    pub fn highest(&self) -> u64 {
+        self.entries.keys().next_back().copied().unwrap_or_default()
+    }
+}
+
+#[cfg(test)]
+mod entries_tests {
+    use super::*;
+    use crate::message::{EntriesUnavailable, Entry, EntryKind};
+
+    fn note(seq: u64, text: &str) -> Entry {
+        Entry {
+            seq,
+            kind: EntryKind::Note { text: text.into() },
+        }
+    }
+
+    fn texts(event: Option<EntriesEvent>) -> Vec<(u64, String)> {
+        let Some(EntriesEvent::Entries(entries)) = event else {
+            panic!("entries: {event:?}");
+        };
+        entries
+            .into_iter()
+            .map(|entry| match entry.kind {
+                EntryKind::Note { text } => (entry.seq, text),
+                other => panic!("{other:?}"),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn entries_are_kept_in_seq_order_and_replaced_by_seq() {
+        let mut readable = ReadableEntries::default();
+        let event = readable.apply(&ToDevice::Entries {
+            entries: vec![note(2, "B"), note(1, "A")],
+            reset: true,
+        });
+        assert_eq!(texts(event), vec![(1, "A".into()), (2, "B".into())]);
+        let event = readable.apply(&ToDevice::Entries {
+            entries: vec![note(2, "B2"), note(3, "C")],
+            reset: false,
+        });
+        assert_eq!(
+            texts(event),
+            vec![(1, "A".into()), (2, "B2".into()), (3, "C".into())]
+        );
+        assert_eq!(readable.highest(), 3);
+        // A reset drops what was there.
+        let event = readable.apply(&ToDevice::Entries {
+            entries: vec![note(9, "Z")],
+            reset: true,
+        });
+        assert_eq!(texts(event), vec![(9, "Z".into())]);
+    }
+
+    #[test]
+    fn unavailable_is_told_and_other_messages_are_not_entries() {
+        let mut readable = ReadableEntries::default();
+        assert_eq!(
+            readable.apply(&ToDevice::EntriesUnavailable {
+                reason: EntriesUnavailable::CompanionOff
+            }),
+            Some(EntriesEvent::Unavailable(EntriesUnavailable::CompanionOff))
+        );
+        assert_eq!(readable.apply(&ToDevice::Heartbeat { seq: 1, at: 1 }), None);
+        assert_eq!(readable.highest(), 0);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #[test]

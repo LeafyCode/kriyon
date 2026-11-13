@@ -16,7 +16,9 @@ use crate::framed::{MessageReader, MessageWriter};
 use crate::LinkError;
 use iroh::EndpointAddr;
 use kriyon_remote::codec::Decoded;
-use kriyon_remote::device_view::{HostView, LinkState, ScreenEvent, SessionScreen};
+use kriyon_remote::device_view::{
+    EntriesEvent, HostView, LinkState, ReadableEntries, ScreenEvent, SessionScreen,
+};
 use kriyon_remote::link_policy::{CloseCode, HeartbeatWatch};
 use kriyon_remote::message::{
     EndpointId, FromDevice, Holder, RefuseReason, RequestId, SessionId, ToDevice,
@@ -38,6 +40,19 @@ pub trait DeviceEvents: Send + Sync + 'static {
 
 /// Where one session's screen events go.
 pub type ScreenSink = Arc<dyn Fn(ScreenEvent) + Send + Sync>;
+
+/// Where one session's [Readable view] events go.
+pub type EntriesSink = Arc<dyn Fn(EntriesEvent) + Send + Sync>;
+
+/// A session read as entries here, kept across links: a new link asks
+/// from the highest entry it has.
+struct Reading {
+    sink: EntriesSink,
+    entries: std::sync::Mutex<ReadableEntries>,
+}
+
+/// An open stream's [`Reading`], once the person reads it.
+type ReadingSlot = Arc<std::sync::Mutex<Option<Arc<Reading>>>>;
 
 /// A paired host, as the device keeps it.
 #[derive(Clone, Debug)]
@@ -127,6 +142,8 @@ struct Conn {
     /// The sessions the person has open here, and where their screens go:
     /// opened again on each new link, so a reconnect redraws them.
     wanted: HashMap<SessionId, ScreenSink>,
+    /// The wanted sessions the person reads as entries.
+    reading: HashMap<SessionId, Arc<Reading>>,
     /// Starts asked for and not yet answered: sent again, with the same
     /// request id, on every new link until the host answers.
     starting: HashMap<RequestId, PendingStart>,
@@ -201,6 +218,7 @@ fn fresh_request_id() -> RequestId {
 struct OpenSession {
     writer: Arc<Mutex<MessageWriter<FromDevice>>>,
     screen: Arc<std::sync::Mutex<SessionScreen>>,
+    reading: ReadingSlot,
     reader: JoinHandle<()>,
 }
 
@@ -474,10 +492,64 @@ impl DeviceRuntime {
         let open = {
             let mut c = conn.conn.lock().await;
             c.wanted.remove(session);
+            c.reading.remove(session);
             c.sessions.remove(session)
         };
         if let Some(open) = open {
             let_go(open).await;
+        }
+    }
+
+    /// Read open `session` as [Readable view] entries too; its events go to
+    /// `sink`, on this link and every one after, until it stops or closes.
+    ///
+    /// # Errors
+    /// [`DeviceError::NotOpen`] for a session not open here, or a link
+    /// failure.
+    pub async fn read_entries(
+        &self,
+        host: &EndpointId,
+        session: &str,
+        sink: EntriesSink,
+    ) -> Result<(), DeviceError> {
+        let conn = self.host(host).await?;
+        let reading = Arc::new(Reading {
+            sink,
+            entries: std::sync::Mutex::default(),
+        });
+        let writer = {
+            let mut c = conn.conn.lock().await;
+            if !c.wanted.contains_key(session) {
+                return Err(DeviceError::NotOpen);
+            }
+            c.reading.insert(session.to_string(), Arc::clone(&reading));
+            c.sessions.get(session).map(|open| {
+                *slot(&open.reading) = Some(Arc::clone(&reading));
+                Arc::clone(&open.writer)
+            })
+        };
+        let Some(writer) = writer else {
+            // Asked for when the session opens on the next link.
+            return Ok(());
+        };
+        let sent = writer
+            .lock()
+            .await
+            .send(&FromDevice::RequestEntries { since: 0 })
+            .await;
+        sent.map_err(|e| DeviceError::Link(e.to_string()))
+    }
+
+    /// Stop reading `session` as entries here; what the host still sends is
+    /// let go until the session closes.
+    pub async fn stop_entries(&self, host: &EndpointId, session: &str) {
+        let Ok(conn) = self.host(host).await else {
+            return;
+        };
+        let mut c = conn.conn.lock().await;
+        c.reading.remove(session);
+        if let Some(open) = c.sessions.get(session) {
+            *slot(&open.reading) = None;
         }
     }
 
@@ -635,15 +707,18 @@ async fn open_wanted(
     let screen = SessionScreen::new().map_err(|e| DeviceError::Link(format!("{e:?}")))?;
     let writer = Arc::new(Mutex::new(writer));
     let screen = Arc::new(std::sync::Mutex::new(screen));
+    let reading: ReadingSlot = Arc::default();
     let reader = tokio::spawn(read_session(
         reader,
         Arc::clone(&writer),
+        Arc::clone(&reading),
         Arc::clone(&screen),
         Arc::clone(sink),
     ));
     let open = OpenSession {
-        writer,
+        writer: Arc::clone(&writer),
         screen,
+        reading: Arc::clone(&reading),
         reader,
     };
     let mut c = conn.conn.lock().await;
@@ -652,14 +727,30 @@ async fn open_wanted(
         .get(session)
         .is_some_and(|wanted| Arc::ptr_eq(wanted, sink));
     let same_link = c.link.as_ref().is_some_and(|now| Arc::ptr_eq(now, link));
-    let gone = if still_wanted && same_link {
-        c.sessions.insert(session.to_string(), open)
+    let (gone, read) = if still_wanted && same_link {
+        let read = c.reading.get(session).cloned();
+        (c.sessions.insert(session.to_string(), open), read)
     } else {
-        Some(open)
+        (Some(open), None)
     };
     drop(c);
     if let Some(gone) = gone {
         let_go(gone).await;
+    }
+    if let Some(read) = read {
+        // Read before this link: ask from what it has.
+        let since = read
+            .entries
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .highest();
+        *slot(&reading) = Some(read);
+        writer
+            .lock()
+            .await
+            .send(&FromDevice::RequestEntries { since })
+            .await
+            .map_err(link_err)?;
     }
     Ok(())
 }
@@ -837,6 +928,12 @@ async fn follow_control(
     }
 }
 
+fn slot(reading: &ReadingSlot) -> std::sync::MutexGuard<'_, Option<Arc<Reading>>> {
+    reading
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 fn lock(screen: &std::sync::Mutex<SessionScreen>) -> std::sync::MutexGuard<'_, SessionScreen> {
     screen
         .lock()
@@ -847,6 +944,7 @@ fn lock(screen: &std::sync::Mutex<SessionScreen>) -> std::sync::MutexGuard<'_, S
 async fn read_session(
     mut reader: MessageReader<ToDevice>,
     writer: Arc<Mutex<MessageWriter<FromDevice>>>,
+    reading: ReadingSlot,
     screen: Arc<std::sync::Mutex<SessionScreen>>,
     sink: ScreenSink,
 ) {
@@ -859,6 +957,18 @@ async fn read_session(
                     Ok(Some(Decoded::Unknown { .. })) => continue,
                     _ => return,
                 };
+                let read = slot(&reading).clone();
+                if let Some(read) = read {
+                    let event = read
+                        .entries
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .apply(&message);
+                    if let Some(event) = event {
+                        (read.sink)(event);
+                        continue;
+                    }
+                }
                 let events = lock(&screen).on_message(message, Instant::now());
                 let mut resync = false;
                 for event in events {

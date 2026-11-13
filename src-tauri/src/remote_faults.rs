@@ -257,6 +257,59 @@ fn a_link_cut_mid_stream_reconnects_and_redraws_without_replaying_input() {
     });
 }
 
+fn note(key: &str, text: &str) -> kriyon_core::readable::Keyed {
+    kriyon_core::readable::Keyed {
+        key: key.into(),
+        kind: kriyon_remote::message::EntryKind::Note { text: text.into() },
+    }
+}
+
+#[test]
+fn a_phone_reads_a_session_as_entries_across_a_dropped_link() {
+    use kriyon_remote::device_view::EntriesEvent;
+    run(async {
+        let world = world().await;
+        let _beats = Beats::start(&world);
+        *world.fake.entries.lock() = Ok(vec![note("a", "A")]);
+        let phone = Phone::connect(&world, 3, Role::Viewer).await;
+        watching(&world, &phone, b"x").await;
+        let seen: Arc<Mutex<Vec<EntriesEvent>>> = Arc::default();
+        let into = Arc::clone(&seen);
+        phone
+            .rt
+            .read_entries(
+                &phone.host,
+                "s",
+                Arc::new(move |event| into.lock().push(event)),
+            )
+            .await
+            .expect("reads");
+        let texts = |seen: &Mutex<Vec<EntriesEvent>>| -> Vec<String> {
+            match seen.lock().last() {
+                Some(EntriesEvent::Entries(entries)) => entries
+                    .iter()
+                    .map(|entry| format!("{:?}", entry.kind))
+                    .collect(),
+                _ => Vec::new(),
+            }
+        };
+        wait_until("the first entry", || texts(&seen).len() == 1).await;
+        *world.fake.entries.lock() = Ok(vec![note("a", "A"), note("b", "B")]);
+        wait_until("the second", || texts(&seen).len() == 2).await;
+
+        // The link drops; meanwhile a third entry is made. Back, the phone
+        // asks from what it has and keeps the two.
+        world.host.reconnect(&phone.me);
+        wait_until("the drop", || phone.state() != Some(LinkState::Connected)).await;
+        *world.fake.entries.lock() = Ok(vec![note("a", "A"), note("b", "B"), note("c", "C")]);
+        phone.rt.wake();
+        phone.until_state(LinkState::Connected).await;
+        let id = asked(&world).await;
+        answer(&world, id, b"y");
+        wait_until("the third", || texts(&seen).len() == 3).await;
+    });
+}
+
 #[test]
 fn a_host_asleep_past_the_heartbeat_shows_lost_then_recovers() {
     run(async {
