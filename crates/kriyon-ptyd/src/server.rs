@@ -20,7 +20,7 @@ use kriyon_core::lease::DetachedLease;
 use kriyon_core::output_history::OutputHistory;
 use kriyon_core::session::{check_screen_size, EngineError, SessionEngine, SessionId, SpawnSpec};
 use kriyon_core::skip_ahead::{Next, SkipAheadQueue};
-use kriyon_core::wire::{chunked, Frame, FrameDecoder};
+use kriyon_core::wire::{ByteStream, Frame, FrameDecoder};
 use parking_lot::{Condvar, Mutex};
 
 use crate::pty::PtyEngine;
@@ -90,10 +90,11 @@ struct AttachedClient {
     queue: SkipAheadQueue,
     /// The writer has taken bytes off the queue and not finished writing them.
     sending: bool,
-    /// How many [Output history] answers the client is owed. The writer
-    /// sends them outside the queue: at up to the queue's own size, queueing
-    /// one would make the client skip ahead.
-    history_requests: u32,
+    /// The client asked for the [Output history] and has not had it yet.
+    /// Requests that pile up before it is sent share one answer: each copies
+    /// up to the whole history. The writer sends it outside the queue: at up
+    /// to the queue's own size, queueing it would make the client skip ahead.
+    history_wanted: bool,
 }
 
 /// The text of one screen row, as the desktop's terminal reads it: the second
@@ -335,7 +336,7 @@ impl Shared {
             id,
             queue: SkipAheadQueue::starting_with_screen(CLIENT_QUEUE_LIMIT),
             sending: false,
-            history_requests: 0,
+            history_wanted: false,
         });
         let shared = Arc::clone(self);
         // A thread the OS refuses must not panic the daemon (and the session
@@ -385,8 +386,8 @@ impl Shared {
                     else {
                         return;
                     };
-                    if attached.history_requests > 0 {
-                        attached.history_requests -= 1;
+                    if attached.history_wanted {
+                        attached.history_wanted = false;
                         attached.sending = true;
                         // Built after the `client` lock is released: copying
                         // megabytes under it would stall the PTY reader.
@@ -445,9 +446,7 @@ impl Shared {
     /// then the `HistoryEnd` that tells the client it has all of it.
     fn history_frames(&self) -> Vec<u8> {
         let history = self.history.lock().contents();
-        let mut bytes: Vec<u8> = chunked(&history, Frame::History)
-            .flat_map(|frame| frame.encode())
-            .collect();
+        let mut bytes = ByteStream::History.encode(&history);
         bytes.extend(Frame::HistoryEnd.encode());
         bytes
     }
@@ -455,7 +454,7 @@ impl Shared {
     /// Send the live client the [Output history], on request.
     fn request_history(&self) {
         if let Some(attached) = self.client.lock().as_mut() {
-            attached.history_requests = attached.history_requests.saturating_add(1);
+            attached.history_wanted = true;
             self.client_ready.notify_all();
         }
     }
@@ -694,9 +693,7 @@ fn remove_socket(path: &Path) {
 /// payload limit. A screen snapshot of a large, colourful screen can, and the
 /// app refuses a frame that does.
 fn output_frames(bytes: &[u8]) -> Vec<u8> {
-    chunked(bytes, Frame::Output)
-        .flat_map(|frame| frame.encode())
-        .collect()
+    ByteStream::Output.encode(bytes)
 }
 
 /// Write the person's typing to the session. A failed write is never dropped
@@ -1062,7 +1059,7 @@ mod tests {
             id: 0,
             queue,
             sending: false,
-            history_requests: 0,
+            history_wanted: false,
         });
         shared
     }
@@ -1079,6 +1076,33 @@ mod tests {
             shared.detach(&UnixStream::pair().expect("socket pair").0);
             first
         })
+    }
+
+    #[test]
+    fn history_requests_that_pile_up_share_one_answer() {
+        // Each answer copies up to the whole history; a client asking faster
+        // than they are sent must not queue a copy per ask.
+        let shared = with_client(SkipAheadQueue::new(CLIENT_QUEUE_LIMIT));
+        shared.history.lock().push(b"earlier\n");
+        shared.request_history();
+        shared.request_history();
+        shared.request_history();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut decoder = FrameDecoder::new();
+        std::thread::scope(|scope| {
+            scope.spawn(|| shared.write_to_client(0, ChannelWriter(tx)));
+            while let Ok(bytes) = rx.recv_timeout(Duration::from_millis(300)) {
+                decoder.push(&bytes);
+            }
+            shared.detach(&UnixStream::pair().expect("socket pair").0);
+        });
+        let mut ends = 0;
+        while let Ok(Some(frame)) = decoder.next_frame() {
+            if frame == Frame::HistoryEnd {
+                ends += 1;
+            }
+        }
+        assert_eq!(ends, 1);
     }
 
     #[test]
@@ -1415,16 +1439,5 @@ mod tests {
         let history = read_history(&mut client_end);
         assert!(history.len() > OUTPUT_HISTORY_LIMIT - line(0).len());
         assert!(String::from_utf8_lossy(&history).ends_with(&line(count - 1)));
-    }
-
-    #[test]
-    fn each_history_request_gets_its_own_answer() {
-        let (shared, _daemon_end, mut client_end, _writer) = attached();
-        shared.on_output(b"asked twice\n");
-        shared.request_history();
-        shared.request_history();
-        for history in read_histories(&mut client_end, 2) {
-            assert!(String::from_utf8_lossy(&history).contains("asked twice"));
-        }
     }
 }

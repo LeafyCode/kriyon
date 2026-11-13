@@ -81,6 +81,39 @@ pub enum Frame {
     Dialog { open: bool, generation: u64 },
 }
 
+/// A frame kind that carries a stream of bytes with no message boundaries, so
+/// a long run can be cut into frames anywhere.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ByteStream {
+    /// [`Frame::Output`].
+    Output,
+    /// [`Frame::History`].
+    History,
+}
+
+impl ByteStream {
+    /// `bytes` as encoded frames of this kind, each within
+    /// [`MAX_PAYLOAD_LEN`], written straight from `bytes`: the one copy a
+    /// frame needs, where building [`Frame`]s and encoding them makes three.
+    /// No bytes, no frame.
+    #[must_use]
+    pub fn encode(self, bytes: &[u8]) -> Vec<u8> {
+        let tag = match self {
+            ByteStream::Output => TAG_OUTPUT,
+            ByteStream::History => TAG_HISTORY,
+        };
+        let frames = bytes.len().div_ceil(MAX_PAYLOAD_LEN);
+        let mut out = Vec::with_capacity(bytes.len() + frames * HEADER_LEN);
+        for chunk in bytes.chunks(MAX_PAYLOAD_LEN) {
+            out.push(tag);
+            // A chunk is at most `MAX_PAYLOAD_LEN`, which fits in a `u32`.
+            out.extend_from_slice(&u32::try_from(chunk.len()).unwrap_or(u32::MAX).to_le_bytes());
+            out.extend_from_slice(chunk);
+        }
+        out
+    }
+}
+
 /// Split a byte stream into frames small enough for any decoder to accept. The
 /// two streams ([`Frame::Stdin`], [`Frame::Output`]) carry no message boundaries,
 /// so where a long one is cut doesn't matter.
@@ -279,6 +312,37 @@ mod tests {
         dec.push(&[TAG_DIALOG, 2, 0, 0, 0, 1, 0]);
         dec.push(&Frame::Busy(true).encode());
         assert_eq!(dec.next_frame(), Ok(Some(Frame::Busy(true))));
+    }
+
+    #[test]
+    fn a_byte_stream_encodes_as_its_frames_would() {
+        assert!(
+            ByteStream::Output.encode(b"").is_empty(),
+            "nothing to send, no frame"
+        );
+        for bytes in [&b"x"[..], b"hello world"] {
+            assert_eq!(
+                ByteStream::Output.encode(bytes),
+                Frame::Output(bytes.to_vec()).encode()
+            );
+            assert_eq!(
+                ByteStream::History.encode(bytes),
+                Frame::History(bytes.to_vec()).encode()
+            );
+        }
+    }
+
+    #[test]
+    fn a_long_byte_stream_is_cut_into_frames_the_decoder_accepts() {
+        let bytes = vec![7u8; MAX_PAYLOAD_LEN + 10];
+        let mut dec = FrameDecoder::new();
+        dec.push(&ByteStream::Output.encode(&bytes));
+        assert_eq!(
+            dec.next_frame(),
+            Ok(Some(Frame::Output(vec![7; MAX_PAYLOAD_LEN])))
+        );
+        assert_eq!(dec.next_frame(), Ok(Some(Frame::Output(vec![7; 10]))));
+        assert_eq!(dec.next_frame(), Ok(None));
     }
 
     #[test]

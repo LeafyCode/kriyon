@@ -30,9 +30,12 @@ output." (ADR-0057). Neither can be met from the visible screen alone.
   mid escape code. It can't restore colours or modes set before the cut.
 - **Asked for, never pushed.** A client sends `RequestHistory` and gets
   `History` frames, split to the frame limit, closed by one `HistoryEnd`, so
-  it knows when it has all of it and never draws it as live `Output`. Each
-  request gets its own answer. The client's writer sends it outside the
-  bounded queue, which a full history would overflow.
+  it knows when it has all of it and never draws it as live `Output`.
+  Requests that pile up before the answer goes out share it, since each
+  answer copies up to the whole history: a client asks again only after its
+  `HistoryEnd` (changed 13 Nov, from one answer per request). The client's
+  writer sends it outside the bounded queue, which a full history would
+  overflow.
 
 ## Consequences
 
