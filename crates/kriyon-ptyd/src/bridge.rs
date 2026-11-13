@@ -17,8 +17,10 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use kriyon_core::bridge::{
-    is_partial, parse_request, spool_line, Request, BAD_REQUEST, MAX_BODY, NO_CONTENT,
+    check_poster, is_partial, parse_request, spool_line, PosterRefusal, Request, BAD_REQUEST,
+    MAX_BODY, NO_CONTENT,
 };
+use kriyon_core::proc::TerminalSeat;
 
 /// Serve the bridge for session `id` if the app asked for one (it put the
 /// socket path in this daemon's env). Best-effort: the terminal works the same
@@ -35,6 +37,7 @@ pub fn spawn(id: &str) {
         spool: kriyon_core::paths::bridge_spool(Path::new(&home), id),
         partial: kriyon_core::paths::bridge_partial(Path::new(&home), id),
         session_tty: crate::pty::hosted_tty,
+        peer: peer_seat,
     };
     std::thread::spawn(move || {
         if let Err(e) = serve(Path::new(&socket), &files) {
@@ -85,6 +88,9 @@ struct Files {
     /// The device number of the session's terminal, once known: only posts
     /// from the [Owning claude] on it are kept.
     session_tty: fn() -> Option<u64>,
+    /// Where the peer of a stream sits on its terminal, against the session's
+    /// terminal. [`peer_seat`], except in tests.
+    peer: fn(&UnixStream, u64) -> Result<TerminalSeat, PosterRefusal>,
 }
 
 /// Bind `socket` and keep every event posted to it.
@@ -165,23 +171,54 @@ fn handle(mut stream: UnixStream, files: &Files) {
 /// Whether the process that posted on `stream` is the session's [Owning
 /// claude]. The companion rides in every `claude` that inherits the session's
 /// env (a nested `claude -p` from a Bash command, a test script's), and each
-/// would post here as if it were the session's own. Fails open when it can't
-/// tell: before the terminal is open, or off macOS.
+/// would post here as if it were the session's own. Fails closed: a post is
+/// kept only when its sender is proven to be the owner (see [`check_poster`]).
 fn posted_by_owner(stream: &UnixStream, files: &Files) -> bool {
-    let Some(session_tty) = (files.session_tty)() else {
-        return true;
-    };
-    peer_seat(stream, session_tty).is_none_or(|seat| seat.owns_session())
+    match check_poster((files.session_tty)(), |tty| (files.peer)(stream, tty)) {
+        Ok(()) => true,
+        Err(refusal) => {
+            log_refusal(refusal);
+            false
+        }
+    }
+}
+
+/// How often each reason a post is refused is logged at most. A nested
+/// `claude` posts on every event, so every refusal would flood the log; once a
+/// lifetime would hide a later, different poster refused for the same reason.
+const REFUSAL_LOG_EVERY: Duration = Duration::from_mins(10);
+
+/// Log why a post was refused, at most once per [`REFUSAL_LOG_EVERY`] for
+/// each reason.
+fn log_refusal(refusal: PosterRefusal) {
+    use std::time::Instant;
+    static LAST: Mutex<Vec<(PosterRefusal, Instant)>> = Mutex::new(Vec::new());
+    let now = Instant::now();
+    let mut last = LAST
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    match last.iter_mut().find(|(seen, _)| *seen == refusal) {
+        Some((_, at)) if now.duration_since(*at) < REFUSAL_LOG_EVERY => return,
+        Some((_, at)) => *at = now,
+        None => last.push((refusal, now)),
+    }
+    drop(last);
+    eprintln!(
+        "kriyon-ptyd: companion bridge: not keeping a post: {}",
+        refusal.reason()
+    );
 }
 
 /// Where the peer of `stream` sits on its terminal, from the kernel: its pid
 /// (`LOCAL_PEERPID`), then its process group, controlling terminal and that
 /// terminal's foreground group (`proc_pidinfo`).
 #[cfg(target_os = "macos")]
-fn peer_seat(stream: &UnixStream, session_tty: u64) -> Option<kriyon_core::proc::TerminalSeat> {
+fn peer_seat(stream: &UnixStream, session_tty: u64) -> Result<TerminalSeat, PosterRefusal> {
     use std::os::fd::AsRawFd as _;
+    const FAILED: PosterRefusal = PosterRefusal::LookupFailed;
     let mut pid: libc::pid_t = 0;
-    let mut len = libc::socklen_t::try_from(std::mem::size_of::<libc::pid_t>()).ok()?;
+    let mut len =
+        libc::socklen_t::try_from(std::mem::size_of::<libc::pid_t>()).map_err(|_| FAILED)?;
     // SAFETY: `pid` and `len` are valid for writes and `len` is `pid`'s size.
     let rc = unsafe {
         libc::getsockopt(
@@ -193,27 +230,59 @@ fn peer_seat(stream: &UnixStream, session_tty: u64) -> Option<kriyon_core::proc:
         )
     };
     if rc != 0 || pid <= 0 {
-        return None;
+        return Err(FAILED);
     }
     // SAFETY: `proc_bsdinfo` is plain old data; all zeroes is a valid value.
     let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
-    let size = libc::c_int::try_from(std::mem::size_of::<libc::proc_bsdinfo>()).ok()?;
+    let size =
+        libc::c_int::try_from(std::mem::size_of::<libc::proc_bsdinfo>()).map_err(|_| FAILED)?;
     // SAFETY: `info` is valid for `size` bytes of writes.
     let read =
         unsafe { libc::proc_pidinfo(pid, libc::PROC_PIDTBSDINFO, 0, (&raw mut info).cast(), size) };
     if read != size {
-        return None;
+        return Err(FAILED);
     }
-    Some(kriyon_core::proc::TerminalSeat {
-        pgid: i32::try_from(info.pbi_pgid).ok()?,
+    Ok(TerminalSeat {
+        pgid: i32::try_from(info.pbi_pgid).map_err(|_| FAILED)?,
         foreground_pgid: i32::try_from(info.e_tpgid).unwrap_or(0),
         on_session_tty: u64::from(info.e_tdev) == session_tty,
     })
 }
 
-#[cfg(not(target_os = "macos"))]
-fn peer_seat(_stream: &UnixStream, _session_tty: u64) -> Option<kriyon_core::proc::TerminalSeat> {
-    None
+/// Where the peer of `stream` sits on its terminal: its pid from the kernel
+/// (`SO_PEERCRED`), then its process group, controlling terminal and that
+/// terminal's foreground group from `/proc/<pid>/stat`.
+#[cfg(target_os = "linux")]
+fn peer_seat(stream: &UnixStream, session_tty: u64) -> Result<TerminalSeat, PosterRefusal> {
+    use std::os::fd::AsRawFd as _;
+    let mut cred = libc::ucred {
+        pid: 0,
+        uid: 0,
+        gid: 0,
+    };
+    let mut len = libc::socklen_t::try_from(std::mem::size_of::<libc::ucred>())
+        .map_err(|_| PosterRefusal::LookupFailed)?;
+    // SAFETY: `cred` and `len` are valid for writes and `len` is `cred`'s size.
+    let rc = unsafe {
+        libc::getsockopt(
+            stream.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_PEERCRED,
+            (&raw mut cred).cast(),
+            &raw mut len,
+        )
+    };
+    if rc != 0 || cred.pid <= 0 {
+        return Err(PosterRefusal::LookupFailed);
+    }
+    let stat = std::fs::read_to_string(format!("/proc/{}/stat", cred.pid))
+        .map_err(|_| PosterRefusal::LookupFailed)?;
+    kriyon_core::proc::seat_from_proc_stat(&stat, session_tty).ok_or(PosterRefusal::LookupFailed)
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn peer_seat(_stream: &UnixStream, _session_tty: u64) -> Result<TerminalSeat, PosterRefusal> {
+    Err(PosterRefusal::NoCheckOnThisPlatform)
 }
 
 /// One event as it is kept: redacted, stamped with when it arrived.
@@ -248,6 +317,15 @@ fn replace(partial: &Path, body: &[u8]) -> std::io::Result<()> {
 mod tests {
     use super::*;
 
+    /// A session terminal, and a poster that owns it, for tests that need a
+    /// post kept without a real terminal.
+    const TEST_OWNER_TTY: u64 = 0x1000_0002;
+    const OWNER_SEAT: TerminalSeat = TerminalSeat {
+        pgid: 300,
+        foreground_pgid: 300,
+        on_session_tty: true,
+    };
+
     fn send(socket: &Path, body: &str) -> String {
         let mut stream = UnixStream::connect(socket).expect("connects");
         let request = format!(
@@ -271,7 +349,8 @@ mod tests {
         let files = Files {
             spool: spool.clone(),
             partial: partial.clone(),
-            session_tty: || None,
+            session_tty: || Some(TEST_OWNER_TTY),
+            peer: |_, _| Ok(OWNER_SEAT),
         };
         std::thread::spawn(move || {
             for stream in listener.incoming().flatten() {
@@ -303,7 +382,7 @@ mod tests {
         assert_eq!(mode(&socket), 0o600);
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     #[test]
     fn posts_from_a_claude_off_the_session_terminal_are_dropped() {
         // The test process stands in for a nested `claude`: it has no
@@ -317,6 +396,7 @@ mod tests {
             spool: spool.clone(),
             partial: partial.clone(),
             session_tty: || Some(0x1000_0001),
+            peer: peer_seat,
         };
         std::thread::spawn(move || {
             for stream in listener.incoming().flatten() {
@@ -333,10 +413,10 @@ mod tests {
 
     /// The terminal [`posts_from_the_claude_holding_the_session_terminal_are_kept`]
     /// treats as the session's.
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     static TEST_TTY: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     #[test]
     fn posts_from_the_claude_holding_the_session_terminal_are_kept() {
         use std::os::unix::fs::MetadataExt as _;
@@ -349,6 +429,7 @@ mod tests {
             spool: spool.clone(),
             partial: tmp.path().join("bridge/s.partial.json"),
             session_tty: || Some(TEST_TTY.load(Ordering::SeqCst)),
+            peer: peer_seat,
         };
         std::thread::spawn(move || {
             for stream in listener.incoming().flatten() {
@@ -381,6 +462,56 @@ mod tests {
 
         let text = std::fs::read_to_string(&spool).expect("the owner's post is kept");
         assert_eq!(text.lines().count(), 1);
+    }
+
+    /// Serve a bridge on a fresh socket with these `files`; returns the socket.
+    fn serve_test_bridge(tmp: &Path, files: Files) -> PathBuf {
+        let socket = tmp.join("s.b.sock");
+        let listener = bind(&socket).expect("binds");
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                handle(stream, &files);
+            }
+        });
+        socket
+    }
+
+    #[test]
+    fn posts_before_the_session_terminal_is_known_are_not_kept() {
+        // No process in the session can post before its terminal exists (the
+        // terminal is recorded before the shell starts), so a post now is from
+        // outside the session.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let spool = tmp.path().join("bridge/s.jsonl");
+        let socket = serve_test_bridge(
+            tmp.path(),
+            Files {
+                spool: spool.clone(),
+                partial: tmp.path().join("bridge/s.partial.json"),
+                session_tty: || None,
+                peer: |_, _| Ok(OWNER_SEAT),
+            },
+        );
+        // Answered as kept, so a mod has nothing to retry.
+        assert!(send(&socket, r#"{"kind":"row"}"#).starts_with("HTTP/1.1 204"));
+        assert!(!spool.exists());
+    }
+
+    #[test]
+    fn posts_from_a_caller_the_os_cannot_place_are_not_kept() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let spool = tmp.path().join("bridge/s.jsonl");
+        let socket = serve_test_bridge(
+            tmp.path(),
+            Files {
+                spool: spool.clone(),
+                partial: tmp.path().join("bridge/s.partial.json"),
+                session_tty: || Some(TEST_OWNER_TTY),
+                peer: |_, _| Err(PosterRefusal::LookupFailed),
+            },
+        );
+        assert!(send(&socket, r#"{"kind":"row"}"#).starts_with("HTTP/1.1 204"));
+        assert!(!spool.exists());
     }
 
     #[test]

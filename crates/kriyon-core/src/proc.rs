@@ -78,6 +78,29 @@ impl TerminalSeat {
     }
 }
 
+/// Where a process sits on its terminal, from its Linux `/proc/<pid>/stat`
+/// line, against the session's terminal device number `session_tty`.
+///
+/// The command name (field 2) is in parentheses and may itself hold spaces and
+/// parentheses, so the fields are read after the *last* `)`: state, ppid,
+/// pgrp, session, `tty_nr`, `tpgid`. `tty_nr` uses the kernel's device
+/// encoding, which equals the `st_rdev` of the terminal's device file for
+/// every major number below 4096 — all terminals. `None` for a line that
+/// doesn't parse.
+#[must_use]
+pub fn seat_from_proc_stat(stat: &str, session_tty: u64) -> Option<TerminalSeat> {
+    let (_, after_name) = stat.rsplit_once(')')?;
+    let mut fields = after_name.split_whitespace().skip(2); // state, ppid
+    let pgid = fields.next()?.parse().ok()?;
+    let tty_nr: i64 = fields.nth(1)?.parse().ok()?; // after session
+    let foreground_pgid = fields.next()?.parse().ok()?;
+    Some(TerminalSeat {
+        pgid,
+        foreground_pgid,
+        on_session_tty: tty_nr > 0 && u64::try_from(tty_nr).ok() == Some(session_tty),
+    })
+}
+
 /// Parse the output of `ps -axww -o pid=,ppid=,tpgid=,args=`.
 ///
 /// Tolerant by design (the [Loose coupling] rule applies to the OS too): a row
@@ -505,6 +528,44 @@ mod tests {
             pgid,
             foreground_pgid,
             on_session_tty,
+        }
+    }
+
+    /// `/dev/pts/1`: major 136, minor 1.
+    const PTS_1: u64 = (136 << 8) | 1;
+
+    #[test]
+    fn a_proc_stat_line_gives_the_terminal_seat() {
+        let stat = "4242 (claude) S 4100 4242 4100 34817 4242 4194560 0 0 0 0 0 0 0 0 20 0";
+        assert_eq!(
+            seat_from_proc_stat(stat, PTS_1),
+            Some(seat(4242, 4242, true))
+        );
+        assert!(seat_from_proc_stat(stat, PTS_1).is_some_and(|s| s.owns_session()));
+    }
+
+    #[test]
+    fn a_command_name_with_spaces_and_parentheses_is_skipped_whole() {
+        let stat = "77 (a (b) c) d) S 1 70 70 34818 -1 0 0";
+        assert_eq!(seat_from_proc_stat(stat, PTS_1), Some(seat(70, -1, false)));
+    }
+
+    #[test]
+    fn a_process_with_no_terminal_is_not_on_the_session_terminal() {
+        let line = "88 (claude) S 1 88 88 0 -1 0";
+        let parsed = seat_from_proc_stat(line, PTS_1).expect("parses");
+        assert!(!parsed.on_session_tty && !parsed.owns_session());
+    }
+
+    #[test]
+    fn a_proc_stat_line_that_does_not_parse_gives_nothing() {
+        for stat in [
+            "",
+            "12 (claude",
+            "12 (claude) S 1 x 1 34817 1",
+            "12 (claude) S 1",
+        ] {
+            assert_eq!(seat_from_proc_stat(stat, PTS_1), None, "{stat:?}");
         }
     }
 
