@@ -244,6 +244,7 @@ mod tests {
             kind: AskKind::Permission,
             text: "Claude needs your permission to use Bash".to_string(),
             asked_at: None,
+            question: None,
         }
     }
 

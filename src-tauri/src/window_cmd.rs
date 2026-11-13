@@ -348,6 +348,7 @@ mod tray_command_tests {
                 kind: kriyon_core::ask::AskKind::Permission,
                 text: "Claude needs your permission to use Bash".to_string(),
                 asked_at: None,
+                question: None,
             }));
             runtimes.insert(SessionId("s-blocked".to_string()), blocked);
             runtimes.insert(SessionId("s-idle".to_string()), SessionRuntime::new());

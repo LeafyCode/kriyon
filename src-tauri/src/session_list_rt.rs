@@ -124,6 +124,7 @@ mod tests {
                     kind: AskKind::Question,
                     text: "Which?".into(),
                     asked_at: None,
+                    question: None,
                 }),
                 last_seen_ms: Some(99),
                 dialog_on_screen: false,

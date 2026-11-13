@@ -27,6 +27,10 @@ pub struct PendingAsk {
     pub kind: AskKind,
     pub text: String,
     pub asked_at: Option<String>,
+    /// A question's header and options, for the [Readable view]; not part of
+    /// what the window is sent.
+    #[serde(skip)]
+    pub question: Option<AskQuestion>,
 }
 
 /// Claude's first question as the hook gave it, for the [Readable view]:
@@ -42,8 +46,6 @@ pub struct AskQuestion {
 #[derive(Debug, Default)]
 pub struct AskState {
     current: Option<PendingAsk>,
-    /// The open ask's question, when it is a question the hook described.
-    question: Option<AskQuestion>,
     /// The tool call the current ask belongs to, so only its own
     /// `PostToolUse` closes a question/plan (permissions have none).
     tool_use_id: Option<String>,
@@ -91,7 +93,9 @@ impl AskState {
                         question_text(ev.questions.as_deref()),
                         ev,
                     );
-                    self.question = first_question(ev.questions.as_deref());
+                    if let Some(ask) = self.current.as_mut() {
+                        ask.question = first_question(ev.questions.as_deref());
+                    }
                 }
                 "ExitPlanMode" => {
                     self.open(AskKind::PlanApproval, plan_text(ev.plan.as_deref()), ev);
@@ -156,18 +160,17 @@ impl AskState {
     }
 
     fn open(&mut self, kind: AskKind, text: String, ev: &HookEvent) {
-        self.question = None;
         self.current = Some(PendingAsk {
             kind,
             text,
             asked_at: ev.ts.clone(),
+            question: None,
         });
         self.tool_use_id.clone_from(&ev.tool_use_id);
     }
 
     fn clear(&mut self) {
         self.current = None;
-        self.question = None;
         self.tool_use_id = None;
         self.asker = None;
     }
@@ -177,13 +180,6 @@ impl AskState {
     /// (`PermissionRequest`, or a "needs permission" `Notification`) for the
     /// `AskUserQuestion` / `ExitPlanMode` tool *itself* when the user's config
     /// requires it; that gate must not overwrite the question/plan it guards.
-    /// The open question's header and options, when the open ask is a
-    /// question the hook described.
-    #[must_use]
-    pub fn question(&self) -> Option<&AskQuestion> {
-        self.question.as_ref()
-    }
-
     fn has_specific_ask(&self) -> bool {
         matches!(&self.current, Some(ask) if ask.kind != AskKind::Permission)
     }
@@ -297,7 +293,10 @@ mod tests {
             options.join(",")
         ));
         state.ingest(&event);
-        let question = state.question().expect("a question");
+        let question = state
+            .current()
+            .and_then(|ask| ask.question)
+            .expect("a question");
         assert_eq!(question.header, "Database");
         assert_eq!(question.question, "Which db?");
         assert_eq!(question.options.len(), 8, "at most 8");
@@ -305,7 +304,7 @@ mod tests {
         let mut post = pre("AskUserQuestion");
         post.event = "PostToolUse".to_string();
         state.ingest(&post);
-        assert_eq!(state.question(), None);
+        assert_eq!(state.current().and_then(|ask| ask.question), None);
     }
 
     #[test]
@@ -317,13 +316,20 @@ mod tests {
             "é".repeat(100)
         ));
         state.ingest(&event);
-        let option = &state.question().expect("a question").options[0];
-        assert!(option.len() <= 80, "{}", option.len());
+        let question = state
+            .current()
+            .and_then(|ask| ask.question)
+            .expect("a question");
+        assert!(
+            question.options[0].len() <= 80,
+            "{}",
+            question.options[0].len()
+        );
         let mut state = AskState::new();
         let mut gate = ev("PermissionRequest");
         gate.tool_name = Some("Bash".to_string());
         state.ingest(&gate);
-        assert_eq!(state.question(), None);
+        assert_eq!(state.current().and_then(|ask| ask.question), None);
     }
 
     #[test]

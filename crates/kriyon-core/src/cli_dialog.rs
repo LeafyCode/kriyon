@@ -164,6 +164,7 @@ mod tests {
             kind,
             text: "?".into(),
             asked_at: None,
+            question: None,
         }
     }
 

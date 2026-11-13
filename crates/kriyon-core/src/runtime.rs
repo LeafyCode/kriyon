@@ -515,6 +515,7 @@ mod tests {
             kind: AskKind::Permission,
             text: "Needs permission".to_string(),
             asked_at: None,
+            question: None,
         }
     }
 
