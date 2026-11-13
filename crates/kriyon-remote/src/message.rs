@@ -17,6 +17,33 @@ pub type SessionId = String;
 /// A [Remote device]'s or [Host]'s iroh endpoint id: its Ed25519 public key.
 pub type EndpointId = [u8; 32];
 
+/// Bytes as text, two lowercase hex digits a byte: an endpoint id as 64.
+#[must_use]
+pub fn hex(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+    bytes
+        .iter()
+        .fold(String::with_capacity(bytes.len() * 2), |mut text, b| {
+            let _ = write!(text, "{b:02x}");
+            text
+        })
+}
+
+/// The endpoint id `text` names: exactly 64 lowercase hex digits, nothing
+/// else (it crossed from an app's screens).
+#[must_use]
+pub fn parse_id_hex(text: &str) -> Option<EndpointId> {
+    let lower_hex = |b: u8| b.is_ascii_digit() || (b'a'..=b'f').contains(&b);
+    if text.len() != 64 || !text.bytes().all(lower_hex) {
+        return None;
+    }
+    let mut id = [0_u8; 32];
+    for (i, byte) in id.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&text[i * 2..i * 2 + 2], 16).ok()?;
+    }
+    Some(id)
+}
+
 /// A device's id for one `StartSession`, so a resend returns the same session.
 pub type RequestId = [u8; 16];
 
@@ -319,6 +346,25 @@ pub enum PairToDevice {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_endpoint_id_is_sixty_four_lowercase_hex_digits() {
+        let id = [0xab; 32];
+        let text = hex(&id);
+        assert_eq!(text, "ab".repeat(32));
+        assert_eq!(parse_id_hex(&text), Some(id));
+        for bad in [
+            String::new(),
+            "ab".repeat(31),
+            "ab".repeat(33),
+            "AB".repeat(32),
+            "zz".repeat(32),
+            format!("{}é", "a".repeat(62)),
+            "../".repeat(21) + "a",
+        ] {
+            assert!(parse_id_hex(&bad).is_none(), "{bad:?}");
+        }
+    }
 
     fn tag<T: Serialize>(message: &T) -> u8 {
         postcard::to_allocvec(message).expect("encodes")[0]

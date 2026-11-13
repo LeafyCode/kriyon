@@ -11,6 +11,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use kriyon_remote::message::hex;
 use kriyon_remote::push::{sign_wake, SenderKey, WakePlanner, WakeRequest};
 use parking_lot::Mutex;
 use tauri::Manager as _;
@@ -247,10 +248,6 @@ fn host_secret(app: &tauri::AppHandle, rt: &PushRt) -> Option<[u8; 32]> {
         *kept = crate::remote_cmd::device_key(app).ok();
     }
     *kept
-}
-
-fn hex(bytes: &[u8]) -> String {
-    crate::store::hex(bytes)
 }
 
 #[cfg(test)]

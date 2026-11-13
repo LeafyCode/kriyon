@@ -6,11 +6,11 @@
 use std::sync::Arc;
 
 use kriyon_remote::device_view::{HostView, ScreenEvent};
-use kriyon_remote::message::{EndpointId, Holder, Role, SessionInfo};
+use kriyon_remote::message::{hex, EndpointId, Holder, Role, SessionInfo};
 use serde::Serialize;
 use tauri::{Emitter as _, Manager as _};
 
-use crate::remote_cmd::{device_id_text, parse_device_id};
+use crate::remote_cmd::parse_device_id;
 use kriyon_remote_link::device_runtime::{
     screen_frame, DeviceEvents, DeviceRuntime, HostEntry, LinkState,
 };
@@ -128,7 +128,7 @@ impl DeviceEvents for Emitter {
             })
             .collect();
         let payload = HostLinkView {
-            host_id: device_id_text(&host),
+            host_id: hex(&host),
             name: view.host_name.clone().unwrap_or_default(),
             state,
             role: view.role.map(Role::into),
@@ -231,7 +231,7 @@ pub async fn remote_host_pair(app: tauri::AppHandle, invite: String) -> Result<S
                             eprintln!("kriyon: paired, but couldn't connect yet: {e}");
                         }
                         PairingEnded::Paired {
-                            host_id: device_id_text(&row.host_id),
+                            host_id: hex(&row.host_id),
                             name,
                         }
                     }
@@ -271,7 +271,7 @@ pub fn remote_hosts(
     Ok(rows
         .into_iter()
         .map(|row| PairedHostView {
-            host_id: device_id_text(&row.host_id),
+            host_id: hex(&row.host_id),
             name: row.name,
             paired_at: row.paired_at,
         })

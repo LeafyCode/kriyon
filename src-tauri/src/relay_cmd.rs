@@ -64,7 +64,7 @@ fn this_device(app: &tauri::AppHandle) -> Result<ThisDevice, String> {
     let secret = crate::remote_cmd::device_key(app)?;
     let id = kriyon_remote_link::endpoint::public_id(&secret);
     Ok(ThisDevice {
-        key_hex: crate::remote_cmd::device_id_text(&id),
+        key_hex: kriyon_remote::message::hex(&id),
         name: crate::remote_cmd::host_name(),
         platform: if cfg!(target_os = "macos") {
             "macos"

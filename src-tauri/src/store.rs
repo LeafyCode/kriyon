@@ -7,6 +7,7 @@
 use std::path::Path;
 
 use kriyon_core::project_notes::{NoteKind, ProjectNote};
+use kriyon_remote::message::hex;
 use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json;
@@ -66,28 +67,6 @@ fn role_from_text(text: &str) -> kriyon_remote::message::Role {
     } else {
         kriyon_remote::message::Role::Viewer
     }
-}
-
-/// Lowercase hex, two digits a byte.
-pub(crate) fn hex(bytes: &[u8]) -> String {
-    use std::fmt::Write as _;
-    bytes
-        .iter()
-        .fold(String::with_capacity(bytes.len() * 2), |mut out, b| {
-            let _ = write!(out, "{b:02x}");
-            out
-        })
-}
-
-fn endpoint_from_hex(text: &str) -> Option<[u8; 32]> {
-    if text.len() != 64 || !text.is_ascii() {
-        return None;
-    }
-    let mut out = [0_u8; 32];
-    for (i, byte) in out.iter_mut().enumerate() {
-        *byte = u8::from_str_radix(&text[i * 2..i * 2 + 2], 16).ok()?;
-    }
-    Some(out)
 }
 
 /// A persisted project: a named workspace rooted at a filesystem path.
@@ -452,7 +431,7 @@ impl Store {
         for row in rows {
             let (id, name, addrs, relay_url, paired_at) = row?;
             let (Some(host_id), Ok(addrs)) = (
-                endpoint_from_hex(&id),
+                kriyon_remote::message::parse_id_hex(&id),
                 serde_json::from_str::<Vec<String>>(&addrs),
             ) else {
                 continue;
@@ -519,7 +498,7 @@ impl Store {
         let mut out = Vec::new();
         for row in rows {
             let (id, name, role, paired_at) = row?;
-            if let Some(endpoint_id) = endpoint_from_hex(&id) {
+            if let Some(endpoint_id) = kriyon_remote::message::parse_id_hex(&id) {
                 out.push(PairedDeviceRow {
                     endpoint_id,
                     name,
@@ -619,7 +598,7 @@ impl Store {
         let mut out = Vec::new();
         for row in rows {
             let (id, sealed) = row?;
-            if let Some(id) = endpoint_from_hex(&id) {
+            if let Some(id) = kriyon_remote::message::parse_id_hex(&id) {
                 out.push((id, sealed));
             }
         }

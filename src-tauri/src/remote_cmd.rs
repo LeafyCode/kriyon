@@ -4,7 +4,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use kriyon_remote::message::Role;
+use kriyon_remote::message::{hex, Role};
 
 /// The longest name the person may give a device, in bytes, as for the name
 /// a device gives itself.
@@ -41,22 +41,8 @@ impl From<Role> for RoleArg {
 /// # Errors
 /// A message for any other text.
 pub fn parse_device_id(text: &str) -> Result<[u8; 32], String> {
-    let refused = || "a device id is 64 lowercase hex digits".to_string();
-    let lower_hex = |b: u8| b.is_ascii_digit() || (b'a'..=b'f').contains(&b);
-    if text.len() != 64 || !text.bytes().all(lower_hex) {
-        return Err(refused());
-    }
-    let mut id = [0_u8; 32];
-    for (i, byte) in id.iter_mut().enumerate() {
-        *byte = u8::from_str_radix(&text[i * 2..i * 2 + 2], 16).map_err(|_| refused())?;
-    }
-    Ok(id)
-}
-
-/// A device id as the webview gets it.
-#[must_use]
-pub fn device_id_text(id: &[u8; 32]) -> String {
-    crate::store::hex(id)
+    kriyon_remote::message::parse_id_hex(text)
+        .ok_or_else(|| "a device id is 64 lowercase hex digits".to_string())
 }
 
 /// A pairing code from the webview: exactly six ASCII digits.
@@ -211,22 +197,12 @@ mod tests {
     }
 
     #[test]
-    fn a_device_id_is_sixty_four_lowercase_hex_digits() {
-        let id = [0xab; 32];
-        let text = device_id_text(&id);
-        assert_eq!(text, "ab".repeat(32));
-        assert_eq!(parse_device_id(&text), Ok(id));
-        for bad in [
-            String::new(),
-            "ab".repeat(31),
-            "ab".repeat(33),
-            "AB".repeat(32),
-            "zz".repeat(32),
-            format!("{}é", "a".repeat(62)),
-            "../".repeat(21) + "a",
-        ] {
-            assert!(parse_device_id(&bad).is_err(), "{bad:?}");
-        }
+    fn a_device_id_that_isnt_one_is_refused_in_words() {
+        assert_eq!(parse_device_id(&"ab".repeat(32)), Ok([0xab; 32]));
+        assert_eq!(
+            parse_device_id("AB"),
+            Err("a device id is 64 lowercase hex digits".to_string())
+        );
     }
 
     #[test]
@@ -449,7 +425,7 @@ async fn status(rt: &crate::remote_rt::RemoteRuntime) -> RemoteStatus {
     };
     RemoteStatus {
         enabled: rt.is_on().await,
-        host_id: rt.host_id().await.map(|id| device_id_text(&id)),
+        host_id: rt.host_id().await.map(|id| hex(&id)),
         pairing,
     }
 }
@@ -566,7 +542,7 @@ pub async fn remote_enter_code(app: tauri::AppHandle, code: String) -> Result<Co
         .await?;
     Ok(match outcome {
         CodeOutcome::Paired { device, name, role } => CodeResult::Paired {
-            device_id: device_id_text(&device),
+            device_id: hex(&device),
             name,
             role: role.into(),
         },
@@ -599,7 +575,7 @@ pub fn remote_devices(
     Ok(rows
         .into_iter()
         .map(|row| DeviceView {
-            id: device_id_text(&row.endpoint_id),
+            id: hex(&row.endpoint_id),
             name: row.name,
             role: row.role.into(),
             paired_at: row.paired_at,

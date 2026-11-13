@@ -78,3 +78,6 @@ website/shots-src/new-shots/
 crates/kriyon-push/push.env
 *.secret
 *.p8
+
+# The phone library for iOS, built by scripts/mobile/build-ios.sh
+/mobile/app/modules/kriyon-native/ios/Rust
