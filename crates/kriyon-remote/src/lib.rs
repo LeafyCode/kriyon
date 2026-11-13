@@ -13,6 +13,7 @@ pub mod link_policy;
 pub mod message;
 pub mod pairing;
 pub mod queue;
+pub mod relay;
 pub mod screen;
 pub mod text;
 pub mod writer;

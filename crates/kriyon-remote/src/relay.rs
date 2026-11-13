@@ -1,0 +1,274 @@
+//! Our relay, as the app sees it (the [Relay pass] contract,
+//! `docs/superpowers/specs/2026-11-13-relay-pass-contract.md`): what each
+//! refusal from the `BisBig` API or the relay means for the app, when a pass is
+//! due, and when the endpoint is rebuilt to use it. Pure: the HTTP calls and
+//! the endpoint are the app's.
+
+use std::time::Duration;
+
+/// How long before a pass expires the endpoint is rebuilt with a new one even
+/// while someone is watching a session.
+pub const FORCE_REBUILD_UNDER: Duration = Duration::from_hours(7 * 24);
+
+/// A refusal from the `BisBig` API, by its HTTP status and error `code`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ApiRefusal {
+    /// Sign in again.
+    SignedOut,
+    /// No subscription: offer to subscribe.
+    NoSubscription,
+    /// The relay account is suspended.
+    AccountBlocked,
+    /// This device was removed from the relay account.
+    DeviceRemoved,
+    /// The device isn't registered: register it, then ask again.
+    DeviceUnknown,
+    /// The relay account already has 10 devices.
+    DeviceLimit,
+    /// The app sent something the API refused: a bug, logged.
+    Invalid,
+    /// Anything else: the API is down or changed. Keep the pass we have.
+    Unavailable,
+}
+
+impl ApiRefusal {
+    /// The refusal an HTTP `status` with error `code` means.
+    #[must_use]
+    pub fn from_reply(status: u16, code: Option<&str>) -> Self {
+        match (status, code) {
+            (401, _) => Self::SignedOut,
+            (402, Some("RELAY_NO_SUBSCRIPTION")) => Self::NoSubscription,
+            (403, Some("RELAY_ACCOUNT_BLOCKED")) => Self::AccountBlocked,
+            (403, Some("RELAY_DEVICE_REMOVED")) => Self::DeviceRemoved,
+            (404, Some("RELAY_DEVICE_UNKNOWN")) => Self::DeviceUnknown,
+            (409, Some("RELAY_DEVICE_LIMIT")) => Self::DeviceLimit,
+            (400, Some("VALIDATION_ERROR")) => Self::Invalid,
+            _ => Self::Unavailable,
+        }
+    }
+
+    /// What the app tells the person, or `None` when it acts instead.
+    #[must_use]
+    pub fn message(self) -> Option<&'static str> {
+        match self {
+            Self::SignedOut => Some("Sign in again"),
+            Self::NoSubscription => Some("Our relay needs a subscription"),
+            Self::AccountBlocked => Some("Relay access is suspended for this account"),
+            Self::DeviceRemoved => Some("This device was removed from your relay account"),
+            Self::DeviceLimit => Some("You already use 10 devices. Remove one first"),
+            Self::DeviceUnknown | Self::Invalid | Self::Unavailable => None,
+        }
+    }
+}
+
+/// What the app does about a refusal from the relay itself.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RelayAction {
+    /// Fetch a new pass and rebuild the endpoint.
+    Renew,
+    /// Ask `/status` and show what it says.
+    CheckStatus,
+    /// Say this device was removed; offer to register it again.
+    Removed,
+    /// Say too many devices are connected; try again later.
+    RetryLater,
+    /// The relay turned the pass away before its handshake (HTTP 401): a
+    /// bug at the pass issuer's end. Report it; a new pass wouldn't help, so no loop.
+    Report,
+}
+
+impl RelayAction {
+    /// The action for a relay's refusal `reason`
+    /// (`RelayStatus::auth_denied_reason()`); `None` for a refusal before the
+    /// handshake, which gives no reason.
+    #[must_use]
+    pub fn from_reason(reason: Option<&str>) -> Self {
+        match reason {
+            None => Self::Report,
+            Some("pass-expired" | "pass-wrong-device") => Self::Renew,
+            Some("device-removed") => Self::Removed,
+            Some("device-limit") => Self::RetryLater,
+            // `account-blocked`, and any reason added later.
+            Some(_) => Self::CheckStatus,
+        }
+    }
+}
+
+/// What one poll of the device-code token endpoint said.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SignInPoll {
+    /// Signed in.
+    Token(String),
+    /// Not approved yet: ask again after the interval.
+    Pending,
+    /// Asked too often: wait longer.
+    SlowDown,
+    /// The person said no.
+    Denied,
+    /// The code ran out: start again.
+    Expired,
+}
+
+impl SignInPoll {
+    /// What a reply with this OAuth `error` (or the `access_token`) means.
+    #[must_use]
+    pub fn from_reply(access_token: Option<&str>, error: Option<&str>) -> Self {
+        if let Some(token) = access_token {
+            return Self::Token(token.to_string());
+        }
+        match error {
+            Some("authorization_pending") => Self::Pending,
+            Some("slow_down") => Self::SlowDown,
+            Some("access_denied") => Self::Denied,
+            // `expired_token`, or anything the spec doesn't name: start again.
+            _ => Self::Expired,
+        }
+    }
+}
+
+/// Whether to fetch a new pass: none yet, or `renew_after` has passed.
+#[must_use]
+pub fn pass_due(now_s: u64, renew_after_s: Option<u64>) -> bool {
+    renew_after_s.is_none_or(|after| now_s >= after)
+}
+
+/// Whether to rebuild the endpoint so it uses the newest pass: a newer pass
+/// than the one in use is waiting, and it is a quiet moment (no device stream
+/// open, nothing watched) or the pass in use has under
+/// [`FORCE_REBUILD_UNDER`] left.
+#[must_use]
+pub fn rebuild_due(
+    now_s: u64,
+    in_use_expires_s: Option<u64>,
+    newer_waiting: bool,
+    quiet: bool,
+) -> bool {
+    let running_low = in_use_expires_s
+        .is_none_or(|expires| expires.saturating_sub(now_s) < FORCE_REBUILD_UNDER.as_secs());
+    newer_waiting && (quiet || running_low)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn each_api_refusal_in_the_contract_maps_to_its_action() {
+        let table = [
+            (401, Some("UNAUTHORIZED"), ApiRefusal::SignedOut),
+            (
+                402,
+                Some("RELAY_NO_SUBSCRIPTION"),
+                ApiRefusal::NoSubscription,
+            ),
+            (
+                403,
+                Some("RELAY_ACCOUNT_BLOCKED"),
+                ApiRefusal::AccountBlocked,
+            ),
+            (403, Some("RELAY_DEVICE_REMOVED"), ApiRefusal::DeviceRemoved),
+            (404, Some("RELAY_DEVICE_UNKNOWN"), ApiRefusal::DeviceUnknown),
+            (409, Some("RELAY_DEVICE_LIMIT"), ApiRefusal::DeviceLimit),
+            (400, Some("VALIDATION_ERROR"), ApiRefusal::Invalid),
+            // A 401 means signed out whatever its body says.
+            (401, None, ApiRefusal::SignedOut),
+            (500, Some("INTERNAL"), ApiRefusal::Unavailable),
+            (503, None, ApiRefusal::Unavailable),
+            (403, Some("SOMETHING_NEW"), ApiRefusal::Unavailable),
+        ];
+        for (status, code, want) in table {
+            assert_eq!(
+                ApiRefusal::from_reply(status, code),
+                want,
+                "{status} {code:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_contracts_words_are_what_the_person_sees() {
+        assert_eq!(
+            ApiRefusal::NoSubscription.message(),
+            Some("Our relay needs a subscription")
+        );
+        assert_eq!(
+            ApiRefusal::DeviceLimit.message(),
+            Some("You already use 10 devices. Remove one first")
+        );
+        assert_eq!(
+            ApiRefusal::DeviceRemoved.message(),
+            Some("This device was removed from your relay account")
+        );
+        assert_eq!(
+            ApiRefusal::AccountBlocked.message(),
+            Some("Relay access is suspended for this account")
+        );
+        assert_eq!(ApiRefusal::SignedOut.message(), Some("Sign in again"));
+        assert_eq!(
+            ApiRefusal::DeviceUnknown.message(),
+            None,
+            "acted on, not shown"
+        );
+    }
+
+    #[test]
+    fn each_relay_reason_in_the_contract_maps_to_its_action() {
+        let table = [
+            (Some("pass-expired"), RelayAction::Renew),
+            (Some("pass-wrong-device"), RelayAction::Renew),
+            (Some("account-blocked"), RelayAction::CheckStatus),
+            (Some("device-removed"), RelayAction::Removed),
+            (Some("device-limit"), RelayAction::RetryLater),
+            // An unknown reason is treated like account-blocked.
+            (Some("a-reason-added-later"), RelayAction::CheckStatus),
+            // No reason: refused before the handshake.
+            (None, RelayAction::Report),
+        ];
+        for (reason, want) in table {
+            assert_eq!(RelayAction::from_reason(reason), want, "{reason:?}");
+        }
+    }
+
+    #[test]
+    fn a_sign_in_poll_reads_the_oauth_reply() {
+        assert_eq!(
+            SignInPoll::from_reply(Some("tok"), None),
+            SignInPoll::Token("tok".into())
+        );
+        let table = [
+            ("authorization_pending", SignInPoll::Pending),
+            ("slow_down", SignInPoll::SlowDown),
+            ("access_denied", SignInPoll::Denied),
+            ("expired_token", SignInPoll::Expired),
+            ("unknown_error", SignInPoll::Expired),
+        ];
+        for (error, want) in table {
+            assert_eq!(SignInPoll::from_reply(None, Some(error)), want, "{error}");
+        }
+    }
+
+    #[test]
+    fn a_pass_is_due_when_there_is_none_or_renew_after_has_passed() {
+        assert!(pass_due(100, None));
+        assert!(!pass_due(100, Some(200)));
+        assert!(pass_due(200, Some(200)));
+    }
+
+    #[test]
+    fn the_endpoint_is_rebuilt_at_a_quiet_moment_or_when_the_pass_runs_low() {
+        let week = FORCE_REBUILD_UNDER.as_secs();
+        let now = 1_000_000;
+        let far = Some(now + 20 * 24 * 3600);
+        assert!(!rebuild_due(now, far, false, true), "nothing newer");
+        assert!(rebuild_due(now, far, true, true), "newer, and quiet");
+        assert!(
+            !rebuild_due(now, far, true, false),
+            "newer, but someone watches"
+        );
+        assert!(
+            rebuild_due(now, Some(now + week - 1), true, false),
+            "under a week left"
+        );
+        assert!(rebuild_due(now, None, true, false), "no pass in use yet");
+    }
+}
