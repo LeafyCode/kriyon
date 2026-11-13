@@ -47,6 +47,24 @@ No iroh, no Tauri, no IO. Everything here is unit-tested in milliseconds.
 
 ## Step C — the host in the app
 
+Design decided at the end of Phase 1 (architecture review, `phase1-architecture-review.md` in the
+plan folder):
+
+- **Start without the webview.** Split `create_session` into a Rust `start_session(app, id, cwd,
+  sinks)` that takes an output-sink trait; the desktop's webview Channels are one sink, a remote
+  device's screen stream another. "Save the rows, then launch claude" moves from TypeScript into
+  Rust, with the launch decision in kriyon-core. Needed for remote `StartSession` and for waking a
+  sleeping session from a remote device while the window is hidden.
+- **One writer per session.** A per-session writer in `AppState.sessions` owns [Typing control]
+  and the engine write. Desktop typing goes through it as the host holder, which records "host
+  last typed" for the takeover rule; remote input is a second caller, and `recheck_at_write`
+  runs inside it, atomically with the write.
+- **One reader hook.** The [Daemon client] hands every daemon frame (output, dialog, busy,
+  history, snapshot) to one in-order `on_event` before any webview pacing; the remote fan-out
+  hangs off it.
+- **Snapshots per device** come from the daemon's `RequestSnapshot{id}`, which doesn't repaint
+  the desktop.
+
 1. Store: paired devices table, pairing secrets in memory only, `(device_id, request_id)` table.
 2. Settings: [Remote access] switch (off by default) and the consent screen (ADR-0057 copy,
    including "a Viewer sees every session's screen"). Off = no endpoint.

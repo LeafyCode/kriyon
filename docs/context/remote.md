@@ -33,13 +33,18 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
 - **Typing control** — which one device may send input and resize to a [Session] right now. The
   person at the host can always take it back. Each change bumps a **control epoch** that every
   input carries, so a late keystroke from the old holder is refused. _Avoid_: lock, focus.
-- **Session run** — one start of a [Session]'s process. [Screen update] numbers restart with
-  each run, and input names the run it was meant for. _Avoid_: generation, incarnation.
+- **Session run** — one start of a [Session]'s [PTY daemon] (and the shell inside it), named by a
+  random id the daemon makes when it starts and sends on attach, so a run survives an app
+  restart. [Screen update] numbers restart with each run, and input names the run it was meant
+  for. Not the Companion bridge's `run`, which counts `claude` processes inside one session.
+  _Avoid_: generation, incarnation.
 - **Screen update** — a numbered, compressed chunk of a [Session]'s output sent to a [Remote
   device] after its first [Screen snapshot]. A gap in the numbers means "send the whole screen",
   never a guess. _Avoid_: delta, diff (taken by [File diff]).
-- **Skip ahead** — what the [Host] does when a [Remote device]'s queue fills: drop it and send a
-  fresh [Screen snapshot], so a slow device never slows the session or another device.
+- **Skip ahead** — what a sender does when one receiver's queue of a [Session]'s output fills:
+  drop the queue and send a fresh [Screen snapshot] instead, so a slow receiver never slows the
+  session or anyone else. The [PTY daemon] does it for the app (ADR-0059), and the [Host] for each
+  [Remote device]. Both use `kriyon_core::skip_ahead`.
 - **Relay pass** — a signed, short-lived pass from a BisBig subscription, bound to one [Device
   key], that our relay checks by itself. Its format is the relay contract's. _Avoid_: ticket
   (iroh uses that for addresses), token.
