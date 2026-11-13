@@ -56,6 +56,9 @@ No iroh, no Tauri, no IO. Everything here is unit-tested in milliseconds.
 5. Input: device input goes through `authorize`, then the single PTY-writer task rechecks run,
    epoch, paired and dialog atomically with the write.
 6. Needs: status, Needs-you and the dialog check in Rust (fix-first table) before 5 is finished.
+7. A session a remote device opens counts as an Onlooker for auto-sleep, and wakes a sleeping
+   session the same way desktop focus does (wake-on-focus and the focused-wake retry read
+   desktop focus only today).
 
 ## Step D — the desktop as a remote device
 
