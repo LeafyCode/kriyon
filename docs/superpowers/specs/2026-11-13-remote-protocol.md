@@ -83,7 +83,9 @@ makes no push calls.
    and only while [Remote access] is on, does the host accept
    `kriyon/pair/1`. It makes a one-time pairing secret (32 random bytes),
    valid for 5 minutes, and stores the chosen role with it. It shows a QR
-   code: host endpoint id, host addresses, the secret.
+   code whose text is `kriyon-pair:1:<hex>`: the hex of a postcard
+   `PairingInvite { host_id, addrs, relay_url, secret }` (relay URL only when
+   the person subscribes). Each new pairing replaces a pending one.
 2. The device scans it, connects with `kriyon/pair/1` (which proves the host's
    id, so a man in the middle is ruled out unless the QR leaked) and sends
    its device name and `HMAC-SHA256(secret, "kriyon pair v1" || device_id || host_id)`.
