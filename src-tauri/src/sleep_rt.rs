@@ -631,7 +631,7 @@ fn type_resume<R: tauri::Runtime>(
         .writers
         .host_write(
             &SessionId(id.to_string()),
-            &engine,
+            engine.as_ref(),
             format!("\x15claude --resume {claude_id}\r").as_bytes(),
         )
         .map(|_took| ())

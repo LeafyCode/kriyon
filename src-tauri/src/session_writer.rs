@@ -16,14 +16,12 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
-use kriyon_core::session::{SessionEngine as _, SessionId};
+use kriyon_core::session::{SessionEngine, SessionId};
 use kriyon_remote::authorize::{Dialog, PendingWrite};
 use kriyon_remote::control::{Change, Control, HostIsTyping};
 use kriyon_remote::message::{EndpointId, RefuseReason, Role};
 use kriyon_remote::writer::{HostTook, SessionGate};
 use parking_lot::Mutex;
-
-use crate::daemon_client::DaemonClient;
 
 pub(crate) use kriyon_remote::writer::DEFAULT_SCREEN;
 
@@ -150,7 +148,7 @@ impl Writers {
     pub fn device_input(
         &self,
         id: &SessionId,
-        engine: &DaemonClient,
+        engine: &dyn SessionEngine,
         device: &EndpointId,
         role: Option<Role>,
         write: &PendingWrite,
@@ -173,7 +171,7 @@ impl Writers {
     pub fn device_resize(
         &self,
         id: &SessionId,
-        engine: &DaemonClient,
+        engine: &dyn SessionEngine,
         device: &EndpointId,
         role: Option<Role>,
         write: &PendingWrite,
@@ -272,7 +270,7 @@ impl Writers {
 
     /// The PTY was just sized to `attached` (a client attaching): if a device
     /// holds its own size, put that back, so the PTY and the gate agree.
-    pub fn sync_screen(&self, id: &SessionId, engine: &DaemonClient, attached: (u16, u16)) {
+    pub fn sync_screen(&self, id: &SessionId, engine: &dyn SessionEngine, attached: (u16, u16)) {
         let screen = self.gate(id).lock().screen();
         if screen != attached {
             let _ = engine.resize(screen.0, screen.1);
@@ -316,7 +314,7 @@ impl Writers {
     pub fn host_write(
         &self,
         id: &SessionId,
-        engine: &DaemonClient,
+        engine: &dyn SessionEngine,
         bytes: &[u8],
     ) -> Result<HostTook, String> {
         let gate = self.gate(id);
@@ -345,7 +343,7 @@ impl Writers {
     pub fn host_resize(
         &self,
         id: &SessionId,
-        engine: &DaemonClient,
+        engine: &dyn SessionEngine,
         size: (u16, u16),
     ) -> Result<(), String> {
         let gate = self.gate(id);
@@ -364,7 +362,7 @@ impl Writers {
     pub fn release_device(
         &self,
         device: &EndpointId,
-        engines: &[(SessionId, Arc<DaemonClient>)],
+        engines: &[(SessionId, Arc<dyn SessionEngine>)],
     ) -> Vec<(SessionId, HostTook)> {
         let mut changed = Vec::new();
         for (id, engine) in engines {
@@ -388,9 +386,24 @@ impl Writers {
     }
 }
 
+/// Every live session's engine, collected under the sessions lock and
+/// released before any gate is taken (the lock order above).
+pub fn live_engines(state: &crate::AppState) -> Vec<(SessionId, Arc<dyn SessionEngine>)> {
+    state
+        .sessions
+        .lock()
+        .iter()
+        .map(|(id, session)| {
+            let engine: Arc<dyn SessionEngine> = Arc::clone(&session.engine) as _;
+            (id.clone(), engine)
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::daemon_client::DaemonClient;
     use kriyon_remote::authorize::Dialog;
 
     use kriyon_remote::authorize::PendingWrite;

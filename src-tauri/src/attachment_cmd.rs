@@ -407,7 +407,7 @@ pub async fn submit_prompt(
                 let engine = crate::commands::engine_of(&state, &id)?;
                 state
                     .writers
-                    .host_write(&id, &engine, key.text.as_bytes())?;
+                    .host_write(&id, engine.as_ref(), key.text.as_bytes())?;
             }
             if key.wait_ms > 0 {
                 std::thread::sleep(Duration::from_millis(key.wait_ms));

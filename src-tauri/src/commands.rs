@@ -712,7 +712,7 @@ pub(crate) fn launch_claude_in<R: tauri::Runtime>(
     }
     if state
         .writers
-        .host_write(id, &engine, claude_command(&plan).as_bytes())
+        .host_write(id, engine.as_ref(), claude_command(&plan).as_bytes())
         .is_err()
     {
         // Nothing started: the prompt file nothing will read goes, and the
@@ -777,7 +777,7 @@ pub async fn start_fresh_claude(app: tauri::AppHandle, id: String) -> Result<(),
         );
         state
             .writers
-            .host_write(&id, &engine, command.as_bytes())
+            .host_write(&id, engine.as_ref(), command.as_bytes())
             .map(|_took| ())
     })
     .await
@@ -812,7 +812,10 @@ pub fn write_stdin(
     let id = SessionId(id.to_owned());
     // Cloned out, so the write happens with the sessions lock released.
     let engine = engine_of(&state, &id)?;
-    state.writers.host_write(&id, &engine, data).map(|_took| ())
+    state
+        .writers
+        .host_write(&id, engine.as_ref(), data)
+        .map(|_took| ())
 }
 
 /// The engine of session `id`, cloned out from under the sessions lock.
@@ -922,7 +925,9 @@ pub fn resize_pty(
     kriyon_core::session::check_screen_size(cols, rows).map_err(|e| e.to_string())?;
     let id = SessionId(id);
     let engine = engine_of(&state, &id)?;
-    state.writers.host_resize(&id, &engine, (cols, rows))
+    state
+        .writers
+        .host_resize(&id, engine.as_ref(), (cols, rows))
 }
 
 /// Close the session, removing it from state and [Tree stop]ping its daemon —

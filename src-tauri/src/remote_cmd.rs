@@ -665,12 +665,7 @@ async fn release_everywhere(app: &tauri::AppHandle, device: [u8; 32]) {
     let _ = tauri::async_runtime::spawn_blocking(move || {
         use tauri::Manager as _;
         let state = app.state::<crate::AppState>();
-        let engines: Vec<_> = state
-            .sessions
-            .lock()
-            .iter()
-            .map(|(id, session)| (id.clone(), std::sync::Arc::clone(&session.engine)))
-            .collect();
+        let engines = crate::session_writer::live_engines(&state);
         state.writers.release_device(&device, &engines);
     })
     .await;

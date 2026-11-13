@@ -228,7 +228,7 @@ impl ServeHost for AppServeHost {
         let engine = self.engine(&id).ok_or(RefuseReason::NoSuchSession)?;
         self.0.state::<AppState>().writers.device_input(
             &id,
-            &engine,
+            engine.as_ref(),
             device,
             Some(role),
             write,
@@ -248,7 +248,7 @@ impl ServeHost for AppServeHost {
         let engine = self.engine(&id).ok_or(RefuseReason::NoSuchSession)?;
         self.0.state::<AppState>().writers.device_resize(
             &id,
-            &engine,
+            engine.as_ref(),
             device,
             Some(role),
             write,
@@ -291,15 +291,7 @@ impl ServeHost for AppServeHost {
 
     fn release(&self, device: &EndpointId) {
         let state = self.0.state::<AppState>();
-        let engines: Vec<(
-            SessionId,
-            std::sync::Arc<crate::daemon_client::DaemonClient>,
-        )> = state
-            .sessions
-            .lock()
-            .iter()
-            .map(|(id, session)| (id.clone(), std::sync::Arc::clone(&session.engine)))
-            .collect();
+        let engines = crate::session_writer::live_engines(&state);
         // The writers tell every device (their change hook).
         let _ = state.writers.release_device(device, &engines);
     }
