@@ -133,10 +133,7 @@ mod tests {
         let stream = UnixStream::connect(&socket).expect("connect");
         let engine = DaemonClient::adopt(stream, id.clone()).expect("client");
         (
-            Session {
-                engine: std::sync::Arc::new(engine),
-                zdotdir: None,
-            },
+            Session::new(std::sync::Arc::new(engine), None, false),
             daemon,
         )
     }

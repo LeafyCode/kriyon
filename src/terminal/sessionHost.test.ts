@@ -2,10 +2,10 @@ import { beforeEach, expect, test, vi } from "vitest";
 import {
   closeSession,
   createSession,
+  launchClaude,
   reportDrained,
   requestRepaint,
-  seedPrompt,
-  writeStdin,
+  startFreshClaude as startFreshClaudeIpc,
 } from "../ipc/bridge.ts";
 import {
   attachTerminal,
@@ -23,18 +23,21 @@ import {
 vi.mock("../ipc/bridge", () => ({
   createSession: vi.fn(),
   closeSession: vi.fn(),
-  writeStdin: vi.fn(),
+  launchClaude: vi.fn(),
   reportDrained: vi.fn(),
   requestRepaint: vi.fn(),
-  seedPrompt: vi.fn(),
+  startFreshClaude: vi.fn(),
 }));
 
 const mockedCreateSession = vi.mocked(createSession);
 const mockedCloseSession = vi.mocked(closeSession);
-const mockedWriteStdin = vi.mocked(writeStdin);
+const mockedLaunchClaude = vi.mocked(launchClaude);
+const mockedStartFreshClaude = vi.mocked(startFreshClaudeIpc);
 const mockedReportDrained = vi.mocked(reportDrained);
 const mockedRequestRepaint = vi.mocked(requestRepaint);
-const mockedSeedPrompt = vi.mocked(seedPrompt);
+
+/** Rust's once-per-shell launch claim, faked: a new pty resets it. */
+const launchedIn = new Set<string>();
 
 /** Capture the output callback so tests can simulate backend pty output. */
 let onBytes: ((bytes: Uint8Array) => void) | undefined;
@@ -56,17 +59,28 @@ beforeEach(() => {
   onBusy = undefined;
   onExit = undefined;
   // Resolves to `reattached`: false = freshly spawned daemon (default).
-  mockedCreateSession.mockImplementation((_id, _cwd, cb, busy, exit) => {
+  launchedIn.clear();
+  mockedCreateSession.mockImplementation((id, _cwd, cb, busy, exit) => {
+    launchedIn.delete(id);
     onBytes = cb;
     onBusy = busy;
     onExit = exit;
     return Promise.resolve(false);
   });
   mockedCloseSession.mockResolvedValue(undefined);
-  mockedWriteStdin.mockResolvedValue(undefined);
+  mockedLaunchClaude.mockImplementation((id, claudeSessionId) => {
+    if (launchedIn.has(id)) {
+      return Promise.resolve({ kind: "skipped" });
+    }
+    launchedIn.add(id);
+    return Promise.resolve({
+      kind: "launched",
+      resuming: claudeSessionId !== null,
+    });
+  });
+  mockedStartFreshClaude.mockResolvedValue(undefined);
   mockedReportDrained.mockResolvedValue(undefined);
   mockedRequestRepaint.mockResolvedValue(undefined);
-  mockedSeedPrompt.mockResolvedValue("/run/s1.prompt");
   // Reset the seams so handlers don't leak across tests.
   setResumeFailedHandler(() => {
     // no-op default
@@ -193,21 +207,21 @@ test("launchClaudeOnce does not claim a failed host; the retried session launche
   await expect(launchClaudeOnce("s-launch", null)).resolves.toEqual({
     kind: "skipped",
   });
-  expect(mockedWriteStdin).not.toHaveBeenCalled();
+  expect(mockedLaunchClaude).not.toHaveBeenCalled();
 
   await ensureSession("s-launch", "/work", noop);
   await expect(launchClaudeOnce("s-launch", null)).resolves.toEqual({
     kind: "launched",
     resuming: false,
   });
-  await flush();
-  expect(mockedWriteStdin).toHaveBeenCalledWith(
+  expect(mockedLaunchClaude).toHaveBeenCalledWith(
     "s-launch",
-    new TextEncoder().encode("claude\r")
+    null,
+    undefined,
+    undefined
   );
   disposeSession("s-launch");
 });
-
 // Detached output is NOT buffered and replayed on attach — a byte-capped
 // replay could start mid-escape-sequence (garbage), and its bytes were already
 // drained-reported once (replaying through the WriteQueue reported them twice,
@@ -281,7 +295,7 @@ test("launchClaudeOnce skips a dead host instead of writing into a dead pty", as
   await expect(launchClaudeOnce("s-dead", null)).resolves.toEqual({
     kind: "skipped",
   });
-  expect(mockedWriteStdin).not.toHaveBeenCalled();
+  expect(mockedLaunchClaude).not.toHaveBeenCalled();
   disposeSession("s-dead");
 });
 
@@ -289,9 +303,10 @@ test("launchClaudeOnce skips a dead host instead of writing into a dead pty", as
 // activation: the revive resets the once-per-run launch claim.
 test("a revived session can launch claude again", async () => {
   ensureSession("s-dead", "/work", noop);
-  await launchClaudeOnce("s-dead", null);
-  await flush();
-  expect(mockedWriteStdin).toHaveBeenCalledTimes(1);
+  await expect(launchClaudeOnce("s-dead", null)).resolves.toEqual({
+    kind: "launched",
+    resuming: false,
+  });
 
   onExit?.();
   await ensureSession("s-dead", "/work", noop);
@@ -321,34 +336,35 @@ test("ensureSession alone does not launch claude", async () => {
   await Promise.resolve();
 
   // Opening the pty must not start claude; that is launchClaudeOnce's job.
-  expect(mockedWriteStdin).not.toHaveBeenCalled();
+  expect(mockedLaunchClaude).not.toHaveBeenCalled();
   disposeSession("s1");
 });
 
-test("launchClaudeOnce starts a fresh claude when there is no claude session id", async () => {
+test("launchClaudeOnce asks Rust for a fresh claude when there is no claude session id", async () => {
   ensureSession("s1", "/work", noop);
-  launchClaudeOnce("s1", null);
-  await flush();
-
-  expect(mockedWriteStdin).toHaveBeenCalledWith(
+  await launchClaudeOnce("s1", null);
+  expect(mockedLaunchClaude).toHaveBeenCalledWith(
     "s1",
-    new TextEncoder().encode("claude\r")
+    null,
+    undefined,
+    undefined
   );
   disposeSession("s1");
 });
-
-test("launchClaudeOnce resumes when a claude session id is known", async () => {
+test("launchClaudeOnce asks Rust to resume when a claude session id is known", async () => {
   ensureSession("s1", "/work", noop);
-  launchClaudeOnce("s1", "claude-abc");
-  await flush();
-
-  expect(mockedWriteStdin).toHaveBeenCalledWith(
+  await expect(launchClaudeOnce("s1", "claude-abc")).resolves.toEqual({
+    kind: "launched",
+    resuming: true,
+  });
+  expect(mockedLaunchClaude).toHaveBeenCalledWith(
     "s1",
-    new TextEncoder().encode("claude --resume claude-abc\r")
+    "claude-abc",
+    undefined,
+    undefined
   );
   disposeSession("s1");
 });
-
 test("a resumed session whose claude exits before starting reports a failed resume", async () => {
   const failed: string[] = [];
   setResumeFailedHandler((id) => failed.push(id));
@@ -412,13 +428,9 @@ test("startFreshClaude launches a plain claude and disarms resume detection", as
   setResumeFailedHandler((id) => failed.push(id));
   ensureSession("s1", "/work", noop);
   await launchClaudeOnce("s1", "claude-abc");
-  mockedWriteStdin.mockClear();
 
   await startFreshClaude("s1");
-  expect(mockedWriteStdin).toHaveBeenCalledWith(
-    "s1",
-    new TextEncoder().encode("claude\r")
-  );
+  expect(mockedStartFreshClaude).toHaveBeenCalledWith("s1");
 
   // Detection is disarmed: a later exit of the fresh session must not fire.
   onBusy?.(true);
@@ -426,36 +438,15 @@ test("startFreshClaude launches a plain claude and disarms resume detection", as
   expect(failed).toEqual([]);
   disposeSession("s1");
 });
-
-test("launchClaudeOnce launches at most once per session", async () => {
-  ensureSession("s1", "/work", noop);
-  launchClaudeOnce("s1", null);
-  launchClaudeOnce("s1", "claude-abc");
-  await flush();
-
-  expect(mockedWriteStdin).toHaveBeenCalledTimes(1);
-  disposeSession("s1");
-});
-
-test("launchClaudeOnce ignores an unsafe claude session id and starts fresh", async () => {
-  ensureSession("s1", "/work", noop);
-  // A persisted value with shell metacharacters must never be interpolated.
-  launchClaudeOnce("s1", "abc; rm -rf /");
-  await flush();
-
-  expect(mockedWriteStdin).toHaveBeenCalledWith(
-    "s1",
-    new TextEncoder().encode("claude\r")
-  );
-  disposeSession("s1");
-});
-
-test("launchClaudeOnce returns true on the launching call, false thereafter", async () => {
+test("a launch asked after one went through is skipped", async () => {
   ensureSession("ret1", "/work", noop);
-  const first = launchClaudeOnce("ret1", null);
-  const second = launchClaudeOnce("ret1", "claude-abc");
-  await expect(first).resolves.toEqual({ kind: "launched", resuming: false });
-  await expect(second).resolves.toEqual({ kind: "skipped" });
+  await expect(launchClaudeOnce("ret1", null)).resolves.toEqual({
+    kind: "launched",
+    resuming: false,
+  });
+  await expect(launchClaudeOnce("ret1", "claude-abc")).resolves.toEqual({
+    kind: "skipped",
+  });
   disposeSession("ret1");
 });
 
@@ -468,22 +459,14 @@ test("launchClaudeOnce reports skipped when there is no host", async () => {
 // Regression: a session reattached to a surviving daemon already has claude
 // running in its shell. Re-sending the launch command would type it as
 // keystrokes into the live claude's input box (and never start anything).
-test("launchClaudeOnce does not relaunch a reattached session", async () => {
-  mockedCreateSession.mockImplementationOnce((_id, _cwd, cb) => {
-    onBytes = cb;
-    return Promise.resolve(true);
-  });
+test("launchClaudeOnce passes on that a reattached session already runs claude", async () => {
   ensureSession("re1", "/work", noop);
-
+  mockedLaunchClaude.mockResolvedValueOnce({ kind: "reattached" });
   await expect(launchClaudeOnce("re1", "claude-abc")).resolves.toEqual({
     kind: "reattached",
   });
-  await flush();
-
-  expect(mockedWriteStdin).not.toHaveBeenCalled();
   disposeSession("re1");
 });
-
 test("disposeSession closes the pty and lets a fresh ensure recreate it", () => {
   ensureSession("s1", "/work", noop);
   disposeSession("s1");
@@ -494,112 +477,22 @@ test("disposeSession closes the pty and lets a fresh ensure recreate it", () => 
   disposeSession("s1");
 });
 
-test("a seeded launch reads the prompt file and self-cleans", async () => {
+test("a seed prompt and a report address go to Rust, never typed here", async () => {
   ensureSession("s1", "/work", noop);
-  const result = await launchClaudeOnce("s1", null, "Continue the work");
-
-  expect(result).toEqual({ kind: "launched", resuming: false });
-  expect(mockedSeedPrompt).toHaveBeenCalledWith("s1", "Continue the work");
-  // Reads the file into a var, removes it, launches claude with it — quoted.
-  expect(mockedWriteStdin).toHaveBeenCalledWith(
-    "s1",
-    new TextEncoder().encode(
-      'p="$(cat "/run/s1.prompt")"; rm -f "/run/s1.prompt"; claude "$p"\r'
-    )
-  );
+  const report = { from: "child-uuid", splitOff: true, to: "lead-uuid" };
+  await launchClaudeOnce("s1", null, "Fix it", report);
+  expect(mockedLaunchClaude).toHaveBeenCalledWith("s1", null, "Fix it", report);
   disposeSession("s1");
 });
-
-test("a nested session starts under its own id, told where to report", async () => {
+test("a dropped seed prompt is reported as such", async () => {
   ensureSession("s1", "/work", noop);
-  await launchClaudeOnce("s1", null, "Fix it", {
-    from: "child-uuid",
-    to: "parent-uuid",
-  });
-  expect(mockedWriteStdin).toHaveBeenCalledWith(
-    "s1",
-    new TextEncoder().encode(
-      'p="$(cat "/run/s1.prompt")"; rm -f "/run/s1.prompt"; KRIYON_REPORT_TO=parent-uuid KRIYON_REPORT_FROM=child-uuid claude --session-id child-uuid "$p"\r'
-    )
-  );
+  // Rust couldn't write the seed file: claude started without the prompt.
+  mockedLaunchClaude.mockResolvedValueOnce({ kind: "seedDropped" });
+  await expect(
+    launchClaudeOnce("s1", null, "Continue the work")
+  ).resolves.toEqual({ kind: "seedDropped" });
   disposeSession("s1");
 });
-
-test("a split off session is told the person started it", async () => {
-  ensureSession("s1", "/work", noop);
-  await launchClaudeOnce("s1", null, undefined, {
-    from: "child-uuid",
-    splitOff: true,
-    to: "lead-uuid",
-  });
-  expect(mockedWriteStdin).toHaveBeenCalledWith(
-    "s1",
-    new TextEncoder().encode(
-      "KRIYON_REPORT_TO=lead-uuid KRIYON_REPORT_FROM=child-uuid KRIYON_REPORT_BY=person claude --session-id child-uuid\r"
-    )
-  );
-  disposeSession("s1");
-});
-
-test("a nested session with no task still starts under its own id, told where to report", async () => {
-  ensureSession("s1", "/work", noop);
-  await launchClaudeOnce("s1", null, undefined, {
-    from: "child-uuid",
-    to: "lead-uuid",
-  });
-  expect(mockedWriteStdin).toHaveBeenCalledWith(
-    "s1",
-    new TextEncoder().encode(
-      "KRIYON_REPORT_TO=lead-uuid KRIYON_REPORT_FROM=child-uuid claude --session-id child-uuid\r"
-    )
-  );
-  disposeSession("s1");
-});
-
-test("a report address that isn't a bare id is never typed", async () => {
-  ensureSession("s1", "/work", noop);
-  await launchClaudeOnce("s1", null, "Fix it", {
-    from: "child; rm -rf ~",
-    to: "parent-uuid",
-  });
-  expect(mockedWriteStdin).toHaveBeenCalledWith(
-    "s1",
-    new TextEncoder().encode(
-      'p="$(cat "/run/s1.prompt")"; rm -f "/run/s1.prompt"; claude "$p"\r'
-    )
-  );
-  disposeSession("s1");
-});
-
-test("an unseeded launch is a plain claude", async () => {
-  ensureSession("s2", "/work", noop);
-  await launchClaudeOnce("s2", null);
-
-  expect(mockedSeedPrompt).not.toHaveBeenCalled();
-  expect(mockedWriteStdin).toHaveBeenCalledWith(
-    "s2",
-    new TextEncoder().encode("claude\r")
-  );
-  disposeSession("s2");
-});
-
-test("a dropped seed prompt falls back to plain claude and reports seedDropped", async () => {
-  ensureSession("s1", "/work", noop);
-  // The seed-prompt file write fails: the user's first prompt is lost, so the
-  // caller must be told (not left thinking the session started with it).
-  mockedSeedPrompt.mockRejectedValueOnce(new Error("disk full"));
-
-  const result = await launchClaudeOnce("s1", null, "Continue the work");
-
-  expect(result).toEqual({ kind: "seedDropped" });
-  // Still launches a usable session, just without the seed.
-  expect(mockedWriteStdin).toHaveBeenCalledWith(
-    "s1",
-    new TextEncoder().encode("claude\r")
-  );
-  disposeSession("s1");
-});
-
 test("a failed launch write reports writeFailed and arms no resume watchdog", async () => {
   vi.useFakeTimers();
   try {
@@ -607,7 +500,7 @@ test("a failed launch write reports writeFailed and arms no resume watchdog", as
     setResumeFailedHandler((id) => failed.push(id));
     ensureSession("s1", "/work", noop);
     // The launch keystrokes never reach the pty.
-    mockedWriteStdin.mockRejectedValueOnce(new Error("pty gone"));
+    mockedLaunchClaude.mockResolvedValueOnce({ kind: "writeFailed" });
 
     const result = await launchClaudeOnce("s1", "claude-abc");
 
@@ -648,4 +541,20 @@ test("a failed row save still starts the shell, so Rust's refusal is what the pe
   noteRowSave("s-failed-save", Promise.reject(new Error("disk full")));
   await ensureSession("s-failed-save", "/work/new", noop);
   expect(mockedCreateSession).toHaveBeenCalledTimes(1);
+});
+
+test("a second launch asked while one is under way joins it", async () => {
+  ensureSession("s1", "/work", noop);
+  const first = launchClaudeOnce("s1", null, "Fix it");
+  const second = launchClaudeOnce("s1", null);
+  await expect(second).resolves.toEqual({ kind: "launched", resuming: false });
+  await first;
+  expect(mockedLaunchClaude).toHaveBeenCalledTimes(1);
+  expect(mockedLaunchClaude).toHaveBeenCalledWith(
+    "s1",
+    null,
+    "Fix it",
+    undefined
+  );
+  disposeSession("s1");
 });

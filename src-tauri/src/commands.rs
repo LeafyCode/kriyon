@@ -406,7 +406,7 @@ pub async fn create_session(
             &engine,
             (INITIAL_COLS, INITIAL_ROWS),
         );
-        register_session(&app, &state, SessionId(id), engine, None)?;
+        register_session(&app, &state, SessionId(id), engine, None, true)?;
         served.keep();
         return Ok(true);
     }
@@ -516,7 +516,7 @@ pub async fn create_session(
         &engine,
         (INITIAL_COLS, INITIAL_ROWS),
     );
-    register_session(&app, &state, SessionId(id), engine, zdotdir)?;
+    register_session(&app, &state, SessionId(id), engine, zdotdir, false)?;
     served.keep();
 
     Ok(false)
@@ -533,6 +533,7 @@ fn register_session(
     id: SessionId,
     engine: DaemonClient,
     zdotdir: Option<tempfile::TempDir>,
+    reattached: bool,
 ) -> Result<(), String> {
     if state.closed_mid_create.lock().remove(&id) {
         crate::daemon_rt::stop_held(crate::daemon_rt::owns_run_dir(app), &engine);
@@ -543,20 +544,19 @@ fn register_session(
     state
         .sessions
         .lock()
-        .insert(id, Session { engine, zdotdir });
+        .insert(id, Session::new(engine, zdotdir, reattached));
     Ok(())
 }
 
-/// Write a [Handoff prompt] to the session's path-contained prompt file and
-/// return its absolute path, so the launcher can seed it via
-/// `claude "$(cat <path>)"`. The id is validated before it touches the path.
-///
-/// # Errors
-/// Returns an error string if HOME cannot be resolved, the id is invalid, or the
-/// write fails.
-#[allow(clippy::needless_pass_by_value)]
-#[tauri::command]
-pub fn seed_prompt(app: tauri::AppHandle, id: String, text: String) -> Result<String, String> {
+/// Write a first prompt (a [Handoff prompt], a follow-up's task) to session
+/// `id`'s path-contained prompt file and return its absolute path, for the
+/// launch command to read (see `kriyon_core::claude_launch`). The id is
+/// validated before it touches the path.
+fn write_seed_prompt<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    id: &str,
+    text: &str,
+) -> Result<String, String> {
     let home = {
         use tauri::Manager as _;
         app.path()
@@ -565,11 +565,165 @@ pub fn seed_prompt(app: tauri::AppHandle, id: String, text: String) -> Result<St
             .or_else(|| std::env::var("HOME").ok().map(PathBuf::from))
             .ok_or_else(|| "cannot resolve HOME".to_string())?
     };
-    let run = run_dir(&app, &home)?;
+    let run = run_dir(app, &home)?;
     std::fs::create_dir_all(&run).map_err(|e| e.to_string())?;
-    let path = seed_prompt_path(&run, &id).ok_or_else(|| "invalid session id".to_string())?;
+    let path = seed_prompt_path(&run, id).ok_or_else(|| "invalid session id".to_string())?;
     std::fs::write(&path, text).map_err(|e| e.to_string())?;
     Ok(path.to_string_lossy().into_owned())
+}
+
+/// A [Nested session]'s report address, from the webview.
+#[derive(Clone, Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReportArg {
+    pub to: String,
+    pub from: String,
+    #[serde(default)]
+    pub split_off: bool,
+}
+
+/// What launching `claude` into a session came to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum LaunchOutcome {
+    /// Launched; `resuming` when it resumes a conversation (which can fail).
+    Launched { resuming: bool },
+    /// Launched fresh, but the seed prompt's file couldn't be written: the
+    /// first prompt was lost.
+    SeedDropped,
+    /// The command never reached the shell; nothing started.
+    WriteFailed,
+    /// The shell outlived the app and already runs `claude`.
+    Reattached,
+    /// No such session, or `claude` was already launched into its shell.
+    Skipped,
+}
+
+/// Launch `claude` into session `id`'s shell, once per shell: resuming its
+/// conversation, or fresh with a seed prompt and a [Nested session]'s report
+/// address. What is typed is decided in `kriyon_core::claude_launch`; ids
+/// that aren't bare tokens are never typed.
+pub(crate) fn launch_claude_in<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    state: &AppState,
+    id: &SessionId,
+    claude_session_id: Option<String>,
+    seed: Option<&str>,
+    report: Option<ReportArg>,
+) -> LaunchOutcome {
+    use kriyon_core::claude_launch::{claude_command, resumes, LaunchPlan, Report};
+    use std::sync::atomic::Ordering;
+    let (engine, reattached) = {
+        let sessions = state.sessions.lock();
+        let Some(session) = sessions.get(id) else {
+            return LaunchOutcome::Skipped;
+        };
+        // Claimed before anything is written, so a second ask is a no-op.
+        if session.launched.swap(true, Ordering::AcqRel) {
+            return LaunchOutcome::Skipped;
+        }
+        (std::sync::Arc::clone(&session.engine), session.reattached)
+    };
+    if reattached {
+        return LaunchOutcome::Reattached;
+    }
+    let mut plan = LaunchPlan {
+        claude_session_id,
+        seed_path: None,
+        report: report.map(|report| Report {
+            to: report.to,
+            from: report.from,
+            split_off: report.split_off,
+        }),
+    };
+    let resuming = resumes(&plan);
+    let mut seed_dropped = false;
+    if let Some(seed) = seed.filter(|seed| !resuming && !seed.trim().is_empty()) {
+        match write_seed_prompt(app, &id.0, seed) {
+            // A path the command couldn't quote safely (a home folder with
+            // `$` in it) is never typed: the prompt is dropped, and said so.
+            Ok(path) if kriyon_core::claude_launch::safe_path(&path) => {
+                plan.seed_path = Some(path);
+            }
+            Ok(path) => {
+                let _ = std::fs::remove_file(path);
+                seed_dropped = true;
+            }
+            Err(_) => seed_dropped = true,
+        }
+    }
+    if state
+        .writers
+        .host_write(id, &engine, claude_command(&plan).as_bytes())
+        .is_err()
+    {
+        // Nothing started: the prompt file nothing will read goes, and the
+        // shell may be launched into on the next try.
+        if let Some(path) = &plan.seed_path {
+            let _ = std::fs::remove_file(path);
+        }
+        if let Some(session) = state.sessions.lock().get(id) {
+            session.launched.store(false, Ordering::Release);
+        }
+        return LaunchOutcome::WriteFailed;
+    }
+    if seed_dropped {
+        LaunchOutcome::SeedDropped
+    } else {
+        LaunchOutcome::Launched { resuming }
+    }
+}
+
+/// [`launch_claude_in`], for the webview: off the main thread, since it
+/// writes a file and the shell's socket.
+///
+/// # Errors
+/// Only if the blocking pool fails; what happened is the [`LaunchOutcome`].
+#[tauri::command]
+pub async fn launch_claude(
+    app: tauri::AppHandle,
+    id: String,
+    claude_session_id: Option<String>,
+    seed: Option<String>,
+    report: Option<ReportArg>,
+) -> Result<LaunchOutcome, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        use tauri::Manager as _;
+        launch_claude_in(
+            &app,
+            &app.state::<AppState>(),
+            &SessionId(id),
+            claude_session_id,
+            seed.as_deref(),
+            report,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+/// Start a fresh `claude` in session `id`, whose resume failed (its
+/// conversation expired): the same shell, a plain launch.
+///
+/// # Errors
+/// An unknown session, or a write that failed.
+#[tauri::command]
+pub async fn start_fresh_claude(app: tauri::AppHandle, id: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        use tauri::Manager as _;
+        let state = app.state::<AppState>();
+        let id = SessionId(id);
+        let engine = engine_of(&state, &id)?;
+        let command = kriyon_core::claude_launch::claude_command(
+            &kriyon_core::claude_launch::LaunchPlan::default(),
+        );
+        state
+            .writers
+            .host_write(&id, &engine, command.as_bytes())
+            .map(|_took| ())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Write the raw request body to the session's stdin.
@@ -1018,7 +1172,7 @@ pub async fn bootstrap_worktree(
     .map_err(|e| e.to_string())
 }
 
-/// Resolve HOME via Tauri, mirroring `seed_prompt`.
+/// Resolve HOME via Tauri, mirroring `write_seed_prompt`.
 pub(crate) fn resolve_home(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     use tauri::Manager as _;
     app.path()
@@ -1141,6 +1295,135 @@ pub fn home_dir(app: tauri::AppHandle) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    mod launch {
+        use std::io::Read as _;
+        use std::os::unix::net::UnixStream;
+        use std::time::{Duration, Instant};
+
+        use kriyon_core::wire::{Frame, FrameDecoder};
+        use tauri::Manager as _;
+
+        use super::super::{launch_claude_in, LaunchOutcome};
+        use crate::{AppState, Session, SessionId};
+
+        /// A mock app with session "s" registered over a socket pair; the
+        /// daemon's end, to read what is typed.
+        fn app_with_session(
+            reattached: bool,
+        ) -> (tauri::App<tauri::test::MockRuntime>, UnixStream) {
+            let app = tauri::test::mock_app();
+            app.manage(AppState::default());
+            let (daemon, client) = UnixStream::pair().expect("pair");
+            let engine = crate::daemon_client::DaemonClient::adopt(client, SessionId("s".into()))
+                .expect("client");
+            app.state::<AppState>().sessions.lock().insert(
+                SessionId("s".into()),
+                Session::new(std::sync::Arc::new(engine), None, reattached),
+            );
+            (app, daemon)
+        }
+
+        /// What the daemon was asked to type, within a second.
+        fn typed(daemon: &mut UnixStream) -> Vec<u8> {
+            daemon
+                .set_read_timeout(Some(Duration::from_millis(100)))
+                .expect("timeout");
+            let mut decoder = FrameDecoder::new();
+            let mut out = Vec::new();
+            let deadline = Instant::now() + Duration::from_secs(1);
+            let mut buf = [0u8; 4096];
+            while Instant::now() < deadline {
+                match daemon.read(&mut buf) {
+                    Ok(n) => decoder.push(&buf[..n]),
+                    // Quiet after something came: that was all of it.
+                    Err(_) if !out.is_empty() => break,
+                    Err(_) => {}
+                }
+                while let Ok(Some(frame)) = decoder.next_frame() {
+                    if let Frame::Stdin(bytes) = frame {
+                        out.extend(bytes);
+                    }
+                }
+            }
+            out
+        }
+
+        fn launch(
+            app: &tauri::App<tauri::test::MockRuntime>,
+            claude_id: Option<&str>,
+        ) -> LaunchOutcome {
+            launch_claude_in(
+                app.handle(),
+                &app.state::<AppState>(),
+                &SessionId("s".into()),
+                claude_id.map(str::to_string),
+                None,
+                None,
+            )
+        }
+
+        #[test]
+        fn claude_is_launched_into_a_shell_once() {
+            let (app, mut daemon) = app_with_session(false);
+            assert_eq!(
+                launch(&app, None),
+                LaunchOutcome::Launched { resuming: false }
+            );
+            assert_eq!(launch(&app, None), LaunchOutcome::Skipped);
+            assert_eq!(typed(&mut daemon), b"claude\r");
+        }
+
+        #[test]
+        fn a_known_conversation_is_resumed() {
+            let (app, mut daemon) = app_with_session(false);
+            assert_eq!(
+                launch(&app, Some("claude-abc")),
+                LaunchOutcome::Launched { resuming: true }
+            );
+            assert_eq!(typed(&mut daemon), b"claude --resume claude-abc\r");
+        }
+
+        #[test]
+        fn a_shell_that_outlived_the_app_is_never_launched_into() {
+            let (app, mut daemon) = app_with_session(true);
+            assert_eq!(launch(&app, None), LaunchOutcome::Reattached);
+            assert_eq!(launch(&app, None), LaunchOutcome::Skipped);
+            assert_eq!(typed(&mut daemon), b"");
+        }
+
+        #[test]
+        fn a_launch_that_never_reached_the_shell_can_be_tried_again() {
+            let (app, daemon) = app_with_session(false);
+            drop(daemon);
+            assert_eq!(launch(&app, None), LaunchOutcome::WriteFailed);
+            assert_eq!(
+                launch(&app, None),
+                LaunchOutcome::WriteFailed,
+                "tried again, not skipped as launched"
+            );
+        }
+
+        #[test]
+        fn a_report_address_from_the_webview_reads_with_its_split_off() {
+            let report: super::super::ReportArg = serde_json::from_value(serde_json::json!({
+                "to": "lead", "from": "child", "splitOff": true
+            }))
+            .expect("reads");
+            assert!(report.split_off);
+            let plain: super::super::ReportArg =
+                serde_json::from_value(serde_json::json!({ "to": "lead", "from": "child" }))
+                    .expect("reads");
+            assert!(!plain.split_off);
+        }
+
+        #[test]
+        fn an_unknown_session_launches_nothing() {
+            let app = tauri::test::mock_app();
+            app.manage(AppState::default());
+            assert_eq!(launch(&app, None), LaunchOutcome::Skipped);
+        }
+    }
 
     #[test]
     fn seed_prompt_path_is_contained_and_typed() {

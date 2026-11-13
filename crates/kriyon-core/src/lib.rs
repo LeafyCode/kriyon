@@ -5,6 +5,7 @@ pub mod attachment;
 pub mod blame;
 pub mod bootstrap;
 pub mod bridge;
+pub mod claude_launch;
 pub mod cli_dialog;
 pub mod completion;
 pub mod daemon;

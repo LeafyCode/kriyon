@@ -78,6 +78,29 @@ pub struct Session {
     /// held lock.
     pub engine: std::sync::Arc<DaemonClient>,
     pub zdotdir: Option<tempfile::TempDir>,
+    /// Whether this client reattached to a daemon that survived the app: its
+    /// shell already runs `claude`, which must never be launched again.
+    pub reattached: bool,
+    /// Whether `claude` was launched into this client's shell: once per
+    /// shell, however many ways ask (see `commands::launch_claude`).
+    pub launched: std::sync::atomic::AtomicBool,
+}
+
+impl Session {
+    /// A session client; `reattached` when its daemon outlived the app.
+    #[must_use]
+    pub fn new(
+        engine: std::sync::Arc<DaemonClient>,
+        zdotdir: Option<tempfile::TempDir>,
+        reattached: bool,
+    ) -> Self {
+        Self {
+            engine,
+            zdotdir,
+            reattached,
+            launched: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
 }
 
 /// Shared application state: the live sessions keyed by their internal id.
@@ -542,7 +565,8 @@ pub fn run() {
             git_cmd::unwatch_working_tree,
             commands::worktree_path,
             commands::bootstrap_worktree,
-            commands::seed_prompt,
+            commands::launch_claude,
+            commands::start_fresh_claude,
             store_cmd::save_layout,
             store_cmd::load_layout,
             store_cmd::upsert_project,

@@ -7,9 +7,11 @@ import type {
   FileContent,
   FileWriteResult,
   HooksOffScope,
+  LaunchOutcome,
   MergeOutcome,
   NestedInitiation,
   NestedOutcome,
+  NestedReport,
   NestedRequest,
   NotifyPreference,
   NotifySound,
@@ -179,11 +181,28 @@ export function closeSession(id: string): Promise<void> {
 }
 
 /**
- * Write a session's seed [Handoff prompt] to a path-contained file and resolve
- * to its absolute path, so the launcher can start `claude "$(cat <path>)"`.
+ * Launch `claude` into session `id`'s shell, once per shell (Rust decides the
+ * command and claims the launch): resuming `claudeSessionId` when given,
+ * otherwise fresh with an optional first prompt and [Nested session] report
+ * address.
  */
-export function seedPrompt(id: string, text: string): Promise<string> {
-  return invoke("seed_prompt", { id, text });
+export function launchClaude(
+  id: string,
+  claudeSessionId: string | null,
+  seed: string | undefined,
+  report: NestedReport | undefined
+): Promise<LaunchOutcome> {
+  return invoke("launch_claude", {
+    claudeSessionId,
+    id,
+    report: report ?? null,
+    seed: seed ?? null,
+  });
+}
+
+/** Start a plain `claude` in session `id`, whose resume failed. */
+export function startFreshClaude(id: string): Promise<void> {
+  return invoke("start_fresh_claude", { id });
 }
 
 // --- Transcript ---

@@ -132,6 +132,21 @@ export interface PastSessionPage {
  * the session that started it (`to`), and the id its own conversation is
  * started with (`from`), so only that conversation reports (ADR-0049).
  */
+/** What launching `claude` into a session came to (mirrors Rust
+ *  `commands::LaunchOutcome`). */
+export type LaunchOutcome =
+  /** `claude` was launched; track its boot (`resuming` if `--resume`). */
+  | { kind: "launched"; resuming: boolean }
+  /** Launched fresh, but the seed prompt's file couldn't be written: the
+   *  first prompt was lost. */
+  | { kind: "seedDropped" }
+  /** The command never reached the shell; nothing started. */
+  | { kind: "writeFailed" }
+  /** The shell outlived the app and already runs `claude`. */
+  | { kind: "reattached" }
+  /** No such session, or `claude` was already launched into its shell. */
+  | { kind: "skipped" };
+
 export interface NestedReport {
   from: string;
   /** The person started it with [Split off], so the lead didn't ask for it. */
