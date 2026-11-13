@@ -45,6 +45,8 @@ pub(crate) struct FakeHost {
     pub(crate) start_result: Mutex<Result<String, RefuseReason>>,
     /// The host's projects, as devices are told them.
     pub(crate) projects: Mutex<Vec<ProjectInfo>>,
+    /// How long a start takes, so a test can drop the link mid-start.
+    pub(crate) start_delay: Mutex<Duration>,
     /// Sessions earlier starts made, by request id.
     pub(crate) started: Mutex<HashMap<[u8; 16], String>>,
     /// Told every change of control, as the app's writers tell it.
@@ -75,6 +77,7 @@ impl Default for FakeHost {
             starts: Mutex::default(),
             start_result: Mutex::new(Ok("started".into())),
             started: Mutex::default(),
+            start_delay: Mutex::new(Duration::ZERO),
             projects: Mutex::new(vec![ProjectInfo {
                 id: "p".into(),
                 name: "app".into(),
@@ -181,9 +184,18 @@ impl ServeHost for FakeHost {
         start: RemoteStart,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String, RefuseReason>> + Send>>
     {
-        self.starts.lock().push((device, start));
+        // Recorded as soon as it is asked, as the app records a start before
+        // its shell opens: a resend finds it.
         let result = self.start_result.lock().clone();
-        Box::pin(async move { result })
+        if let Ok(id) = &result {
+            self.started.lock().insert(start.request_id, id.clone());
+        }
+        self.starts.lock().push((device, start));
+        let delay = *self.start_delay.lock();
+        Box::pin(async move {
+            tokio::time::sleep(delay).await;
+            result
+        })
     }
 
     fn set_push_token(&self, device: &EndpointId, key_id: u32, sealed: Vec<u8>) {

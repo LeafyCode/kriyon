@@ -18,7 +18,9 @@ use iroh::EndpointAddr;
 use kriyon_remote::codec::Decoded;
 use kriyon_remote::device_view::{HostView, ScreenEvent, SessionScreen};
 use kriyon_remote::link_policy::{CloseCode, HeartbeatWatch};
-use kriyon_remote::message::{EndpointId, FromDevice, Holder, RefuseReason, SessionId, ToDevice};
+use kriyon_remote::message::{
+    EndpointId, FromDevice, Holder, RefuseReason, RequestId, SessionId, ToDevice,
+};
 use kriyon_remote::pairing::PairingInvite;
 use serde::Serialize;
 use tokio::sync::{Mutex, Notify};
@@ -139,6 +141,55 @@ struct Conn {
     /// The sessions the person has open here, and where their screens go:
     /// opened again on each new link, so a reconnect redraws them.
     wanted: HashMap<SessionId, ScreenSink>,
+    /// Starts asked for and not yet answered: sent again, with the same
+    /// request id, on every new link until the host answers.
+    starting: HashMap<RequestId, PendingStart>,
+}
+
+struct PendingStart {
+    message: FromDevice,
+    answer: tokio::sync::oneshot::Sender<Result<SessionId, RefuseReason>>,
+}
+
+/// Why a session couldn't be started on a host.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StartError {
+    /// The host refused it, or it failed there.
+    Refused(RefuseReason),
+    /// That host isn't paired here.
+    NotConnected,
+    /// This device stopped following the host before it answered.
+    Gone,
+}
+
+impl StartError {
+    /// What it means, in words a person reads.
+    #[must_use]
+    pub fn words(self) -> &'static str {
+        match self {
+            Self::Refused(reason) => kriyon_remote::device_view::refusal_words(reason),
+            Self::NotConnected => "That computer isn't paired with this device.",
+            Self::Gone => "This device stopped connecting to that computer.",
+        }
+    }
+}
+
+/// A request id no other start from this device has had: the time, and a
+/// count for starts asked in the same instant.
+fn fresh_request_id() -> RequestId {
+    static COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_nanos());
+    let count = COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let mut id = [0u8; 16];
+    id[..8].copy_from_slice(
+        &u64::try_from(nanos & u128::from(u64::MAX))
+            .unwrap_or(0)
+            .to_be_bytes(),
+    );
+    id[8..].copy_from_slice(&count.to_be_bytes());
+    id
 }
 
 struct OpenSession {
@@ -291,6 +342,57 @@ impl DeviceRuntime {
             link.close();
         }
         c.control = None;
+    }
+
+    /// Start a session on `host` in project `project_id`, titled `title` or
+    /// after the project: the new session's id, which the caller can open.
+    /// Asked once; while the link is down it waits, and on every new link it
+    /// is sent again with the same request id, so the host makes one
+    /// session however often it is sent (spec §4).
+    ///
+    /// # Errors
+    /// [`StartError`]: refused (with the host's reason), a host not paired
+    /// here, or one this device stopped following before it answered.
+    pub async fn start_session(
+        &self,
+        host: &EndpointId,
+        project_id: &str,
+        title: Option<String>,
+    ) -> Result<SessionId, StartError> {
+        let conn = self
+            .host(host)
+            .await
+            .map_err(|_| StartError::NotConnected)?;
+        let request_id = fresh_request_id();
+        let message = FromDevice::StartSession {
+            request_id,
+            project_id: project_id.to_string(),
+            title,
+            worktree: false,
+        };
+        let (answer, answered) = tokio::sync::oneshot::channel();
+        let control = {
+            let mut c = conn.conn.lock().await;
+            c.starting.insert(
+                request_id,
+                PendingStart {
+                    message: message.clone(),
+                    answer,
+                },
+            );
+            c.control
+                .clone()
+                .filter(|_| c.state == Some(LinkState::Connected))
+        };
+        // Not connected now, or the send fails: the next link sends it.
+        if let Some(control) = control {
+            let _ = control.lock().await.send(&message).await;
+        }
+        match answered.await {
+            Ok(Ok(session_id)) => Ok(session_id),
+            Ok(Err(reason)) => Err(StartError::Refused(reason)),
+            Err(_) => Err(StartError::Gone),
+        }
     }
 
     /// Retry every waiting reconnect at once: the network changed, or the
@@ -607,6 +709,22 @@ async fn follow_control(
                     watch.beat(Instant::now());
                 }
                 let mut c = conn.conn.lock().await;
+                // A start's answer goes to whoever asked for it.
+                let answer = match &message {
+                    ToDevice::StartResult { request_id, session_id } => {
+                        Some((*request_id, Ok(session_id.clone())))
+                    }
+                    ToDevice::StartRefused { request_id, reason } => {
+                        Some((*request_id, Err(*reason)))
+                    }
+                    _ => None,
+                };
+                if let Some((request_id, answer)) = answer {
+                    if let Some(pending) = c.starting.remove(&request_id) {
+                        let _ = pending.answer.send(answer);
+                    }
+                    continue;
+                }
                 let changed = c.view.apply(&message);
                 // This link's own Welcome: the view keeps the last link's.
                 let now_connected = matches!(message, ToDevice::Welcome { .. })
@@ -616,6 +734,19 @@ async fn follow_control(
                     welcomed = true;
                     // Redraw what the person had open before the link dropped.
                     tokio::spawn(reopen(Arc::clone(conn), Arc::clone(link)));
+                    // Starts not yet answered go again, as they were.
+                    let unanswered: Vec<FromDevice> =
+                        c.starting.values().map(|pending| pending.message.clone()).collect();
+                    if let Some(control) = c.control.clone() {
+                        tokio::spawn(async move {
+                            let mut control = control.lock().await;
+                            for message in unanswered {
+                                if control.send(&message).await.is_err() {
+                                    return;
+                                }
+                            }
+                        });
+                    }
                 }
                 if changed || now_connected {
                     let state = c.state.unwrap_or(LinkState::Connecting);

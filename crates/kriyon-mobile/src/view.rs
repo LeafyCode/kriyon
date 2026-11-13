@@ -165,6 +165,7 @@ mod tests {
                 },
             )]),
             refused: Some(RefuseReason::NotInControl),
+            projects: Vec::new(),
         };
         let state = host_state(&HOST, &ME, LinkState::Connected, &view);
         assert_eq!(state.host_id, "ab".repeat(32));

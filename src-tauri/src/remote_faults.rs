@@ -43,7 +43,7 @@ use crate::remote_test_support::{
     answer, asked, device, next, on_loopback, run, wait_until, world, world_on, DeviceSeen, World,
 };
 use kriyon_remote_link::device_runtime::{
-    DeviceError, DeviceEvents, DeviceRuntime, HostEntry, LinkState, ScreenSink, Timing,
+    DeviceError, DeviceEvents, DeviceRuntime, HostEntry, LinkState, ScreenSink, StartError, Timing,
 };
 
 /// How long the device here waits on a quiet host before it counts it lost.
@@ -487,5 +487,95 @@ fn a_session_opened_while_reconnecting_is_drawn_once_back() {
         let id = asked(&world).await;
         answer(&world, id, b"late");
         phone.until_screen(b"late").await;
+    });
+}
+
+// Remote starts: a device starts a session, sees it, and a resend across a
+// reconnect still makes one.
+
+/// A world whose project "p" may be started in, a start making session "s".
+async fn startable() -> World {
+    let world = world().await;
+    world.fake.folders.lock().insert(
+        "p".into(),
+        kriyon_remote::authorize::ProjectFolder::Approved,
+    );
+    *world.fake.start_result.lock() = Ok("s".into());
+    world
+}
+
+impl Phone {
+    async fn until_projects(&self) {
+        wait_until("the project list", || {
+            self.seen
+                .last()
+                .is_some_and(|(_, view)| view.projects.iter().any(|project| project.id == "p"))
+        })
+        .await;
+    }
+}
+
+#[test]
+fn a_controller_starts_a_session_then_sees_its_screen() {
+    run(async {
+        let world = startable().await;
+        let _beats = Beats::start(&world);
+        let phone = Phone::connect(&world, 3, Role::Controller).await;
+        phone.until_projects().await;
+        let started = phone
+            .rt
+            .start_session(&phone.host, "p", Some("Fix login".into()))
+            .await;
+        assert_eq!(started, Ok("s".to_string()));
+        let asked_for = world.fake.starts.lock().clone();
+        assert_eq!(asked_for.len(), 1);
+        assert_eq!(asked_for[0].1.title.as_deref(), Some("Fix login"));
+        watching(&world, &phone, b"the new session").await;
+    });
+}
+
+#[test]
+fn a_start_resent_across_a_reconnect_makes_one_session() {
+    run(async {
+        let world = startable().await;
+        let _beats = Beats::start(&world);
+        *world.fake.start_delay.lock() = Duration::from_millis(800);
+        let phone = Arc::new(Phone::connect(&world, 3, Role::Controller).await);
+        phone.until_projects().await;
+        let starting = {
+            let phone = Arc::clone(&phone);
+            tokio::spawn(async move { phone.rt.start_session(&phone.host, "p", None).await })
+        };
+        wait_until("the start reaching the host", || {
+            !world.fake.starts.lock().is_empty()
+        })
+        .await;
+        // The link drops before the answer comes.
+        world.host.reconnect(&phone.me);
+        wait_until("the drop", || phone.state() != Some(LinkState::Connected)).await;
+        phone.rt.wake();
+        let started = tokio::time::timeout(PATIENCE, starting)
+            .await
+            .expect("answered after the reconnect")
+            .expect("task");
+        assert_eq!(started, Ok("s".to_string()));
+        assert_eq!(world.fake.starts.lock().len(), 1, "one session, not two");
+    });
+}
+
+#[test]
+fn a_viewer_cant_start_and_is_told_why_in_words() {
+    run(async {
+        let world = startable().await;
+        let _beats = Beats::start(&world);
+        let phone = Phone::connect(&world, 3, Role::Viewer).await;
+        phone.until_projects().await;
+        let refused = phone.rt.start_session(&phone.host, "p", None).await;
+        assert_eq!(refused, Err(StartError::Refused(RefuseReason::NotAllowed)));
+        assert_eq!(
+            refused.expect_err("refused").words(),
+            "This device isn't allowed to do that."
+        );
+        assert!(world.fake.starts.lock().is_empty());
     });
 }

@@ -11,7 +11,7 @@ use std::time::Instant;
 
 use crate::compress::{CompressError, Kind, SnapshotHead, SnapshotParts, Unpacker};
 use crate::message::{
-    Epoch, FromDevice, Holder, RefuseReason, Role, SessionId, SessionInfo, ToDevice,
+    Epoch, FromDevice, Holder, ProjectInfo, RefuseReason, Role, SessionId, SessionInfo, ToDevice,
 };
 use crate::screen::{Follow, ScreenFollower};
 
@@ -32,6 +32,8 @@ pub struct HostView {
     pub control: HashMap<SessionId, ControlState>,
     /// The last refusal the host sent on the control stream.
     pub refused: Option<RefuseReason>,
+    /// Where a Controller may start a session, as the host last said.
+    pub projects: Vec<ProjectInfo>,
 }
 
 impl HostView {
@@ -73,6 +75,7 @@ impl HostView {
                 );
             }
             ToDevice::Refused { reason } => self.refused = Some(*reason),
+            ToDevice::ProjectList { projects } => self.projects.clone_from(projects),
             // Heartbeats are the link's; screens belong on session streams.
             _ => return false,
         }
@@ -229,8 +232,77 @@ impl SessionScreen {
     }
 }
 
+/// What a refusal means, in words a person reads: the same on the desktop
+/// and the phone.
+#[must_use]
+pub fn refusal_words(reason: RefuseReason) -> &'static str {
+    match reason {
+        RefuseReason::NotPaired => "This device isn't paired with that computer any more.",
+        RefuseReason::NoSuchSession => "That session isn't there any more.",
+        RefuseReason::NotAllowed => "This device isn't allowed to do that.",
+        RefuseReason::NotInControl => "You don't have control of this session.",
+        RefuseReason::Stale => {
+            "The screen changed before that arrived. Look again, then try again."
+        }
+        RefuseReason::OutOfRange => "That is too big to send.",
+        RefuseReason::DialogOpen => "A question is showing there. Answer it first.",
+        RefuseReason::FolderNotAllowed => {
+            "That project's folder isn't one sessions can start in on that computer."
+        }
+        RefuseReason::UnknownMessage => "That computer's Kriyon doesn't know that request.",
+        RefuseReason::TooOld { .. } => "Update Kriyon on this device to use that computer.",
+        RefuseReason::NoSuchProject => "That project isn't on that computer any more.",
+        RefuseReason::ScreenTooLarge => "That screen is too big to show here.",
+        RefuseReason::StartFailed => "The session couldn't be started on that computer.",
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_project_list_replaces_the_last_one() {
+        let mut view = HostView::default();
+        let first = vec![ProjectInfo {
+            id: "a".into(),
+            name: "app".into(),
+            parked: false,
+        }];
+        assert!(view.apply(&ToDevice::ProjectList {
+            projects: first.clone()
+        }));
+        assert_eq!(view.projects, first);
+        assert!(view.apply(&ToDevice::ProjectList { projects: vec![] }));
+        assert_eq!(view.projects, Vec::<ProjectInfo>::new());
+    }
+
+    #[test]
+    fn every_refusal_has_its_own_words() {
+        let reasons = [
+            RefuseReason::NotPaired,
+            RefuseReason::NoSuchSession,
+            RefuseReason::NotAllowed,
+            RefuseReason::NotInControl,
+            RefuseReason::Stale,
+            RefuseReason::OutOfRange,
+            RefuseReason::DialogOpen,
+            RefuseReason::FolderNotAllowed,
+            RefuseReason::UnknownMessage,
+            RefuseReason::TooOld { min_minor: 1 },
+            RefuseReason::NoSuchProject,
+            RefuseReason::ScreenTooLarge,
+            RefuseReason::StartFailed,
+        ];
+        let words: std::collections::HashSet<&str> = reasons
+            .iter()
+            .map(|reason| refusal_words(*reason))
+            .collect();
+        assert_eq!(words.len(), reasons.len());
+        assert_eq!(
+            refusal_words(RefuseReason::FolderNotAllowed),
+            "That project's folder isn't one sessions can start in on that computer."
+        );
+    }
+
     use kriyon_core::session::SessionStatus;
     use kriyon_core::standing::StandingState;
 
