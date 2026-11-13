@@ -14,7 +14,8 @@
 //! - [`host_runtime`]: [Remote access] on the host: the switch, the accept
 //!   loop and the one pairing in progress, and [`host_runtime::Serve`],
 //!   serving paired devices their control and session streams; the app
-//!   comes in through [`host_runtime::ServeHost`].
+//!   comes in through [`host_runtime::ServeHost`]. Behind the `host-runtime`
+//!   feature: the phone leaves it out.
 //! - [`framed`]: messages over a QUIC stream, with the `kriyon-remote` codec.
 //! - `test_support` (the `test-support` feature): shared fakes for tests
 //!   over loopback.
@@ -24,6 +25,7 @@ pub mod device_runtime;
 pub mod endpoint;
 pub mod framed;
 pub mod host;
+#[cfg(feature = "host-runtime")]
 pub mod host_runtime;
 pub mod invite;
 pub mod keys;

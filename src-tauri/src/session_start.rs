@@ -250,8 +250,7 @@ async fn start_remote_once(
     let (made, project) = tauri::async_runtime::spawn_blocking(move || {
         let (app, project_id) = looking;
         let host = crate::remote_host_rt::AppServeHost(app.clone());
-        let made = crate::remote_starts::answered(&store(&app).0.lock(), &device, &request_id, now);
-        if let Some(made) = made {
+        if let Some(made) = host.started(&device, &request_id) {
             return Ok((Some(made), None));
         }
         // Checked again here: the project may have changed since the check.

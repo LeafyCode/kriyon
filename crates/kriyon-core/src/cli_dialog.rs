@@ -150,9 +150,9 @@ pub trait ScreenRows {
     fn filled(&self, row: u16) -> bool;
     /// `row`'s text, as the desktop's terminal reads it.
     fn text(&self, row: u16) -> String;
-    /// `count` rows from `first`, with their colours and attributes, as the
-    /// terminal would draw them.
-    fn formatted(&self, first: u16, count: u16) -> Vec<Vec<u8>>;
+    /// Each of `count` rows from `first`, with its colours and attributes as
+    /// the terminal would draw it, in turn to `each`.
+    fn each_formatted(&self, first: u16, count: u16, each: &mut dyn FnMut(&[u8]));
 }
 
 /// Whether `screen` shows a [CLI dialog], and a fingerprint of it while it
@@ -190,9 +190,9 @@ pub fn dialog_look(screen: &impl ScreenRows) -> (bool, u64) {
         .copied()
         .unwrap_or_else(|| last.saturating_sub(DIALOG_ROWS - 1));
     let mut hasher = std::hash::DefaultHasher::new();
-    for row in screen.formatted(first, last.max(first) - first + 1) {
-        std::hash::Hash::hash(&row, &mut hasher);
-    }
+    screen.each_formatted(first, last.max(first) - first + 1, &mut |row| {
+        std::hash::Hash::hash(row, &mut hasher);
+    });
     (true, std::hash::Hasher::finish(&hasher))
 }
 
@@ -216,14 +216,12 @@ mod tests {
         fn text(&self, row: u16) -> String {
             self.0[usize::from(row)].clone()
         }
-        fn formatted(&self, first: u16, count: u16) -> Vec<Vec<u8>> {
-            (first..first + count)
-                .map(|row| {
-                    let mut bytes = self.0[usize::from(row)].clone().into_bytes();
-                    bytes.push(self.1[usize::from(row)]);
-                    bytes
-                })
-                .collect()
+        fn each_formatted(&self, first: u16, count: u16, each: &mut dyn FnMut(&[u8])) {
+            for row in first..first + count {
+                let mut bytes = self.0[usize::from(row)].clone().into_bytes();
+                bytes.push(self.1[usize::from(row)]);
+                each(&bytes);
+            }
         }
     }
 

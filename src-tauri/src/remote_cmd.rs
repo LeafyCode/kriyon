@@ -665,7 +665,7 @@ async fn release_everywhere(app: &tauri::AppHandle, device: [u8; 32]) {
     let _ = tauri::async_runtime::spawn_blocking(move || {
         use tauri::Manager as _;
         let state = app.state::<crate::AppState>();
-        let engines = crate::session_writer::live_engines(&state);
+        let engines = crate::session_registry::live_engines(&state);
         state.writers.release_device(&device, &engines);
     })
     .await;

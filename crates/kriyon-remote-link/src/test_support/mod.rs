@@ -14,6 +14,7 @@ use crate::device_runtime::{DeviceEvents, DeviceRuntime};
 use crate::host::PairedDevices;
 use crate::LinkConfig;
 
+#[cfg(feature = "host-runtime")]
 pub mod host_world;
 
 /// The [Paired device]s a host knows, in memory.

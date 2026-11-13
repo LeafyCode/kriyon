@@ -32,7 +32,7 @@ reqwest = { version = "0.13", default-features = false, features = ["json", "rus
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 kriyon-core = { path = "../crates/kriyon-core" }
 kriyon-remote = { path = "../crates/kriyon-remote" }
-kriyon-remote-link = { path = "../crates/kriyon-remote-link" }
+kriyon-remote-link = { path = "../crates/kriyon-remote-link", features = ["host-runtime"] }
 kriyon-relay-client = { path = "../crates/kriyon-relay-client" }
 iroh = { version = "1.4.1", default-features = false, features = ["tls-ring"] }
 qrcode = { version = "0.14.1", default-features = false }
@@ -85,7 +85,7 @@ libproc = "0.14"
 libc = "0.2.189"
 
 [dev-dependencies]
-kriyon-remote-link = { path = "../crates/kriyon-remote-link", features = ["test-support"] }
+kriyon-remote-link = { path = "../crates/kriyon-remote-link", features = ["host-runtime", "test-support"] }
 # The real push sender, so host-side wakes are tested against it.
 kriyon-push = { path = "../crates/kriyon-push" }
 # The mock runtime behind `tauri::test`, so the watch-signal route (state

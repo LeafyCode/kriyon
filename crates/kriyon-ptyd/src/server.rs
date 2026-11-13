@@ -144,13 +144,16 @@ impl ScreenRows for VtRows<'_> {
         row_text(self.0, row)
     }
 
-    fn formatted(&self, first: u16, count: u16) -> Vec<Vec<u8>> {
+    fn each_formatted(&self, first: u16, count: u16, each: &mut dyn FnMut(&[u8])) {
         let (_, cols) = self.0.size();
-        self.0
+        for row in self
+            .0
             .rows_formatted(0, cols)
             .skip(usize::from(first))
             .take(usize::from(count))
-            .collect()
+        {
+            each(&row);
+        }
     }
 }
 

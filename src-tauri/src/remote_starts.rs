@@ -23,27 +23,40 @@ impl RemoteStarts {
     /// Run `start` for `key` alone: a resend that comes while it runs waits
     /// for it (and then finds its record), while other starts go ahead.
     pub async fn once<T>(&self, key: StartKey, start: impl std::future::Future<Output = T>) -> T {
-        let lock = Arc::clone(self.under_way.lock().entry(key).or_default());
-        let done = {
-            let _this_request = lock.lock().await;
-            start.await
+        let held = Held {
+            starts: self,
+            key,
+            lock: Arc::clone(self.under_way.lock().entry(key).or_default()),
         };
-        drop(lock);
-        // Gone once no one else waits on it.
-        let mut under_way = self.under_way.lock();
-        if under_way
-            .get(&key)
-            .is_some_and(|held| Arc::strong_count(held) == 1)
-        {
-            under_way.remove(&key);
-        }
-        done
+        let _this_request = held.lock.lock().await;
+        start.await
     }
 
     /// How many starts have a lock now.
     #[cfg(test)]
     fn under_way(&self) -> usize {
         self.under_way.lock().len()
+    }
+}
+
+/// A start's hold on its key's lock: let go when the start ends, or is
+/// dropped part way (its task cancelled), and the lock goes with the last.
+struct Held<'a> {
+    starts: &'a RemoteStarts,
+    key: StartKey,
+    lock: Arc<tokio::sync::Mutex<()>>,
+}
+
+impl Drop for Held<'_> {
+    fn drop(&mut self) {
+        // The map's and this one's: no one else waits on it.
+        let mut under_way = self.starts.under_way.lock();
+        if under_way
+            .get(&self.key)
+            .is_some_and(|held| Arc::strong_count(held) == 2)
+        {
+            under_way.remove(&self.key);
+        }
     }
 }
 
@@ -102,22 +115,23 @@ mod tests {
         tauri::async_runtime::block_on(async {
             let starts = Arc::new(RemoteStarts::default());
             let made = Arc::new(AtomicUsize::new(0));
+            let (inside, entered) = tokio::sync::oneshot::channel::<()>();
             let (release, held) = tokio::sync::oneshot::channel::<()>();
             let first = {
                 let (starts, made) = (Arc::clone(&starts), Arc::clone(&made));
                 tokio::spawn(async move {
                     starts
                         .once((PHONE, [1; 16]), async {
+                            let _ = inside.send(());
                             let _ = held.await;
                             made.fetch_add(1, Ordering::SeqCst)
                         })
                         .await
                 })
             };
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            entered.await.expect("the first is under way");
             // Another request goes ahead at once.
-            let other = starts.once((PHONE, [2; 16]), async { 99 }).await;
-            assert_eq!(other, 99);
+            assert_eq!(starts.once((PHONE, [2; 16]), async { 99 }).await, 99);
             // The resend waits for the first, then runs after it.
             let resend = {
                 let (starts, made) = (Arc::clone(&starts), Arc::clone(&made));
@@ -127,12 +141,31 @@ mod tests {
                         .await
                 })
             };
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-            assert!(!resend.is_finished(), "waits for the first");
             let _ = release.send(());
             assert_eq!(first.await.expect("first"), 0);
             assert_eq!(resend.await.expect("resend"), 1, "after the first made it");
             assert_eq!(starts.under_way(), 0, "nothing left behind");
+        });
+    }
+
+    #[test]
+    fn a_start_dropped_part_way_leaves_nothing_behind() {
+        tauri::async_runtime::block_on(async {
+            let starts = Arc::new(RemoteStarts::default());
+            let task = {
+                let starts = Arc::clone(&starts);
+                tokio::spawn(async move {
+                    starts
+                        .once((PHONE, [1; 16]), std::future::pending::<()>())
+                        .await;
+                })
+            };
+            while starts.under_way() == 0 {
+                tokio::task::yield_now().await;
+            }
+            task.abort();
+            let _ = task.await;
+            assert_eq!(starts.under_way(), 0);
         });
     }
 }

@@ -114,6 +114,23 @@ pub(crate) fn forget(state: &AppState, id: &SessionId) -> Option<Session> {
     state.sessions.lock().remove(id)
 }
 
+/// Every live session's engine, collected under the sessions lock and let
+/// go before any session's gate is taken (the writers' lock order).
+#[must_use]
+pub fn live_engines(
+    state: &crate::AppState,
+) -> Vec<(
+    kriyon_core::session::SessionId,
+    std::sync::Arc<crate::daemon_client::DaemonClient>,
+)> {
+    state
+        .sessions
+        .lock()
+        .iter()
+        .map(|(id, session)| (id.clone(), std::sync::Arc::clone(&session.engine)))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

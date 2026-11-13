@@ -359,10 +359,10 @@ impl Writers {
     /// sessions' engines, collected by the caller before this takes any gate
     /// lock. Blocking: call it off the async runtime. Returns what changed,
     /// for the devices to hear.
-    pub fn release_device(
+    pub fn release_device<E: SessionEngine + ?Sized>(
         &self,
         device: &EndpointId,
-        engines: &[(SessionId, Arc<dyn SessionEngine>)],
+        engines: &[(SessionId, Arc<E>)],
     ) -> Vec<(SessionId, HostTook)> {
         let mut changed = Vec::new();
         for (id, engine) in engines {
@@ -384,20 +384,6 @@ impl Writers {
         }
         changed
     }
-}
-
-/// Every live session's engine, collected under the sessions lock and
-/// released before any gate is taken (the lock order above).
-pub fn live_engines(state: &crate::AppState) -> Vec<(SessionId, Arc<dyn SessionEngine>)> {
-    state
-        .sessions
-        .lock()
-        .iter()
-        .map(|(id, session)| {
-            let engine: Arc<dyn SessionEngine> = Arc::clone(&session.engine) as _;
-            (id.clone(), engine)
-        })
-        .collect()
 }
 
 #[cfg(test)]

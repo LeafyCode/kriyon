@@ -291,7 +291,7 @@ impl ServeHost for AppServeHost {
 
     fn release(&self, device: &EndpointId) {
         let state = self.0.state::<AppState>();
-        let engines = crate::session_writer::live_engines(&state);
+        let engines = crate::session_registry::live_engines(&state);
         // The writers tell every device (their change hook).
         let _ = state.writers.release_device(device, &engines);
     }
