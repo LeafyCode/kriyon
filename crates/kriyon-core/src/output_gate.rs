@@ -30,6 +30,17 @@ use std::time::{Duration, Instant};
 /// hidden one never does. The longest a session is paused by a hidden window.
 pub const STALL_AFTER: Duration = Duration::from_millis(500);
 
+/// A webview's gate paces, then holds, output once this many bytes are
+/// delivered but not drained.
+pub const WEBVIEW_HIGH_WATER: usize = 128 * 1024;
+/// A webview's gate releases held output once in-flight bytes drain to this.
+pub const WEBVIEW_LOW_WATER: usize = 16 * 1024;
+/// The most output a webview's gate holds while it has stopped painting (a
+/// hidden window gets no animation frames). Past it the held bytes are dropped
+/// and the webview repaints from the daemon's screen when it is back: the
+/// app's memory per session, however long the window stays hidden.
+pub const WEBVIEW_HOLD_CAP: usize = 1024 * 1024;
+
 /// Delivered where output is cut, so the dropped bytes cannot leave the
 /// terminal's parser mid-sequence: string terminator (ends an OSC or DCS that
 /// lost its end), then end of synchronized output (DEC 2026). Both do nothing
@@ -81,6 +92,12 @@ impl OutputGate {
             held: VecDeque::new(),
             skipped: false,
         }
+    }
+
+    /// The gate for a webview that draws a session's terminal (ADR-0059).
+    #[must_use]
+    pub fn for_webview(now: Instant) -> Self {
+        Self::new(WEBVIEW_HIGH_WATER, WEBVIEW_LOW_WATER, WEBVIEW_HOLD_CAP, now)
     }
 
     /// A gate that delivers everything at once and never paces or holds: for
@@ -358,5 +375,26 @@ mod tests {
             assert_eq!(g.pace_until(t0), None);
             assert!(g.offer(vec![0; 64 * 1024], t0).is_some());
         }
+    }
+
+    #[test]
+    fn a_webview_gate_paces_at_its_high_mark_and_holds_up_to_its_cap() {
+        let t0 = Instant::now();
+        let mut g = OutputGate::for_webview(t0);
+        assert!(g.offer(vec![0; WEBVIEW_HIGH_WATER - 1], t0).is_some());
+        assert_eq!(g.pace_until(t0), None, "under the high mark");
+        assert!(g.offer(vec![0; 1], t0).is_some());
+        assert_eq!(g.pace_until(t0), Some(t0 + STALL_AFTER));
+        let stalled = t0 + STALL_AFTER;
+        assert_eq!(
+            g.offer(vec![0; WEBVIEW_HOLD_CAP], stalled),
+            None,
+            "held, up to the cap"
+        );
+        assert_eq!(
+            g.offer(vec![0; 1], stalled),
+            Some(CUT_SEAL.to_vec()),
+            "then cut"
+        );
     }
 }

@@ -18,15 +18,6 @@ use kriyon_core::session::{EngineError, SessionEngine, SessionId};
 use kriyon_core::wire::{self, Frame, FrameDecoder};
 use parking_lot::{Condvar, Mutex};
 
-/// Hold output for the webview once this many bytes are delivered but not drained.
-const HIGH_WATER: usize = 128 * 1024;
-/// Release held output once in-flight bytes drain to this or below.
-const LOW_WATER: usize = 16 * 1024;
-/// The most output held for a webview that has stopped painting (a hidden
-/// window gets no animation frames). Past it the held bytes are dropped and the
-/// webview repaints from the daemon's screen snapshot when it is back. Bounds
-/// the app's memory per session however long the window stays hidden.
-const HOLD_CAP: usize = 1024 * 1024;
 const READ_BUF_LEN: usize = 8192;
 /// How long one frame may take to reach the daemon. A frame is a few bytes to a
 /// few kilobytes on a local socket, and the daemon drains its client on a thread
@@ -132,7 +123,7 @@ impl DaemonClient {
         G: Fn(bool) + Send + 'static,
         H: FnOnce() + Send + 'static,
     {
-        let gate = OutputGate::new(HIGH_WATER, LOW_WATER, HOLD_CAP, Instant::now());
+        let gate = OutputGate::for_webview(Instant::now());
         Self::build(stream, id, on_read, on_output, on_busy, on_exit, gate)
     }
 
@@ -445,6 +436,9 @@ pub(crate) mod test_support {
 mod tests {
     use super::test_support::spawn_greeting_daemon;
     use super::*;
+    use kriyon_core::output_gate::{
+        WEBVIEW_HIGH_WATER as HIGH_WATER, WEBVIEW_HOLD_CAP as HOLD_CAP,
+    };
 
     #[test]
     fn the_client_keeps_the_last_dialog_state_the_daemon_sent() {
