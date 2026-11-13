@@ -615,7 +615,9 @@ pub fn request_repaint(state: tauri::State<'_, AppState>, id: String) -> Result<
 /// Resize the session's pty to `cols` x `rows`.
 ///
 /// # Errors
-/// Returns an error string if the session is unknown or the resize fails.
+/// Returns an error string if the size is out of range
+/// ([`kriyon_core::session::check_screen_size`]), the session is unknown or
+/// the resize fails.
 // Signature is dictated by Tauri's command macro (State + by-value args).
 #[allow(clippy::needless_pass_by_value)]
 #[tauri::command]
@@ -625,6 +627,9 @@ pub fn resize_pty(
     cols: u16,
     rows: u16,
 ) -> Result<(), String> {
+    // Checked here as well as in the daemon, so a bad size from the webview
+    // is refused before a frame is sent, and the command returns the error.
+    kriyon_core::session::check_screen_size(cols, rows).map_err(|e| e.to_string())?;
     let sessions = state.sessions.lock();
     let session = sessions
         .get(&SessionId(id))

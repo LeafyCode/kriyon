@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use kriyon_core::lease::DetachedLease;
-use kriyon_core::session::{SessionEngine, SessionId, SpawnSpec};
+use kriyon_core::session::{check_screen_size, EngineError, SessionEngine, SessionId, SpawnSpec};
 use kriyon_core::wire::{Frame, FrameDecoder};
 use parking_lot::Mutex;
 
@@ -149,10 +149,23 @@ impl Shared {
         write_or_drop(&mut client, &Frame::Busy(busy));
     }
 
-    /// Resize the server-side emulator so its screen snapshot matches the
-    /// client's terminal. Called alongside the PTY resize.
-    fn resize(&self, cols: u16, rows: u16) {
-        self.emulator.lock().screen_mut().set_size(rows, cols);
+    /// Resize the PTY, then the server-side emulator so its screen snapshot
+    /// matches. A size out of range reaches neither (a zero side panics the
+    /// emulator, a huge one exhausts memory), and a failed PTY resize leaves
+    /// the emulator at the size the tty still has.
+    fn resize<E: SessionEngine + ?Sized>(
+        &self,
+        engine: &E,
+        cols: u16,
+        rows: u16,
+    ) -> Result<(), EngineError> {
+        check_screen_size(cols, rows)?;
+        // Held across the PTY resize, so output the child draws at the new
+        // size after SIGWINCH is never parsed at the old one.
+        let mut emulator = self.emulator.lock();
+        engine.resize(cols, rows)?;
+        emulator.screen_mut().set_size(rows, cols);
+        Ok(())
     }
 
     fn detach(&self) {
@@ -367,8 +380,9 @@ fn serve_client(stream: &mut UnixStream, engine: &Arc<PtyEngine>, shared: &Arc<S
                         // Attach carries the initial size; treat like a resize.
                         // Both the PTY and the server-side emulator must track it.
                         Frame::Resize { cols, rows } | Frame::Attach { cols, rows } => {
-                            let _ = engine.resize(cols, rows);
-                            shared.resize(cols, rows);
+                            if let Err(e) = shared.resize(engine.as_ref(), cols, rows) {
+                                eprintln!("kriyon-ptyd: resize to {cols}x{rows} refused: {e}");
+                            }
                         }
                         Frame::Repaint => shared.repaint(),
                         Frame::Shutdown => return true,
@@ -384,12 +398,97 @@ fn serve_client(stream: &mut UnixStream, engine: &Arc<PtyEngine>, shared: &Arc<S
 #[cfg(test)]
 mod tests {
     use super::{
-        deliver_stdin, screen_snapshot, write_or_drop, ENTER_ALTERNATE_SCREEN,
+        deliver_stdin, screen_snapshot, write_or_drop, Shared, ENTER_ALTERNATE_SCREEN,
         LEAVE_ALTERNATE_SCREEN,
     };
+    use kriyon_core::lease::DetachedLease;
     use kriyon_core::session::{EngineError, SessionEngine, SessionId};
     use kriyon_core::wire::Frame;
+    use parking_lot::Mutex;
     use std::io::{self, Write};
+    use std::sync::atomic::AtomicBool;
+    use std::time::{Duration, Instant};
+
+    /// Shared daemon state with no client, its emulator at 80x24.
+    fn shared() -> Shared {
+        Shared {
+            client: Mutex::new(None),
+            emulator: Mutex::new(vt100::Parser::new(24, 80, 0)),
+            busy: AtomicBool::new(false),
+            lease: Mutex::new(DetachedLease::new(Duration::from_secs(60), Instant::now())),
+        }
+    }
+
+    /// A session that records each pty resize, and fails them when told to.
+    struct ResizeEngine {
+        id: SessionId,
+        fail: bool,
+        resized: Mutex<Vec<(u16, u16)>>,
+    }
+    impl ResizeEngine {
+        fn new(fail: bool) -> Self {
+            Self {
+                id: SessionId("s".into()),
+                fail,
+                resized: Mutex::new(Vec::new()),
+            }
+        }
+    }
+    impl SessionEngine for ResizeEngine {
+        fn id(&self) -> &SessionId {
+            &self.id
+        }
+        fn write_stdin(&self, _: &[u8]) -> Result<(), EngineError> {
+            Ok(())
+        }
+        fn resize(&self, cols: u16, rows: u16) -> Result<(), EngineError> {
+            self.resized.lock().push((cols, rows));
+            if self.fail {
+                Err(EngineError::Pty("not a tty".into()))
+            } else {
+                Ok(())
+            }
+        }
+        fn close(&self) -> Result<(), EngineError> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_valid_size_resizes_the_pty_and_the_emulator() {
+        let (shared, engine) = (shared(), ResizeEngine::new(false));
+        shared.resize(&engine, 120, 40).expect("120x40 is valid");
+        assert_eq!(*engine.resized.lock(), vec![(120, 40)]);
+        assert_eq!(shared.emulator.lock().screen().size(), (40, 120));
+    }
+
+    #[test]
+    fn a_zero_or_huge_size_reaches_neither_the_pty_nor_the_emulator() {
+        for (cols, rows) in [(80, 0), (0, 24), (u16::MAX, u16::MAX)] {
+            let (shared, engine) = (shared(), ResizeEngine::new(false));
+            assert!(matches!(
+                shared.resize(&engine, cols, rows),
+                Err(EngineError::InvalidSize { .. })
+            ));
+            assert_eq!(
+                *engine.resized.lock(),
+                vec![],
+                "{cols}x{rows} reached the pty"
+            );
+            assert_eq!(shared.emulator.lock().screen().size(), (24, 80));
+        }
+    }
+
+    #[test]
+    fn a_failed_pty_resize_leaves_the_emulator_matching_the_pty() {
+        let (shared, engine) = (shared(), ResizeEngine::new(true));
+        assert!(shared.resize(&engine, 120, 40).is_err());
+        assert_eq!(
+            shared.emulator.lock().screen().size(),
+            (24, 80),
+            "the pty kept its old size, so the snapshot must too"
+        );
+    }
 
     /// A session whose stdin write fails or succeeds, as told.
     struct StdinEngine {
