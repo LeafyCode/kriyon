@@ -16,6 +16,7 @@ pub mod git_run;
 pub mod handoff_rt;
 pub mod hooks;
 pub mod integration;
+pub mod keyring_vault;
 pub mod links_cmd;
 pub mod memory;
 pub mod menu;

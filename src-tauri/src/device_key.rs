@@ -8,31 +8,66 @@
 //! build with a provisioning profile). Otherwise it falls back to the login
 //! keychain, which is never synced either and is readable while the person is
 //! logged in, by this app only.
+//!
+//! On Linux, both are kept in the desktop's keyring (the Secret Service:
+//! GNOME Keyring, `KWallet`; `keyring_vault`), which keeps them encrypted and
+//! readable while the person's session is unlocked. A keyring that is
+//! missing or stays locked is an error; nothing falls back to a file.
 
-#[cfg(target_os = "macos")]
 use kriyon_remote_link::keys::KeyVault;
 use kriyon_remote_link::keys::SecretVault;
 
-/// The app's keychain item `account` (macOS); elsewhere, none yet: reads
-/// find nothing and writes fail.
+/// The app's secret `account`: the keychain item (macOS), the keyring item
+/// (Linux); elsewhere, none yet: reads find nothing and writes fail.
 #[must_use]
 pub fn app_vault(identifier: &str, account: &'static str) -> Box<dyn SecretVault> {
     #[cfg(target_os = "macos")]
     {
         Box::new(Keychain::item(identifier, account))
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "linux")]
+    {
+        Box::new(crate::keyring_vault::KeyringVault::new(
+            crate::keyring_vault::SecretServiceKeyring,
+            identifier,
+            account,
+        ))
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
         let _ = (identifier, account);
         Box::new(NoVault)
     }
 }
 
+/// Where the host's [Device key] is kept, or `None` on a platform with no
+/// keychain support yet.
+#[must_use]
+pub fn key_vault(identifier: &str) -> Option<Box<dyn KeyVault>> {
+    #[cfg(target_os = "macos")]
+    {
+        Some(Box::new(Keychain::for_app(identifier)))
+    }
+    #[cfg(target_os = "linux")]
+    {
+        Some(Box::new(crate::keyring_vault::KeyringVault::new(
+            crate::keyring_vault::SecretServiceKeyring,
+            identifier,
+            "device-key",
+        )))
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        let _ = identifier;
+        None
+    }
+}
+
 /// No keychain on this platform yet.
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 struct NoVault;
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 impl SecretVault for NoVault {
     fn read(&self) -> Result<Option<Vec<u8>>, String> {
         Ok(None)

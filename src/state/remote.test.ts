@@ -97,10 +97,12 @@ test("turning off needs no consent, and drops the QR code", async () => {
 });
 
 test("a failure to turn on is shown, and the switch stays off", async () => {
-  vi.mocked(remoteSetEnabled).mockRejectedValue("remote access needs macOS");
+  vi.mocked(remoteSetEnabled).mockRejectedValue(
+    "remote access needs macOS or Linux for now"
+  );
   useRemote.getState().askToTurnOn();
   await useRemote.getState().turnOn();
-  expect(useRemote.getState().error).toContain("needs macOS");
+  expect(useRemote.getState().error).toContain("needs macOS or Linux");
   expect(useRemote.getState().status).toBeNull();
 });
 

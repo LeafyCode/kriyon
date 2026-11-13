@@ -79,7 +79,7 @@ jobs:
         env:
           PACKAGES: >-
             libwebkit2gtk-4.1-dev librsvg2-dev patchelf libxdo-dev libssl-dev
-            libayatana-appindicator3-dev
+            libayatana-appindicator3-dev gnome-keyring dbus-daemon
         run: |
           echo "packages=$PACKAGES" >> "$GITHUB_OUTPUT"
           hash="$(echo "$PACKAGES" | sha256sum | cut -c1-16)"
@@ -131,6 +131,19 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
+      # Remote access's keyring on Linux against a real Secret Service:
+      # GNOME Keyring in a D-Bus session of its own, unlocked with a
+      # throwaway password. No secret of the repo's is involved.
+      - name: Keyring against a real Secret Service
+        run: |
+          dbus-run-session -- sh -c '
+            set -eu
+            echo -n ci-only | gnome-keyring-daemon --components=secrets --daemonize --unlock >/dev/null
+            # The keyring owns the Secret Service name, or the test means nothing.
+            dbus-send --session --print-reply --dest=org.freedesktop.DBus /org/freedesktop/DBus \
+              org.freedesktop.DBus.NameHasOwner string:org.freedesktop.secrets | grep -q "boolean true"
+            cargo test -p kriyon --lib keyring_vault -- --ignored
+          '
 
   # The app is Mac-first, so the Mac is where clippy, the tests and a real
   # app build have to pass. macOS runners cost ten times as much on a private

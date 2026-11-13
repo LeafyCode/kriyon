@@ -269,22 +269,27 @@ pub(crate) fn host_name() -> String {
     }
 }
 
-/// The host's [Device key], made on first use.
+/// The host's [Device key], made on first use, kept in this computer's
+/// keychain (macOS) or keyring (Linux).
 pub(crate) fn device_key(app: &tauri::AppHandle) -> Result<[u8; 32], String> {
-    #[cfg(target_os = "macos")]
-    {
-        let vault = crate::device_key::Keychain::for_app(&app.config().identifier);
-        kriyon_remote_link::keys::load_or_create(
-            &vault,
-            kriyon_remote_link::endpoint::generate_secret_key,
-        )
-        .map_err(|e| e.to_string())
+    // On Linux each keyring read is a D-Bus round trip, and the key never
+    // changes once had: read it once per run.
+    #[cfg(target_os = "linux")]
+    static HAD: std::sync::OnceLock<[u8; 32]> = std::sync::OnceLock::new();
+    #[cfg(target_os = "linux")]
+    if let Some(key) = HAD.get() {
+        return Ok(*key);
     }
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _ = app;
-        Err("remote access needs macOS for now".to_string())
-    }
+    let vault = crate::device_key::key_vault(&app.config().identifier)
+        .ok_or_else(|| "remote access needs macOS or Linux for now".to_string())?;
+    let key = kriyon_remote_link::keys::load_or_create(
+        vault.as_ref(),
+        kriyon_remote_link::endpoint::generate_secret_key,
+    )
+    .map_err(|e| e.to_string())?;
+    #[cfg(target_os = "linux")]
+    let _ = HAD.set(key);
+    Ok(key)
 }
 
 /// This computer's one endpoint, bound now if it isn't, with the device side

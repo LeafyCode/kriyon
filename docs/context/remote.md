@@ -15,6 +15,8 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
 - **Device key** — a device's own Ed25519 key pair; its public half is the device's iroh endpoint
   id. Made once and never replaced, since every pairing depends on it. On the Mac it is kept in the
   login keychain, never synced or sent; the stronger device-only mode needs a provisioning profile.
+  On Linux it is kept in the desktop's keyring (the Secret Service: GNOME Keyring, or KWallet
+  with its Secret Service on); a keyring that is missing or locked is an error, never a file.
   _Avoid_: node id, identity.
 - **Pairing** — adding a [Remote device] to a [Host] in person: an expiring QR code on the host,
   then the device's [Pairing code] typed into the host. The only way a device is ever trusted; an
@@ -65,7 +67,8 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
   _Avoid_: relay user, subscription (that is what pays for it).
 - **Device sign-in** — signing Kriyon in to BisBig with a device code (OAuth device grant, RFC
   8628): the app shows a short code and opens the BisBig sign-in page in the browser; the person
-  approves there. The app never sees a password. Its access token is kept in the keychain.
+  approves there. The app never sees a password. Its access token is kept in the keychain (on
+  Linux, the keyring).
   _Avoid_: login, account link.
 - **Sealed push token** — a phone's push token locked to the push sender's public key, one copy
   per [Host], with an expiry. Only the push sender can open it, in memory, for one alert. No
