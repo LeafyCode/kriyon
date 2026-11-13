@@ -14,149 +14,220 @@ Terms in [brackets] are in the glossary, [`docs/context/remote.md`](../../contex
 - **Relay** — passes encrypted QUIC packets between devices that can't reach
   each other directly. Can't read them. Ours needs a [Relay pass]; the pass
   format is in the relay contract, kept outside this spec.
-- **Push sender** — opens a [Sealed push token] and sends one alert. Stores nothing.
+- **Push sender** — opens a [Sealed push token] and sends one alert. Keeps
+  nothing on disk.
 
 The desktop app is the [PTY daemon]'s only client. The host side of this
 protocol lives in the app's Rust core and reads sessions through the same
 [Daemon client] the window uses.
 
+When [Remote access] is off, the host creates no iroh endpoint at all and
+makes no push calls.
+
 ## 2. Transport
 
 - iroh 1.x endpoint per device. The endpoint id is the device's Ed25519
-  public key ([Device key]); the secret stays in the OS keychain, never synced.
-- ALPN `kriyon/remote/1`. The number is the major protocol version; a new
-  major gets a new ALPN, and the host serves the last released one beside it.
+  public key ([Device key]). The secret stays in the OS keychain, this device
+  only (`ThisDeviceOnly` on iPhone), readable only while unlocked; never synced.
+- ALPNs: `kriyon/remote/1` and `kriyon/pair/1`. The number is the major
+  version. The host keeps a minimum major and minor it accepts and refuses
+  older ones; every security check lives in `authorize` (§8), which doesn't
+  depend on the version.
+- **No 0-RTT** on either ALPN: 0-RTT data can be replayed.
 - Address lookup: none by default (iroh's minimal preset). Each device stores
-  the host's endpoint id plus the ways to reach it it learned at pairing:
-  LAN addresses, an optional Tailscale address with the host's fixed port, and
-  the relay URL when the person subscribes.
-- One QUIC connection per device per host. Inside it:
+  the host's endpoint id plus the ways to reach it learned at pairing: LAN
+  addresses, an optional Tailscale address with the host's fixed port, and the
+  relay URL when the person subscribes.
+- The host checks the peer's endpoint id at accept time, before it opens or
+  accepts any stream. Handshakes from unpaired ids are rate-limited.
+- One QUIC connection per device per host. Inside it, at most 16 concurrent
+  bidirectional streams:
   - **Control stream** (first bidirectional stream): hello, heartbeats,
     session list, status, control changes, refusals.
-  - **One session stream per open session** (bidirectional): screen down,
-    input and resize up. Closing it detaches; the session keeps running.
+  - **One session stream per open session**, at most one per session per
+    device: screen down, input and resize up. Closing it detaches; the
+    session keeps running.
 
 ## 3. Encoding
 
-- Each message is `[u32 length, big-endian][postcard-encoded enum]`, the same
-  length-prefixed shape as the [Daemon frame]. Maximum length 1 MiB; a longer
-  length is a protocol error and closes the stream (never buffered).
-- Enums carry an `Unknown` arm on decode: an unknown message is skipped and
-  answered with `Refused { reason: UnknownMessage }`, never a crash. Fields are
-  only ever appended; removing or reordering one is a new major version.
-- Screen bytes are zstd-compressed per [Screen update].
+- Each message is `[u32 length, big-endian][varint tag][postcard body]`.
+- **Limits.** Host to device: 1 MiB per message. Device to host: `Input` and
+  `Compose` 64 KiB, `PushToken` 2 KiB, device name 64 bytes, anything else
+  4 KiB. A longer length is a protocol error and closes the stream; it is
+  never buffered.
+- **Unknown messages.** The tag is decoded first. An unknown tag is skipped
+  and answered with `Refused { reason: UnknownMessage }`, never a crash.
+  Trailing bytes after a known message are ignored.
+- **Adding fields.** postcard doesn't describe itself, so fields are appended
+  only at the end of a top-level message, never inside a nested struct or a
+  list item; otherwise add a new message type. The host never depends on a
+  new field for a security check unless it requires that minor version.
+- **Compression.** Each [Screen update] and snapshot is one independent zstd
+  frame, no dictionary, with the content size in the frame header. Decoders
+  use `window_log_max = 23` and refuse more than 8 MiB decompressed; that is a
+  protocol error and the device sends `Resync`. A snapshot bigger than 1 MiB
+  compressed is sent as numbered `SnapshotPart`s.
 
 ## 4. Pairing
 
-1. On the host the person picks a role and presses "Pair a device". The host
-   makes a one-time pairing secret (32 random bytes) valid for 5 minutes and
-   shows a QR code: host endpoint id, host addresses, the secret, the role.
-2. The device scans it and connects with ALPN `kriyon/pair/1`, sending its
-   endpoint id, a device name and an HMAC of its id under the secret.
-3. Both sides derive a 6-digit [Pairing code] from the QUIC connection's
-   exported keying material (RFC 5705 exporter, label `kriyon pairing`).
-   Both screens show it; the person confirms on both. A mismatch or a timeout
-   ends it.
-4. The host stores the device (endpoint id, name, role, paired at) in its
-   store. The secret is burnt after one use, success or not.
+1. On the host the person picks a role and presses "Pair a device". Only now,
+   and only while [Remote access] is on, does the host accept
+   `kriyon/pair/1`. It makes a one-time pairing secret (32 random bytes),
+   valid for 5 minutes, and stores the chosen role with it. It shows a QR
+   code: host endpoint id, host addresses, the secret.
+2. The device scans it, connects with `kriyon/pair/1` (which proves the host's
+   id, so a man in the middle is ruled out unless the QR leaked) and sends
+   its device name and `HMAC-SHA256(secret, "kriyon pair v1" || device_id || host_id)`.
+   The host compares in constant time. Wrong HMACs are rate-limited and don't
+   use up the secret; the first right one takes it, atomically.
+3. Both sides derive the 6-digit [Pairing code] from the connection's
+   exported keying material: label `EXPERIMENTAL kriyon pairing v1`, context
+   `host_id || device_id || SHA-256(secret)`, 8 bytes read as a big-endian
+   u64, mod 10^6, zero-padded.
+4. **The device shows the code; the person types it into the host.** Three
+   wrong tries burn the secret. If someone with a leaked QR connected first,
+   the real phone shows no code and pairing fails safe.
+5. The host stores the device (endpoint id, name, role from step 1, paired at)
+   and sends `Paired`. The device stores the host only after `Paired`. The
+   device never sends a role. The host shows the name as "named by the device".
 
-Removing a device on the host closes its links at once and forgets it. The
-device learns only that it was refused.
+**Removing a device or changing it to Viewer**, in this order: drop it from
+the `authorize` state; release its [Typing control] and bump the epoch on every
+session it held; close its connection; delete its sealed push token and its
+stored `request_id`s. A device refused with `NotPaired` stops retrying and
+shows "Removed from this computer".
 
 ## 5. Connecting
 
-1. Device opens `kriyon/remote/1`. iroh already proved both endpoint ids.
-2. Host looks up the remote endpoint id among [Paired device]s. Not found:
-   close with `NotPaired`.
-3. Device sends `Hello { app_version, protocol_minor, last_seen_runs }`. Host
-   answers `Welcome { host_name, protocol_minor, role, sessions }`.
-4. Heartbeat: host sends `Heartbeat { seq, at }` every 15 s from the app's main
-   loop, so it proves the app is alive, not just the socket. A device with no
-   heartbeat for 40 s shows "Disconnected, reconnecting" and turns typing off.
-5. Reconnect backs off to at most 30 s and retries at once on a network change
-   or when the app comes to the front. It never gives up.
+1. Device opens `kriyon/remote/1`. iroh has already proved both endpoint ids,
+   and the host refused unpaired ids at accept time.
+2. Device sends `Hello { app_version, protocol_minor }`. Host answers
+   `Welcome { host_name, protocol_minor, role, sessions }`.
+3. Heartbeat: host sends `Heartbeat { seq, at }` every 15 s, scheduled from
+   the app's main loop so it proves the app is alive, not just the socket. A
+   device with no heartbeat for 40 s shows "Disconnected, reconnecting" and
+   turns typing off.
+4. Reconnect backs off to at most 30 s and retries at once on a network change
+   or when the app comes to the front. It stops only on `NotPaired`.
+5. **When a connection closes,** the host releases any typing control that
+   device held and bumps the epoch. A reconnected device must send
+   `TakeControl` again, so input buffered before the drop can never land.
+
+**Back-pressure.** Every outgoing stream, the control stream included, has a
+bounded per-device queue measured in bytes. The main loop only enqueues and
+never waits on a network write. A full session queue means [Skip ahead]
+(§6); a full control queue closes that connection.
 
 ## 6. Sessions and screens
 
 - `SessionList` lists sessions with id, title, project, [Status] and whether
   each needs the person (the Needs-you list), computed in Rust.
 - `Open { session_id }` on a new session stream. Host checks the session
-  exists, then sends `Snapshot { run, seq, cols, rows, bytes }` (the
-  [Screen snapshot], ADR-0004) followed by `Update { run, seq, bytes }`
+  exists, then sends `Snapshot { run, seq, cols, rows, bytes, skipped }`
+  (the [Screen snapshot], ADR-0004) followed by `Update { run, seq, bytes }`
   for every chunk of output.
-- **[Session run]** — a number that changes each time the session's process
+- **[Session run]** — a random u64 made each time the session's process
   starts. `seq` restarts with each run. A device that sees a gap in `seq` or a
-  new `run` asks `Resync` and gets a fresh `Snapshot`; it never guesses.
-- Each device has its own bounded queue on the host. When it fills, the host
-  drops the queue and sends a fresh `Snapshot` with `skipped: true`; the device
-  shows "Skipped ahead". It never blocks the session or another device.
+  new `run` sends `Resync` (at most once a second) and gets a fresh
+  `Snapshot`; it never guesses.
+- When a device's session queue fills, the host drops it and sends a fresh
+  `Snapshot` with `skipped: true`; the device shows "Skipped ahead". It never
+  blocks the session or another device.
 - Readable view entries (`Entry { … }`, trimmed, from the Structured view's
-  data) come on the same stream when the device asks for them. Details in a
-  later revision.
+  data) come on the same stream when the device asks. Format in a later
+  revision.
 
 ## 7. Input and control
 
-- `TakeControl { session_id }` → host grants [Typing control] if the device is
-  a Controller, and tells every device who holds it (`Control { holder, epoch }`).
-  `epoch` goes up with every change. The person at the host can always take it
-  back; that bumps the epoch.
-- `Input { run, epoch, bytes }` and `Resize { run, epoch, cols, rows }` must
-  carry the current run and epoch. A stale one is refused, not applied.
-- Composer text (`Compose { run, epoch, text }`) is refused while a CLI dialog
-  is showing (ADR-0040); keys sent to the terminal view are not.
+- **Epoch** — `(host_boot_id, counter)` per session, where `host_boot_id` is
+  random per app start, so a value never repeats across restarts. It changes
+  with every control change.
+- **Who holds control.** `TakeControl { session_id }` from a Controller
+  takes it from another remote device at once. It takes it from the host only
+  when nobody has typed at the host for 10 seconds, or the person clicks
+  "Let <device> type" on the host. Typing at the host's own keyboard always
+  takes control back and bumps the epoch. Every device hears
+  `Control { holder, epoch }`.
+- `Input { run, epoch, seen_seq, bytes }`, `Compose { run, epoch, seen_seq, text }`
+  and `Resize { run, epoch, cols, rows }` must carry the current run and epoch.
+  `seen_seq` is the last screen update the device had drawn. The host refuses
+  with `Stale` when the run or epoch is old, or when a CLI dialog appeared or
+  changed after `seen_seq`, so a lagging phone can't answer a dialog it never
+  saw.
+- `Compose` is refused while a CLI dialog is showing (ADR-0040). This is a
+  guard against mistakes, not a security boundary: a Controller can send the
+  same bytes as `Input`.
 - While a remote device holds control it may resize to its own size, never
   under 80 columns. When control returns to the host, the host's size comes back.
 - Receipts are honest: `InputAck { epoch, written: bool }` means the bytes
-  reached the PTY, not that Claude acted on them. Keystrokes are never
-  resent after a reconnect.
+  reached the PTY, not that Claude acted on them.
 
 ## 8. The host's one check
 
 Every message from a device passes `authorize(device, message, host_state)` in
 `kriyon-remote` before anything acts on it. It returns `Allow` or
-`Refuse(reason)`, and every refusal has a test:
+`Refuse(reason)`. The run, epoch, paired and dialog checks are then **repeated
+inside the single PTY-writer task, atomically with the write**, so a takeover,
+removal or new dialog between the check and the write still wins.
 
-| Check | Refusal |
-|---|---|
-| Device is paired | `NotPaired` |
-| Role allows it (Viewer: no input, resize, control, start) | `NotAllowed` |
-| Holds typing control, current run and epoch | `NotInControl`, `Stale` |
-| Session exists | `NoSuchSession` |
-| Folder inside an approved root (same check as the IPC boundary) | `FolderNotAllowed` |
-| Sizes and lengths in range (shared bounds with the local resize command) | `OutOfRange` |
-| No composer text while a dialog shows | `DialogOpen` |
+| Message | Roles | Stream | Checks (refusal) |
+|---|---|---|---|
+| `Hello`, `Resync`, `Open`, `RequestEntries` | Viewer, Controller | control / session | paired (`NotPaired`), session exists (`NoSuchSession`) |
+| `TakeControl` | Controller | control | role (`NotAllowed`), control rules §7 (`NotInControl`) |
+| `Input`, `Resize` | Controller | session | role, holds control, run + epoch + `seen_seq` (`Stale`), size bounds shared with the local resize command (`OutOfRange`) |
+| `Compose` | Controller | session | as `Input`, plus no dialog showing (`DialogOpen`) |
+| `StartSession` | Controller | control | role; project exists and its folder is inside an approved root (`FolderNotAllowed`) |
+| `PushToken` | Viewer, Controller | control | size (`OutOfRange`) |
+| anything else | — | — | `UnknownMessage` |
 
-Refusals are answered with `Refused { reason }` and logged on the host.
+Refusals are answered with `Refused { reason }`, rate-limited, and logged on
+the host without the payload.
+
+There are no file messages in version 1: a remote device can't read or
+write files except by typing in a terminal it controls.
 
 ## 9. Starting sessions
 
-`StartSession { request_id, project_id, … }`. Existing projects only at first.
-The host stores `request_id`, so a resend never starts two sessions. Worktree
-setup stays off for remote starts by default, because it runs scripts.
+`StartSession { request_id, project_id, title?, worktree: false }`. No args,
+env or flags from the device. Existing projects only at first. The host keeps
+`(device_id, request_id)` with the result for 24 hours, on disk, so a resend
+returns the same session instead of starting two. Worktree setup stays off
+for remote starts, because it runs scripts.
 
 ## 10. Push
 
-1. The push sender publishes one X25519 public key.
+1. The push sender publishes one X25519 public key with a key id.
 2. The phone seals `{ token, platform, host_id, expires }` (expires about 60
-   days, renewed on every connect) to that key, once per host, and sends it to
-   the host as `PushToken { sealed }`.
-3. To wake the phone the host sends the sender `{ sealed, at, request_id }`
-   signed with its device key. The sender checks the signature, the time
-   (±5 min), the expiry and that `host_id` matches the signer, refuses a
-   repeated `request_id`, opens the token in memory, sends one visible alert
-   "A session needs you" via APNs or FCM, and forgets it.
-4. Alerts are a hint. The app re-checks the host each time it opens.
+   days, renewed on every connect) once per host with HPKE (RFC 9180, base
+   mode, DHKEM X25519-HKDF-SHA256, HKDF-SHA256, ChaCha20-Poly1305, info
+   `"kriyon push token v1"`), and sends it to the host as `PushToken { sealed }`.
+3. To wake the phone, the host makes an HTTPS POST to the sender with
+   `{ sealed, at, request_id }` and an Ed25519 signature by its device key over
+   the postcard bytes of `("kriyon push wake v1", sender_key_id, SHA-256(sealed), at, request_id)`.
+4. The sender checks the signature, the time (±5 minutes), the expiry and that
+   `host_id` matches the signer, refuses a `request_id` it saw in the last
+   10 minutes (kept in memory only), applies in-memory limits per host and per
+   token hash (1 a minute, 30 a day) and a cap on the sealed size, opens the
+   token in memory, sends one visible alert "A session needs you" through APNs
+   or FCM, and forgets it.
+5. The sender could notice one phone's token arriving from several hosts. Not
+   linking them is a policy promise; the crypto doesn't prevent it.
+6. Alerts are a hint. The app re-checks the host each time it opens.
 
 ## 11. Fault tests (CI)
 
 Cut the network mid-stream; sleep and wake the host; kill and restart the
-relay; crash the host mid-write; a slow device beside a fast one; a stale
-epoch after a takeover; a resend of `StartSession`; an oversize length prefix;
-an unknown message; a device removed while connected. Each must end in the
-behaviour above, with no lost session and no replayed input.
+relay; crash the host mid-write; a slow device beside a fast one; a device
+that never reads its control stream; a stale epoch after a takeover; input
+buffered across a reconnect; a dialog that appears after `seen_seq`; a resend
+of `StartSession`; an oversize length prefix; a zstd bomb; an unknown message;
+a device removed while connected; a leaked pairing QR used first. Each must
+end in the behaviour above, with no lost session and no replayed input.
 
 ## Open
 
 - Readable-view entry format (follows the Structured view work).
 - Exact Tailscale port and how the host learns its Tailscale address (spike).
 - Whether `kriyon-remote` reuses the [Daemon frame] codec or keeps its own.
+- An app lock on the phone, since a stolen Controller phone has shell access
+  until the person removes it on the host.
