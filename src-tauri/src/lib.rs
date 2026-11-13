@@ -29,7 +29,9 @@ pub mod remote_cmd;
 pub mod remote_device_cmd;
 pub mod remote_device_rt;
 pub mod remote_endpoint;
+pub mod remote_host_rt;
 pub mod remote_rt;
+pub mod remote_serve;
 pub mod sandbox;
 pub mod session_list_rt;
 pub mod session_registry;
@@ -218,6 +220,9 @@ pub(crate) fn refresh_needs_you_badge<R: tauri::Runtime>(handle: &tauri::AppHand
 /// How often the background ticker runs. Everything slower is expressed as a
 /// multiple of this, in [`SAMPLE_EVERY_N_TICKS`].
 const TICK_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
+/// Remote heartbeats every 15 s (`kriyon_remote::link_policy::HEARTBEAT_EVERY`)
+/// on the 2 s tick: every 14 s, so a beat is never late.
+const REMOTE_HEARTBEAT_EVERY_N_TICKS: u64 = 7;
 
 /// How many ticks between [Session footprint] samples and [Sleeping session]
 /// passes — 6s: fresh enough for a sidebar chip, cheap enough to never matter
@@ -260,6 +265,18 @@ fn background_tick<R: tauri::Runtime>(app: &tauri::AppHandle<R>, tick: u64) {
     }
 
     emit_watch_heartbeats(app);
+
+    // Remote devices hear the app is alive from here, the main loop, not
+    // from the socket alone (spec §5), and hear sessions change.
+    if let Some(serve) = app.try_state::<crate::remote_serve::Serve>() {
+        serve.sessions_changed();
+        if tick.is_multiple_of(REMOTE_HEARTBEAT_EVERY_N_TICKS) {
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX));
+            serve.heartbeat(now_ms);
+        }
+    }
 }
 
 /// Emit a liveness heartbeat per live watch, so the frontend can detect a watch
@@ -354,6 +371,13 @@ pub fn run() {
             let store = Store::open(&data_dir.join("kriyon.db"))
                 .map_err(|e| -> Box<dyn std::error::Error> { Box::new(e) })?;
             app.manage(StoreState(Mutex::new(store)));
+            // Paired devices are served from the first `turn_on` on.
+            let serve = crate::remote_serve::Serve::new(std::sync::Arc::new(
+                crate::remote_host_rt::AppServeHost(app.handle().clone()),
+            ));
+            app.manage(serve.clone());
+            app.state::<crate::remote_rt::RemoteRuntime>()
+                .serve_with(serve);
             // Remote access comes back up only if the person left it on.
             crate::remote_cmd::restore(app.handle());
             // Reconnect to the computers this one paired with as a device.

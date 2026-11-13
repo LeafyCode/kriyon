@@ -11,6 +11,8 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use kriyon_core::session::{SessionEngine as _, SessionId};
+use kriyon_remote::authorize::Dialog;
+use kriyon_remote::control::Control;
 use kriyon_remote::message::EndpointId;
 use kriyon_remote::writer::{HostTook, SessionGate};
 use parking_lot::Mutex;
@@ -19,7 +21,7 @@ use crate::daemon_client::DaemonClient;
 
 /// The size a session's PTY has until its terminal says otherwise; the
 /// window sends its real size right after attaching.
-const DEFAULT_SCREEN: (u16, u16) = (80, 24);
+pub(crate) const DEFAULT_SCREEN: (u16, u16) = (80, 24);
 
 /// Every live session's gate, made on first use and dropped with the session
 /// ([`crate::session_registry::forget`]).
@@ -27,6 +29,16 @@ pub struct Writers {
     /// Random per app start, so a control epoch never repeats across starts.
     host_boot_id: u64,
     gates: Mutex<HashMap<SessionId, Arc<Mutex<SessionGate>>>>,
+}
+
+/// One session's gate as the host's one check sees it, copied out from under
+/// its lock.
+#[derive(Clone, Debug)]
+pub struct GateFacts {
+    pub run: u64,
+    pub control: Control,
+    pub dialog: Dialog,
+    pub size: (u16, u16),
 }
 
 impl Default for Writers {
@@ -63,6 +75,30 @@ impl Writers {
     #[cfg(test)]
     pub(crate) fn has_gate(&self, id: &SessionId) -> bool {
         self.gates.lock().contains_key(id)
+    }
+
+    /// The daemon named session `id`'s [Session run].
+    pub fn set_run(&self, id: &SessionId, run: u64) {
+        self.gate(id).lock().set_run(run);
+    }
+
+    /// The dialog watch saw session `id`'s dialog change.
+    pub fn set_dialog(&self, id: &SessionId, dialog: Dialog) {
+        self.gate(id).lock().set_dialog(dialog);
+    }
+
+    /// What the host's one check needs about session `id`: `None` until the
+    /// daemon named its run, since no device may act on it before.
+    #[must_use]
+    pub fn facts(&self, id: &SessionId) -> Option<GateFacts> {
+        let gate = self.gates.lock().get(id).cloned()?;
+        let gate = gate.lock();
+        Some(GateFacts {
+            run: gate.run()?,
+            control: gate.control().clone(),
+            dialog: gate.dialog(),
+            size: gate.screen(),
+        })
     }
 
     /// Drop session `id`'s gate: the session is closed.
@@ -139,5 +175,35 @@ impl Writers {
             }
         }
         changed
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kriyon_remote::authorize::Dialog;
+
+    #[test]
+    fn a_session_has_facts_for_the_check_once_its_run_is_known() {
+        let writers = Writers::default();
+        let id = SessionId("s".into());
+        writers.ensure(&id);
+        assert!(
+            writers.facts(&id).is_none(),
+            "no run yet: nothing a device may act on"
+        );
+        writers.set_run(&id, 7);
+        writers.set_dialog(
+            &id,
+            Dialog {
+                showing: true,
+                changed_at_seq: Some(3),
+            },
+        );
+        let facts = writers.facts(&id).expect("facts");
+        assert_eq!(facts.run, 7);
+        assert_eq!(facts.dialog.changed_at_seq, Some(3));
+        assert_eq!(facts.size, DEFAULT_SCREEN);
+        assert!(writers.facts(&SessionId("other".into())).is_none());
     }
 }

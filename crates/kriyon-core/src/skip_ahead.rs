@@ -80,6 +80,13 @@ impl SkipAheadQueue {
         self.skipped = true;
     }
 
+    /// Whether a skip is pending: the next pop is [`Next::SkipAhead`] and
+    /// pushes are dropped until then.
+    #[must_use]
+    pub fn is_skipping(&self) -> bool {
+        self.skipped
+    }
+
     /// Whether there is nothing left to send: no frame and no fresh screen.
     #[must_use]
     pub fn is_empty(&self) -> bool {
@@ -195,5 +202,15 @@ mod tests {
     fn a_new_queue_starts_with_a_fresh_screen() {
         let mut q = SkipAheadQueue::starting_with_screen(100);
         assert_eq!(q.pop(), Next::SkipAhead);
+    }
+
+    #[test]
+    fn a_queue_says_when_a_skip_is_pending() {
+        let mut queue = SkipAheadQueue::new(100);
+        assert!(!queue.is_skipping());
+        queue.push(frame(200));
+        assert!(queue.is_skipping());
+        assert_eq!(queue.pop(), Next::SkipAhead);
+        assert!(!queue.is_skipping());
     }
 }

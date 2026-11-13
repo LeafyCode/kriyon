@@ -238,25 +238,28 @@ pub async fn create_session(
     // Every frame from the daemon, in order, before the webview's pacing. A
     // repaint (`Screen`) is not output the session made, so neither the
     // "still painting" clock nor the refusal watch counts it.
-    let event_callback = move |event: crate::daemon_client::DaemonEvent<'_>| match event {
-        crate::daemon_client::DaemonEvent::Output(bytes) => {
-            {
-                use tauri::Manager as _;
-                let state = output_app.state::<AppState>();
-                let mut runtimes = state.runtimes.lock();
-                if let Some(runtime) = runtimes.get_mut(&output_id) {
-                    runtime.note_pty_output(Instant::now());
+    let event_callback = move |event: crate::daemon_client::DaemonEvent<'_>| {
+        crate::remote_host_rt::on_event(&output_app, &output_id, event);
+        match event {
+            crate::daemon_client::DaemonEvent::Output(bytes) => {
+                {
+                    use tauri::Manager as _;
+                    let state = output_app.state::<AppState>();
+                    let mut runtimes = state.runtimes.lock();
+                    if let Some(runtime) = runtimes.get_mut(&output_id) {
+                        runtime.note_pty_output(Instant::now());
+                    }
+                }
+                if refusal.lock().feed(bytes) {
+                    let app = output_app.clone();
+                    std::thread::spawn(move || crate::integration::note_sideload_refused(&app));
                 }
             }
-            if refusal.lock().feed(bytes) {
-                let app = output_app.clone();
-                std::thread::spawn(move || crate::integration::note_sideload_refused(&app));
+            crate::daemon_client::DaemonEvent::Busy(busy) => {
+                let _ = on_busy.send(busy);
             }
+            _ => {}
         }
-        crate::daemon_client::DaemonEvent::Busy(busy) => {
-            let _ = on_busy.send(busy);
-        }
-        _ => {}
     };
     // Output and repaints on their way to the webview, paced by `report_drained`.
     let output_callback = move |bytes: Vec<u8>| {
@@ -349,6 +352,8 @@ pub async fn create_session(
         .closed_mid_create
         .lock()
         .remove(&SessionId(id.clone()));
+    // Served to remote devices from its daemon's first frame on.
+    crate::remote_host_rt::attach(&app, &SessionId(id.clone()));
     // Open the window a close can mark. Cleared however this returns.
     let _in_flight = CreateInFlight::begin(&state, &SessionId(id.clone()));
     let live = if let Ok(stream) = UnixStream::connect(&socket) {
@@ -703,6 +708,7 @@ pub async fn close_session(
 
     let session_id = SessionId(id);
     let session = session_registry::forget(&state, &session_id);
+    crate::remote_host_rt::detach(&app, &session_id);
     // Clear the persisted sleep mark too, so a closed session is never restored
     // asleep on the next launch. Best-effort: the launch-time reconcile also
     // drops a mark whose daemon is gone, so a missed write self-heals.

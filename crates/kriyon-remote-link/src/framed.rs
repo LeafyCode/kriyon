@@ -85,6 +85,18 @@ impl<M: Wire> MessageWriter<M> {
         })
     }
 
+    /// Send one message already encoded with [`kriyon_remote::codec::encode`]:
+    /// how a per-device queue, which holds encoded messages, is written out.
+    ///
+    /// # Errors
+    /// A [`LinkError`] for a stream that's gone.
+    pub async fn send_encoded(&mut self, frame: &[u8]) -> Result<(), LinkError> {
+        self.send.write_all(frame).await.map_err(|e| match e {
+            iroh::endpoint::WriteError::ConnectionLost(lost) => crate::endpoint::gone(&lost),
+            other => LinkError::Connect(other.to_string()),
+        })
+    }
+
     /// Say nothing more will be sent on this stream.
     pub fn finish(&mut self) {
         // Already finished or reset: nothing more would be sent anyway.

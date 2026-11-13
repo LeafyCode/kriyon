@@ -121,8 +121,9 @@ impl SessionFanout {
         self.ask_all(false)
     }
 
-    /// Output the session made: one update for every device that follows.
-    /// A device whose update can't be made starts over from a snapshot.
+    /// Output the session made: one update for every device that follows. A
+    /// device whose queue overflows, or whose update can't be made, starts
+    /// over from a snapshot: the requester ids to ask for.
     pub fn output(&mut self, bytes: &[u8]) -> Vec<RequesterId> {
         let Some(seq) = self.seq.as_mut() else {
             return Vec::new();
@@ -148,12 +149,27 @@ impl SessionFanout {
         let Some(frame) = frame else {
             return self.ask_all(true);
         };
-        for stream in self.devices.values_mut() {
+        let mut overflowed = Vec::new();
+        for (device, stream) in &mut self.devices {
             if stream.awaiting.is_none() {
                 stream.queue.push(frame.clone());
+                if stream.queue.is_skipping() {
+                    overflowed.push(*device);
+                }
             }
         }
-        Vec::new()
+        // Asked for now, not when the device's writer pops the skip: a slow
+        // device's writer is stuck in a network write. A fresh queue, so the
+        // snapshot isn't dropped behind a skip the writer hasn't seen.
+        overflowed
+            .iter()
+            .filter_map(|device| {
+                if let Some(stream) = self.devices.get_mut(device) {
+                    stream.queue = SessionQueue::new(self.limit);
+                }
+                self.ask(device, true)
+            })
+            .collect()
     }
 
     /// The daemon skipped ahead for the window, dropping output every device
@@ -376,8 +392,9 @@ mod tests {
         following(&mut fanout, B, b"b");
         let (_, _) = drain(&mut fanout, &A);
         let mut fast_got = 0;
+        let mut asks = Vec::new();
         for i in 0..200 {
-            fanout.output(format!("chunk {i:03} {}", "x".repeat(64)).as_bytes());
+            asks.extend(fanout.output(format!("chunk {i:03} {}", "x".repeat(64)).as_bytes()));
             // A keeps up; B is never read.
             fast_got += drain(&mut fanout, &A)
                 .0
@@ -386,7 +403,6 @@ mod tests {
                 .count();
         }
         assert_eq!(fast_got, 200, "the fast device gets every update");
-        let (_, asks) = drain(&mut fanout, &B);
         assert_eq!(asks.len(), 1, "the slow one is asked a fresh snapshot for");
         fanout.snapshot_part(asks[0], b"now");
         fanout.snapshot_end(asks[0], SIZE);
@@ -506,5 +522,30 @@ mod tests {
         assert_eq!(fanout.open_count(), 1);
         fanout.output(b"x");
         assert_eq!(fanout.pop(&A), Pop::Empty);
+    }
+
+    #[test]
+    fn an_overflowing_device_is_asked_for_at_once_not_when_its_writer_comes_back() {
+        // The writer of a slow device is stuck in a network write, so it
+        // can't pop the skip; the snapshot is asked for as the queue skips.
+        let mut fanout = SessionFanout::new(4096).expect("fanout");
+        fanout.hello(1);
+        following(&mut fanout, A, b"a");
+        let mut asks = Vec::new();
+        for i in 0..200 {
+            asks.extend(fanout.output(format!("chunk {i:03} {}", "x".repeat(64)).as_bytes()));
+        }
+        assert_eq!(asks.len(), 1, "asked once, as it skipped");
+        fanout.snapshot_part(asks[0], b"now");
+        fanout.snapshot_end(asks[0], SIZE);
+        let (messages, more) = drain(&mut fanout, &A);
+        assert_eq!(
+            more,
+            Vec::<RequesterId>::new(),
+            "no second ask when the writer pops"
+        );
+        assert!(messages
+            .iter()
+            .any(|m| matches!(m, ToDevice::Snapshot { skipped: true, .. })));
     }
 }

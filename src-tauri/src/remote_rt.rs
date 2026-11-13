@@ -56,13 +56,15 @@ pub(crate) fn now_ms() -> i64 {
 #[derive(Default)]
 pub struct RemoteRuntime {
     running: Mutex<Option<Running>>,
+    /// What serves paired devices' streams, set once at app start.
+    serve: std::sync::Mutex<Option<crate::remote_serve::Serve>>,
 }
 
 struct Running {
     host: Arc<Host>,
     accept: JoinHandle<()>,
     pairing: Arc<Mutex<Pairing>>,
-    /// Paired devices' connections, held until they are served (next step).
+    /// Paired devices' connections, while they last.
     links: Arc<Mutex<Vec<Arc<RemoteLink>>>>,
 }
 
@@ -92,6 +94,14 @@ pub enum CodeOutcome {
 }
 
 impl RemoteRuntime {
+    /// Serve paired devices with `serve` from the next `turn_on` on. Without
+    /// it, their connections are held but not served.
+    pub fn serve_with(&self, serve: crate::remote_serve::Serve) {
+        if let Ok(mut slot) = self.serve.lock() {
+            *slot = Some(serve);
+        }
+    }
+
     /// Bring the host endpoint up. Does nothing if it is already up.
     ///
     /// # Errors
@@ -105,10 +115,12 @@ impl RemoteRuntime {
         host.start_accepting();
         let pairing = Arc::new(Mutex::new(Pairing::default()));
         let links = Arc::new(Mutex::new(Vec::new()));
+        let serve = self.serve.lock().ok().and_then(|slot| slot.clone());
         let accept = tokio::spawn(accept_loop(
             Arc::clone(&host),
             Arc::clone(&pairing),
             Arc::clone(&links),
+            serve,
             setup.on_code_wanted,
             setup.on_device_gone,
         ));
@@ -275,11 +287,12 @@ impl RemoteRuntime {
 
 /// Take what the host admits: pairing devices get their request read and,
 /// once one took the pairing, the person is asked for its code; paired
-/// devices' connections are held for the session streams.
+/// devices' connections are served by `serve`.
 async fn accept_loop(
     host: Arc<Host>,
     pairing: Arc<Mutex<Pairing>>,
     links: Arc<Mutex<Vec<Arc<RemoteLink>>>>,
+    serve: Option<crate::remote_serve::Serve>,
     on_code_wanted: Arc<dyn Fn(String) + Send + Sync>,
     on_device_gone: Arc<dyn Fn(EndpointId) + Send + Sync>,
 ) {
@@ -288,6 +301,9 @@ async fn accept_loop(
             Accepted::Remote(link) => {
                 let link = Arc::new(link);
                 links.lock().await.push(Arc::clone(&link));
+                if let Some(serve) = &serve {
+                    tokio::spawn(serve.clone().serve(Arc::clone(&link)));
+                }
                 let links = Arc::clone(&links);
                 let on_device_gone = Arc::clone(&on_device_gone);
                 tokio::spawn(async move {

@@ -60,6 +60,18 @@ impl SessionGate {
         &self.control
     }
 
+    /// The current [Session run], once the daemon named it.
+    #[must_use]
+    pub fn run(&self) -> Option<u64> {
+        self.run
+    }
+
+    /// The dialog as the dialog watch last saw it.
+    #[must_use]
+    pub fn dialog(&self) -> Dialog {
+        self.dialog
+    }
+
     /// The session's process (re)started: a new run.
     pub fn set_run(&mut self, run: u64) {
         self.run = Some(run);
