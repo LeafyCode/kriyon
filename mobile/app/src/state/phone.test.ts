@@ -29,6 +29,10 @@ jest.mock("../../modules/kriyon-native/index.ts", () => ({
   },
 }));
 
+jest.mock("./push.ts", () => ({
+  registerPush: jest.fn(() => Promise.resolve("on")),
+}));
+
 const native = jest.mocked(KriyonNative);
 
 const MAC = "ab".repeat(32);
@@ -78,6 +82,7 @@ test("starting reads this phone's id and its computers", async () => {
   expect(state.deviceId).toBe("ef".repeat(32));
   expect(state.hosts.map((one) => one.name)).toEqual(["Mac"]);
   expect(native.start).toHaveBeenCalledWith("Test phone");
+  expect(state.push).toBe("on");
 });
 
 test("a start that fails says why", async () => {

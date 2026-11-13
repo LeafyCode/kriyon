@@ -147,18 +147,40 @@ impl KeyVault for StoreVault<'_> {
     }
 }
 
-/// The device runtime's news, as the phone's records.
+/// The device runtime's news, as the phone's records; a computer whose
+/// link just came up is given the push token.
 struct Told {
     me: EndpointId,
     listener: Arc<dyn HostListener>,
+    /// Set once the device is made.
+    shared: std::sync::OnceLock<std::sync::Weak<Shared>>,
+    /// Each computer's link as last told, to see one come up.
+    last: std::sync::Mutex<std::collections::HashMap<EndpointId, LinkState>>,
 }
 
 impl DeviceEvents for Told {
     fn host_changed(&self, host: EndpointId, state: LinkState, view: &HostView) {
+        let came_up = locked(&self.last).insert(host, state) != Some(LinkState::Connected)
+            && state == LinkState::Connected;
+        if came_up {
+            if let Some(shared) = self.shared.get().and_then(std::sync::Weak::upgrade) {
+                shared.give_push(host);
+            }
+        }
         self.listener
             .host_changed(host_state(&host, &self.me, state, view));
     }
 }
+
+/// The push token this phone gave.
+#[derive(Clone)]
+struct PushToken {
+    token: String,
+    platform: kriyon_remote::push::Platform,
+}
+
+/// How long one computer may take to be given the push token.
+const PUSH_SEND_WAIT: std::time::Duration = std::time::Duration::from_secs(20);
 
 /// What the device and its pairings share.
 struct Shared {
@@ -168,9 +190,50 @@ struct Shared {
     events: Arc<dyn DeviceEvents>,
     /// Held across each change to the kept list, so two never lose one.
     hosts_lock: std::sync::Mutex<()>,
+    /// The push sender (`KRIYON_PUSH_URL` at build time); none: no push.
+    push_url: Option<String>,
+    push: std::sync::Mutex<Option<PushToken>>,
+}
+
+fn locked<T>(mutex: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+fn now_s() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
 }
 
 impl Shared {
+    /// Give `host` the push token in the background; one computer that
+    /// can't take it never holds up another.
+    fn give_push(self: &Arc<Self>, host: EndpointId) {
+        let shared = Arc::clone(self);
+        self.handle.spawn(async move {
+            // It is given again on the next link if this one fails.
+            let _ = tokio::time::timeout(PUSH_SEND_WAIT, shared.send_push(host)).await;
+        });
+    }
+
+    /// Give `host` the push token, sealed for it to the push sender's
+    /// newest key (fetched each time, so a rotated key is taken up on the
+    /// next link). Nothing to give, or no sender: done.
+    async fn send_push(&self, host: EndpointId) -> Result<(), MobileError> {
+        let (Some(push), Some(url)) = (locked(&self.push).clone(), self.push_url.clone()) else {
+            return Ok(());
+        };
+        let key = crate::push::fetch_sender_key(&url)
+            .await
+            .map_err(|reason| MobileError::Link { reason })?;
+        let (key_id, sealed) =
+            crate::push::seal_for(&key, &push.token, push.platform, &host, now_s())
+                .map_err(|reason| MobileError::Invalid { reason })?;
+        Ok(self.device.send_push_token(&host, key_id, sealed).await?)
+    }
+
     /// Run `work` on the library's own runtime, whatever thread the app
     /// calls from.
     async fn on_runtime<T: Send + 'static>(
@@ -344,6 +407,27 @@ impl MobileDevice {
         device_name: String,
         bind: SocketAddr,
     ) -> Result<Arc<Self>, MobileError> {
+        Self::start_with(
+            store,
+            listener,
+            device_name,
+            bind,
+            option_env!("KRIYON_PUSH_URL").map(str::to_string),
+        )
+    }
+
+    /// [`MobileDevice::start_on`] with the push sender at `push_url` (none:
+    /// no push).
+    ///
+    /// # Errors
+    /// The store failed, or the endpoint couldn't be bound.
+    pub fn start_with(
+        store: Arc<dyn PhoneStore>,
+        listener: Arc<dyn HostListener>,
+        device_name: String,
+        bind: SocketAddr,
+        push_url: Option<String>,
+    ) -> Result<Arc<Self>, MobileError> {
         let secret = load_or_create(
             &StoreVault(store.as_ref()),
             kriyon_remote_link::endpoint::generate_secret_key,
@@ -374,13 +458,22 @@ impl MobileDevice {
             device.attach(endpoint).await;
             Ok::<(), MobileError>(())
         })?;
+        let told = Arc::new(Told {
+            me,
+            listener,
+            shared: std::sync::OnceLock::new(),
+            last: std::sync::Mutex::new(std::collections::HashMap::new()),
+        });
         let shared = Arc::new(Shared {
             handle: runtime.handle().clone(),
             device,
             store,
-            events: Arc::new(Told { me, listener }),
+            events: Arc::clone(&told) as Arc<dyn DeviceEvents>,
             hosts_lock: std::sync::Mutex::new(()),
+            push_url,
+            push: std::sync::Mutex::new(None),
         });
+        let _ = told.shared.set(Arc::downgrade(&shared));
         let hosts = shared.hosts()?;
         // Every paired computer, connected in the background.
         for host in hosts {
@@ -474,6 +567,37 @@ impl MobileDevice {
         self.shared
             .on_runtime(async move { device.disconnect(&id).await })
             .await
+    }
+
+    /// This phone's push token (`apns` or `fcm`), from the phone's push
+    /// service. Each paired computer gets it sealed for itself to the push
+    /// sender's key, now and on every link, in the background. Returns
+    /// whether push is on: a build without a push sender keeps nothing.
+    ///
+    /// # Errors
+    /// A platform that isn't one.
+    pub async fn set_push_token(
+        &self,
+        token: String,
+        platform: String,
+    ) -> Result<bool, MobileError> {
+        let platform =
+            crate::push::platform(&platform).map_err(|reason| MobileError::Invalid { reason })?;
+        if self.shared.push_url.is_none() {
+            return Ok(false);
+        }
+        // Kept first: a computer that connects later, or the next link of
+        // one the sender couldn't be reached for, is given it then.
+        *locked(&self.shared.push) = Some(PushToken { token, platform });
+        let device = Arc::clone(&self.shared.device);
+        let hosts = self
+            .shared
+            .on_runtime(async move { device.connected_hosts().await })
+            .await?;
+        for host in hosts {
+            self.shared.give_push(host);
+        }
+        Ok(true)
     }
 
     /// The app came to the front, or the network changed: dial now.
@@ -847,5 +971,179 @@ mod tests {
             }
         });
         assert_eq!(device.hosts().expect("hosts").len(), 8);
+    }
+
+    /// Pair `device` with a new host on loopback; the host and its id.
+    async fn paired_host(device: &Arc<MobileDevice>, roles: &Arc<Roles>) -> Arc<Host> {
+        let host = Arc::new(
+            Host::bind(
+                &LinkConfig {
+                    bind: loopback(),
+                    ..LinkConfig::new([1; 32])
+                },
+                Arc::clone(roles) as Arc<dyn PairedDevices>,
+                10,
+            )
+            .await
+            .expect("host binds"),
+        );
+        host.start_pairing(SECRET, Role::Controller);
+        let invite = kriyon_remote_link::invite::invite(&host, SECRET).to_qr_text();
+        let host_side = {
+            let host = Arc::clone(&host);
+            tokio::spawn(async move {
+                let Accepted::Pair(link) = tokio::time::timeout(WAIT, host.accept())
+                    .await
+                    .expect("in time")
+                    .expect("open")
+                else {
+                    panic!("a pairing connection");
+                };
+                link.request().await.expect("the right proof")
+            })
+        };
+        let pairing = device.pair(invite).await.expect("pairs");
+        let mut attempt = host_side.await.expect("host task");
+        let code = pairing.code();
+        let (check, finished) = tokio::join!(
+            attempt.confirm(&code, "Test Mac", |id, role| {
+                roles.0.lock().expect("roles").insert(id, role);
+                true
+            }),
+            pairing.finish()
+        );
+        assert!(matches!(check, Ok(CodeCheck::Paired { .. })));
+        finished.expect("paired");
+        host
+    }
+
+    #[test]
+    fn the_push_token_reaches_each_computer_on_every_link_sealed_to_the_newest_key() {
+        use kriyon_remote::codec::Decoded;
+        use kriyon_remote::message::{FromDevice, ToDevice};
+        use kriyon_remote::push::{open_push_token, push_public_key, Platform};
+
+        let key = |id: u32, secret: u8| {
+            (
+                200,
+                format!(
+                    r#"{{"key_id":{id},"public_key":"{}"}}"#,
+                    kriyon_remote::message::hex(&push_public_key(&[secret; 32]))
+                ),
+            )
+        };
+        // Down for the first link, then key 3, then key 4 (rotated).
+        let sender =
+            crate::push::tests::fake_sender_replies(vec![(503, "{}".into()), key(3, 9), key(4, 8)]);
+        let store = Arc::new(Memory::default());
+        let device = MobileDevice::start_with(
+            Arc::clone(&store) as Arc<dyn PhoneStore>,
+            Arc::new(Seen::default()),
+            "Test phone".into(),
+            loopback(),
+            Some(sender),
+        )
+        .expect("starts");
+        let roles = Arc::new(Roles::default());
+        let (host_id, tokens) = run({
+            let device = Arc::clone(&device);
+            async move {
+                // Given while no computer is connected: kept for later.
+                assert_eq!(
+                    device
+                        .set_push_token("apns-token".into(), "apns".into())
+                        .await,
+                    Ok(true)
+                );
+                let host = paired_host(&device, &roles).await;
+                let mut tokens = Vec::new();
+                // Three links in turn, each dropped by the computer.
+                for link_number in 0..3 {
+                    let Accepted::Remote(link) = tokio::time::timeout(WAIT, host.accept())
+                        .await
+                        .expect("in time")
+                        .expect("open")
+                    else {
+                        panic!("the paired phone");
+                    };
+                    let (mut out, mut control) = link.accept_stream().await.expect("control");
+                    let _hello = control.next().await;
+                    out.send(&ToDevice::Welcome {
+                        host_name: "Test Mac".into(),
+                        protocol_minor: 0,
+                        role: Role::Controller,
+                        sessions: vec![],
+                    })
+                    .await
+                    .expect("welcome");
+                    // The sender was down for the first link: nothing yet.
+                    let wait = if link_number == 0 {
+                        std::time::Duration::from_secs(2)
+                    } else {
+                        WAIT
+                    };
+                    let token = tokio::time::timeout(wait, async {
+                        loop {
+                            match control.next().await {
+                                Ok(Some(Decoded::Message(FromDevice::PushToken {
+                                    key_id,
+                                    sealed,
+                                }))) => return (key_id, sealed),
+                                Ok(Some(_)) => {}
+                                other => panic!("the link ended: {other:?}"),
+                            }
+                        }
+                    })
+                    .await;
+                    match (link_number, token) {
+                        (0, Err(_)) => {}
+                        (0, Ok(_)) => panic!("no key while the sender was down"),
+                        (_, token) => tokens.push(token.expect("a push token in time")),
+                    }
+                    link.close(kriyon_remote::link_policy::CloseCode::HostClosing);
+                }
+                (host.id(), tokens)
+            }
+        });
+        let [(first_key, first), (second_key, second)] = tokens.as_slice() else {
+            panic!("two tokens");
+        };
+        assert_eq!(
+            (*first_key, *second_key),
+            (3, 4),
+            "the newest key each link"
+        );
+        for (secret, sealed) in [(9, first), (8, second)] {
+            let plain = open_push_token(&[secret; 32], sealed).expect("the sender opens it");
+            assert_eq!(plain.token, "apns-token");
+            assert_eq!(plain.platform, Platform::Apns);
+            assert_eq!(plain.host_id, host_id, "sealed for this computer only");
+        }
+    }
+
+    #[test]
+    fn without_a_push_sender_a_token_is_kept_and_nothing_is_sent() {
+        let store = Arc::new(Memory::default());
+        let device = MobileDevice::start_with(
+            Arc::clone(&store) as Arc<dyn PhoneStore>,
+            Arc::new(Seen::default()),
+            "Test phone".into(),
+            loopback(),
+            None,
+        )
+        .expect("starts");
+        run({
+            let device = Arc::clone(&device);
+            async move {
+                assert_eq!(
+                    device.set_push_token("t".into(), "apns".into()).await,
+                    Ok(false)
+                );
+                assert!(matches!(
+                    device.set_push_token("t".into(), "ios".into()).await,
+                    Err(MobileError::Invalid { .. })
+                ));
+            }
+        });
     }
 }

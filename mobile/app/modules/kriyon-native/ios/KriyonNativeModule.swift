@@ -211,6 +211,10 @@ public final class KriyonNativeModule: Module {
       try await rust { try await self.started().forget(hostId: hostId) }
     }
 
+    AsyncFunction("setPushToken") { (token: String, platform: String) -> Bool in
+      try await rust { try await self.started().setPushToken(token: token, platform: platform) }
+    }
+
     Function("wake") {
       try self.started().wake()
     }

@@ -49,6 +49,7 @@ function SessionRow({
 export function HomeScreen() {
   const hosts = usePhone((state) => state.hosts);
   const states = usePhone((state) => state.states);
+  const push = usePhone((state) => state.push);
   const { show } = usePhone.getState();
   const waiting = needsYou(hosts, states);
   return (
@@ -87,6 +88,9 @@ export function HomeScreen() {
           </View>
         );
       })}
+      {push ? (
+        <Text style={[ui.hint, { marginTop: 16 }]}>Alerts: {push}</Text>
+      ) : null}
       <Pressable
         accessibilityRole="button"
         onPress={() => show({ kind: "pair" })}

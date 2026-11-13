@@ -33,6 +33,9 @@ kriyon-remote-link = { path = "../kriyon-remote-link" }
 # (https://github.com/n0-computer/net-tools/pull/267), in a netwatch that
 # iroh uses, with a netdev that builds for iOS (0.47 does).
 libc = "=0.2.189"
+# The push sender's key (GET /v1/key); both already in the tree via iroh.
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", default-features = false, features = ["macros", "rt-multi-thread", "sync", "time"] }

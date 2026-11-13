@@ -13,6 +13,10 @@ jest.mock("../modules/kriyon-native/index.ts", () => ({
   },
 }));
 
+jest.mock("./state/push.ts", () => ({
+  registerPush: jest.fn(() => Promise.resolve("off")),
+}));
+
 // The session screen's web view is native; home never shows it.
 jest.mock("react-native-webview", () => ({ WebView: () => null }));
 jest.mock("./terminal/page.generated.ts", () => ({ TERMINAL_PAGE: "" }));

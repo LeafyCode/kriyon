@@ -7,6 +7,7 @@ import {
   KriyonNative,
   type PairedHost,
 } from "../../modules/kriyon-native/index.ts";
+import { type PushStatus, registerPush } from "./push.ts";
 
 /** Which screen shows. */
 export type Screen =
@@ -34,6 +35,8 @@ interface PhoneStore {
   openSession: (hostId: string, sessionId: string) => Promise<void>;
   pair: (inviteText: string) => Promise<void>;
   pairing: Pairing;
+  /** Where phone alerts stand; `null` until asked. */
+  push: PushStatus | null;
   screen: Screen;
   show: (screen: Screen) => void;
   start: (deviceName: string) => Promise<void>;
@@ -117,12 +120,15 @@ export const usePhone = create<PhoneStore>((set) => ({
     }
   },
   pairing: { phase: "idle" },
+  push: null,
   screen: { kind: "home" },
   show: (screen) => set({ screen }),
   start: async (deviceName) => {
     try {
       const deviceId = await KriyonNative.start(deviceName);
       set({ deviceId, hosts: await KriyonNative.hosts(), startError: null });
+      // Alerts come once Rust is up: it seals the token for each computer.
+      set({ push: await registerPush() });
     } catch (error) {
       set({ startError: reasonOf(error) });
     }

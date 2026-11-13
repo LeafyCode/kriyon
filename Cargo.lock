@@ -3262,6 +3262,8 @@ dependencies = [
  "kriyon-remote",
  "kriyon-remote-link",
  "libc",
+ "reqwest",
+ "rustls",
  "serde",
  "serde_json",
  "tokio",

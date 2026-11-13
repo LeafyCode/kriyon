@@ -8,6 +8,7 @@ uniffi::setup_scaffolding!();
 
 pub mod device;
 pub mod hosts;
+pub mod push;
 pub mod view;
 
 pub use device::{

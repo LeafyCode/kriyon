@@ -94,6 +94,12 @@ interface KriyonNativeModule {
   /** Starts pairing; resolves to the code to type into the computer. */
   pair: (inviteText: string) => Promise<string>;
   /**
+   * Gives Rust this phone's raw push token (`apns` or `fcm`); each paired
+   * computer gets it sealed for itself. Resolves to whether push is on (a
+   * build without a push sender keeps nothing).
+   */
+  setPushToken: (token: string, platform: "apns" | "fcm") => Promise<boolean>;
+  /**
    * Starts the device side, once per run (a later call returns the same
    * device, under its first name); resolves to this phone's id.
    */

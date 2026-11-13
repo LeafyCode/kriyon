@@ -132,3 +132,11 @@ test("a failed pairing says why", async () => {
     screen.getByText("that isn't a Kriyon pairing code")
   ).toBeOnTheScreen();
 });
+
+test("home says where alerts stand", async () => {
+  usePhone.setState({ push: "unavailable: no aps-environment" });
+  await render(<HomeScreen />);
+  expect(
+    screen.getByText("Alerts: unavailable: no aps-environment")
+  ).toBeOnTheScreen();
+});

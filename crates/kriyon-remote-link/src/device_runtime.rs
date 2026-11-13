@@ -346,6 +346,21 @@ impl DeviceRuntime {
     /// # Errors
     /// [`DeviceError::NotConnected`] or a link failure.
     pub async fn take_control(&self, host: &EndpointId, session: &str) -> Result<(), DeviceError> {
+        self.send_control(
+            host,
+            &FromDevice::TakeControl {
+                session_id: session.to_string(),
+            },
+        )
+        .await
+    }
+
+    /// Send `message` on `host`'s control stream.
+    async fn send_control(
+        &self,
+        host: &EndpointId,
+        message: &FromDevice,
+    ) -> Result<(), DeviceError> {
         let conn = self.host(host).await?;
         let control = conn
             .conn
@@ -354,14 +369,41 @@ impl DeviceRuntime {
             .control
             .clone()
             .ok_or(DeviceError::NotConnected)?;
-        let sent = control
+        let sent = control.lock().await.send(message).await;
+        sent.map_err(|e| DeviceError::Link(e.to_string()))
+    }
+
+    /// The hosts connected now (welcomed, heartbeat coming).
+    pub async fn connected_hosts(&self) -> Vec<EndpointId> {
+        let hosts: Vec<(EndpointId, Arc<HostConn>)> = self
+            .hosts
             .lock()
             .await
-            .send(&FromDevice::TakeControl {
-                session_id: session.to_string(),
-            })
-            .await;
-        sent.map_err(|e| DeviceError::Link(e.to_string()))
+            .iter()
+            .map(|(id, conn)| (*id, Arc::clone(conn)))
+            .collect();
+        let mut connected = Vec::new();
+        for (id, conn) in hosts {
+            if conn.conn.lock().await.state == Some(LinkState::Connected) {
+                connected.push(id);
+            }
+        }
+        connected
+    }
+
+    /// Give `host` this device's push token, sealed to the push sender's key
+    /// `key_id` (spec section 10). It is sent again on every link.
+    ///
+    /// # Errors
+    /// [`DeviceError::NotConnected`], or the link failed.
+    pub async fn send_push_token(
+        &self,
+        host: &EndpointId,
+        key_id: u32,
+        sealed: Vec<u8>,
+    ) -> Result<(), DeviceError> {
+        self.send_control(host, &FromDevice::PushToken { key_id, sealed })
+            .await
     }
 
     /// Type `bytes` into `session`, which this device must control.
@@ -1074,5 +1116,71 @@ mod tests {
             Some(vec![3, 4])
         );
         assert_eq!(screen_frame(&ScreenEvent::Resync), None);
+    }
+
+    #[test]
+    fn a_push_token_reaches_the_host_on_its_control_stream() {
+        run(async {
+            let (rt, me) = device_runtime().await;
+            let paired = Arc::new(Paired(StdMutex::new(HashMap::from([(me, Role::Viewer)]))));
+            let host = Arc::new(
+                Host::bind(
+                    &LinkConfig {
+                        bind: loopback(),
+                        ..LinkConfig::new([1; 32])
+                    },
+                    paired,
+                    10,
+                )
+                .await
+                .expect("host binds"),
+            );
+            let serving = Arc::clone(&host);
+            let heard = tokio::spawn(async move {
+                let Some(Accepted::Remote(link)) = serving.accept().await else {
+                    panic!("a paired device");
+                };
+                let (mut out, mut control) = link.accept_stream().await.expect("control");
+                let _hello = control.next().await;
+                out.send(&ToDevice::Welcome {
+                    host_name: "Studio".into(),
+                    protocol_minor: 0,
+                    role: Role::Viewer,
+                    sessions: vec![],
+                })
+                .await
+                .expect("welcome");
+                control.next().await
+            });
+            let seen = Arc::new(DeviceSeen::default());
+            rt.connect(
+                HostEntry {
+                    id: host.id(),
+                    addr: host.addr(),
+                },
+                Arc::clone(&seen) as Arc<dyn DeviceEvents>,
+            )
+            .await
+            .expect("connects");
+            wait_until("welcome", || {
+                seen.last()
+                    .is_some_and(|(state, _)| state == LinkState::Connected)
+            })
+            .await;
+            assert_eq!(rt.connected_hosts().await, vec![host.id()]);
+            rt.send_push_token(&host.id(), 7, vec![1, 2, 3])
+                .await
+                .expect("sent");
+            let heard = tokio::time::timeout(Duration::from_secs(10), heard)
+                .await
+                .expect("in time")
+                .expect("host task");
+            assert!(matches!(
+                heard,
+                Ok(Some(Decoded::Message(FromDevice::PushToken { key_id: 7, ref sealed }))) if sealed == &[1, 2, 3]
+            ));
+            rt.disconnect(&host.id()).await;
+            assert_eq!(rt.connected_hosts().await, Vec::<EndpointId>::new());
+        });
     }
 }

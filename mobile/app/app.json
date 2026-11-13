@@ -23,6 +23,7 @@
     "web": {
       "favicon": "./assets/favicon.png"
     },
-    "scheme": "kriyon"
+    "scheme": "kriyon",
+    "plugins": ["expo-notifications"]
   }
 }
