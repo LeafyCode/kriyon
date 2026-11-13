@@ -13,7 +13,9 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
   [Remote link]. It holds no session; it shows the host's. _Avoid_: client (taken by [Daemon
   client]), peer.
 - **Device key** — a device's own Ed25519 key pair; its public half is the device's iroh endpoint
-  id. Kept in the OS keychain, never synced or sent. _Avoid_: node id, identity.
+  id. Made once and never replaced, since every pairing depends on it. On the Mac it is kept in the
+  login keychain, never synced or sent; the stronger device-only mode needs a provisioning profile.
+  _Avoid_: node id, identity.
 - **Pairing** — adding a [Remote device] to a [Host] in person: an expiring QR code on the host,
   then the device's [Pairing code] typed into the host. The only way a device is ever trusted; an
   account can't do it. _Avoid_: linking, login.

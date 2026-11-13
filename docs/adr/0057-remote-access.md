@@ -88,3 +88,8 @@ freeze test). The full protocol is in
 - The protocol is versioned; a test fails if a change would break the last
   released phone app.
 - A paid outside security review happens before public release.
+- The host's Device key sits in the login keychain: never synced, readable
+  while the person is logged in, by Kriyon only. Apple's stronger
+  "this device only, when unlocked" mode needs the data-protection keychain,
+  which a Developer ID app gets only with a provisioning profile; the code
+  uses it as soon as the build is signed with one.

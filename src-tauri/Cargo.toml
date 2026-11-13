@@ -29,6 +29,7 @@ serde_json = "1"
 kriyon-core = { path = "../crates/kriyon-core" }
 kriyon-remote = { path = "../crates/kriyon-remote" }
 kriyon-remote-link = { path = "../crates/kriyon-remote-link" }
+tokio = { version = "1", default-features = false, features = ["rt", "sync", "time"] }
 tauri-plugin-notification = "2"
 tauri-plugin-fs = "2"
 tauri-plugin-shell = "2"
@@ -55,6 +56,7 @@ tauri-plugin-updater = "2"
 local-feed = []
 
 [target.'cfg(target_os = "macos")'.dependencies]
+security-framework = { version = "3.7", features = ["OSX_10_15"] }
 objc2 = { version = "0.6", features = ["exception"] }
 objc2-app-kit = { version = "0.3", features = ["NSSound", "NSGraphics", "NSPasteboard", "NSPasteboardItem"] }
 objc2-foundation = { version = "0.3", features = ["NSString", "NSDictionary", "NSObject", "NSError", "NSBundle", "NSFileManager", "NSURL"] }

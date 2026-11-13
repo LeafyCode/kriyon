@@ -7,6 +7,7 @@ pub mod commands;
 pub mod completion_cmd;
 pub mod daemon_client;
 pub mod daemon_rt;
+pub mod device_key;
 pub mod entry_cmd;
 pub mod file_cmd;
 pub mod folder_cmd;
@@ -24,6 +25,8 @@ pub mod plan_limits_rt;
 pub mod policy;
 pub mod prompt_cmd;
 pub mod quit;
+pub mod remote_cmd;
+pub mod remote_rt;
 pub mod sandbox;
 pub mod session_list_rt;
 pub mod session_registry;
@@ -300,6 +303,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_positioner::init())
         .manage(AppState::default())
+        .manage(remote_rt::RemoteRuntime::default())
         .manage(attachment_cmd::AttachmentRegistry::default())
         .manage(folder_cmd::ChosenFolders::default())
         .on_window_event(|window, event| {
@@ -338,6 +342,8 @@ pub fn run() {
             let store = Store::open(&data_dir.join("kriyon.db"))
                 .map_err(|e| -> Box<dyn std::error::Error> { Box::new(e) })?;
             app.manage(StoreState(Mutex::new(store)));
+            // Remote access comes back up only if the person left it on.
+            crate::remote_cmd::restore(app.handle());
             crate::activity_rt::open(&data_dir);
             crate::attachment_cmd::init(app.handle());
 
@@ -422,6 +428,15 @@ pub fn run() {
             commands::close_session,
             commands::sleep_idle_sessions,
             commands::report_drained,
+            remote_cmd::remote_status,
+            remote_cmd::remote_set_enabled,
+            remote_cmd::remote_start_pairing,
+            remote_cmd::remote_stop_pairing,
+            remote_cmd::remote_enter_code,
+            remote_cmd::remote_devices,
+            remote_cmd::remote_rename_device,
+            remote_cmd::remote_remove_device,
+            remote_cmd::remote_set_device_role,
             commands::watch_transcript,
             git_cmd::repo_status,
             git_cmd::create_worktree,

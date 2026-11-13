@@ -1,0 +1,494 @@
+//! Commands for [Remote access]: the switch, pairing and the paired devices.
+//! Every argument comes from the webview and is checked here (trust boundary);
+//! what the host does lives in [`crate::remote_rt`].
+
+use serde::{Deserialize, Serialize};
+
+use kriyon_remote::message::Role;
+
+/// The longest name the person may give a device, in bytes, as for the name
+/// a device gives itself.
+const MAX_DEVICE_NAME: usize = kriyon_remote::pairing::MAX_DEVICE_NAME;
+
+/// A role as the webview names it. Anything else is refused by serde.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RoleArg {
+    Viewer,
+    Controller,
+}
+
+impl From<RoleArg> for Role {
+    fn from(role: RoleArg) -> Self {
+        match role {
+            RoleArg::Viewer => Self::Viewer,
+            RoleArg::Controller => Self::Controller,
+        }
+    }
+}
+
+impl From<Role> for RoleArg {
+    fn from(role: Role) -> Self {
+        match role {
+            Role::Viewer => Self::Viewer,
+            Role::Controller => Self::Controller,
+        }
+    }
+}
+
+/// A device id from the webview: exactly 64 lowercase hex digits.
+///
+/// # Errors
+/// A message for any other text.
+pub fn parse_device_id(text: &str) -> Result<[u8; 32], String> {
+    let refused = || "a device id is 64 lowercase hex digits".to_string();
+    let lower_hex = |b: u8| b.is_ascii_digit() || (b'a'..=b'f').contains(&b);
+    if text.len() != 64 || !text.bytes().all(lower_hex) {
+        return Err(refused());
+    }
+    let mut id = [0_u8; 32];
+    for (i, byte) in id.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&text[i * 2..i * 2 + 2], 16).map_err(|_| refused())?;
+    }
+    Ok(id)
+}
+
+/// A device id as the webview gets it.
+#[must_use]
+pub fn device_id_text(id: &[u8; 32]) -> String {
+    use std::fmt::Write as _;
+    id.iter().fold(String::with_capacity(64), |mut text, b| {
+        let _ = write!(text, "{b:02x}");
+        text
+    })
+}
+
+/// A pairing code from the webview: exactly six ASCII digits.
+///
+/// # Errors
+/// A message for any other text.
+pub fn check_code_text(code: &str) -> Result<(), String> {
+    if code.len() == 6 && code.bytes().all(|b| b.is_ascii_digit()) {
+        Ok(())
+    } else {
+        Err("a pairing code is six digits".to_string())
+    }
+}
+
+/// A name the person gives a device: short plain text.
+///
+/// # Errors
+/// A message for an empty, long or disguised name.
+pub fn check_device_name_text(name: &str) -> Result<(), String> {
+    kriyon_remote::text::check_shown_text(name, MAX_DEVICE_NAME)
+        .map_err(|_| format!("a device name is 1 to {MAX_DEVICE_NAME} bytes of plain text"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_device_id_is_sixty_four_lowercase_hex_digits() {
+        let id = [0xab; 32];
+        let text = device_id_text(&id);
+        assert_eq!(text, "ab".repeat(32));
+        assert_eq!(parse_device_id(&text), Ok(id));
+        for bad in [
+            String::new(),
+            "ab".repeat(31),
+            "ab".repeat(33),
+            "AB".repeat(32),
+            "zz".repeat(32),
+            format!("{}é", "a".repeat(62)),
+            "../".repeat(21) + "a",
+        ] {
+            assert!(parse_device_id(&bad).is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn a_code_is_exactly_six_digits() {
+        assert_eq!(check_code_text("012345"), Ok(()));
+        for bad in ["", "12345", "1234567", "12345a", " 12345", "１２３４５６"] {
+            assert!(check_code_text(bad).is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn a_device_name_is_short_plain_text() {
+        assert_eq!(check_device_name_text("Work phone"), Ok(()));
+        for bad in ["", "two\nlines", "a\u{202e}b", &"x".repeat(65)] {
+            assert!(check_device_name_text(bad).is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn a_role_from_the_webview_is_one_of_two_words() {
+        let parse = |json: &str| serde_json::from_str::<RoleArg>(json);
+        assert_eq!(parse("\"viewer\"").ok(), Some(RoleArg::Viewer));
+        assert_eq!(parse("\"controller\"").ok(), Some(RoleArg::Controller));
+        assert!(parse("\"admin\"").is_err());
+        assert!(parse("\"Controller\"").is_err());
+    }
+}
+
+/// The switch's setting in the store; absent means off.
+const SETTING: &str = "remoteAccess";
+
+/// The event telling the UI a device took the pairing and its code is wanted.
+pub const CODE_WANTED_EVENT: &str = "remote-pairing-code-wanted";
+
+/// Paired devices as the host's accept loop asks for them: the store.
+struct StoreDevices(tauri::AppHandle);
+
+impl kriyon_remote_link::host::PairedDevices for StoreDevices {
+    fn role(&self, device: &[u8; 32]) -> Option<Role> {
+        use tauri::Manager as _;
+        let store = self.0.state::<crate::StoreState>();
+        let store = store.0.lock();
+        // A store that can't answer admits nobody.
+        store.paired_device_role(device).ok().flatten()
+    }
+}
+
+/// This computer's name, as a paired device shows it.
+fn host_name() -> String {
+    let mut buf = [0_u8; 256];
+    // SAFETY: `buf` is valid for `buf.len()` bytes of writes.
+    let rc = unsafe { libc::gethostname(buf.as_mut_ptr().cast(), buf.len()) };
+    let name = if rc == 0 {
+        let end = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+        String::from_utf8_lossy(&buf[..end]).into_owned()
+    } else {
+        String::new()
+    };
+    let name = name.trim_end_matches(".local");
+    if name.is_empty() {
+        "Kriyon".to_string()
+    } else {
+        name.to_string()
+    }
+}
+
+/// The host's [Device key], made on first use.
+fn device_key(app: &tauri::AppHandle) -> Result<[u8; 32], String> {
+    #[cfg(target_os = "macos")]
+    {
+        let vault = crate::device_key::Keychain::for_app(&app.config().identifier);
+        crate::device_key::load_or_create(&vault, kriyon_remote_link::endpoint::generate_secret_key)
+            .map_err(|e| e.to_string())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = app;
+        Err("remote access needs macOS for now".to_string())
+    }
+}
+
+async fn turn_on(app: &tauri::AppHandle) -> Result<(), String> {
+    use tauri::{Emitter as _, Manager as _};
+    let secret_key = device_key(app)?;
+    let emitter = app.clone();
+    let setup = crate::remote_rt::HostSetup {
+        secret_key,
+        bind: std::net::SocketAddr::from(([0, 0, 0, 0], 0)),
+        paired: std::sync::Arc::new(StoreDevices(app.clone())),
+        on_code_wanted: std::sync::Arc::new(move |device_name| {
+            let _ = emitter.emit(
+                CODE_WANTED_EVENT,
+                serde_json::json!({ "deviceName": device_name }),
+            );
+        }),
+    };
+    app.state::<crate::remote_rt::RemoteRuntime>()
+        .turn_on(setup)
+        .await
+}
+
+/// Bring remote access back up at launch if the person left it on.
+pub fn restore(app: &tauri::AppHandle) {
+    use tauri::Manager as _;
+    let on = app
+        .state::<crate::StoreState>()
+        .0
+        .lock()
+        .load_layout(SETTING)
+        .ok()
+        .flatten()
+        .is_some_and(|value| value == "true");
+    if on {
+        let app = app.clone();
+        tauri::async_runtime::spawn(async move {
+            if let Err(e) = turn_on(&app).await {
+                eprintln!("kriyon: remote access didn't come back up: {e}");
+            }
+        });
+    }
+}
+
+/// [Remote access] as the settings show it.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteStatus {
+    pub enabled: bool,
+    /// The host's endpoint id while on.
+    pub host_id: Option<String>,
+    pub pairing: PairingView,
+}
+
+/// The pairing in progress.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase", tag = "state")]
+pub enum PairingView {
+    Idle,
+    Waiting { role: RoleArg },
+    CodeWanted { role: RoleArg, device_name: String },
+}
+
+async fn status(rt: &crate::remote_rt::RemoteRuntime) -> RemoteStatus {
+    use crate::remote_rt::PairingStatus;
+    let pairing = match rt.pairing_status().await {
+        PairingStatus::Idle => PairingView::Idle,
+        PairingStatus::Waiting { role } => PairingView::Waiting { role: role.into() },
+        PairingStatus::CodeWanted { role, device_name } => PairingView::CodeWanted {
+            role: role.into(),
+            device_name,
+        },
+    };
+    RemoteStatus {
+        enabled: rt.is_on().await,
+        host_id: rt.host_id().await.map(|id| device_id_text(&id)),
+        pairing,
+    }
+}
+
+/// Where remote access stands.
+///
+/// # Errors
+/// Never; `Result` for the command's async form.
+#[tauri::command]
+pub async fn remote_status(
+    rt: tauri::State<'_, crate::remote_rt::RemoteRuntime>,
+) -> Result<RemoteStatus, String> {
+    Ok(status(&rt).await)
+}
+
+/// Turn remote access on (the host endpoint comes up) or off (no endpoint at
+/// all), and remember it across launches.
+///
+/// # Errors
+/// Why the endpoint couldn't come up, or the setting couldn't be saved.
+#[tauri::command]
+pub async fn remote_set_enabled(
+    app: tauri::AppHandle,
+    enabled: bool,
+) -> Result<RemoteStatus, String> {
+    use tauri::Manager as _;
+    if enabled {
+        turn_on(&app).await?;
+    } else {
+        app.state::<crate::remote_rt::RemoteRuntime>()
+            .turn_off()
+            .await;
+    }
+    app.state::<crate::StoreState>()
+        .0
+        .lock()
+        .save_layout(SETTING, if enabled { "true" } else { "false" })
+        .map_err(|e| e.to_string())?;
+    Ok(status(&app.state::<crate::remote_rt::RemoteRuntime>()).await)
+}
+
+/// Start pairing a device as `role`; returns the QR code's text.
+///
+/// # Errors
+/// When remote access is off.
+#[tauri::command]
+pub async fn remote_start_pairing(
+    rt: tauri::State<'_, crate::remote_rt::RemoteRuntime>,
+    role: RoleArg,
+) -> Result<String, String> {
+    Ok(rt.start_pairing(role.into()).await?.to_qr_text())
+}
+
+/// Stop the pairing in progress.
+///
+/// # Errors
+/// Never; `Result` for the command's async form.
+#[tauri::command]
+pub async fn remote_stop_pairing(
+    rt: tauri::State<'_, crate::remote_rt::RemoteRuntime>,
+) -> Result<(), String> {
+    rt.stop_pairing().await;
+    Ok(())
+}
+
+/// What typing a code did, for the UI.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase", tag = "outcome")]
+pub enum CodeResult {
+    Paired {
+        device_id: String,
+        name: String,
+        role: RoleArg,
+    },
+    Wrong {
+        tries_left: u32,
+    },
+    Burned,
+    NoAttempt,
+}
+
+/// The person typed the code the device shows.
+///
+/// # Errors
+/// For text that isn't six digits, or when the device can't be told.
+#[tauri::command]
+pub async fn remote_enter_code(app: tauri::AppHandle, code: String) -> Result<CodeResult, String> {
+    use crate::remote_rt::CodeOutcome;
+    use tauri::Manager as _;
+    check_code_text(&code)?;
+    let store_app = app.clone();
+    let now_ms = chrono_now_ms();
+    let outcome = app
+        .state::<crate::remote_rt::RemoteRuntime>()
+        .enter_code(&code, &host_name(), move |device, name, role| {
+            let store = store_app.state::<crate::StoreState>();
+            let row = crate::store::PairedDeviceRow {
+                endpoint_id: device,
+                name: name.to_string(),
+                role,
+                paired_at: now_ms,
+            };
+            let kept = store.0.lock().add_paired_device(&row);
+            if let Err(e) = &kept {
+                eprintln!("kriyon: couldn't keep the paired device: {e}");
+            }
+            kept.is_ok()
+        })
+        .await?;
+    Ok(match outcome {
+        CodeOutcome::Paired { device, name, role } => CodeResult::Paired {
+            device_id: device_id_text(&device),
+            name,
+            role: role.into(),
+        },
+        CodeOutcome::Wrong { tries_left } => CodeResult::Wrong { tries_left },
+        CodeOutcome::Burned => CodeResult::Burned,
+        CodeOutcome::NoAttempt => CodeResult::NoAttempt,
+    })
+}
+
+fn chrono_now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+}
+
+/// A paired device, for the UI.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeviceView {
+    pub id: String,
+    pub name: String,
+    pub role: RoleArg,
+    pub paired_at: i64,
+}
+
+/// Every paired device.
+///
+/// # Errors
+/// When the store can't be read.
+#[allow(clippy::needless_pass_by_value)]
+#[tauri::command]
+pub fn remote_devices(
+    store: tauri::State<'_, crate::StoreState>,
+) -> Result<Vec<DeviceView>, String> {
+    let rows = store.0.lock().paired_devices().map_err(|e| e.to_string())?;
+    Ok(rows
+        .into_iter()
+        .map(|row| DeviceView {
+            id: device_id_text(&row.endpoint_id),
+            name: row.name,
+            role: row.role.into(),
+            paired_at: row.paired_at,
+        })
+        .collect())
+}
+
+/// Rename a paired device.
+///
+/// # Errors
+/// For a bad id or name, an unknown device, or a store failure.
+#[allow(clippy::needless_pass_by_value)]
+#[tauri::command]
+pub fn remote_rename_device(
+    store: tauri::State<'_, crate::StoreState>,
+    id: String,
+    name: String,
+) -> Result<(), String> {
+    let id = parse_device_id(&id)?;
+    check_device_name_text(&name)?;
+    if store
+        .0
+        .lock()
+        .rename_paired_device(&id, &name)
+        .map_err(|e| e.to_string())?
+    {
+        Ok(())
+    } else {
+        Err("no such device".to_string())
+    }
+}
+
+/// Remove a paired device: forget it, and cut it off at once.
+///
+/// # Errors
+/// For a bad id, an unknown device, or a store failure.
+#[tauri::command]
+pub async fn remote_remove_device(app: tauri::AppHandle, id: String) -> Result<(), String> {
+    use tauri::Manager as _;
+    let id = parse_device_id(&id)?;
+    let removed = app
+        .state::<crate::StoreState>()
+        .0
+        .lock()
+        .remove_paired_device(&id)
+        .map_err(|e| e.to_string())?;
+    if !removed {
+        return Err("no such device".to_string());
+    }
+    app.state::<crate::remote_rt::RemoteRuntime>()
+        .cut_off(&id)
+        .await;
+    Ok(())
+}
+
+/// Change a paired device's role. Its connections close so it comes back
+/// with the new role.
+///
+/// # Errors
+/// For a bad id, an unknown device, or a store failure.
+#[tauri::command]
+pub async fn remote_set_device_role(
+    app: tauri::AppHandle,
+    id: String,
+    role: RoleArg,
+) -> Result<(), String> {
+    use tauri::Manager as _;
+    let id = parse_device_id(&id)?;
+    let changed = app
+        .state::<crate::StoreState>()
+        .0
+        .lock()
+        .set_paired_device_role(&id, role.into())
+        .map_err(|e| e.to_string())?;
+    if !changed {
+        return Err("no such device".to_string());
+    }
+    app.state::<crate::remote_rt::RemoteRuntime>()
+        .reconnect(&id)
+        .await;
+    Ok(())
+}

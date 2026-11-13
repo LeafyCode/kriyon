@@ -2961,6 +2961,7 @@ dependencies = [
  "plist",
  "portable-pty",
  "rusqlite",
+ "security-framework",
  "semver",
  "serde",
  "serde_json",
@@ -2976,6 +2977,7 @@ dependencies = [
  "tauri-plugin-updater",
  "tempfile",
  "thiserror 2.0.21",
+ "tokio",
  "uuid",
  "window-vibrancy",
 ]
