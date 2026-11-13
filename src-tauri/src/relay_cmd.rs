@@ -1,6 +1,6 @@
 //! Our relay in the app: the settings' commands, putting a pass to use on
 //! this computer's one endpoint, and watching what the relay says. The
-//! decisions are `kriyon_remote::relay`'s and `relay_rt`'s; this is glue.
+//! decisions are `kriyon_remote::relay`'s and `kriyon_relay_client`'s; this is glue.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -11,9 +11,9 @@ use serde::Serialize;
 use tauri::{Emitter as _, Manager as _};
 use tauri_plugin_opener::OpenerExt as _;
 
-use crate::relay_api::RelayStatus;
-use crate::relay_rt::{RelayRuntime, RelayView, SignInView, ThisDevice};
 use crate::remote_endpoint::{Bound, RemoteEndpoint};
+use kriyon_relay_client::api::RelayStatus;
+use kriyon_relay_client::runtime::{RelayRuntime, RelayView, SignInView, ThisDevice};
 
 /// Sent when the relay's state changed, for the settings to read it again.
 pub const RELAY_CHANGED_EVENT: &str = "relay-changed";

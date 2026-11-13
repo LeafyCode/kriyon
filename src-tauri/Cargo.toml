@@ -33,6 +33,7 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 kriyon-core = { path = "../crates/kriyon-core" }
 kriyon-remote = { path = "../crates/kriyon-remote" }
 kriyon-remote-link = { path = "../crates/kriyon-remote-link" }
+kriyon-relay-client = { path = "../crates/kriyon-relay-client" }
 iroh = { version = "1.4.1", default-features = false, features = ["tls-ring"] }
 qrcode = { version = "0.14.1", default-features = false }
 tokio = { version = "1", default-features = false, features = ["macros", "rt", "sync", "time"] }

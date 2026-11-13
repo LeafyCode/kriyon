@@ -7,8 +7,10 @@
 use kriyon_remote::relay::{ApiRefusal, SignInPoll};
 use serde::{Deserialize, Serialize};
 
-/// The client id this app signs in as.
-pub const CLIENT_ID: &str = "kriyon-desktop";
+/// The desktop app's client id for device sign-in.
+pub const DESKTOP_CLIENT_ID: &str = "kriyon-desktop";
+/// The phone app's client id for device sign-in.
+pub const MOBILE_CLIENT_ID: &str = "kriyon-mobile";
 /// Where the device-code sign-in lives, under the API base.
 const AUTH: &str = "/api/v1/admin/auth";
 /// Where the relay's calls live, under the API base.
@@ -81,6 +83,7 @@ pub struct RelayStatus {
 /// The `BisBig` API, signed in or not.
 pub struct RelayApi {
     base: String,
+    client_id: &'static str,
     token: Option<String>,
     http: reqwest::Client,
 }
@@ -114,11 +117,12 @@ fn unreachable(e: impl std::fmt::Display) -> ApiError {
 }
 
 impl RelayApi {
-    /// The API at `base` (from build-time configuration).
+    /// The API at `base` (from build-time configuration), signing in as
+    /// `client_id` ([`DESKTOP_CLIENT_ID`] or [`MOBILE_CLIENT_ID`]).
     ///
     /// # Errors
     /// When the HTTP client can't be made.
-    pub fn new(base: &str) -> Result<Self, String> {
+    pub fn new(base: &str, client_id: &'static str) -> Result<Self, String> {
         // reqwest's rustls has no crypto provider of its own; ring is the
         // one already in the app (iroh's). Installed once; a second install
         // is refused, which is fine.
@@ -129,6 +133,7 @@ impl RelayApi {
             .map_err(|e| e.to_string())?;
         Ok(Self {
             base: base.trim_end_matches('/').to_string(),
+            client_id,
             token: None,
             http,
         })
@@ -179,7 +184,7 @@ impl RelayApi {
         // OAuth's own replies, not the API's envelope.
         let reply = self
             .request(reqwest::Method::POST, &format!("{AUTH}/device/code"))
-            .json(&serde_json::json!({ "client_id": CLIENT_ID }))
+            .json(&serde_json::json!({ "client_id": self.client_id }))
             .send()
             .await
             .map_err(unreachable)?;
@@ -202,7 +207,7 @@ impl RelayApi {
             .json(&serde_json::json!({
                 "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
                 "device_code": device_code,
-                "client_id": CLIENT_ID,
+                "client_id": self.client_id,
             }))
             .send()
             .await
@@ -353,7 +358,11 @@ pub(crate) mod test_api {
     }
 
     pub fn run<F: std::future::Future>(f: F) -> F::Output {
-        tauri::async_runtime::block_on(f)
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("runtime")
+            .block_on(f)
     }
 }
 
@@ -389,7 +398,7 @@ mod tests {
         }
         });
         run(async {
-            let api = RelayApi::new(&base).expect("api");
+            let api = RelayApi::new(&base, DESKTOP_CLIENT_ID).expect("api");
             let code = api.device_code().await.expect("code");
             assert_eq!(code.user_code, "ABCD1234");
             assert_eq!(code.interval, 5);
@@ -419,7 +428,7 @@ mod tests {
             _ => (404, "{}".into()),
         });
         let got = run(async {
-            RelayApi::new(&base)
+            RelayApi::new(&base, DESKTOP_CLIENT_ID)
                 .expect("api")
                 .signed_in("tok")
                 .pass(KEY)
@@ -444,7 +453,9 @@ mod tests {
             _ => (404, "{}".into()),
         });
         run(async {
-            let api = RelayApi::new(&base).expect("api").signed_in("tok");
+            let api = RelayApi::new(&base, DESKTOP_CLIENT_ID)
+                .expect("api")
+                .signed_in("tok");
             assert_eq!(
                 api.pass(KEY).await,
                 Err(ApiError::Refused(ApiRefusal::NoSubscription))
@@ -473,7 +484,9 @@ mod tests {
         }
         });
         run(async {
-            let api = RelayApi::new(&base).expect("api").signed_in("tok");
+            let api = RelayApi::new(&base, DESKTOP_CLIENT_ID)
+                .expect("api")
+                .signed_in("tok");
             let status = api.status().await.expect("status");
             assert_eq!(status.subscription.expect("subscribed").state, "active");
             assert_eq!(status.devices[0].device_id, "d1");
@@ -494,7 +507,9 @@ mod tests {
     #[test]
     fn a_device_id_that_is_not_an_id_never_reaches_the_api() {
         let (base, seen) = fake_api(|_, _| (200, r#"{"data":null,"meta":{}}"#.into()));
-        let api = RelayApi::new(&base).expect("api").signed_in("tok");
+        let api = RelayApi::new(&base, DESKTOP_CLIENT_ID)
+            .expect("api")
+            .signed_in("tok");
         for bad in ["", "../status", "d1/x", "d1?x=1", "d 1", "%2e%2e"] {
             assert_eq!(
                 run(api.remove_device(bad)),
@@ -507,7 +522,7 @@ mod tests {
 
     #[test]
     fn an_api_that_is_not_there_is_unreachable_not_a_refusal() {
-        let api = RelayApi::new("http://127.0.0.1:1").expect("api");
+        let api = RelayApi::new("http://127.0.0.1:1", DESKTOP_CLIENT_ID).expect("api");
         assert!(matches!(run(api.status()), Err(ApiError::Unreachable(_))));
     }
 }

@@ -3204,6 +3204,7 @@ dependencies = [
  "iroh",
  "kriyon-core",
  "kriyon-push",
+ "kriyon-relay-client",
  "kriyon-remote",
  "kriyon-remote-link",
  "libc",
@@ -3300,6 +3301,19 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "tokio",
+]
+
+[[package]]
+name = "kriyon-relay-client"
+version = "0.16.0"
+dependencies = [
+ "kriyon-remote",
+ "kriyon-remote-link",
+ "reqwest",
+ "rustls",
+ "serde",
+ "serde_json",
  "tokio",
 ]
 

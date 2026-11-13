@@ -297,7 +297,10 @@ pub(crate) async fn bound(app: &tauri::AppHandle) -> Result<crate::remote_endpoi
     let secret_key = device_key(app)?;
     // The relay the person turned on, with this device's pass; used if the
     // endpoint binds now.
-    let relay = app.state::<crate::relay_rt::RelayRuntime>().access().await;
+    let relay = app
+        .state::<kriyon_relay_client::runtime::RelayRuntime>()
+        .access()
+        .await;
     app.state::<crate::remote_endpoint::RemoteEndpoint>()
         .want_relay(relay)
         .await;

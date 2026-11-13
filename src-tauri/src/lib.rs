@@ -25,9 +25,7 @@ pub mod plan_limits_rt;
 pub mod policy;
 pub mod prompt_cmd;
 pub mod quit;
-pub mod relay_api;
 pub mod relay_cmd;
-pub mod relay_rt;
 pub mod remote_cmd;
 pub mod remote_device_cmd;
 pub mod remote_endpoint;
@@ -422,8 +420,13 @@ pub fn run() {
                 .serve_with(serve);
             // Our relay, before remote access comes back up: its pass is
             // set on the endpoint when it binds.
-            app.manage(crate::relay_rt::RelayRuntime::new(
-                crate::relay_rt::RelaySetup::from_build(),
+            app.manage(kriyon_relay_client::runtime::RelayRuntime::new(
+                // The relay's addresses are this build's; without both,
+                // there is no relay at all.
+                kriyon_relay_client::runtime::RelaySetup::desktop(
+                    option_env!("KRIYON_RELAY_API"),
+                    option_env!("KRIYON_RELAY_WEB"),
+                ),
                 crate::device_key::app_vault(&app.config().identifier, "relay"),
             ));
             app.manage(crate::relay_cmd::RelayGlue::default());

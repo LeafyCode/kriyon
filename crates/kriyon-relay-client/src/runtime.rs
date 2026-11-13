@@ -11,48 +11,55 @@ use kriyon_remote_link::RelayAccess;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
-use crate::relay_api::{ApiError, PassReply, RelayApi, RelayStatus};
+use crate::api::{ApiError, PassReply, RelayApi, RelayStatus};
 use kriyon_remote_link::keys::SecretVault;
 
-/// Where the API and the website are, from build-time configuration.
+/// Where the API (and, on the desktop, the website) are, from the app's
+/// build-time configuration, and which app signs in.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RelaySetup {
     /// The API base (`KRIYON_RELAY_API`).
     pub api: String,
-    /// The website base (`KRIYON_RELAY_WEB`), where the person subscribes.
-    pub web: String,
+    /// The website base (`KRIYON_RELAY_WEB`), where the person subscribes;
+    /// the phone has none (no buy button there).
+    pub web: Option<String>,
+    /// The app's client id for device sign-in.
+    pub client_id: &'static str,
+}
+
+/// A configured address: present and not blank, without a trailing slash.
+fn clean(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.trim_end_matches('/').to_string())
 }
 
 impl RelaySetup {
-    /// This build's setup: `None` (no relay) unless both were set when it
-    /// was built.
+    /// The desktop's setup: both the API and the website, or no relay.
     #[must_use]
-    pub fn from_build() -> Option<Self> {
-        Self::from_values(
-            option_env!("KRIYON_RELAY_API"),
-            option_env!("KRIYON_RELAY_WEB"),
-        )
-    }
-
-    /// The setup from `api` and `web`: both present and not blank.
-    #[must_use]
-    pub fn from_values(api: Option<&str>, web: Option<&str>) -> Option<Self> {
-        let clean = |value: Option<&str>| {
-            value
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(|value| value.trim_end_matches('/').to_string())
-        };
+    pub fn desktop(api: Option<&str>, web: Option<&str>) -> Option<Self> {
         Some(Self {
             api: clean(api)?,
-            web: clean(web)?,
+            web: Some(clean(web)?),
+            client_id: crate::api::DESKTOP_CLIENT_ID,
         })
     }
 
-    /// Where the person subscribes, changes or cancels.
+    /// The phone's setup: the API, or no relay.
     #[must_use]
-    pub fn subscriptions_url(&self) -> String {
-        format!("{}/subscriptions", self.web)
+    pub fn mobile(api: Option<&str>) -> Option<Self> {
+        Some(Self {
+            api: clean(api)?,
+            web: None,
+            client_id: crate::api::MOBILE_CLIENT_ID,
+        })
+    }
+
+    /// Where the person subscribes, changes or cancels; none on the phone.
+    #[must_use]
+    pub fn subscriptions_url(&self) -> Option<String> {
+        self.web.as_ref().map(|web| format!("{web}/subscriptions"))
     }
 }
 
@@ -192,7 +199,7 @@ impl RelayRuntime {
     /// Where the person subscribes; `None` without a relay.
     #[must_use]
     pub fn subscriptions_url(&self) -> Option<String> {
-        self.setup.as_ref().map(RelaySetup::subscriptions_url)
+        self.setup.as_ref().and_then(RelaySetup::subscriptions_url)
     }
 
     /// What the keychain holds; `None` when it can't be read now (locked,
@@ -247,7 +254,7 @@ impl RelayRuntime {
 
     fn api(&self, token: Option<&str>) -> Result<RelayApi, String> {
         let setup = self.setup.as_ref().ok_or("This build has no relay")?;
-        let api = RelayApi::new(&setup.api)?;
+        let api = RelayApi::new(&setup.api, setup.client_id)?;
         Ok(match token {
             Some(token) => api.signed_in(token),
             None => api,
@@ -547,7 +554,7 @@ mod tests {
     use std::sync::{Arc, Mutex as StdMutex};
 
     use super::*;
-    use crate::relay_api::test_api::{fake_api, run, TEST_PASS};
+    use crate::api::test_api::{fake_api, run, TEST_PASS};
 
     /// A keychain item in memory, shared so a second runtime sees it. It
     /// counts writes and removals, and can be made unreadable (locked).
@@ -594,7 +601,8 @@ mod tests {
     fn setup(api: &str) -> RelaySetup {
         RelaySetup {
             api: api.into(),
-            web: "https://web.example.test/".into(),
+            web: Some("https://web.example.test".into()),
+            client_id: crate::api::DESKTOP_CLIENT_ID,
         }
     }
 
@@ -624,24 +632,60 @@ mod tests {
     }
 
     #[test]
-    fn the_relay_exists_only_when_both_addresses_were_built_in() {
-        assert_eq!(RelaySetup::from_values(None, None), None);
+    fn the_desktop_has_a_relay_only_with_both_addresses_built_in() {
+        assert_eq!(RelaySetup::desktop(None, None), None);
+        assert_eq!(RelaySetup::desktop(Some("https://api.test"), None), None);
         assert_eq!(
-            RelaySetup::from_values(Some("https://api.test"), None),
+            RelaySetup::desktop(Some(" "), Some("https://web.test")),
             None
         );
+        let setup =
+            RelaySetup::desktop(Some("https://api.test"), Some("https://web.test/")).expect("both");
         assert_eq!(
-            RelaySetup::from_values(Some(" "), Some("https://web.test")),
-            None
+            setup.subscriptions_url().as_deref(),
+            Some("https://web.test/subscriptions")
         );
-        let setup = RelaySetup::from_values(Some("https://api.test"), Some("https://web.test/"))
-            .expect("both");
-        assert_eq!(setup.subscriptions_url(), "https://web.test/subscriptions");
+        assert_eq!(setup.client_id, "kriyon-desktop");
         run(async {
             let none = RelayRuntime::new(None, Box::new(Memory::default()));
             assert!(!none.view().await.available);
             assert!(none.start_sign_in().await.is_err());
         });
+    }
+
+    #[test]
+    fn the_phone_has_a_relay_with_the_api_alone_and_no_place_to_buy() {
+        assert_eq!(RelaySetup::mobile(None), None);
+        assert_eq!(RelaySetup::mobile(Some("")), None);
+        let setup = RelaySetup::mobile(Some("https://api.test/")).expect("the api");
+        assert_eq!(setup.api, "https://api.test");
+        assert_eq!(setup.client_id, "kriyon-mobile");
+        assert_eq!(setup.subscriptions_url(), None);
+        let relay = RelayRuntime::new(Some(setup), Box::new(Memory::default()));
+        assert_eq!(relay.subscriptions_url(), None);
+    }
+
+    #[test]
+    fn the_phone_signs_in_as_kriyon_mobile() {
+        let (base, seen) = fake_api(|line, _| {
+            match line {
+            "POST /api/v1/admin/auth/device/code" => (
+                200,
+                r#"{"device_code":"dc","user_code":"X","verification_uri":"u","verification_uri_complete":"u","expires_in":600,"interval":0}"#.into(),
+            ),
+            _ => (404, "{}".into()),
+        }
+        });
+        let relay = RelayRuntime::new(RelaySetup::mobile(Some(&base)), Box::new(Memory::default()));
+        run(async {
+            relay.start_sign_in().await.expect("started");
+        });
+        let seen = seen.lock().expect("seen").clone();
+        assert!(
+            seen[0].body.contains(r#""client_id":"kriyon-mobile""#),
+            "{:?}",
+            seen[0]
+        );
     }
 
     #[test]
