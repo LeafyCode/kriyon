@@ -21,8 +21,12 @@ The desktop app is the [PTY daemon]'s only client. The host side of this
 protocol lives in the app's Rust core and reads sessions through the same
 [Daemon client] the window uses.
 
-When [Remote access] is off, the host creates no iroh endpoint at all and
-makes no push calls.
+One iroh endpoint per app, shared by both roles: it accepts as a host only
+while [Remote access] is on, and dials as a device when the person uses
+another computer from here. With Remote access off and no paired computers
+there is no endpoint at all; with Remote access off but a paired computer in
+use, the endpoint offers no ALPN, so every incoming handshake fails. No push
+calls while Remote access is off.
 
 ## 2. Transport
 

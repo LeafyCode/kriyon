@@ -23,8 +23,10 @@ freeze test). The full protocol is in
   it on shows a consent screen that says in plain words what changes: other
   devices you pair can see and type into your sessions; a Controller can do
   anything you can do in a terminal; traffic is end-to-end encrypted; through
-  our relay it passes a server that can't read it. With the switch off, the
-  host opens no network listener and Kriyon behaves exactly as before.
+  our relay it passes a server that can't read it. With the switch off, this
+  computer accepts no connections. It opens no network socket at all unless
+  the person uses another computer from here; then one socket stays open for
+  that, offering no protocol to anyone who dials in.
 - **The session lives on the [Host].** A [Remote link] is only a window into
   it. Losing a link never stops, pauses or slows a session.
 - **Transport: iroh.** QUIC with each device's own Ed25519 [Device key];
