@@ -295,14 +295,23 @@ impl ServeHost for AppServeHost {
         }
     }
 
-    fn started(&self, device: &EndpointId, request_id: &[u8; 16]) -> Option<String> {
-        self.0
+    fn started(
+        &self,
+        device: &EndpointId,
+        request_id: &[u8; 16],
+    ) -> Option<Result<String, RefuseReason>> {
+        let record = self
+            .0
             .state::<StoreState>()
             .0
             .lock()
             .remote_start(device, request_id, crate::remote_rt::now_ms())
             .ok()
-            .flatten()
+            .flatten()?;
+        Some(match record {
+            crate::store::RemoteStartRecord::Made(session_id) => Ok(session_id),
+            crate::store::RemoteStartRecord::Failed => Err(RefuseReason::StartFailed),
+        })
     }
 
     fn start_session(

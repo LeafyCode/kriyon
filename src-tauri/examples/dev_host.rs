@@ -143,7 +143,11 @@ impl ServeHost for DevApp {
         ProjectFolder::NoSuchProject
     }
 
-    fn started(&self, _device: &EndpointId, _request_id: &[u8; 16]) -> Option<String> {
+    fn started(
+        &self,
+        _device: &EndpointId,
+        _request_id: &[u8; 16],
+    ) -> Option<Result<String, RefuseReason>> {
         None
     }
 

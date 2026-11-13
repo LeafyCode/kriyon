@@ -48,7 +48,7 @@ pub(crate) struct FakeHost {
     /// How long a start takes, so a test can drop the link mid-start.
     pub(crate) start_delay: Mutex<Duration>,
     /// Sessions earlier starts made, by request id.
-    pub(crate) started: Mutex<HashMap<[u8; 16], String>>,
+    pub(crate) started: Mutex<HashMap<[u8; 16], Result<String, RefuseReason>>>,
     /// Told every change of control, as the app's writers tell it.
     pub(crate) serve: Mutex<Option<Serve>>,
 }
@@ -174,7 +174,11 @@ impl ServeHost for FakeHost {
         self.projects.lock().clone()
     }
 
-    fn started(&self, _device: &EndpointId, request_id: &[u8; 16]) -> Option<String> {
+    fn started(
+        &self,
+        _device: &EndpointId,
+        request_id: &[u8; 16],
+    ) -> Option<Result<String, RefuseReason>> {
         self.started.lock().get(request_id).cloned()
     }
 
@@ -188,7 +192,7 @@ impl ServeHost for FakeHost {
         // its shell opens: a resend finds it.
         let result = self.start_result.lock().clone();
         if let Ok(id) = &result {
-            self.started.lock().insert(start.request_id, id.clone());
+            self.started.lock().insert(start.request_id, Ok(id.clone()));
         }
         self.starts.lock().push((device, start));
         let delay = *self.start_delay.lock();

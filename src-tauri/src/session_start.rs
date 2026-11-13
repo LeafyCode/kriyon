@@ -216,9 +216,10 @@ pub const SESSION_ADDED_EVENT: &str = "session-added";
 /// Start a session as paired `device` asked (`StartSession`, its check
 /// passed): in the project's folder, titled as asked or after the project,
 /// never in a worktree, with a fresh `claude`. A resend of the same
-/// `request_id` within a day returns the session the first one made (spec
-/// §4): the request is recorded before the shell opens, and forgotten, with
-/// the session's row, if it doesn't. The window hears of it
+/// `request_id` within a day gets the answer the first one got (spec §4):
+/// the request is recorded before the shell opens; if the shell doesn't
+/// open, the session's row goes and the request stays failed, so a resend
+/// is refused the same way and never starts a session nobody waits for. The window hears of it
 /// ([`SESSION_ADDED_EVENT`]) and shows it in its sidebar; opening it there
 /// takes over its output.
 ///
@@ -281,7 +282,7 @@ async fn start_remote_once(
     .await
     .map_err(|_| RefuseReason::StartFailed)??;
     if let Some(made) = made {
-        return Ok(made);
+        return made;
     }
     let Some(project) = project else {
         return Err(RefuseReason::StartFailed);
@@ -305,13 +306,15 @@ async fn start_remote_once(
         Ok(started) => started,
         Err(why) => {
             eprintln!("kriyon: a remote start failed: {why}");
-            // Nothing started: neither the request nor a row stays behind.
-            let forgetting = (app.clone(), id.clone());
+            // Nothing started: no row stays behind, and the request stays
+            // failed for the day, so a resend is refused the same way
+            // rather than starting a session nobody waits for.
+            let failing = (app.clone(), id.clone());
             let _ = tauri::async_runtime::spawn_blocking(move || {
-                let (app, id) = forgetting;
+                let (app, id) = failing;
                 let store = app.state::<crate::StoreState>();
                 let store = store.0.lock();
-                let _ = store.forget_remote_start(&device, &request_id);
+                let _ = store.fail_remote_start(&device, &request_id);
                 let _ = store.delete_session(&id);
             })
             .await;

@@ -66,7 +66,11 @@ pub trait ServeHost: Send + Sync + 'static {
     fn project_folder(&self, project_id: &str) -> ProjectFolder;
     /// The session `device`'s start `request_id` already made, if any (kept a
     /// day): a resend gets it back.
-    fn started(&self, device: &EndpointId, request_id: &[u8; 16]) -> Option<String>;
+    fn started(
+        &self,
+        device: &EndpointId,
+        request_id: &[u8; 16],
+    ) -> Option<Result<String, RefuseReason>>;
     /// Start a session as `device` asked (its check already passed): the
     /// new session's id, or the one this request already started.
     fn start_session(
@@ -666,10 +670,14 @@ impl Serve {
             return;
         };
         let refused = |reason| ToDevice::StartRefused { request_id, reason };
-        if let Some(session_id) = made {
-            out.send(&ToDevice::StartResult {
-                request_id,
-                session_id,
+        if let Some(made) = made {
+            // A resend: the same answer the first one got.
+            out.send(&match made {
+                Ok(session_id) => ToDevice::StartResult {
+                    request_id,
+                    session_id,
+                },
+                Err(reason) => refused(reason),
             });
             return;
         }
@@ -1318,6 +1326,33 @@ mod tests {
     }
 
     #[test]
+    fn a_resent_start_that_failed_is_refused_again_and_starts_nothing() {
+        run(async {
+            let world = world().await;
+            world
+                .fake
+                .folders
+                .lock()
+                .insert("p".into(), ProjectFolder::Approved);
+            world
+                .fake
+                .started
+                .lock()
+                .insert([7; 16], Err(RefuseReason::StartFailed));
+            let (_c, _cl, mut cw, mut cr) = device(&world, 3, Role::Controller).await;
+            cw.send(&start("p", false)).await.expect("sent");
+            assert_eq!(
+                next(&mut cr).await,
+                ToDevice::StartRefused {
+                    request_id: [7; 16],
+                    reason: RefuseReason::StartFailed
+                }
+            );
+            assert!(world.fake.starts.lock().is_empty(), "nothing started again");
+        });
+    }
+
+    #[test]
     fn a_start_that_fails_says_so() {
         run(async {
             let world = world().await;
@@ -1348,7 +1383,7 @@ mod tests {
                 .fake
                 .started
                 .lock()
-                .insert([7; 16], "made-before".into());
+                .insert([7; 16], Ok("made-before".into()));
             let (_c, _cl, mut cw, mut cr) = device(&world, 3, Role::Controller).await;
             cw.send(&start("p", false)).await.expect("sent");
             assert_eq!(

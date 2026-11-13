@@ -19,6 +19,15 @@ pub enum StoreError {
     Sqlite(#[from] rusqlite::Error),
 }
 
+/// What a device's remote start came to, kept a day for a resend.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RemoteStartRecord {
+    /// It made this session.
+    Made(String),
+    /// It failed: its session's shell didn't open.
+    Failed,
+}
+
 /// A paired device's sealed push token, and the push sender's key it was
 /// sealed to.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -354,13 +363,21 @@ impl Store {
                  request_id TEXT NOT NULL,
                  session_id TEXT NOT NULL,
                  at_ms      INTEGER NOT NULL,
+                 failed     INTEGER NOT NULL DEFAULT 0,
                  PRIMARY KEY(device_id, request_id)
              );",
         )?;
+        self.migrate_columns()
+    }
+
+    /// Bring a table made by an older version up to date: the columns added
+    /// since, each added only if missing.
+    fn migrate_columns(&self) -> Result<(), StoreError> {
         self.migrate_claude_session_id()?;
         self.migrate_column("projects", "setup_command", "TEXT")?;
         self.migrate_column("sessions", "archived_at", "INTEGER")?;
         self.migrate_column("sessions", "baseline_oid", "TEXT")?;
+        self.migrate_column("remote_starts", "failed", "INTEGER NOT NULL DEFAULT 0")?;
         // The [Sleeping session] mark, so a session Kriyon stopped is restored
         // as asleep after an app restart instead of silently losing its moon.
         self.migrate_column("sessions", "sleep_state", "TEXT")?;
@@ -681,30 +698,36 @@ impl Store {
         device: &[u8; 32],
         request_id: &[u8; 16],
         now_ms: i64,
-    ) -> Result<Option<String>, StoreError> {
+    ) -> Result<Option<RemoteStartRecord>, StoreError> {
         Ok(self
             .conn
             .query_row(
-                "SELECT session_id FROM remote_starts
+                "SELECT session_id, failed FROM remote_starts
                  WHERE device_id = ?1 AND request_id = ?2 AND at_ms > ?3",
                 rusqlite::params![hex(device), hex(request_id), now_ms - REMOTE_START_KEPT_MS],
-                |r| r.get::<_, String>(0),
+                |r| {
+                    Ok(if r.get::<_, bool>(1)? {
+                        RemoteStartRecord::Failed
+                    } else {
+                        RemoteStartRecord::Made(r.get::<_, String>(0)?)
+                    })
+                },
             )
             .optional()?)
     }
 
-    /// Forget `device`'s start `request_id`: it failed, so a resend starts
-    /// it afresh.
+    /// Mark `device`'s start `request_id` failed: a resend within the day is
+    /// refused the same way, and never starts a session nobody waits for.
     ///
     /// # Errors
     /// Returns [`StoreError::Sqlite`] if the statement fails.
-    pub fn forget_remote_start(
+    pub fn fail_remote_start(
         &self,
         device: &[u8; 32],
         request_id: &[u8; 16],
     ) -> Result<(), StoreError> {
         self.conn.execute(
-            "DELETE FROM remote_starts WHERE device_id = ?1 AND request_id = ?2",
+            "UPDATE remote_starts SET failed = 1 WHERE device_id = ?1 AND request_id = ?2",
             rusqlite::params![hex(device), hex(request_id)],
         )?;
         Ok(())
@@ -1229,7 +1252,7 @@ mod tests {
             assert_eq!(s.remote_start(&PHONE, &[5; 16], 1).expect("reads"), None);
             assert_eq!(
                 s.remote_start(&LAPTOP, &[5; 16], 1).expect("reads"),
-                Some("s2".to_string())
+                Some(RemoteStartRecord::Made("s2".to_string()))
             );
             assert!(!s.remove_paired_device(&PHONE).expect("already gone"));
         }
@@ -1279,7 +1302,7 @@ mod tests {
                 .expect("records");
             assert_eq!(
                 s.remote_start(&PHONE, &[5; 16], DAY_MS - 1).expect("reads"),
-                Some("s1".to_string())
+                Some(RemoteStartRecord::Made("s1".to_string()))
             );
             assert_eq!(s.remote_start(&PHONE, &[6; 16], 0).expect("reads"), None);
             assert_eq!(
@@ -1289,12 +1312,20 @@ mod tests {
         }
 
         #[test]
-        fn a_start_that_failed_is_forgotten_so_a_resend_tries_again() {
+        fn a_start_that_failed_stays_failed_for_a_day() {
             let s = store();
             s.record_remote_start(&PHONE, &[5; 16], "s1", 0)
                 .expect("records");
-            s.forget_remote_start(&PHONE, &[5; 16]).expect("forgets");
-            assert_eq!(s.remote_start(&PHONE, &[5; 16], 1).expect("reads"), None);
+            s.fail_remote_start(&PHONE, &[5; 16]).expect("marks");
+            assert_eq!(
+                s.remote_start(&PHONE, &[5; 16], DAY_MS - 1).expect("reads"),
+                Some(RemoteStartRecord::Failed),
+                "a resend is refused the same way, never started again"
+            );
+            assert_eq!(
+                s.remote_start(&PHONE, &[5; 16], DAY_MS).expect("reads"),
+                None
+            );
         }
 
         fn studio() -> PairedHostRow {
@@ -1340,7 +1371,7 @@ mod tests {
             assert_eq!(s.prune_remote_starts(DAY_MS + 1).expect("prunes"), 1);
             assert_eq!(
                 s.remote_start(&PHONE, &[6; 16], DAY_MS + 1).expect("reads"),
-                Some("new".to_string())
+                Some(RemoteStartRecord::Made("new".to_string()))
             );
         }
     }
