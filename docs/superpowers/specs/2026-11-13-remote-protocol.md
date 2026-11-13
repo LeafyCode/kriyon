@@ -64,9 +64,15 @@ makes no push calls.
   new field for a security check unless it requires that minor version.
 - **Compression.** Each [Screen update] and snapshot is one independent zstd
   frame, no dictionary, with the content size in the frame header. Decoders
-  use `window_log_max = 23` and refuse more than 8 MiB decompressed; that is a
-  protocol error and the device sends `Resync`. A snapshot bigger than 1 MiB
-  compressed is sent as numbered `SnapshotPart`s.
+  use `window_log_max = 23` and refuse more than 8 MiB decompressed for an
+  update and 24 MiB for a snapshot; past that is a protocol error and the
+  device sends `Resync`. A snapshot bigger than 1 MiB compressed is sent as
+  numbered `SnapshotPart`s (each repeats the snapshot fields, at most
+  1 MiB − 1 KiB of compressed bytes).
+- **Screen size for remote viewing.** A host screen over 250,000 cells (for
+  example 500 × 500) can't be viewed remotely: `Open` is refused
+  `ScreenTooLarge`. That keeps the worst snapshot (about 67 bytes a cell) under
+  the 24 MiB cap.
 
 ## 4. Pairing
 
@@ -202,7 +208,24 @@ the host without the payload.
 - An app below the host's minimum version gets `Refused { TooOld { min_minor } }`
   and the connection closes.
 
-**Other messages:** host to device `StartResult { request_id, session_id }`
+- The stream has three states: `Control`, `Unopened` (a session stream
+  before its `Open`) and `Session(id)`.
+- `StartSession` for a missing project is `NoSuchProject`.
+- `seq` numbers a run's output updates, the same numbers for every device. A
+  `Snapshot` carries the seq of the last update it includes, so one device's
+  resync never makes a gap for another. The dialog fact passed to `authorize`
+  is `Dialog { showing, changed_at_seq }`: the screen seq at which a dialog
+  last appeared or changed (the host maps the daemon's dialog generation onto it).
+- The host accepts one `Resync` a second per device per session; a device
+  re-asks on a timer, so a quiet session never leaves it stale.
+- Queues: 2 MiB per session stream, 256 KiB for the control stream. A start
+  title is at most 200 bytes. Names and titles refuse control characters,
+  line and paragraph separators, bidi and zero-width characters.
+- Message tags are the variant positions (postcard), append-only, pinned by
+  golden tests; so are the numbers of `RefuseReason`, `SessionStatus`, `Role`
+  and `Holder`.
+
+**Other messages:** `Control { session_id, holder, epoch }` on the control stream. host to device `StartResult { request_id, session_id }`
 and `SessionStatus { session_id, status, needs_you }`. On `kriyon/pair/1`:
 `PairRequest { device_name, proof }` (proof = the 32-byte HMAC of §4),
 `Paired { host_name }` and `Refused`; a device name over 64 bytes is refused
