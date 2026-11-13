@@ -118,6 +118,8 @@ impl SessionFanout {
             return Vec::new();
         }
         self.seq = Some(ScreenSeq::new(run));
+        // Another daemon counts its dialogs afresh.
+        self.dialog_generation = None;
         self.ask_all(false)
     }
 
@@ -273,6 +275,12 @@ impl SessionFanout {
     /// The device closed the session, or went away.
     pub fn close(&mut self, device: &EndpointId) {
         self.devices.remove(device);
+    }
+
+    /// Whether `device` has this session open.
+    #[must_use]
+    pub fn is_open(&self, device: &EndpointId) -> bool {
+        self.devices.contains_key(device)
     }
 
     /// How many devices have the session open.
@@ -547,5 +555,25 @@ mod tests {
         assert!(messages
             .iter()
             .any(|m| matches!(m, ToDevice::Snapshot { skipped: true, .. })));
+    }
+
+    #[test]
+    fn a_new_run_counts_its_first_dialog_even_at_a_generation_seen_before() {
+        let mut fanout = SessionFanout::new(1 << 20).expect("fanout");
+        fanout.hello(1);
+        fanout.output(b"x");
+        assert_eq!(fanout.dialog(1), Some(1));
+        fanout.hello(2);
+        fanout.output(b"y");
+        assert_eq!(fanout.dialog(1), Some(1), "another daemon, another count");
+    }
+
+    #[test]
+    fn a_device_has_a_session_open_once() {
+        let mut fanout = SessionFanout::new(1 << 20).expect("fanout");
+        fanout.hello(1);
+        assert!(!fanout.is_open(&A));
+        following(&mut fanout, A, b"a");
+        assert!(fanout.is_open(&A));
     }
 }

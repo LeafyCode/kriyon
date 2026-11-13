@@ -11,13 +11,63 @@ use crate::daemon_client::DaemonEvent;
 use crate::remote_serve::{LiveSession, Serve, ServeHost};
 use crate::{AppState, StoreState};
 
+/// How many times a snapshot ask is tried, [`ASK_RETRY`] apart.
+const ASK_TRIES: u32 = 40;
+const ASK_RETRY: std::time::Duration = std::time::Duration::from_millis(50);
+
+/// Session `id` served while its start is under way: unless [`Self::keep`]
+/// is called, dropping it stops serving it, so a failed start leaves nothing
+/// registered.
+pub struct Attached {
+    app: tauri::AppHandle,
+    id: SessionId,
+    kept: bool,
+}
+
+impl Attached {
+    /// The start succeeded: keep serving it.
+    pub fn keep(mut self) {
+        self.kept = true;
+    }
+}
+
+impl Drop for Attached {
+    fn drop(&mut self) {
+        if !self.kept {
+            detach(&self.app, &self.id);
+        }
+    }
+}
+
+/// A newly registered client for session `id`: tell it a remote device
+/// looks on, if one has the session open (a wake or a reattach while a
+/// device watches).
+pub fn note_engine(
+    app: &tauri::AppHandle,
+    id: &SessionId,
+    engine: &crate::daemon_client::DaemonClient,
+) {
+    if app
+        .try_state::<Serve>()
+        .is_some_and(|serve| serve.is_onlooked(&id.0))
+    {
+        engine.set_remote_onlooker(true);
+    }
+}
+
 /// Serve session `id` to remote devices, before its daemon client is built:
 /// the daemon names its run in its first frame. Snapshot requests go out on
 /// the blocking pool, so the daemon reader that makes them never takes the
 /// sessions lock (a close can hold it while joining that reader).
-pub fn attach(app: &tauri::AppHandle, id: &SessionId) {
+#[must_use = "dropping it stops serving the session"]
+pub fn attach(app: &tauri::AppHandle, id: &SessionId) -> Attached {
+    let attached = Attached {
+        app: app.clone(),
+        id: id.clone(),
+        kept: false,
+    };
     let Some(serve) = app.try_state::<Serve>() else {
-        return;
+        return attached;
     };
     let ask_app = app.clone();
     let ask_id = id.clone();
@@ -29,14 +79,20 @@ pub fn attach(app: &tauri::AppHandle, id: &SessionId) {
             let app = ask_app.clone();
             let id = ask_id.clone();
             tauri::async_runtime::spawn_blocking(move || {
-                let engine = app
-                    .state::<AppState>()
-                    .sessions
-                    .lock()
-                    .get(&id)
-                    .map(|session| std::sync::Arc::clone(&session.engine));
-                if let Some(engine) = engine {
-                    let _ = engine.request_snapshot(requester);
+                // A new run's ask can come before its client is registered;
+                // asked again for a moment rather than lost, which would
+                // leave the device waiting for a snapshot nobody makes.
+                for _ in 0..ASK_TRIES {
+                    let engine = app
+                        .state::<AppState>()
+                        .sessions
+                        .lock()
+                        .get(&id)
+                        .map(|session| std::sync::Arc::clone(&session.engine));
+                    if engine.is_some_and(|engine| engine.request_snapshot(requester).is_ok()) {
+                        return;
+                    }
+                    std::thread::sleep(ASK_RETRY);
                 }
             });
         },
@@ -48,6 +104,7 @@ pub fn attach(app: &tauri::AppHandle, id: &SessionId) {
                 .map_or(crate::session_writer::DEFAULT_SCREEN, |facts| facts.size)
         },
     );
+    attached
 }
 
 /// One event from session `id`'s daemon, for remote devices and the

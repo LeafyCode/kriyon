@@ -71,6 +71,8 @@ struct Served {
     ask: Box<dyn Fn(RequesterId) + Send + Sync>,
     size: Box<dyn Fn() -> (u16, u16) + Send + Sync>,
     wakers: Mutex<HashMap<EndpointId, Arc<Notify>>>,
+    /// The session closed: its device streams finish.
+    ended: std::sync::atomic::AtomicBool,
 }
 
 impl Served {
@@ -202,15 +204,25 @@ impl Serve {
                 ask: Box::new(ask),
                 size: Box::new(size),
                 wakers: Mutex::new(HashMap::new()),
+                ended: std::sync::atomic::AtomicBool::new(false),
             }),
         );
     }
 
     /// Stop serving session `id`: it closed. Its device streams end.
     pub fn detach(&self, id: &str) {
-        if let Some(served) = self.0.sessions.lock().remove(id) {
+        let served = self.0.sessions.lock().remove(id);
+        if let Some(served) = served {
+            served.ended.store(true, Ordering::Relaxed);
             served.wake_all();
         }
+    }
+
+    /// Whether a remote device has session `id` open.
+    #[must_use]
+    pub fn is_onlooked(&self, id: &str) -> bool {
+        self.served(id)
+            .is_some_and(|served| served.fanout.lock().open_count() > 0)
     }
 
     fn served(&self, id: &str) -> Option<Arc<Served>> {
@@ -225,6 +237,8 @@ impl Serve {
             return EventNote::default();
         };
         let mut note = EventNote::default();
+        // Asked before the fan-out lock: it takes the session's gate lock.
+        let size = matches!(event, DaemonEvent::SnapshotEnd { .. }).then(|| (served.size)());
         let asks = {
             let mut fanout = served.fanout.lock();
             match event {
@@ -243,7 +257,7 @@ impl Serve {
                     Vec::new()
                 }
                 DaemonEvent::SnapshotEnd { id } => fanout
-                    .snapshot_end(id, (served.size)())
+                    .snapshot_end(id, size.unwrap_or(crate::session_writer::DEFAULT_SCREEN))
                     .into_iter()
                     .collect(),
                 DaemonEvent::Busy(_)
@@ -266,13 +280,12 @@ impl Serve {
     /// Tell every device about sessions whose entry changed since they last
     /// heard; a session that went away sends the whole list.
     pub fn sessions_changed(&self) {
-        let now: HashMap<String, SessionInfo> = self
-            .0
-            .host
-            .sessions()
-            .into_iter()
-            .map(|info| (info.id.clone(), info))
-            .collect();
+        // Nobody to tell: no list built. The next device starts from Welcome.
+        if self.0.controls.lock().is_empty() {
+            self.0.heard.lock().clear();
+            return;
+        }
+        let now = sessions_heard(self.0.host.sessions());
         let mut heard = self.0.heard.lock();
         let gone = heard.keys().any(|id| !now.contains_key(id));
         let changed: Vec<SessionInfo> = now
@@ -318,7 +331,7 @@ impl Serve {
         let Ok((writer, reader)) = link.accept_stream().await else {
             return;
         };
-        let Some(control) = self.welcome(&link, device, role, writer, reader).await else {
+        let Some((out, tasks)) = self.welcome(&link, device, role, writer, reader).await else {
             return;
         };
         loop {
@@ -332,8 +345,17 @@ impl Serve {
                 () = link.closed() => break,
             }
         }
-        control.abort();
-        self.0.controls.lock().remove(&device);
+        for task in tasks {
+            task.abort();
+        }
+        // Only this connection's entry: the device may have reconnected.
+        let mut controls = self.0.controls.lock();
+        if controls
+            .get(&device)
+            .is_some_and(|held| Arc::ptr_eq(held, &out))
+        {
+            controls.remove(&device);
+        }
     }
 
     /// Read the control stream's `Hello` and answer it: `Welcome`, or a
@@ -345,7 +367,7 @@ impl Serve {
         role: Role,
         mut writer: MessageWriter<ToDevice>,
         mut reader: MessageReader<FromDevice>,
-    ) -> Option<tokio::task::JoinHandle<()>> {
+    ) -> Option<(Arc<ControlOut>, [tokio::task::JoinHandle<()>; 2])> {
         let first = reader.next().await.ok()??;
         let verdict = authorize(
             &device,
@@ -382,12 +404,20 @@ impl Serve {
             link: Arc::clone(link),
         });
         self.0.controls.lock().insert(device, Arc::clone(&out));
+        // A first device hears changes from the list it was just given.
+        {
+            let mut heard = self.0.heard.lock();
+            if heard.is_empty() {
+                *heard = sessions_heard(self.0.host.sessions());
+            }
+        }
+        let writing = tokio::spawn(write_control(writer, Arc::clone(&out)));
         let serve = self.clone();
-        Some(tokio::spawn(async move {
-            let writing = tokio::spawn(write_control(writer, Arc::clone(&out)));
-            serve.read_control(device, role, reader, &out).await;
-            writing.abort();
-        }))
+        let reading_out = Arc::clone(&out);
+        let reading = tokio::spawn(async move {
+            serve.read_control(device, role, reader, &reading_out).await;
+        });
+        Some((out, [writing, reading]))
     }
 
     /// Answer what a device sends on its control stream.
@@ -448,9 +478,19 @@ impl Serve {
             }
         };
         let wake = Arc::new(Notify::new());
-        let (ask, open) = {
+        let opened = {
             let mut fanout = served.fanout.lock();
-            (fanout.open(device), fanout.open_count())
+            // Once per device: two streams would share, and split, one queue.
+            (!fanout.is_open(&device)).then(|| (fanout.open(device), fanout.open_count()))
+        };
+        let Some((ask, open)) = opened else {
+            let _ = writer
+                .send(&ToDevice::Refused {
+                    reason: RefuseReason::NotAllowed,
+                })
+                .await;
+            writer.finish();
+            return;
         };
         served.wakers.lock().insert(device, Arc::clone(&wake));
         if open == 1 {
@@ -521,6 +561,14 @@ impl Serve {
     }
 }
 
+/// A session list by id.
+fn sessions_heard(sessions: Vec<SessionInfo>) -> HashMap<String, SessionInfo> {
+    sessions
+        .into_iter()
+        .map(|info| (info.id.clone(), info))
+        .collect()
+}
+
 /// Write a device's control queue out as it fills.
 async fn write_control(mut writer: MessageWriter<ToDevice>, out: Arc<ControlOut>) {
     loop {
@@ -559,7 +607,13 @@ async fn write_session(
                 }
             }
             Pop::Ask(ask) => (served.ask)(ask),
-            Pop::Empty => wake.notified().await,
+            Pop::Empty => {
+                if served.ended.load(Ordering::Relaxed) {
+                    writer.finish();
+                    return;
+                }
+                wake.notified().await;
+            }
         }
     }
 }
@@ -939,6 +993,65 @@ mod tests {
                     reason: RefuseReason::NotAllowed
                 }
             );
+        });
+    }
+
+    #[test]
+    fn closing_a_session_ends_its_device_streams() {
+        run(async {
+            let world = world().await;
+            let (_phone, link, _cw, _cr) = device(&world, 3, Role::Viewer).await;
+            let (_sw, mut sr) = open(&link).await;
+            let id = asked(&world).await;
+            answer(&world, id, b"x");
+            assert!(matches!(next(&mut sr).await, ToDevice::Snapshot { .. }));
+            world.serve.detach("s");
+            let ended = tokio::time::timeout(Duration::from_secs(10), sr.next())
+                .await
+                .expect("the stream ends");
+            assert!(matches!(ended, Ok(None) | Err(_)), "{ended:?}");
+        });
+    }
+
+    #[test]
+    fn a_device_opens_a_session_once() {
+        run(async {
+            let world = world().await;
+            let (_phone, link, _cw, _cr) = device(&world, 3, Role::Viewer).await;
+            let (_first_w, _first_r) = open(&link).await;
+            let _ = asked(&world).await;
+            let (_second_w, mut second) = open(&link).await;
+            assert_eq!(
+                next(&mut second).await,
+                ToDevice::Refused {
+                    reason: RefuseReason::NotAllowed
+                }
+            );
+        });
+    }
+
+    #[test]
+    fn a_device_that_reconnects_is_served_after_its_old_connection_goes() {
+        run(async {
+            let world = world().await;
+            let (phone, old, _ocw, _ocr) = device(&world, 3, Role::Viewer).await;
+            let new = phone.connect(world.host.addr()).await.expect("reconnect");
+            let (mut cw, mut cr) = new.open_stream().await.expect("control");
+            cw.send(&FromDevice::Hello {
+                app_version: "test".into(),
+                protocol_minor: 0,
+            })
+            .await
+            .expect("hello");
+            assert!(matches!(next(&mut cr).await, ToDevice::Welcome { .. }));
+            drop(old);
+            // Let the old connection's end be noticed and cleaned up.
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            world.serve.heartbeat(42);
+            assert!(matches!(
+                next(&mut cr).await,
+                ToDevice::Heartbeat { at: 42, .. }
+            ));
         });
     }
 }

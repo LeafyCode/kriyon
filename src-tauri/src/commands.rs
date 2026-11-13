@@ -352,8 +352,9 @@ pub async fn create_session(
         .closed_mid_create
         .lock()
         .remove(&SessionId(id.clone()));
-    // Served to remote devices from its daemon's first frame on.
-    crate::remote_host_rt::attach(&app, &SessionId(id.clone()));
+    // Served to remote devices from its daemon's first frame on; no longer
+    // if this start fails.
+    let served = crate::remote_host_rt::attach(&app, &SessionId(id.clone()));
     // Open the window a close can mark. Cleared however this returns.
     let _in_flight = CreateInFlight::begin(&state, &SessionId(id.clone()));
     let live = if let Ok(stream) = UnixStream::connect(&socket) {
@@ -392,6 +393,7 @@ pub async fn create_session(
             .attach(INITIAL_COLS, INITIAL_ROWS)
             .map_err(|e| e.to_string())?;
         register_session(&app, &state, SessionId(id), engine, None)?;
+        served.keep();
         return Ok(true);
     }
 
@@ -491,6 +493,7 @@ pub async fn create_session(
         .attach(INITIAL_COLS, INITIAL_ROWS)
         .map_err(|e| e.to_string())?;
     register_session(&app, &state, SessionId(id), engine, zdotdir)?;
+    served.keep();
 
     Ok(false)
 }
@@ -512,6 +515,7 @@ fn register_session(
         return Err("session was closed while it was starting".to_string());
     }
     let engine = std::sync::Arc::new(engine);
+    crate::remote_host_rt::note_engine(app, &id, &engine);
     state
         .sessions
         .lock()
