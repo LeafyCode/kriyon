@@ -333,6 +333,22 @@ fn write_or_drop<W: Write>(client: &mut Option<W>, frame: &Frame) {
     }
 }
 
+/// Write the person's typing to the session. A failed write is never dropped
+/// silently: it goes to `log` (the daemon's stderr, which the app keeps as the
+/// per-session log) with its cause. A failed `write_all` can have written
+/// part of the bytes, so the line says "may not", never "did not". The client
+/// stays attached: the reaper ends the daemon if the child is gone, and a
+/// transient failure must not cut a working session.
+fn deliver_stdin<E: SessionEngine + ?Sized>(engine: &E, bytes: &[u8], log: &mut impl Write) {
+    if let Err(e) = engine.write_stdin(bytes) {
+        let _ = writeln!(
+            log,
+            "kriyon-ptyd: typing write failed; some of {} bytes may not have reached the session: {e}",
+            bytes.len()
+        );
+    }
+}
+
 /// Read frames from one client until it disconnects or asks to shut down.
 /// Returns `true` only if `Shutdown` was requested.
 fn serve_client(stream: &mut UnixStream, engine: &Arc<PtyEngine>, shared: &Arc<Shared>) -> bool {
@@ -346,7 +362,7 @@ fn serve_client(stream: &mut UnixStream, engine: &Arc<PtyEngine>, shared: &Arc<S
                 while let Some(frame) = dec.next_frame() {
                     match frame {
                         Frame::Stdin(bytes) => {
-                            let _ = engine.write_stdin(&bytes);
+                            deliver_stdin(engine.as_ref(), &bytes, &mut std::io::stderr());
                         }
                         // Attach carries the initial size; treat like a resize.
                         // Both the PTY and the server-side emulator must track it.
@@ -367,9 +383,63 @@ fn serve_client(stream: &mut UnixStream, engine: &Arc<PtyEngine>, shared: &Arc<S
 
 #[cfg(test)]
 mod tests {
-    use super::{screen_snapshot, write_or_drop, ENTER_ALTERNATE_SCREEN, LEAVE_ALTERNATE_SCREEN};
+    use super::{
+        deliver_stdin, screen_snapshot, write_or_drop, ENTER_ALTERNATE_SCREEN,
+        LEAVE_ALTERNATE_SCREEN,
+    };
+    use kriyon_core::session::{EngineError, SessionEngine, SessionId};
     use kriyon_core::wire::Frame;
     use std::io::{self, Write};
+
+    /// A session whose stdin write fails or succeeds, as told.
+    struct StdinEngine {
+        id: SessionId,
+        fail: bool,
+    }
+    impl StdinEngine {
+        fn new(fail: bool) -> Self {
+            Self {
+                id: SessionId("s".into()),
+                fail,
+            }
+        }
+    }
+    impl SessionEngine for StdinEngine {
+        fn id(&self) -> &SessionId {
+            &self.id
+        }
+        fn write_stdin(&self, _: &[u8]) -> Result<(), EngineError> {
+            if self.fail {
+                Err(EngineError::Pty("broken pipe".into()))
+            } else {
+                Ok(())
+            }
+        }
+        fn resize(&self, _: u16, _: u16) -> Result<(), EngineError> {
+            Ok(())
+        }
+        fn close(&self) -> Result<(), EngineError> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn typing_the_session_could_not_take_is_logged_with_the_cause() {
+        let mut log = Vec::new();
+        deliver_stdin(&StdinEngine::new(true), b"ls\r", &mut log);
+        let log = String::from_utf8(log).expect("utf-8 log");
+        assert!(
+            log.contains("typing") && log.contains("broken pipe"),
+            "a failed stdin write must leave a line naming the cause, got {log:?}"
+        );
+    }
+
+    #[test]
+    fn typing_the_session_took_logs_nothing() {
+        let mut log = Vec::new();
+        deliver_stdin(&StdinEngine::new(false), b"ls\r", &mut log);
+        assert_eq!(String::from_utf8_lossy(&log), "");
+    }
 
     /// An emulator fed `bytes`, at a size big enough that nothing wraps.
     fn emulator(bytes: &[u8]) -> vt100::Parser {
