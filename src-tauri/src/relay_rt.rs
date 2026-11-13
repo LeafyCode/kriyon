@@ -134,6 +134,14 @@ pub struct SignInView {
     expires_in_s: u64,
 }
 
+impl SignInView {
+    /// The code this sign-in is polled with; never shown.
+    #[must_use]
+    pub fn device_code(&self) -> &str {
+        &self.device_code
+    }
+}
+
 /// The relay as the settings show it.
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -187,32 +195,44 @@ impl RelayRuntime {
         self.setup.as_ref().map(RelaySetup::subscriptions_url)
     }
 
-    /// What the keychain holds, read once.
-    fn load(&self) -> Saved {
+    /// What the keychain holds; `None` when it can't be read now (locked,
+    /// or access refused), which is never taken for "nothing kept".
+    fn load(&self) -> Option<Saved> {
         match self.vault.read() {
-            Ok(Some(bytes)) => serde_json::from_slice(&bytes).unwrap_or_default(),
-            Ok(None) => Saved::default(),
+            // An item that doesn't read as ours is left as if empty.
+            Ok(Some(bytes)) => Some(serde_json::from_slice(&bytes).unwrap_or_default()),
+            Ok(None) => Some(Saved::default()),
             Err(e) => {
                 eprintln!("kriyon: can't read the relay sign-in from the keychain: {e}");
-                Saved::default()
+                None
             }
         }
     }
 
-    /// Change what is kept, and keep it.
+    /// Change what is kept, and keep it if it changed. While the keychain
+    /// can't be read, the change is made to an empty copy and not kept, so
+    /// an unreadable keychain never loses the sign-in.
     async fn with_saved<R>(&self, change: impl FnOnce(&mut Saved) -> R) -> R {
         let mut state = self.state.lock().await;
-        let saved = state.saved.get_or_insert_with(|| self.load());
-        let result = change(saved);
-        let kept = if *saved == Saved::default() {
-            self.vault.remove()
-        } else {
-            serde_json::to_vec(saved)
-                .map_err(|e| e.to_string())
-                .and_then(|bytes| self.vault.write(&bytes))
+        if state.saved.is_none() {
+            state.saved = self.load();
+        }
+        let Some(saved) = state.saved.as_mut() else {
+            return change(&mut Saved::default());
         };
-        if let Err(e) = kept {
-            eprintln!("kriyon: can't keep the relay sign-in in the keychain: {e}");
+        let before = saved.clone();
+        let result = change(saved);
+        if *saved != before {
+            let kept = if *saved == Saved::default() {
+                self.vault.remove()
+            } else {
+                serde_json::to_vec(saved)
+                    .map_err(|e| e.to_string())
+                    .and_then(|bytes| self.vault.write(&bytes))
+            };
+            if let Err(e) = kept {
+                eprintln!("kriyon: can't keep the relay sign-in in the keychain: {e}");
+            }
         }
         result
     }
@@ -352,11 +372,12 @@ impl RelayRuntime {
         }
     }
 
-    /// Ask until the sign-in started last is approved, refused, runs out or
-    /// is replaced; then, if the relay is on, fetch this device's pass.
+    /// Ask until the sign-in `device_code` (from [`Self::start_sign_in`]) is
+    /// approved, refused, runs out or is replaced; then, if the relay is on, fetch this device's pass.
     /// Returns whether it signed in.
-    pub async fn wait_for_sign_in(&self, device: &ThisDevice) -> bool {
-        let Some(flow) = self.state.lock().await.sign_in.clone() else {
+    pub async fn wait_for_sign_in(&self, device: &ThisDevice, device_code: &str) -> bool {
+        let flow = self.state.lock().await.sign_in.clone();
+        let Some(flow) = flow.filter(|flow| flow.device_code == device_code) else {
             return false;
         };
         let Ok(api) = self.api(None) else {
@@ -510,6 +531,12 @@ impl RelayRuntime {
     /// The relay refused this device: remember why. Returns whether a new
     /// pass would help.
     pub async fn relay_refused(&self, action: RelayAction) -> bool {
+        // Signed out, no new pass can come: say what would bring one.
+        if self.saved().await.token.is_none() {
+            self.set_problem(Some(RelayProblem::Api(ApiRefusal::SignedOut)))
+                .await;
+            return false;
+        }
         self.set_problem(Some(RelayProblem::Relay(action))).await;
         action == RelayAction::Renew
     }
@@ -522,20 +549,36 @@ mod tests {
     use super::*;
     use crate::relay_api::test_api::{fake_api, run, TEST_PASS};
 
-    /// A keychain item in memory, shared so a second runtime sees it.
+    /// A keychain item in memory, shared so a second runtime sees it. It
+    /// counts writes and removals, and can be made unreadable (locked).
     #[derive(Clone, Default)]
-    struct Memory(Arc<StdMutex<Option<Vec<u8>>>>);
+    struct Memory {
+        item: Arc<StdMutex<Option<Vec<u8>>>>,
+        changes: Arc<StdMutex<usize>>,
+        locked: Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    impl Memory {
+        fn changes(&self) -> usize {
+            *self.changes.lock().expect("changes")
+        }
+    }
 
     impl SecretVault for Memory {
         fn read(&self) -> Result<Option<Vec<u8>>, String> {
-            Ok(self.0.lock().expect("vault").clone())
+            if self.locked.load(std::sync::atomic::Ordering::Relaxed) {
+                return Err("the keychain is locked".into());
+            }
+            Ok(self.item.lock().expect("vault").clone())
         }
         fn write(&self, secret: &[u8]) -> Result<(), String> {
-            *self.0.lock().expect("vault") = Some(secret.to_vec());
+            *self.changes.lock().expect("changes") += 1;
+            *self.item.lock().expect("vault") = Some(secret.to_vec());
             Ok(())
         }
         fn remove(&self) -> Result<(), String> {
-            *self.0.lock().expect("vault") = None;
+            *self.changes.lock().expect("changes") += 1;
+            *self.item.lock().expect("vault") = None;
             Ok(())
         }
     }
@@ -638,7 +681,7 @@ mod tests {
                 relay.view().await.sign_in.expect("shown").user_code,
                 "ABCD1234"
             );
-            assert!(relay.wait_for_sign_in(&device()).await);
+            assert!(relay.wait_for_sign_in(&device(), view.device_code()).await);
             let view = relay.view().await;
             assert!(view.signed_in && view.on && view.sign_in.is_none());
             let (access, expires) = relay.access().await.expect("a pass");
@@ -672,8 +715,8 @@ mod tests {
         });
         let relay = RelayRuntime::new(Some(setup(&base)), Box::new(Memory::default()));
         run(async {
-            relay.start_sign_in().await.expect("started");
-            assert!(!relay.wait_for_sign_in(&device()).await);
+            let view = relay.start_sign_in().await.expect("started");
+            assert!(!relay.wait_for_sign_in(&device(), view.device_code()).await);
             let view = relay.view().await;
             assert!(!view.signed_in);
             assert_eq!(
@@ -843,5 +886,74 @@ mod tests {
             assert!(!view.signed_in && !view.on);
         });
         assert_eq!(vault.read().expect("read"), None);
+    }
+
+    #[test]
+    fn a_locked_keychain_never_loses_the_sign_in() {
+        let vault = Memory::default();
+        let relay = signed_in("http://127.0.0.1:1", &vault, true);
+        vault
+            .locked
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        let before = vault.changes();
+        run(async {
+            assert!(!relay.view().await.signed_in, "unread: looks signed out");
+            assert!(relay.access().await.is_none());
+            assert!(!relay.renew(NOV_15, &device(), false).await);
+        });
+        assert_eq!(vault.changes(), before, "nothing written or removed");
+        vault
+            .locked
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+        run(async {
+            assert!(relay.view().await.signed_in, "read again once unlocked");
+        });
+    }
+
+    #[test]
+    fn reading_the_relay_writes_nothing() {
+        let vault = Memory::default();
+        let relay = signed_in("http://127.0.0.1:1", &vault, true);
+        let before = vault.changes();
+        run(async {
+            relay.view().await;
+            relay.access().await;
+            relay.renew(NOV_15 - 1, &device(), false).await;
+        });
+        assert_eq!(vault.changes(), before);
+    }
+
+    #[test]
+    fn signed_out_the_relays_refusal_asks_to_sign_in_again() {
+        let relay = RelayRuntime::new(
+            Some(setup("http://127.0.0.1:1")),
+            Box::new(Memory::default()),
+        );
+        run(async {
+            assert!(
+                !relay.relay_refused(RelayAction::Renew).await,
+                "no token to renew with"
+            );
+            assert_eq!(relay.view().await.problem.as_deref(), Some("Sign in again"));
+        });
+    }
+
+    #[test]
+    fn a_waiter_only_follows_its_own_sign_in() {
+        let (base, _) = fake_api(|line, _| {
+            match line {
+            "POST /api/v1/admin/auth/device/code" => (
+                200,
+                r#"{"device_code":"dc","user_code":"X","verification_uri":"u","verification_uri_complete":"u","expires_in":600,"interval":0}"#.into(),
+            ),
+            _ => (200, r#"{"access_token":"tok"}"#.into()),
+        }
+        });
+        let relay = RelayRuntime::new(Some(setup(&base)), Box::new(Memory::default()));
+        run(async {
+            relay.start_sign_in().await.expect("started");
+            assert!(!relay.wait_for_sign_in(&device(), "an-older-code").await);
+            assert!(!relay.view().await.signed_in);
+        });
     }
 }

@@ -26,6 +26,7 @@ vi.mock("../ipc/bridge.ts", () => ({
     })
   ),
   onRemoteCodeWanted: vi.fn(() => Promise.resolve(() => undefined)),
+  onRelayChanged: vi.fn(() => Promise.resolve(() => undefined)),
   previewNotifySound: vi.fn(() => Promise.resolve()),
   // Remote access on, with a device, so its rows are checked too.
   remoteHosts: vi.fn(() =>

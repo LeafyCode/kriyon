@@ -158,3 +158,23 @@ test("removing a device reads the account again", async () => {
   expect(relayRemoveDevice).toHaveBeenCalledWith("d1");
   expect(useRelay.getState().account?.devices).toEqual([]);
 });
+
+test("turning the relay on reads the account again, with this device", async () => {
+  vi.mocked(relaySetEnabled).mockResolvedValue(
+    view({ on: true, signedIn: true })
+  );
+  vi.mocked(relayAccount).mockResolvedValue(account());
+  vi.mocked(relayThisDevice).mockResolvedValue({ deviceKey: "ab".repeat(32) });
+  await useRelay.getState().setOn(true);
+  expect(relayAccount).toHaveBeenCalled();
+  expect(useRelay.getState().account?.devices).toHaveLength(1);
+});
+
+test("an account that can't be read is not shown from before", async () => {
+  useRelay.setState({ account: account() });
+  vi.mocked(relayView).mockResolvedValue(view({ signedIn: true }));
+  vi.mocked(relayAccount).mockRejectedValue("Can't reach our relay's service");
+  vi.mocked(relayThisDevice).mockResolvedValue({ deviceKey: "ab".repeat(32) });
+  await useRelay.getState().load();
+  expect(useRelay.getState().account).toBeNull();
+});

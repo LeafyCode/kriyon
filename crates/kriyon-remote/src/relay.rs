@@ -95,14 +95,18 @@ impl RelayAction {
 
     /// What the relay's connection status calls for: its refusal `reason`,
     /// else the text of its last `error`. A refusal before the handshake has
-    /// no reason, only an HTTP 401 in the error; any other error is the
+    /// no reason, only an HTTP 401 in the upgrade error; any other error is the
     /// network's, which iroh retries by itself, so it calls for nothing.
     #[must_use]
     pub fn from_status(reason: Option<&str>, error: Option<&str>) -> Option<Self> {
         match (reason, error) {
             (Some(reason), _) => Some(Self::from_reason(Some(reason))),
             // iroh's error text isn't stable; this only picks the message.
-            (None, Some(error)) if error.contains("401") => Some(Self::Report),
+            // iroh-relay's own words for an HTTP status on the relay
+            // connection's upgrade.
+            (None, Some(error)) if error.contains("Unexpected status during upgrade: 401") => {
+                Some(Self::Report)
+            }
             _ => None,
         }
     }
@@ -341,8 +345,16 @@ mod tests {
             Some(RelayAction::Renew)
         );
         assert_eq!(
-            RelayAction::from_status(None, Some("unexpected status 401 Unauthorized")),
+            RelayAction::from_status(
+                None,
+                Some("dial: Unexpected status during upgrade: 401 Unauthorized")
+            ),
             Some(RelayAction::Report)
+        );
+        assert_eq!(
+            RelayAction::from_status(None, Some("connect to 10.0.4.101:4010 timed out")),
+            None,
+            "a 401 in an address is not a refusal"
         );
         assert_eq!(
             RelayAction::from_status(None, Some("connection timed out")),

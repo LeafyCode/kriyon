@@ -70,11 +70,10 @@ export const useRelay = create<RelayStore>((set) => {
     load: () =>
       attempt(async () => {
         const view = await relayView();
-        set({ view });
+        // Never shown from before: only what this read gives.
+        set({ account: null, view });
         if (view.available && view.signedIn) {
           await readAccount();
-        } else {
-          set({ account: null });
         }
       }),
     openSubscriptions: () => attempt(() => relayOpenSubscriptions()),
@@ -85,7 +84,12 @@ export const useRelay = create<RelayStore>((set) => {
       }),
     setOn: (on) =>
       attempt(async () => {
-        set({ view: await relaySetEnabled(on) });
+        const view = await relaySetEnabled(on);
+        set({ view });
+        // Turning on registers this device on the account.
+        if (view.signedIn) {
+          await readAccount();
+        }
       }),
     signIn: () =>
       attempt(async () => {

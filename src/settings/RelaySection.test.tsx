@@ -150,3 +150,21 @@ test("a problem Rust reports is shown", async () => {
     await screen.findByText("This device was removed from your relay account")
   ).toBeInTheDocument();
 });
+
+test("an old error doesn't hide what Rust reports now", async () => {
+  vi.mocked(relayView).mockResolvedValue(
+    view({
+      on: true,
+      problem: "Relay access is suspended for this account",
+      signedIn: true,
+    })
+  );
+  vi.mocked(relayAccount).mockRejectedValue("Can't reach our relay's service");
+  render(<RelaySection />);
+  expect(
+    await screen.findByText("Can't reach our relay's service")
+  ).toBeInTheDocument();
+  expect(
+    screen.getByText("Relay access is suspended for this account")
+  ).toBeInTheDocument();
+});

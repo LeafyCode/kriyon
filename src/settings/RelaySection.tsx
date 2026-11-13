@@ -231,11 +231,19 @@ export function RelaySection() {
   if (!view?.available) {
     return null;
   }
-  const problem = error ?? view.problem;
+  // Both: the last command's error, and what Rust reports now.
+  const problems = [error, view.problem].filter(
+    (line, index, all): line is string =>
+      line !== null && all.indexOf(line) === index
+  );
   return (
     <SettingGroup label="Our relay (paid)">
       {view.signedIn ? <SignedInBlock on={view.on} /> : <SignInBlock />}
-      {problem ? <span style={errorTextStyle}>{problem}</span> : null}
+      {problems.map((line) => (
+        <span key={line} style={errorTextStyle}>
+          {line}
+        </span>
+      ))}
     </SettingGroup>
   );
 }

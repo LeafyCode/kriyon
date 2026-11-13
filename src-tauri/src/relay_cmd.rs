@@ -28,9 +28,14 @@ const FORCED_RENEW_GAP: Duration = Duration::from_secs(10 * 60);
 /// The glue's own state.
 #[derive(Default)]
 pub struct RelayGlue {
-    /// A check or a rebuild is running.
+    /// A check is running.
     busy: AtomicBool,
+    /// The relay refused the pass in hand: the next check fetches a new one,
+    /// when [`FORCED_RENEW_GAP`] allows.
+    force_wanted: AtomicBool,
     last_forced: std::sync::Mutex<Option<std::time::Instant>>,
+    /// Held while the relay is put to use, so two rebuilds never overlap.
+    applying: tokio::sync::Mutex<()>,
 }
 
 impl RelayGlue {
@@ -108,6 +113,8 @@ async fn rebuild(app: &tauri::AppHandle) {
 /// endpoint bound now is rebuilt when `now`, at a quiet moment, or when its
 /// pass runs low.
 async fn apply(app: &tauri::AppHandle, now: bool) {
+    let glue = app.state::<RelayGlue>();
+    let _applying = glue.applying.lock().await;
     let access = app.state::<RelayRuntime>().access().await;
     let endpoint = app.state::<RemoteEndpoint>();
     let in_use_expires = endpoint.bound_relay_expires().await;
@@ -119,13 +126,22 @@ async fn apply(app: &tauri::AppHandle, now: bool) {
     }
 }
 
-/// Renew the pass if it is due (`force`: the relay refused it), and put a
-/// new one to use when it is time.
-async fn check(app: &tauri::AppHandle, force: bool) {
+/// Renew the pass if it is due, or now if the relay refused it, and put a
+/// new one to use when it is time. A check already running leaves this one
+/// to it, or to the next minute's.
+async fn check(app: &tauri::AppHandle) {
     let glue = app.state::<RelayGlue>();
     if glue.busy.swap(true, Ordering::AcqRel) {
         return;
     }
+    // Wanted but too soon after the last: kept for a later check.
+    let force = glue.force_wanted.swap(false, Ordering::AcqRel) && {
+        let allowed = glue.may_force();
+        if !allowed {
+            glue.force_wanted.store(true, Ordering::Release);
+        }
+        allowed
+    };
     if let Ok(device) = this_device(app) {
         let relay = app.state::<RelayRuntime>();
         if relay.renew(now_s(), &device, force).await {
@@ -163,8 +179,11 @@ async fn watch(app: tauri::AppHandle, endpoint: iroh::Endpoint) {
         };
         let renew = app.state::<RelayRuntime>().relay_refused(action).await;
         changed(&app);
-        if renew && app.state::<RelayGlue>().may_force() {
-            check(&app, true).await;
+        if renew {
+            app.state::<RelayGlue>()
+                .force_wanted
+                .store(true, Ordering::Release);
+            check(&app).await;
         }
     }
 }
@@ -185,7 +204,7 @@ pub fn install(app: &tauri::AppHandle) {
     let checker = app.clone();
     tauri::async_runtime::spawn(async move {
         loop {
-            check(&checker, false).await;
+            check(&checker).await;
             tokio::time::sleep(CHECK_EVERY).await;
         }
     });
@@ -217,10 +236,11 @@ pub async fn relay_sign_in(app: tauri::AppHandle) -> Result<SignInView, String> 
         }
     }
     let waiter = app.clone();
+    let code = view.device_code().to_string();
     tauri::async_runtime::spawn(async move {
         if waiter
             .state::<RelayRuntime>()
-            .wait_for_sign_in(&device)
+            .wait_for_sign_in(&device, &code)
             .await
         {
             apply(&waiter, true).await;
