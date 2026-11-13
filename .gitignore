@@ -73,3 +73,8 @@ crashlog.txt
 
 # Raw macOS window captures; scripts/crop-shots.mjs cuts them into shots-src/.
 website/shots-src/new-shots/
+
+# The push sender's real settings and secrets: never committed.
+crates/kriyon-push/push.env
+*.secret
+*.p8
