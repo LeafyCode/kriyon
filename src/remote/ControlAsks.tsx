@@ -4,7 +4,8 @@
  * kept from it. The person can hand it control at once, or not.
  */
 import { type CSSProperties, useEffect, useState } from "react";
-import { useControlAsks } from "../state/controlAsks.ts";
+import { askWords, useControlAsks } from "../state/controlAsks.ts";
+import { useSessions } from "../state/sessions.ts";
 import { button } from "../theme/recipes.ts";
 import { tokens } from "../theme/tokens.ts";
 
@@ -37,6 +38,8 @@ const askStyle: CSSProperties = {
 
 export function ControlAsks() {
   const asks = useControlAsks((state) => state.asks);
+  const sessions = useSessions((state) => state.sessions);
+  const projects = useSessions((state) => state.projects);
   const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
@@ -64,7 +67,7 @@ export function ControlAsks() {
           role="status"
           style={askStyle}
         >
-          <span>{ask.deviceName} wants to type</span>
+          <span>{askWords(ask, sessions, projects)}</span>
           <button
             className="kr-hover-surface"
             onClick={() => useControlAsks.getState().dismiss(ask)}

@@ -77,3 +77,24 @@ export function installControlAskListener(): () => void {
     ),
   ]);
 }
+
+/**
+ * What the panel says of `ask`: the device, and the session it wants to type
+ * in with its project, so the person can tell which one with several open.
+ */
+export function askWords(
+  ask: ControlAsk,
+  sessions: Record<string, { projectId: string; title: string }>,
+  projects: readonly { id: string; name: string }[]
+): string {
+  const session = sessions[ask.sessionId];
+  if (session === undefined) {
+    return `${ask.deviceName} wants to type`;
+  }
+  const project = projects.find((one) => one.id === session.projectId);
+  const where =
+    project === undefined
+      ? session.title
+      : `${session.title} (${project.name})`;
+  return `${ask.deviceName} wants to type in ${where}`;
+}

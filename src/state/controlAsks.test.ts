@@ -1,7 +1,7 @@
 import { beforeEach, expect, test, vi } from "vitest";
 import { remoteLetDeviceType } from "../ipc/bridge.ts";
 import { showToast } from "../ui/Toast.tsx";
-import { ASK_SHOWN_MS, useControlAsks } from "./controlAsks.ts";
+import { ASK_SHOWN_MS, askWords, useControlAsks } from "./controlAsks.ts";
 
 vi.mock("../ui/Toast.tsx", () => ({ showToast: vi.fn() }));
 
@@ -60,4 +60,16 @@ test("not now clears it without asking Rust", () => {
   useControlAsks.getState().dismiss(ask);
   expect(useControlAsks.getState().current(1000)).toEqual([]);
   expect(remoteLetDeviceType).not.toHaveBeenCalled();
+});
+
+test("an ask names the session and its project", () => {
+  const sessions = { s1: { projectId: "p1", title: "Fix the login" } };
+  const projects = [{ id: "p1", name: "kriyon" }];
+  expect(askWords(ask, sessions, projects)).toBe(
+    "Phone wants to type in Fix the login (kriyon)"
+  );
+  expect(askWords(ask, sessions, [])).toBe(
+    "Phone wants to type in Fix the login"
+  );
+  expect(askWords(ask, {}, projects)).toBe("Phone wants to type");
 });
