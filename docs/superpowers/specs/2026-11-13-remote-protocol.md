@@ -63,15 +63,16 @@ makes no push calls.
   list item; otherwise add a new message type. The host never depends on a
   new field for a security check unless it requires that minor version.
 - **Compression.** Each [Screen update] and snapshot is one independent zstd
-  frame, no dictionary, with the content size in the frame header. Decoders
-  use `window_log_max = 23` and refuse more than 8 MiB decompressed for an
+  frame, no dictionary, with the content size in the frame header. The stated
+  content size bounds memory: decoders refuse a frame without it, and refuse more than 8 MiB decompressed for an
   update and 24 MiB for a snapshot; past that is a protocol error and the
   device sends `Resync`. A snapshot bigger than 1 MiB compressed is sent as
   numbered `SnapshotPart`s (each repeats the snapshot fields, at most
   1 MiB − 1 KiB of compressed bytes).
 - **Screen size for remote viewing.** A host screen over 250,000 cells (for
   example 500 × 500) can't be viewed remotely: `Open` is refused
-  `ScreenTooLarge`. That keeps the worst snapshot (about 67 bytes a cell) under
+  `ScreenTooLarge`, and a remote `Resize` past 250,000 cells is `OutOfRange`,
+  so a Controller can't grow the screen past what it may view. That keeps the worst snapshot (about 67 bytes a cell) under
   the 24 MiB cap.
 
 ## 4. Pairing
