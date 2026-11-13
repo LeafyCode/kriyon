@@ -108,6 +108,12 @@ impl Device {
         Ok(DeviceLink { connection })
     }
 
+    /// Whether its endpoint is closed.
+    #[must_use]
+    pub fn is_closed(&self) -> bool {
+        self.endpoint.is_closed()
+    }
+
     /// Close the endpoint.
     pub async fn close(&self) {
         self.endpoint.close().await;

@@ -229,11 +229,13 @@ impl DeviceRuntime {
         }
     }
 
-    /// Dial from this device's one endpoint, which may also host. Replaces an endpoint that was closed.
+    /// Dial from this device's one endpoint, which may also host. An
+    /// endpoint rebuilt with the same key (a new relay pass) replaces the
+    /// closed one it follows.
     pub async fn attach(&self, endpoint: iroh::Endpoint) -> Arc<Device> {
         let mut device = self.device.lock().await;
         match device.as_ref() {
-            Some(device) if device.id() == *endpoint.id().as_bytes() && !endpoint.is_closed() => {
+            Some(device) if device.id() == *endpoint.id().as_bytes() && !device.is_closed() => {
                 Arc::clone(device)
             }
             _ => {
@@ -1417,6 +1419,40 @@ mod tests {
             ));
             rt.disconnect(&host.id()).await;
             assert_eq!(rt.connected_hosts().await, Vec::<EndpointId>::new());
+        });
+    }
+
+    #[test]
+    fn an_endpoint_bound_again_with_the_same_key_replaces_the_closed_one() {
+        run(async {
+            let rt = DeviceRuntime::default();
+            let bind = || async {
+                crate::endpoint::bind(
+                    &LinkConfig {
+                        bind: loopback(),
+                        ..LinkConfig::new(DEVICE_KEY)
+                    },
+                    Vec::new(),
+                )
+                .await
+                .expect("binds")
+            };
+            let first = bind().await;
+            let attached = rt.attach(first.clone()).await;
+            assert!(
+                Arc::ptr_eq(&attached, &rt.attach(first.clone()).await),
+                "the same one"
+            );
+            // Rebuilt (a new relay pass): the old endpoint closes, a new one
+            // with the same key comes.
+            first.close().await;
+            let second = bind().await;
+            let replaced = rt.attach(second.clone()).await;
+            assert!(
+                !Arc::ptr_eq(&attached, &replaced),
+                "the new endpoint is used"
+            );
+            assert!(!replaced.is_closed());
         });
     }
 }
