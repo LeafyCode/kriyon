@@ -4,4 +4,5 @@
 //! shared by the desktop host and the phone library.
 
 pub mod codec;
+pub mod control;
 pub mod message;
