@@ -225,7 +225,8 @@ the host without the payload.
 
 - The stream has three states: `Control`, `Unopened` (a session stream
   before its `Open`) and `Session(id)`.
-- `StartSession` for a missing project is `NoSuchProject`.
+- `StartSession` for a missing project is `NoSuchProject`; one that was
+  allowed but whose shell didn't open is `StartFailed`.
 - `seq` numbers a run's output updates, the same numbers for every device. A
   `Snapshot` carries the seq of the last update it includes, so one device's
   resync never makes a gap for another. The dialog fact passed to `authorize`
