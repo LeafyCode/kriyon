@@ -65,6 +65,7 @@ function link(over: Partial<HostLink> = {}, mine = false): HostLink {
     hostId: HOST,
     name: "Studio",
     role: "controller",
+    projects: [],
     sessions: [
       {
         dialogOpen: false,

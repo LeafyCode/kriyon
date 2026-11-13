@@ -1,8 +1,8 @@
 import { type CSSProperties, useState } from "react";
 import { standingMeta } from "../commandCenter/CommandCenter.tsx";
 import type { HostLink, HostSession, PairedHost } from "../ipc/bridge.ts";
-import { useRemoteHosts } from "../state/remoteHosts.ts";
-import { card, sectionLabel } from "../theme/recipes.ts";
+import { canStart, useRemoteHosts } from "../state/remoteHosts.ts";
+import { button, card, inputBox, sectionLabel } from "../theme/recipes.ts";
 import { tokens } from "../theme/tokens.ts";
 import { RemoteTerminal } from "./RemoteTerminal.tsx";
 import { linkLine } from "./remoteScreen.ts";
@@ -87,6 +87,12 @@ function HostCard({
           {linkLine(state)}
         </span>
       </div>
+      {link && canStart(link) ? (
+        <NewSession
+          link={link}
+          onStarted={(sessionId) => onChoose(sessionId)}
+        />
+      ) : null}
       {(link?.sessions ?? []).map((session) => (
         <SessionRow
           key={session.id}
@@ -98,6 +104,113 @@ function HostCard({
         />
       ))}
     </section>
+  );
+}
+
+/**
+ * Start a session on that computer: in one of its projects (where its
+ * sessions are all parked, said so), titled as typed or after the project.
+ * Once started it is chosen, and shows when that computer lists it.
+ */
+function NewSession({
+  link,
+  onStarted,
+}: {
+  link: HostLink;
+  onStarted: (sessionId: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [projectId, setProjectId] = useState("");
+  const [title, setTitle] = useState("");
+  const [starting, setStarting] = useState(false);
+  const startError = useRemoteHosts((state) => state.startError);
+  // Projects in use first; parked ones after, marked.
+  const projects = [...link.projects].sort(
+    (a, b) => Number(a.parked) - Number(b.parked)
+  );
+  const chosenProject = projectId || projects[0]?.id || "";
+  if (!open) {
+    return (
+      <div style={newSessionStyle}>
+        <button
+          className="kr-hover-surface"
+          onClick={() => {
+            useRemoteHosts.getState().clearStartError();
+            setOpen(true);
+          }}
+          style={button("secondary", "sm")}
+          type="button"
+        >
+          New session
+        </button>
+      </div>
+    );
+  }
+  return (
+    <form
+      onSubmit={(event) => {
+        event.preventDefault();
+        setStarting(true);
+        useRemoteHosts
+          .getState()
+          .startSession(link.hostId, chosenProject, title)
+          .then((id) => {
+            setStarting(false);
+            if (id) {
+              setOpen(false);
+              setTitle("");
+              onStarted(id);
+            }
+          })
+          .catch(() => setStarting(false));
+      }}
+      style={newSessionStyle}
+    >
+      <select
+        aria-label="Project"
+        className="kr-focusable"
+        onChange={(event) => setProjectId(event.target.value)}
+        style={{ ...inputBox(), color: tokens.color.ink.primary }}
+        value={chosenProject}
+      >
+        {projects.map((project) => (
+          <option key={project.id} value={project.id}>
+            {project.parked ? `${project.name} (parked)` : project.name}
+          </option>
+        ))}
+      </select>
+      <input
+        aria-label="Title"
+        onChange={(event) => setTitle(event.target.value)}
+        placeholder="Title (optional)"
+        spellCheck={false}
+        style={{ ...inputBox(), color: tokens.color.ink.primary }}
+        value={title}
+      />
+      <div style={newSessionActionsStyle}>
+        <button
+          className="kr-hover-surface"
+          disabled={starting}
+          style={button("secondary", "sm")}
+          type="submit"
+        >
+          {starting ? "Starting…" : "Start"}
+        </button>
+        <button
+          className="kr-hover-surface"
+          onClick={() => setOpen(false)}
+          style={button("ghost", "sm")}
+          type="button"
+        >
+          Cancel
+        </button>
+      </div>
+      {startError && !starting ? (
+        <span role="alert" style={warnStyle}>
+          {startError}
+        </span>
+      ) : null}
+    </form>
   );
 }
 
@@ -126,6 +239,19 @@ function SessionRow({
     </button>
   );
 }
+
+const newSessionStyle: CSSProperties = {
+  borderTop: `1px solid ${tokens.color.line.soft}`,
+  display: "flex",
+  flexDirection: "column",
+  gap: tokens.space.sm,
+  padding: `${tokens.space.sm} ${tokens.space.md}`,
+};
+
+const newSessionActionsStyle: CSSProperties = {
+  display: "flex",
+  gap: tokens.space.sm,
+};
 
 const viewStyle: CSSProperties = {
   display: "flex",

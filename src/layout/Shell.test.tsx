@@ -396,6 +396,7 @@ test("Other computers shows in the nav only once a computer is paired, with what
           hostId: host,
           name: "Studio",
           role: "controller",
+          projects: [],
           sessions: [
             {
               dialogOpen: false,

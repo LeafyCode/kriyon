@@ -2023,9 +2023,37 @@ export interface HostLink {
   hostId: string;
   /** The name it said; empty until it has. */
   name: string;
+  /** Where a session can be started there. */
+  projects: HostProject[];
   role: RemoteRole | null;
   sessions: HostSession[];
   state: HostLinkState;
+}
+
+/** A project on a paired computer, for the new-session picker. */
+export interface HostProject {
+  id: string;
+  name: string;
+  /** Every session in it is parked there. */
+  parked: boolean;
+}
+
+/**
+ * Start a session on a paired computer in project `projectId`, titled
+ * `title` or after the project. Resolves to the new session's id once that
+ * computer answers (it is asked again across reconnects); rejects with its
+ * refusal in plain words.
+ */
+export function remoteHostStartSession(
+  hostId: string,
+  projectId: string,
+  title: string
+): Promise<string> {
+  return invoke("remote_host_start_session", {
+    hostId,
+    projectId,
+    title: title.trim() === "" ? null : title,
+  });
 }
 
 /** A computer this one paired with, as stored. */

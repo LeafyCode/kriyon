@@ -11,6 +11,7 @@ import {
   remoteHostInput,
   remoteHostOpenSession,
   remoteHostPair,
+  remoteHostStartSession,
   remoteHosts,
   remoteHostsWake,
   remoteHostTakeControl,
@@ -36,6 +37,8 @@ export type HostPairing =
   | { phase: "failed"; reason: string };
 
 interface RemoteHostsStore {
+  /** A new start is being asked for: the last refusal no longer stands. */
+  clearStartError: () => void;
   /** Stop showing a session here; it keeps running there. */
   close: (hostId: string, sessionId: string) => Promise<void>;
   /** Why the last command failed, if it did. */
@@ -56,6 +59,14 @@ interface RemoteHostsStore {
   /** A pairing started here ended (`remote-host-pairing-ended`). */
   pairingEnded: (ended: HostPairingEnded) => Promise<void>;
   resetPairing: () => void;
+  /** Why the last start was refused, in that computer's words. */
+  startError: string | null;
+  /** Start a session there: its id, or `null` with `startError` saying why. */
+  startSession: (
+    hostId: string,
+    projectId: string,
+    title: string
+  ) => Promise<string | null>;
   takeControl: (hostId: string, sessionId: string) => Promise<void>;
   type: (hostId: string, sessionId: string, text: string) => Promise<void>;
 }
@@ -143,6 +154,18 @@ export const useRemoteHosts = create<RemoteHostsStore>((set, get) => {
       await get().load();
     },
     resetPairing: () => set({ pairing: { phase: "idle" } }),
+    clearStartError: () => set({ startError: null }),
+    startError: null,
+    startSession: async (hostId, projectId, title) => {
+      try {
+        const id = await remoteHostStartSession(hostId, projectId, title);
+        set({ startError: null });
+        return id;
+      } catch (error) {
+        set({ startError: failureMessage(error) });
+        return null;
+      }
+    },
     takeControl: (hostId, sessionId) =>
       attempt(() => remoteHostTakeControl(hostId, sessionId)),
     type: async (hostId, sessionId, text) => {
@@ -200,6 +223,15 @@ export function remoteNeedsYouCount(state: {
     }
     return count + link.sessions.filter((session) => session.needsYou).length;
   }, 0);
+}
+
+/** Whether a session can be started there from here now. */
+export function canStart(link: HostLink): boolean {
+  return (
+    link.state === "connected" &&
+    link.role === "controller" &&
+    link.projects.length > 0
+  );
 }
 
 /** Whether this computer may type into `session` now. */

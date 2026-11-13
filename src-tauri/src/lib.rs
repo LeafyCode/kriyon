@@ -544,6 +544,7 @@ pub fn run() {
             remote_device_cmd::remote_host_open_session,
             remote_device_cmd::remote_host_close_session,
             remote_device_cmd::remote_host_take_control,
+            remote_device_cmd::remote_host_start_session,
             remote_device_cmd::remote_host_input,
             remote_device_cmd::remote_hosts_wake,
             commands::watch_transcript,

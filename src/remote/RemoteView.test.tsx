@@ -34,6 +34,7 @@ function link(over: Partial<HostLink> = {}): HostLink {
     hostId: HOST,
     name: "Studio",
     role: "controller",
+    projects: [{ id: "/work/app", name: "app", parked: false }],
     sessions: [
       session(),
       session({
@@ -118,4 +119,67 @@ test("a session that ended there stops showing here", () => {
     useRemoteHosts.getState().linkChanged(link({ sessions: [session()] }))
   );
   expect(screen.queryByTestId("remote-terminal")).toBeNull();
+});
+
+test("a Controller starts a session in a project there, and it opens", async () => {
+  const startSession = vi.fn(() => Promise.resolve("new-one"));
+  useRemoteHosts.setState({
+    hosts: [{ hostId: HOST, name: "Studio", pairedAt: 0 }],
+    links: {
+      [HOST]: link({
+        projects: [
+          { id: "/work/app", name: "app", parked: false },
+          { id: "/work/old", name: "old", parked: true },
+        ],
+      }),
+    },
+    startSession,
+  });
+  render(<RemoteView />);
+  fireEvent.click(screen.getByRole("button", { name: "New session" }));
+  fireEvent.change(screen.getByRole("combobox", { name: "Project" }), {
+    target: { value: "/work/old" },
+  });
+  expect(screen.getByRole("option", { name: "old (parked)" })).toBeTruthy();
+  fireEvent.change(screen.getByRole("textbox", { name: "Title" }), {
+    target: { value: "Fix login" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Start" }));
+  await act(() => Promise.resolve());
+  expect(startSession).toHaveBeenCalledWith(HOST, "/work/old", "Fix login");
+  // It opens once that computer lists it.
+  act(() =>
+    useRemoteHosts.getState().linkChanged(
+      link({
+        sessions: [
+          session({ id: "new-one", needsYou: false, title: "Fix login" }),
+        ],
+      })
+    )
+  );
+  expect(screen.getByTestId("remote-terminal").textContent).toBe("new-one");
+});
+
+test("a refused start says why", async () => {
+  useRemoteHosts.setState({
+    hosts: [{ hostId: HOST, name: "Studio", pairedAt: 0 }],
+    links: { [HOST]: link() },
+    startSession: vi.fn(() => {
+      useRemoteHosts.setState({ startError: "No, and here is why." });
+      return Promise.resolve(null);
+    }),
+  });
+  render(<RemoteView />);
+  fireEvent.click(screen.getByRole("button", { name: "New session" }));
+  fireEvent.click(screen.getByRole("button", { name: "Start" }));
+  expect(await screen.findByText("No, and here is why.")).toBeTruthy();
+});
+
+test("a Viewer is not offered a new session", () => {
+  useRemoteHosts.setState({
+    hosts: [{ hostId: HOST, name: "Studio", pairedAt: 0 }],
+    links: { [HOST]: link({ role: "viewer" }) },
+  });
+  render(<RemoteView />);
+  expect(screen.queryByRole("button", { name: "New session" })).toBeNull();
 });

@@ -7,11 +7,13 @@ import {
   remoteHostInput,
   remoteHostOpenSession,
   remoteHostPair,
+  remoteHostStartSession,
   remoteHosts,
   remoteHostsWake,
   remoteHostTakeControl,
 } from "../ipc/bridge.ts";
 import {
+  canStart,
   canType,
   installRemoteHostListeners,
   remoteNeedsYouCount,
@@ -26,6 +28,7 @@ vi.mock("../ipc/bridge.ts", async (importOriginal) => ({
   remoteHostOpenSession: vi.fn(),
   remoteHostPair: vi.fn(),
   remoteHosts: vi.fn(),
+  remoteHostStartSession: vi.fn(),
   remoteHostsWake: vi.fn(),
   remoteHostTakeControl: vi.fn(),
 }));
@@ -52,6 +55,7 @@ function link(over: Partial<HostLink> = {}): HostLink {
     hostId: HOST,
     name: "Studio",
     role: "controller",
+    projects: [{ id: "/work/app", name: "app", parked: false }],
     sessions: [session()],
     state: "connected",
     ...over,
@@ -222,4 +226,38 @@ test("the app wakes reconnects when its window comes back to the front", () => {
   stop();
   window.dispatchEvent(new Event("focus"));
   expect(remoteHostsWake).toHaveBeenCalledTimes(1);
+});
+
+test("starting a session asks Rust and hands back its id", async () => {
+  vi.mocked(remoteHostStartSession).mockResolvedValue("new-session");
+  const started = await useRemoteHosts
+    .getState()
+    .startSession(HOST, "/work/app", "Fix login");
+  expect(remoteHostStartSession).toHaveBeenCalledWith(
+    HOST,
+    "/work/app",
+    "Fix login"
+  );
+  expect(started).toBe("new-session");
+  expect(useRemoteHosts.getState().startError).toBeNull();
+});
+
+test("a refused start says why, in the host's words", async () => {
+  vi.mocked(remoteHostStartSession).mockRejectedValue(
+    "This device isn't allowed to do that."
+  );
+  const started = await useRemoteHosts
+    .getState()
+    .startSession(HOST, "/work/app", "");
+  expect(started).toBeNull();
+  expect(useRemoteHosts.getState().startError).toBe(
+    "This device isn't allowed to do that."
+  );
+});
+
+test("a session can be started only as a connected Controller with a project to start in", () => {
+  expect(canStart(link())).toBe(true);
+  expect(canStart(link({ role: "viewer" }))).toBe(false);
+  expect(canStart(link({ state: "lost" }))).toBe(false);
+  expect(canStart(link({ projects: [] }))).toBe(false);
 });
