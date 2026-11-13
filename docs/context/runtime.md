@@ -144,15 +144,16 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
 - **Orphan daemon** — a [PTY daemon] whose [Session socket] is in Kriyon's run dir but whose id no
   session row or [Terminal pane] owns, or whose row is an [Archived session]. Reaped at launch and
   on the ticker; an *owned* daemon that merely fails a probe is never reaped.
-- **Detached lease** — how long a [PTY daemon] with no [Watcher] attached tolerates a silent PTY
-  before it [Tree stop]s itself. Output or an attach renews it; it runs only once the last watcher
-  has left. What bounds a [Handover] nobody returns to.
-- **Watcher** (`Watcher`, `Watchers`) — anything that counts as someone looking at a [Session]:
-  the desktop app's focused pane today, a remote device later. A watched session is never slept,
-  and a daemon with any watcher attached never lapses its [Detached lease]. Rules ask "is anyone
-  watching?", never "is the desktop?", so a new kind of watcher counts without changing them.
-  _Avoid_: viewer (reserved for the remote device role), client, focused (that is only the
-  desktop's watcher).
+- **Detached lease** — how long a [PTY daemon] with no client tolerates a silent PTY before it
+  [Tree stop]s itself. Output or an attach renews it. What bounds a [Handover] nobody returns to.
+  The desktop app is the daemon's only client (ADR-0057), so a remote device keeps the lease held
+  through the app's connection, not one of its own.
+- **Watcher** (`Watcher`, `Watchers`) — anything that counts as someone looking at a [Session]
+  for auto-sleep: the desktop app's focused pane today, a remote device later. A watched session
+  is never slept. The sleep gate asks "is anyone watching?", never "is the desktop?", so a new kind
+  of watcher counts without changing it. Waking a sleeping session still follows the desktop's
+  focus only. _Avoid_: viewer (reserved for the remote device role), client (a daemon
+  connection), focused (that is only the desktop's watcher).
 - **Stop cost** (`StopCost`) — what stopping a [Session] would destroy right now: its [Session
   engagement], running [Background shell]s (named), unsent work. The one answer the close confirm,
   the archive action, the quit gate and *Stop all sessions* all read, so they can never disagree.
