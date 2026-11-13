@@ -67,3 +67,28 @@ test("a start that fails says so instead of an empty home", async () => {
     await screen.findByText("keychain read failed (-25308)")
   ).toBeOnTheScreen();
 });
+
+test("a start that failed (the phone was locked) is tried again when the app comes to the front", async () => {
+  const { AppState } =
+    jest.requireActual<typeof import("react-native")>("react-native");
+  let changed: (state: string) => void = () => undefined;
+  const listen = jest.spyOn(AppState, "addEventListener").mockImplementation(((
+    _type: string,
+    listener: (state: string) => void
+  ) => {
+    changed = listener;
+    return { remove: jest.fn() };
+  }) as never);
+  native.start.mockRejectedValueOnce(
+    new Error("keychain read failed (-25308)")
+  );
+  await render(<App />);
+  await screen.findByText("keychain read failed (-25308)");
+  native.start.mockResolvedValueOnce("ef".repeat(32));
+  changed("active");
+  await waitFor(() =>
+    expect(usePhone.getState().deviceId).toBe("ef".repeat(32))
+  );
+  expect(usePhone.getState().startError).toBeNull();
+  listen.mockRestore();
+});

@@ -6,8 +6,11 @@ import ExpoModulesCore
 import Security
 
 /// The phone's store for the Rust library: the iPhone keychain, the same
-/// store expo-secure-store uses, readable after the first unlock and never
-/// leaving this device.
+/// store expo-secure-store uses, readable only while the phone is unlocked
+/// and never leaving it (the spec's choice, as the desktop's device key).
+/// Nothing reads it while the phone is locked: an alert is shown by iOS,
+/// and links come up when the app is in front. A start the system made
+/// while the phone was locked is tried again when the app comes to the front.
 final class KeychainStore: PhoneStore, @unchecked Sendable {
   private let service = "com.leafycode.kriyon.mobile"
 
@@ -38,7 +41,7 @@ final class KeychainStore: PhoneStore, @unchecked Sendable {
     if status == errSecItemNotFound {
       var add = query(key)
       add[kSecValueData as String] = value
-      add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+      add[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
       status = SecItemAdd(add as CFDictionary, nil)
     }
     guard status == errSecSuccess else {

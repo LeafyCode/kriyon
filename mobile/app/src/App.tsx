@@ -54,12 +54,19 @@ export function App() {
     start(deviceName()).catch(() => undefined);
     // Back in front, or the network came back: dial now, not after backoff.
     const front = AppState.addEventListener("change", (state) => {
-      if (state === "active") {
-        try {
-          KriyonNative.wake();
-        } catch {
-          // Not started yet: nothing to wake.
-        }
+      if (state !== "active") {
+        return;
+      }
+      // A start that failed while the phone was locked (its keys are
+      // readable only while it is unlocked) is tried again now.
+      if (usePhone.getState().startError) {
+        start(deviceName()).catch(() => undefined);
+        return;
+      }
+      try {
+        KriyonNative.wake();
+      } catch {
+        // Not started yet: nothing to wake.
       }
     });
     return () => {
