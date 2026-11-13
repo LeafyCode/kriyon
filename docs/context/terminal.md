@@ -79,8 +79,10 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
   connects to. Keyed by Kriyon's [Session] id, which is validated before it is interpolated into the
   path (the trust-boundary path-containment rule). _Avoid_: ipc socket.
 - **Daemon frame** (`Frame`) — one length-prefixed message on the [Session socket]
-  (`[tag][u32 len][payload]`): `Output` / `Stdin` / `Resize` / `Attach` / `Shutdown`. Encoded and
-  decoded by the pure `wire` module, which tolerates partial reads and skips unknown tags.
+  (`[tag][u32 len][payload]`): `Output` / `Stdin` / `Resize` / `Attach` / `Shutdown` / `Busy` /
+  `Repaint`, and for the [Output history] `RequestHistory` (app → daemon), then `History` frames
+  closed by one `HistoryEnd` (daemon → app). Encoded and decoded by the pure `wire` module, which
+  tolerates partial reads and skips unknown tags.
   _Avoid_: packet, message.
 - **Daemon client** (`DaemonClient`) — the app-side [Engine] that connects to a [Session socket],
   runs the framed reader thread feeding the [Output gate] (which never blocks it), and sends
@@ -93,3 +95,9 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
   a client is attached, and keeps no scrollback — only the visible screen, which is all the snapshot
   serialises. It replaced the bounded output ring the daemon used to fill only while detached.
   _Avoid_: scrollback ring, replay buffer (ambiguous with the frontend's detached replay buffer).
+- **Output history** (`OutputHistory`) — the most recent raw output of a session, up to 4 MiB,
+  kept by its [PTY daemon] from every output byte, attached or not, and sent to a [Daemon client]
+  that asks (`RequestHistory`). It holds what scrolled past the [Screen snapshot]: what a client
+  missed when it skipped ahead, or before it attached. Trimmed oldest first, to a line start
+  (ADR-0060).
+  _Avoid_: scrollback ring (the old attach-replay buffer ADR-0004 removed), scrollback.

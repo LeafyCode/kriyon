@@ -24,6 +24,7 @@ pub mod notification;
 pub mod orphan;
 pub mod osc;
 pub mod output_gate;
+pub mod output_history;
 pub mod paths;
 pub mod plan_limits;
 pub mod policy;

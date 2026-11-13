@@ -16,6 +16,9 @@ const TAG_ATTACH: u8 = 3;
 const TAG_SHUTDOWN: u8 = 4;
 const TAG_BUSY: u8 = 5;
 const TAG_REPAINT: u8 = 6;
+const TAG_REQUEST_HISTORY: u8 = 7;
+const TAG_HISTORY: u8 = 8;
+const TAG_HISTORY_END: u8 = 9;
 
 const HEADER_LEN: usize = 5;
 
@@ -58,6 +61,16 @@ pub enum Frame {
     /// session — a remounted xterm starts blank and the socket-level attach
     /// repaint only happens once per connection.
     Repaint,
+    /// Ask the daemon for its [Output history], app → daemon. Answered with
+    /// zero or more `History` frames, then one `HistoryEnd`.
+    RequestHistory,
+    /// Part of the [Output history], daemon → app, oldest first. Kept apart
+    /// from `Output`, so earlier output is never drawn as if it were live. It
+    /// can overlap the `Output` that follows it (ADR-0060).
+    History(Vec<u8>),
+    /// The last frame of an [Output history] answer, daemon → app: the
+    /// `History` frames before it, since the request, are all of it.
+    HistoryEnd,
 }
 
 /// Split a byte stream into frames small enough for any decoder to accept. The
@@ -88,6 +101,9 @@ impl Frame {
             Frame::Shutdown => (TAG_SHUTDOWN, Vec::new()),
             Frame::Busy(busy) => (TAG_BUSY, vec![u8::from(*busy)]),
             Frame::Repaint => (TAG_REPAINT, Vec::new()),
+            Frame::RequestHistory => (TAG_REQUEST_HISTORY, Vec::new()),
+            Frame::History(b) => (TAG_HISTORY, b.clone()),
+            Frame::HistoryEnd => (TAG_HISTORY_END, Vec::new()),
         };
         debug_assert!(
             payload.len() <= MAX_PAYLOAD_LEN,
@@ -177,6 +193,9 @@ impl FrameDecoder {
                     return Ok(Some(Frame::Busy(payload[0] != 0)));
                 }
                 TAG_REPAINT => return Ok(Some(Frame::Repaint)),
+                TAG_REQUEST_HISTORY => return Ok(Some(Frame::RequestHistory)),
+                TAG_HISTORY => return Ok(Some(Frame::History(payload))),
+                TAG_HISTORY_END => return Ok(Some(Frame::HistoryEnd)),
                 // Unknown tag, or a Resize/Attach/Busy with bad length: skip.
                 _ => {}
             }
@@ -209,6 +228,9 @@ mod tests {
             Frame::Busy(true),
             Frame::Busy(false),
             Frame::Repaint,
+            Frame::RequestHistory,
+            Frame::History(b"earlier\n".to_vec()),
+            Frame::HistoryEnd,
         ];
         let mut dec = FrameDecoder::new();
         for f in &frames {

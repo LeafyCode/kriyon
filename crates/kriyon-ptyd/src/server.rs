@@ -14,6 +14,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use kriyon_core::lease::DetachedLease;
+use kriyon_core::output_history::OutputHistory;
 use kriyon_core::session::{check_screen_size, EngineError, SessionEngine, SessionId, SpawnSpec};
 use kriyon_core::skip_ahead::{Next, SkipAheadQueue};
 use kriyon_core::wire::{chunked, Frame, FrameDecoder};
@@ -36,6 +37,10 @@ const CLIENT_QUEUE_LIMIT: usize = 4 * 1024 * 1024;
 /// How long a daemon whose shell exited waits for its client to receive the
 /// output still queued, before it stops.
 const FINAL_SEND_WAIT: Duration = Duration::from_secs(1);
+/// How much recent output each session keeps as its [Output history]. The
+/// same as a client's queue, so whatever a skip ahead dropped is still there
+/// if the client asks soon after. About 40 MB across ten sessions.
+const OUTPUT_HISTORY_LIMIT: usize = CLIENT_QUEUE_LIMIT;
 
 /// DECSET 1049 — switch the client to the alternate screen buffer.
 const ENTER_ALTERNATE_SCREEN: &[u8] = b"\x1b[?1049h";
@@ -82,6 +87,10 @@ struct AttachedClient {
     queue: SkipAheadQueue,
     /// The writer has taken bytes off the queue and not finished writing them.
     sending: bool,
+    /// How many [Output history] answers the client is owed. The writer
+    /// sends them outside the queue: at up to the queue's own size, queueing
+    /// one would make the client skip ahead.
+    history_requests: u32,
 }
 
 /// State shared between the PTY reader thread (which produces output), the
@@ -96,6 +105,9 @@ struct Shared {
     /// Headless terminal emulator consuming every output byte, so its screen is
     /// always the current one to repaint a reattaching client from.
     emulator: Mutex<vt100::Parser>,
+    /// The [Output history], fed every output byte like the emulator. A leaf
+    /// lock: taken last under `client`, or alone.
+    history: Mutex<OutputHistory>,
     /// Last-known foreground-busy state, updated by the busy poller and sent
     /// with every screen snapshot, so a client that attaches or skips ahead
     /// learns it at once. An atomic (not a lock) so the writer can read it
@@ -118,6 +130,7 @@ impl Shared {
         self.lease.lock().note_output(Instant::now());
         let mut client = self.client.lock();
         self.emulator.lock().process(bytes);
+        self.history.lock().push(bytes);
         self.queue_frame(&mut client, output_frames(bytes));
     }
 
@@ -141,6 +154,7 @@ impl Shared {
             id,
             queue: SkipAheadQueue::starting_with_screen(CLIENT_QUEUE_LIMIT),
             sending: false,
+            history_requests: 0,
         });
         let shared = Arc::clone(self);
         // A thread the OS refuses must not panic the daemon (and the session
@@ -185,6 +199,13 @@ impl Shared {
                     else {
                         return;
                     };
+                    if attached.history_requests > 0 {
+                        attached.history_requests -= 1;
+                        attached.sending = true;
+                        // Built after the `client` lock is released: copying
+                        // megabytes under it would stall the PTY reader.
+                        break None;
+                    }
                     let bytes = match attached.queue.pop() {
                         Next::Frame(bytes) => bytes,
                         Next::SkipAhead => self.screen_frames(),
@@ -194,9 +215,10 @@ impl Shared {
                         }
                     };
                     attached.sending = true;
-                    break bytes;
+                    break Some(bytes);
                 }
             };
+            let bytes = bytes.unwrap_or_else(|| self.history_frames());
             let sent = out.write_all(&bytes).is_ok() && out.flush().is_ok();
             if let Some(attached) = self
                 .client
@@ -225,6 +247,25 @@ impl Shared {
         let mut bytes = output_frames(&screen_snapshot(&self.emulator.lock()));
         bytes.extend(Frame::Busy(self.busy.load(Ordering::Relaxed)).encode());
         bytes
+    }
+
+    /// The [Output history] as `History` frames, split to the frame limit,
+    /// then the `HistoryEnd` that tells the client it has all of it.
+    fn history_frames(&self) -> Vec<u8> {
+        let history = self.history.lock().contents();
+        let mut bytes: Vec<u8> = chunked(&history, Frame::History)
+            .flat_map(|frame| frame.encode())
+            .collect();
+        bytes.extend(Frame::HistoryEnd.encode());
+        bytes
+    }
+
+    /// Send the live client the [Output history], on request.
+    fn request_history(&self) {
+        if let Some(attached) = self.client.lock().as_mut() {
+            attached.history_requests = attached.history_requests.saturating_add(1);
+            self.client_ready.notify_all();
+        }
     }
 
     /// Resend the screen snapshot to the live client, on request. A terminal
@@ -307,6 +348,7 @@ pub fn run(
         client_ready: Condvar::new(),
         next_client: AtomicU64::new(0),
         emulator: Mutex::new(vt100::Parser::new(INITIAL_ROWS, INITIAL_COLS, 0)),
+        history: Mutex::new(OutputHistory::new(OUTPUT_HISTORY_LIMIT)),
         busy: AtomicBool::new(false),
         lease: Mutex::new(DetachedLease::new(detached_ttl, Instant::now())),
     });
@@ -490,9 +532,13 @@ fn serve_client(stream: &mut UnixStream, engine: &Arc<PtyEngine>, shared: &Arc<S
                             }
                         }
                         Frame::Repaint => shared.repaint(),
+                        Frame::RequestHistory => shared.request_history(),
                         Frame::Shutdown => return true,
                         // Daemon → app frames never arrive from a client; ignore.
-                        Frame::Output(_) | Frame::Busy(_) => {}
+                        Frame::Output(_)
+                        | Frame::Busy(_)
+                        | Frame::History(_)
+                        | Frame::HistoryEnd => {}
                     }
                 }
             }
@@ -504,9 +550,10 @@ fn serve_client(stream: &mut UnixStream, engine: &Arc<PtyEngine>, shared: &Arc<S
 mod tests {
     use super::{
         deliver_stdin, screen_snapshot, AttachedClient, Shared, CLIENT_QUEUE_LIMIT,
-        ENTER_ALTERNATE_SCREEN, LEAVE_ALTERNATE_SCREEN,
+        ENTER_ALTERNATE_SCREEN, LEAVE_ALTERNATE_SCREEN, OUTPUT_HISTORY_LIMIT,
     };
     use kriyon_core::lease::DetachedLease;
+    use kriyon_core::output_history::OutputHistory;
     use kriyon_core::session::{EngineError, SessionEngine, SessionId};
     use kriyon_core::skip_ahead::SkipAheadQueue;
     use kriyon_core::wire::Frame;
@@ -523,6 +570,7 @@ mod tests {
             client_ready: parking_lot::Condvar::new(),
             next_client: std::sync::atomic::AtomicU64::new(0),
             emulator: Mutex::new(vt100::Parser::new(24, 80, 0)),
+            history: Mutex::new(OutputHistory::new(OUTPUT_HISTORY_LIMIT)),
             busy: AtomicBool::new(false),
             lease: Mutex::new(DetachedLease::new(Duration::from_secs(60), Instant::now())),
         }
@@ -730,6 +778,7 @@ mod tests {
             id: 0,
             queue,
             sending: false,
+            history_requests: 0,
         });
         shared
     }
@@ -872,5 +921,95 @@ mod tests {
             got.extend(chunk);
         }
         assert_eq!(got, bytes);
+    }
+
+    /// Read frames from `stream` until a `HistoryEnd`, returning the
+    /// `History` bytes.
+    fn read_history(stream: &mut UnixStream) -> Vec<u8> {
+        read_histories(stream, 1).remove(0)
+    }
+
+    /// Read `count` history answers, each closed by its `HistoryEnd`.
+    fn read_histories(stream: &mut UnixStream, count: usize) -> Vec<Vec<u8>> {
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .expect("timeout");
+        let mut dec = kriyon_core::wire::FrameDecoder::new();
+        let mut answers = Vec::new();
+        let mut history = Vec::new();
+        let mut buf = vec![0u8; 65536];
+        loop {
+            let n = io::Read::read(stream, &mut buf).expect("the answer arrives");
+            assert_ne!(n, 0, "the connection closed before HistoryEnd");
+            dec.push(&buf[..n]);
+            while let Some(frame) = dec.next_frame().expect("frames within the limit") {
+                match frame {
+                    Frame::History(bytes) => history.extend(bytes),
+                    Frame::HistoryEnd => {
+                        answers.push(std::mem::take(&mut history));
+                        if answers.len() == count {
+                            return answers;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_client_gets_the_output_history_it_asks_for() {
+        let (shared, _daemon_end, mut client_end, _writer) = attached();
+        shared.on_output(b"earlier line\n");
+        shared.request_history();
+        let history = read_history(&mut client_end);
+        assert!(String::from_utf8_lossy(&history).contains("earlier line"));
+    }
+
+    #[test]
+    fn output_while_detached_is_kept_in_the_history_too() {
+        let shared = std::sync::Arc::new(shared());
+        shared.on_output(b"nobody was watching\n");
+        let (daemon_end, mut client_end) = UnixStream::pair().expect("socket pair");
+        let _writer = shared.attach(&daemon_end);
+        shared.request_history();
+        let history = read_history(&mut client_end);
+        assert!(String::from_utf8_lossy(&history).contains("nobody was watching"));
+    }
+
+    #[test]
+    fn a_full_history_reaches_a_client_without_skipping_ahead() {
+        let (shared, _daemon_end, mut client_end, _writer) = attached();
+        // Fill the history to its limit with numbered lines.
+        let line = |i: usize| format!("history line {i:08}\n");
+        let count = OUTPUT_HISTORY_LIMIT / line(0).len() + 10;
+        // Read concurrently, so live output never makes the client skip ahead.
+        let reader = std::thread::spawn(move || {
+            let mut sink = vec![0u8; 65536];
+            client_end
+                .set_read_timeout(Some(Duration::from_millis(500)))
+                .expect("timeout");
+            while matches!(io::Read::read(&mut client_end, &mut sink), Ok(n) if n > 0) {}
+            client_end
+        });
+        for i in 0..count {
+            shared.on_output(line(i).as_bytes());
+        }
+        let mut client_end = reader.join().expect("reader");
+        shared.request_history();
+        let history = read_history(&mut client_end);
+        assert!(history.len() > OUTPUT_HISTORY_LIMIT - line(0).len());
+        assert!(String::from_utf8_lossy(&history).ends_with(&line(count - 1)));
+    }
+
+    #[test]
+    fn each_history_request_gets_its_own_answer() {
+        let (shared, _daemon_end, mut client_end, _writer) = attached();
+        shared.on_output(b"asked twice\n");
+        shared.request_history();
+        shared.request_history();
+        for history in read_histories(&mut client_end, 2) {
+            assert!(String::from_utf8_lossy(&history).contains("asked twice"));
+        }
     }
 }
