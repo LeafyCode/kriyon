@@ -238,7 +238,8 @@ export function ensureSession(
         host.sink(bytes);
       } else {
         // Detached (no terminal mounted): nothing else will report these
-        // bytes, so the PTY reader would park at its high-water mark forever.
+        // bytes, so the Rust output gate would hold, then drop, everything after
+        // its high-water mark.
         // Report-and-drop — no buffering: a terminal that attaches later asks
         // the daemon for a screen repaint instead of replaying a byte-capped
         // buffer that could start mid-escape-sequence (see attachTerminal).

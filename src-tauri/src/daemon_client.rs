@@ -1,7 +1,8 @@
 //! App-side client for the out-of-process `kriyon-ptyd` daemon. Implements the
-//! [`SessionEngine`] trait so the rest of the app is unchanged: the PTY now
-//! lives in the daemon, but stdin/resize/close and the Phase-1 backpressure look
-//! exactly as they did when the PTY was in-process.
+//! [`SessionEngine`] trait so the rest of the app is unchanged: the PTY lives
+//! in the daemon, and this client keeps reading its output whether or not the
+//! window draws — the [Output gate] paces it by a webview that drains, and
+//! holds or drops what a stalled one can't take yet.
 
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
@@ -9,16 +10,22 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
+use std::time::Instant;
 
-use kriyon_core::backpressure::Backpressure;
+use kriyon_core::output_gate::{CatchUp, OutputGate};
 use kriyon_core::session::{EngineError, SessionEngine, SessionId};
 use kriyon_core::wire::{Frame, FrameDecoder};
-use parking_lot::Mutex;
+use parking_lot::{Condvar, Mutex};
 
-/// Park the socket reader once this many bytes are sent-but-not-drained.
+/// Hold output for the webview once this many bytes are delivered but not drained.
 const HIGH_WATER: usize = 128 * 1024;
-/// Resume a parked socket reader once pending falls to/below this.
+/// Release held output once in-flight bytes drain to this or below.
 const LOW_WATER: usize = 16 * 1024;
+/// The most output held for a webview that has stopped painting (a hidden
+/// window gets no animation frames). Past it the held bytes are dropped and the
+/// webview repaints from the daemon's screen snapshot when it is back. Bounds
+/// the app's memory per session however long the window stays hidden.
+const HOLD_CAP: usize = 1024 * 1024;
 const READ_BUF_LEN: usize = 8192;
 /// How long one frame may take to reach the daemon. A frame is a few bytes to a
 /// few kilobytes on a local socket, and the daemon drains its client on a thread
@@ -37,10 +44,13 @@ pub struct DaemonClient {
     id: SessionId,
     writer: Mutex<UnixStream>,
     reader_thread: Mutex<Option<JoinHandle<()>>>,
-    /// Parking the socket reader here transitively backpressures the daemon: a
-    /// parked reader stops draining the socket, the daemon's socket write
-    /// blocks, its PTY read stalls, and the child is paced — no ack protocol.
-    backpressure: Arc<Backpressure>,
+    /// Output on its way to the webview. The reader waits on it only while
+    /// the webview is still draining: if it waited on a webview that stopped
+    /// (a hidden window gets no frames), the daemon's socket write would
+    /// block, then its pty read, and every session would freeze (12 Nov).
+    /// Shared with `report_drained`, which releases held output under the same
+    /// lock, so bytes reach the webview in order.
+    outlet: Arc<Outlet>,
     /// Set before the socket is deliberately severed (close/drop), so the
     /// reader thread can tell our own disconnect from a daemon-side EOF — the
     /// latter means the shell died and must surface as an exit event.
@@ -52,11 +62,26 @@ pub struct DaemonClient {
     accepted: Arc<AtomicBool>,
 }
 
+/// The [Output gate] and the sink it feeds, behind one lock.
+struct Delivery {
+    gate: OutputGate,
+    deliver: Box<dyn FnMut(Vec<u8>) + Send>,
+}
+
+/// [`Delivery`], and the signal a pacing reader waits on: the webview drained
+/// some bytes, or the client is closing.
+struct Outlet {
+    delivery: Mutex<Delivery>,
+    progress: Condvar,
+}
+
 impl DaemonClient {
-    /// Connect to a daemon's socket and stream its output to `on_output`, its
-    /// foreground-busy transitions to `on_busy`, and a single session-death
-    /// notification to `on_exit`. The caller should send
-    /// [`DaemonClient::attach`] next to set the initial size.
+    /// Connect to a daemon's socket. Every output byte goes to `on_read` as
+    /// soon as it is read; the same bytes go to the webview through
+    /// `on_output`, paced by [`DaemonClient::report_drained`]. Foreground-busy
+    /// transitions go to `on_busy`, and a single session-death notification to
+    /// `on_exit`. The caller should send [`DaemonClient::attach`] next to set
+    /// the initial size.
     ///
     /// `on_exit` fires exactly once, from the reader thread, when the daemon
     /// side closes the connection (the shell exited, or the daemon died) — and
@@ -64,20 +89,22 @@ impl DaemonClient {
     ///
     /// # Errors
     /// Returns [`EngineError::Pty`] if the socket cannot be connected or cloned.
-    pub fn connect<F, G, H>(
+    pub fn connect<R, F, G, H>(
         socket: &Path,
         id: SessionId,
+        on_read: R,
         on_output: F,
         on_busy: G,
         on_exit: H,
     ) -> Result<Self, EngineError>
     where
-        F: Fn(Vec<u8>) + Send + 'static,
+        R: FnMut(&[u8]) + Send + 'static,
+        F: FnMut(Vec<u8>) + Send + 'static,
         G: Fn(bool) + Send + 'static,
         H: FnOnce() + Send + 'static,
     {
         let stream = UnixStream::connect(socket).map_err(io_err)?;
-        Self::from_stream(stream, id, on_output, on_busy, on_exit)
+        Self::from_stream(stream, id, on_read, on_output, on_busy, on_exit)
     }
 
     /// Build a client from an already-connected stream. Lets the caller probe a
@@ -87,20 +114,22 @@ impl DaemonClient {
     ///
     /// # Errors
     /// Returns [`EngineError::Pty`] if the stream cannot be cloned.
-    pub fn from_stream<F, G, H>(
+    pub fn from_stream<R, F, G, H>(
         stream: UnixStream,
         id: SessionId,
+        on_read: R,
         on_output: F,
         on_busy: G,
         on_exit: H,
     ) -> Result<Self, EngineError>
     where
-        F: Fn(Vec<u8>) + Send + 'static,
+        R: FnMut(&[u8]) + Send + 'static,
+        F: FnMut(Vec<u8>) + Send + 'static,
         G: Fn(bool) + Send + 'static,
         H: FnOnce() + Send + 'static,
     {
-        let backpressure = Backpressure::new(HIGH_WATER, LOW_WATER);
-        Self::build(stream, id, on_output, on_busy, on_exit, backpressure)
+        let gate = OutputGate::new(HIGH_WATER, LOW_WATER, HOLD_CAP, Instant::now());
+        Self::build(stream, id, on_read, on_output, on_busy, on_exit, gate)
     }
 
     /// [Daemon adoption]: connect to a live daemon nobody is looking at, so the
@@ -110,28 +139,36 @@ impl DaemonClient {
     /// Output is discarded — the daemon's own emulator keeps the screen
     /// snapshot current and repaints the real client when `create_session`
     /// replaces this one. Nothing reports bytes drained for a sink-less client,
-    /// so its watermark is unreachable: a parked reader would stall the daemon's
-    /// socket write, then its PTY read, and freeze an agent nobody is watching.
+    /// so its gate is unpaced and never holds anything.
     /// No `Attach` is sent either: that frame resizes the PTY, and a live TUI
     /// must not be reflowed to a default size behind the user's back.
     ///
     /// # Errors
     /// Returns [`EngineError::Pty`] if the stream cannot be cloned.
     pub fn adopt(stream: UnixStream, id: SessionId) -> Result<Self, EngineError> {
-        let unpaced = Backpressure::new(usize::MAX, usize::MAX);
-        Self::build(stream, id, |_| {}, |_| {}, || {}, unpaced)
+        Self::build(
+            stream,
+            id,
+            |_| {},
+            |_| {},
+            |_| {},
+            || {},
+            OutputGate::unpaced(Instant::now()),
+        )
     }
 
-    fn build<F, G, H>(
+    fn build<R, F, G, H>(
         stream: UnixStream,
         id: SessionId,
+        mut on_read: R,
         on_output: F,
         on_busy: G,
         on_exit: H,
-        backpressure: Backpressure,
+        gate: OutputGate,
     ) -> Result<Self, EngineError>
     where
-        F: Fn(Vec<u8>) + Send + 'static,
+        R: FnMut(&[u8]) + Send + 'static,
+        F: FnMut(Vec<u8>) + Send + 'static,
         G: Fn(bool) + Send + 'static,
         H: FnOnce() + Send + 'static,
     {
@@ -141,8 +178,14 @@ impl DaemonClient {
         let _ = stream.set_write_timeout(Some(WRITE_TIMEOUT));
         let accepted = Arc::new(AtomicBool::new(false));
         let reader_accepted = Arc::clone(&accepted);
-        let backpressure = Arc::new(backpressure);
-        let reader_bp = Arc::clone(&backpressure);
+        let outlet = Arc::new(Outlet {
+            delivery: Mutex::new(Delivery {
+                gate,
+                deliver: Box::new(on_output),
+            }),
+            progress: Condvar::new(),
+        });
+        let reader_outlet = Arc::clone(&outlet);
         let closing = Arc::new(AtomicBool::new(false));
         let reader_closing = Arc::clone(&closing);
 
@@ -158,10 +201,19 @@ impl DaemonClient {
                             reader_accepted.store(true, Ordering::Relaxed);
                             match frame {
                                 Frame::Output(bytes) => {
-                                    let len = bytes.len();
-                                    on_output(bytes);
-                                    // Park here if the frontend has fallen behind.
-                                    reader_bp.after_send(len);
+                                    on_read(&bytes);
+                                    let mut d = reader_outlet.delivery.lock();
+                                    // Paced by a webview that draws; never by
+                                    // one that has stopped.
+                                    while let Some(until) = d.gate.pace_until(Instant::now()) {
+                                        if reader_closing.load(Ordering::Relaxed) {
+                                            break;
+                                        }
+                                        reader_outlet.progress.wait_until(&mut d, until);
+                                    }
+                                    if let Some(out) = d.gate.offer(bytes, Instant::now()) {
+                                        (d.deliver)(out);
+                                    }
                                 }
                                 Frame::Busy(busy) => on_busy(busy),
                                 // Other frames are app → daemon; never arrive here.
@@ -183,7 +235,7 @@ impl DaemonClient {
             id,
             writer: Mutex::new(stream),
             reader_thread: Mutex::new(Some(reader_thread)),
-            backpressure,
+            outlet,
             closing,
             accepted,
         })
@@ -243,14 +295,28 @@ impl DaemonClient {
         self.send(&Frame::Attach { cols, rows })
     }
 
-    /// Acknowledge `bytes` drained from the frontend sink, resuming a parked
-    /// socket reader. Wired to the `report_drained` Tauri command.
+    /// Acknowledge `bytes` drained from the frontend sink: deliver output held
+    /// while it was behind, or, if some had to be dropped, ask the daemon to
+    /// repaint the screen. Wired to the `report_drained` Tauri command.
     pub fn report_drained(&self, bytes: usize) {
-        self.backpressure.report_drained(bytes);
+        let mut d = self.outlet.delivery.lock();
+        let catch_up = d.gate.drained(bytes, Instant::now());
+        self.outlet.progress.notify_all();
+        match catch_up {
+            // Under the lock, so it lands before anything read after it.
+            CatchUp::Deliver(held) => (d.deliver)(held),
+            CatchUp::Repaint => {
+                drop(d);
+                // A failed send severs the connection; the reader then reports
+                // the session gone, so there is nothing more to do with it here.
+                let _ = self.request_repaint();
+            }
+            CatchUp::Nothing => {}
+        }
     }
 
-    /// Sever the connection without touching the daemon's child: wake any
-    /// parked reader, shut the socket down for every dup (the reader thread
+    /// Sever the connection without touching the daemon's child: shut the
+    /// socket down for every dup (the reader thread
     /// holds a clone — dropping our writer alone would leave the connection
     /// open and the daemon blocked on this client forever), then join the
     /// reader. Idempotent; used by both `close()` and `Drop`.
@@ -258,7 +324,7 @@ impl DaemonClient {
         // Mark the disconnect as ours BEFORE severing, so the reader thread
         // never mistakes it for the daemon dying and fires a phantom exit.
         self.closing.store(true, Ordering::Relaxed);
-        self.backpressure.close();
+        self.outlet.progress.notify_all();
         let _ = self.writer.lock().shutdown(std::net::Shutdown::Both);
         if let Some(handle) = self.reader_thread.lock().take() {
             let _ = handle.join();
@@ -469,6 +535,200 @@ mod tests {
         drop(client);
     }
 
+    /// A fake daemon that writes `total` bytes of output in 64 KB frames as fast
+    /// as the client takes them, and flags once every write has gone through —
+    /// the stand-in for a pty whose reads never stall.
+    fn spawn_flooding_daemon(socket: &Path, total: usize) -> Arc<StdMutex<bool>> {
+        let listener = UnixListener::bind(socket).expect("bind");
+        let wrote_all = Arc::new(StdMutex::new(false));
+        let flag = Arc::clone(&wrote_all);
+        std::thread::spawn(move || {
+            let Ok((mut stream, _)) = listener.accept() else {
+                return;
+            };
+            let chunk = Frame::Output(vec![b'x'; 64 * 1024]).encode();
+            for _ in 0..(total / (64 * 1024)) {
+                if stream.write_all(&chunk).is_err() {
+                    return;
+                }
+            }
+            *flag.lock().expect("lock") = true;
+            // Stay connected, like a live daemon.
+            std::thread::sleep(Duration::from_secs(5));
+        });
+        wrote_all
+    }
+
+    fn wait_for(flag: &StdMutex<bool>, what: &str) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !*flag.lock().expect("lock") {
+            assert!(Instant::now() < deadline, "{what}");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    /// The hidden-window freeze (12 Nov): a hidden webview gets no animation
+    /// frames, so its write queue never flushes and never reports bytes
+    /// drained. The session must keep being read anyway — the daemon's writes,
+    /// and so its pty reads, must never wait on the webview.
+    #[test]
+    fn output_keeps_flowing_while_the_webview_drains_nothing() {
+        let dir = tempfile::tempdir().expect("tmp dir");
+        let socket = dir.path().join("s.sock");
+        // Far past the old high-water mark, and past any bound the app holds.
+        let wrote_all = spawn_flooding_daemon(&socket, 64 * HIGH_WATER);
+
+        // A live, attached sink that takes bytes but never reports them drained.
+        let client = DaemonClient::connect(
+            &socket,
+            SessionId("s".into()),
+            |_| {},
+            |_| {},
+            |_| {},
+            || {},
+        )
+        .expect("connect");
+
+        wait_for(
+            &wrote_all,
+            "the daemon's writes stalled: the reader waited on the webview",
+        );
+        drop(client);
+    }
+
+    /// A window that draws drains every frame. A program printing faster than
+    /// that must still be paced by it, as before, rather than have its output
+    /// dropped: scrollback keeps every line of a fast build log.
+    #[test]
+    fn a_webview_that_keeps_draining_paces_the_session_and_gets_every_byte() {
+        let dir = tempfile::tempdir().expect("tmp dir");
+        let socket = dir.path().join("s.sock");
+        // Well past what the app would hold for a stalled webview.
+        let total = 4 * HOLD_CAP;
+        let wrote_all = spawn_flooding_daemon(&socket, total);
+
+        let (tx, rx) = std::sync::mpsc::channel::<usize>();
+        let delivered = Arc::new(StdMutex::new(0usize));
+        let seen = Arc::clone(&delivered);
+        let client = Arc::new(
+            DaemonClient::connect(
+                &socket,
+                SessionId("s".into()),
+                |_| {},
+                move |bytes| {
+                    *seen.lock().expect("lock") += bytes.len();
+                    let _ = tx.send(bytes.len());
+                },
+                |_| {},
+                || {},
+            )
+            .expect("connect"),
+        );
+        // The write queue: once a "frame", report everything that arrived.
+        let drainer = Arc::clone(&client);
+        std::thread::spawn(move || loop {
+            std::thread::sleep(Duration::from_millis(5));
+            let mut n = 0;
+            loop {
+                match rx.try_recv() {
+                    Ok(len) => n += len,
+                    Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => return,
+                }
+            }
+            drainer.report_drained(n);
+        });
+
+        wait_for(&wrote_all, "the daemon's writes stalled");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while *delivered.lock().expect("lock") < total {
+            assert!(
+                Instant::now() < deadline,
+                "the webview did not get every byte"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(
+            *delivered.lock().expect("lock"),
+            total,
+            "nothing dropped, nothing added"
+        );
+    }
+
+    /// While the webview is away, every byte still reaches `on_read` (status,
+    /// notifications), the webview is sent no more than a bounded amount, and
+    /// once it drains it is caught up by a screen repaint from the daemon.
+    #[test]
+    fn a_webview_that_comes_back_after_a_flood_is_caught_up_by_a_repaint() {
+        let dir = tempfile::tempdir().expect("tmp dir");
+        let socket = dir.path().join("s.sock");
+        let total = 64 * HIGH_WATER;
+        let listener = UnixListener::bind(&socket).expect("bind");
+        let (wrote_all, saw_repaint) = (
+            Arc::new(StdMutex::new(false)),
+            Arc::new(StdMutex::new(false)),
+        );
+        let (wrote, repaint) = (Arc::clone(&wrote_all), Arc::clone(&saw_repaint));
+        std::thread::spawn(move || {
+            let Ok((mut stream, _)) = listener.accept() else {
+                return;
+            };
+            let chunk = Frame::Output(vec![b'x'; 64 * 1024]).encode();
+            for _ in 0..(total / (64 * 1024)) {
+                if stream.write_all(&chunk).is_err() {
+                    return;
+                }
+            }
+            *wrote.lock().expect("lock") = true;
+            let mut dec = FrameDecoder::new();
+            let mut buf = [0u8; 4096];
+            while let Ok(n) = stream.read(&mut buf) {
+                if n == 0 {
+                    return;
+                }
+                dec.push(&buf[..n]);
+                while let Some(frame) = dec.next_frame() {
+                    if frame == Frame::Repaint {
+                        *repaint.lock().expect("lock") = true;
+                    }
+                }
+            }
+        });
+
+        let read = Arc::new(StdMutex::new(0usize));
+        let sent = Arc::new(StdMutex::new(0usize));
+        let (read_sink, sent_sink) = (Arc::clone(&read), Arc::clone(&sent));
+        let client = DaemonClient::connect(
+            &socket,
+            SessionId("s".into()),
+            move |bytes| *read_sink.lock().expect("lock") += bytes.len(),
+            move |bytes| *sent_sink.lock().expect("lock") += bytes.len(),
+            |_| {},
+            || {},
+        )
+        .expect("connect");
+
+        wait_for(&wrote_all, "the daemon's writes stalled");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while *read.lock().expect("lock") < total {
+            assert!(Instant::now() < deadline, "not every byte reached on_read");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let delivered = *sent.lock().expect("lock");
+        assert!(
+            delivered <= HIGH_WATER + 64 * 1024,
+            "a webview that drains nothing was sent {delivered} bytes"
+        );
+
+        // The window shows again: the write queue flushes what it had.
+        client.report_drained(delivered);
+        wait_for(
+            &saw_repaint,
+            "the catching-up webview never asked for a repaint",
+        );
+        drop(client);
+    }
+
     /// Replacing a client (webview reload calls `create_session` again for a
     /// live id) drops the old `DaemonClient`. The daemon serves one client at a
     /// time, so the drop MUST fully close the old connection — reader-thread
@@ -486,9 +746,15 @@ mod tests {
             std::thread::sleep(Duration::from_millis(10));
         }
 
-        let client =
-            DaemonClient::connect(&socket, SessionId("s1".to_string()), |_| {}, |_| {}, || {})
-                .expect("connect");
+        let client = DaemonClient::connect(
+            &socket,
+            SessionId("s1".to_string()),
+            |_| {},
+            |_| {},
+            |_| {},
+            || {},
+        )
+        .expect("connect");
         client.attach(80, 24).expect("attach");
         drop(client);
 
@@ -539,6 +805,7 @@ mod tests {
         let client = DaemonClient::connect(
             &socket,
             SessionId("s1".to_string()),
+            |_| {},
             move |bytes| {
                 sink.lock().expect("lock").extend_from_slice(&bytes);
             },
@@ -602,6 +869,7 @@ mod tests {
             &socket,
             SessionId("s1".to_string()),
             |_| {},
+            |_| {},
             move |b| {
                 *sink.lock().expect("lock") = Some(b);
             },
@@ -639,6 +907,7 @@ mod tests {
         let client = DaemonClient::connect(
             &socket,
             SessionId("s1".to_string()),
+            |_| {},
             |_| {},
             |_| {},
             move || {
@@ -681,6 +950,7 @@ mod tests {
         let client = DaemonClient::connect(
             &socket,
             SessionId("s1".to_string()),
+            |_| {},
             |_| {},
             |_| {},
             move || {
