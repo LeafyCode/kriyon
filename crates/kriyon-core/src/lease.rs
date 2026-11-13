@@ -1,4 +1,4 @@
-//! The [Detached lease]: how long a [PTY daemon] nobody is attached to
+//! The [Detached lease]: how long a [PTY daemon] no [Watcher] is attached to
 //! tolerates a silent terminal before it [Tree stop]s itself.
 //!
 //! A daemon outlives the app on purpose, so something has to bound a daemon the
@@ -9,7 +9,7 @@
 //! The signal is the PTY itself. A working `claude` repaints its spinner and
 //! timer continuously; a finished one, or one blocked on a question nobody is
 //! there to answer, prints nothing at all (measured: zero bytes across 80
-//! seconds at the prompt). So "no client *and* no output for the whole lease"
+//! seconds at the prompt). So "no [Watcher] *and* no output for the whole lease"
 //! means there is no turn left to protect — and the conversation is on disk, so
 //! stopping costs nothing a `claude --resume` will not bring back. Claude Code's
 //! own background sessions draw the same line.
@@ -20,13 +20,17 @@
 
 use std::time::{Duration, Instant};
 
-/// Tracks whether a client holds the daemon and when the lease was last
-/// renewed. Pure: every method takes `now`.
+/// Tracks how many [Watcher]s are attached to the daemon and when the lease
+/// was last renewed. Pure: every method takes `now`.
+///
+/// A count, not a flag: any attached watcher means someone is looking, so one
+/// leaving must not lapse the lease while another (a remote device, later)
+/// still has the session open.
 #[derive(Clone, Copy, Debug)]
 pub struct DetachedLease {
     ttl: Duration,
     renewed_at: Instant,
-    attached: bool,
+    watchers: usize,
 }
 
 impl DetachedLease {
@@ -38,7 +42,7 @@ impl DetachedLease {
         Self {
             ttl,
             renewed_at: now,
-            attached: false,
+            watchers: 0,
         }
     }
 
@@ -47,26 +51,28 @@ impl DetachedLease {
         self.renewed_at = now;
     }
 
-    /// A client attached. While one holds the daemon the lease cannot lapse —
-    /// the app is alive and governs the session itself (auto-sleep, close).
+    /// A [Watcher] attached. While any is attached the lease cannot lapse —
+    /// someone is looking, and the app governs the session itself (auto-sleep,
+    /// close).
     pub fn note_attached(&mut self, now: Instant) {
-        self.attached = true;
+        self.watchers = self.watchers.saturating_add(1);
         self.renewed_at = now;
     }
 
-    /// The client left. The lease runs from *this* moment, not from the last
-    /// output: a session that sat quietly attached for hours must not lapse the
-    /// instant the app goes away.
+    /// A [Watcher] left. Once the last one is gone the lease runs from *this*
+    /// moment, not from the last output: a session that sat quietly attached
+    /// for hours must not lapse the instant the app goes away. A detach with
+    /// no watcher attached is ignored rather than going negative.
     pub fn note_detached(&mut self, now: Instant) {
-        self.attached = false;
+        self.watchers = self.watchers.saturating_sub(1);
         self.renewed_at = now;
     }
 
-    /// Whether the daemon should [Tree stop] itself: nobody is attached and the
-    /// terminal has been silent for the whole lease.
+    /// Whether the daemon should [Tree stop] itself: no [Watcher] is attached
+    /// and the terminal has been silent for the whole lease.
     #[must_use]
     pub fn lapsed(&self, now: Instant) -> bool {
-        !self.attached && now.saturating_duration_since(self.renewed_at) >= self.ttl
+        self.watchers == 0 && now.saturating_duration_since(self.renewed_at) >= self.ttl
     }
 }
 
@@ -137,6 +143,34 @@ mod tests {
         let mut lease = DetachedLease::new(TTL, start);
         lease.note_attached(start + ALMOST);
         assert!(!lease.lapsed(start + TTL + TTL));
+    }
+
+    #[test]
+    fn the_lease_holds_while_any_watcher_is_still_attached() {
+        // The desktop leaves while another watcher (a remote device, later)
+        // still has the session open: nobody-is-looking has not happened yet.
+        let start = Instant::now();
+        let mut lease = DetachedLease::new(TTL, start);
+        lease.note_attached(start);
+        lease.note_attached(start);
+        lease.note_detached(after(start, 60));
+        assert!(!lease.lapsed(start + Duration::from_hours(10)));
+        // The last one leaves: the lease runs from that moment.
+        let last = start + Duration::from_hours(10);
+        lease.note_detached(last);
+        assert!(!lease.lapsed(last + ALMOST));
+        assert!(lease.lapsed(last + TTL));
+    }
+
+    #[test]
+    fn an_unmatched_detach_never_leaves_a_phantom_watcher() {
+        let start = Instant::now();
+        let mut lease = DetachedLease::new(TTL, start);
+        lease.note_detached(start);
+        lease.note_detached(start);
+        lease.note_attached(start);
+        lease.note_detached(start);
+        assert!(lease.lapsed(start + TTL));
     }
 
     #[test]

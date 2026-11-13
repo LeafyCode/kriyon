@@ -49,5 +49,6 @@ pub mod tray_badge;
 pub mod tree_stop;
 pub mod tree_watch;
 pub mod update;
+pub mod watch;
 pub mod wire;
 pub mod work_report;
