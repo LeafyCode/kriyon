@@ -26,6 +26,7 @@ pub mod policy;
 pub mod prompt_cmd;
 pub mod quit;
 pub mod remote_cmd;
+pub mod remote_device_cmd;
 pub mod remote_device_rt;
 pub mod remote_rt;
 pub mod sandbox;
@@ -309,6 +310,9 @@ pub fn run() {
         .plugin(tauri_plugin_positioner::init())
         .manage(AppState::default())
         .manage(remote_rt::RemoteRuntime::default())
+        .manage(remote_device_rt::DeviceRuntime::new(
+            std::net::SocketAddr::from(([0, 0, 0, 0], 0)),
+        ))
         .manage(attachment_cmd::AttachmentRegistry::default())
         .manage(folder_cmd::ChosenFolders::default())
         .manage(folder_cmd::MadeWorktrees::default())
@@ -350,6 +354,8 @@ pub fn run() {
             app.manage(StoreState(Mutex::new(store)));
             // Remote access comes back up only if the person left it on.
             crate::remote_cmd::restore(app.handle());
+            // Reconnect to the computers this one paired with as a device.
+            crate::remote_device_cmd::restore(app.handle());
             crate::activity_rt::open(&data_dir);
             crate::attachment_cmd::init(app.handle());
 
@@ -444,6 +450,14 @@ pub fn run() {
             remote_cmd::remote_rename_device,
             remote_cmd::remote_remove_device,
             remote_cmd::remote_set_device_role,
+            remote_device_cmd::remote_host_pair,
+            remote_device_cmd::remote_hosts,
+            remote_device_cmd::remote_host_forget,
+            remote_device_cmd::remote_host_open_session,
+            remote_device_cmd::remote_host_close_session,
+            remote_device_cmd::remote_host_take_control,
+            remote_device_cmd::remote_host_input,
+            remote_device_cmd::remote_hosts_wake,
             commands::watch_transcript,
             git_cmd::repo_status,
             git_cmd::create_worktree,

@@ -232,7 +232,7 @@ impl kriyon_remote_link::host::PairedDevices for StoreDevices {
 }
 
 /// This computer's name, as a paired device shows it.
-fn host_name() -> String {
+pub(crate) fn host_name() -> String {
     let mut buf = [0_u8; 256];
     // SAFETY: `buf` is valid for `buf.len()` bytes of writes.
     let rc = unsafe { libc::gethostname(buf.as_mut_ptr().cast(), buf.len()) };
@@ -251,7 +251,7 @@ fn host_name() -> String {
 }
 
 /// The host's [Device key], made on first use.
-fn device_key(app: &tauri::AppHandle) -> Result<[u8; 32], String> {
+pub(crate) fn device_key(app: &tauri::AppHandle) -> Result<[u8; 32], String> {
     #[cfg(target_os = "macos")]
     {
         let vault = crate::device_key::Keychain::for_app(&app.config().identifier);
