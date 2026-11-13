@@ -49,6 +49,9 @@ struct DeviceStream {
     /// Its queue was dropped since [`SessionFanout::dropped`] last said so:
     /// what else was queued for it (readable-view entries) is gone too.
     dropped: bool,
+    /// It wants the screen. Off (reading entries only), it gets no
+    /// snapshot and no updates, but still has the session open.
+    screen: bool,
 }
 
 /// Updates waiting for the snapshot of `requester` to be packed.
@@ -129,6 +132,9 @@ impl SessionFanout {
 
     /// Start `device` over from a snapshot: the requester id to ask for.
     fn ask(&mut self, device: &EndpointId, skipped: bool) -> Option<RequesterId> {
+        if !self.devices.get(device)?.screen {
+            return None;
+        }
         let requester = self.requester();
         let stream = self.devices.get_mut(device)?;
         // A snapshot being packed for it is no longer wanted.
@@ -171,7 +177,10 @@ impl SessionFanout {
         };
         let number = seq.next_update();
         let run = seq.run();
-        let following = self.devices.values().any(|d| d.awaiting.is_none());
+        let following = self
+            .devices
+            .values()
+            .any(|d| d.screen && d.awaiting.is_none());
         if !following {
             return Vec::new();
         }
@@ -192,7 +201,7 @@ impl SessionFanout {
         };
         let mut overflowed = Vec::new();
         for (device, stream) in &mut self.devices {
-            if stream.awaiting.is_some() {
+            if !stream.screen || stream.awaiting.is_some() {
                 continue;
             }
             if let Some(held) = stream.held.as_mut() {
@@ -319,6 +328,34 @@ impl SessionFanout {
     /// snapshot; `None` before the daemon named its run (it can't answer).
     pub fn open(&mut self, device: EndpointId) -> Option<RequesterId> {
         self.seq.as_ref()?;
+        self.insert(device, true);
+        self.ask(&device, false)
+    }
+
+    /// A device opened this session to read its entries only: open (an
+    /// onlooker), with no screen until it turns it on.
+    pub fn open_without_screen(&mut self, device: EndpointId) {
+        self.insert(device, false);
+    }
+
+    /// Turn `device`'s screen on (the requester id to ask for its
+    /// snapshot) or off (no more updates; a snapshot under way is dropped).
+    pub fn set_screen(&mut self, device: &EndpointId, on: bool) -> Option<RequesterId> {
+        let stream = self.devices.get_mut(device)?;
+        if stream.screen == on {
+            return None;
+        }
+        stream.screen = on;
+        if on {
+            self.seq.as_ref()?;
+            return self.ask(device, false);
+        }
+        stream.awaiting = None;
+        stream.held = None;
+        None
+    }
+
+    fn insert(&mut self, device: EndpointId, screen: bool) {
         self.devices.insert(
             device,
             DeviceStream {
@@ -327,9 +364,9 @@ impl SessionFanout {
                 awaiting: None,
                 held: None,
                 dropped: false,
+                screen,
             },
         );
-        self.ask(&device, false)
     }
 
     /// A device asked to resync: a requester id to ask for, at most once a
@@ -567,6 +604,34 @@ mod tests {
             .collect();
         fanout.output(&noise);
         assert!(fanout.dropped(&B));
+    }
+
+    #[test]
+    fn a_device_with_its_screen_off_gets_no_screen_until_it_turns_it_on() {
+        let mut fanout = SessionFanout::new(1 << 20).expect("fanout");
+        fanout.hello(7);
+        fanout.open_without_screen(A);
+        assert!(fanout.is_open(&A), "still open: an onlooker");
+        fanout.output(b"unseen");
+        assert_eq!(drain(&mut fanout, &A).0, Vec::new());
+        // A new run asks every device for a screen, but not this one.
+        assert_eq!(fanout.hello(8), Vec::<RequesterId>::new());
+        // On: a snapshot, then updates.
+        let id = fanout.set_screen(&A, true).expect("asks");
+        fanout.snapshot_part(id, b"screen");
+        finish(&mut fanout, id);
+        fanout.output(b"seen");
+        let (messages, _) = drain(&mut fanout, &A);
+        assert!(
+            matches!(messages[0], ToDevice::Snapshot { .. }),
+            "{messages:?}"
+        );
+        assert_eq!(messages.len(), 2);
+        // Off again: updates stop, and a snapshot asked for is dropped.
+        fanout.set_screen(&A, false);
+        fanout.output(b"unseen again");
+        assert_eq!(drain(&mut fanout, &A).0, Vec::new());
+        assert_eq!(fanout.resync(&A, Instant::now()), None);
     }
 
     #[test]

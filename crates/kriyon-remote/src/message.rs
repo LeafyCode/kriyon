@@ -180,8 +180,10 @@ pub enum FromDevice {
         app_version: String,
         protocol_minor: u16,
     },
-    /// First message on a new session stream.
-    Open { session_id: SessionId },
+    /// First message on a new session stream. `screen: false` opens it for
+    /// [Readable view] entries only: no snapshot or updates until `Screen {
+    /// on: true }`; it still counts as an onlooker (spec §6).
+    Open { session_id: SessionId, screen: bool },
     /// Session stream: send a fresh snapshot.
     Resync,
     /// Session stream: send [Readable view] entries, and keep sending them
@@ -224,6 +226,9 @@ pub enum FromDevice {
     /// Session stream: stop sending [Readable view] entries; the screen
     /// goes on (spec §6).
     StopEntries,
+    /// Session stream: send the screen (a snapshot, then updates) or stop
+    /// sending it; the stream and its entries go on (spec §6).
+    Screen { on: bool },
 }
 
 /// The kind of a [`FromDevice`] message; its number is the message's tag on
@@ -241,10 +246,11 @@ pub enum FromDeviceKind {
     StartSession = 8,
     PushToken = 9,
     StopEntries = 10,
+    Screen = 11,
 }
 
 impl FromDeviceKind {
-    const ALL: [Self; 11] = [
+    const ALL: [Self; 12] = [
         Self::Hello,
         Self::Open,
         Self::Resync,
@@ -256,6 +262,7 @@ impl FromDeviceKind {
         Self::StartSession,
         Self::PushToken,
         Self::StopEntries,
+        Self::Screen,
     ];
 
     /// The kind with wire tag `tag`, if this side knows it.
@@ -283,6 +290,7 @@ impl FromDevice {
             Self::StartSession { .. } => FromDeviceKind::StartSession,
             Self::PushToken { .. } => FromDeviceKind::PushToken,
             Self::StopEntries => FromDeviceKind::StopEntries,
+            Self::Screen { .. } => FromDeviceKind::Screen,
         }
     }
 }
@@ -526,7 +534,7 @@ mod tests {
         }
     }
 
-    fn device_samples() -> [(FromDevice, u8); 11] {
+    fn device_samples() -> [(FromDevice, u8); 12] {
         let s = || "s".to_string();
         [
             (
@@ -536,7 +544,13 @@ mod tests {
                 },
                 0,
             ),
-            (FromDevice::Open { session_id: s() }, 1),
+            (
+                FromDevice::Open {
+                    session_id: s(),
+                    screen: true,
+                },
+                1,
+            ),
             (FromDevice::Resync, 2),
             (FromDevice::RequestEntries { since: 0 }, 3),
             (FromDevice::TakeControl { session_id: s() }, 4),
@@ -584,6 +598,7 @@ mod tests {
                 9,
             ),
             (FromDevice::StopEntries, 10),
+            (FromDevice::Screen { on: true }, 11),
         ]
     }
 

@@ -187,6 +187,17 @@ impl PendingWrite {
     }
 }
 
+/// Whether session `id` may be shown, its screen too when `screen`: read
+/// for its entries only, a screen of any size will do.
+fn may_show(host: &impl HostFacts, id: &str, screen: bool) -> Result<(), RefuseReason> {
+    let session = host.session(id).ok_or(RefuseReason::NoSuchSession)?;
+    if !screen || viewable(session.cols, session.rows) {
+        Ok(())
+    } else {
+        Err(RefuseReason::ScreenTooLarge)
+    }
+}
+
 /// Decide whether `device` may have `message`, which arrived on `stream`.
 ///
 /// # Errors
@@ -224,16 +235,10 @@ pub fn authorize(
             }
             Ok(())
         }
-        (FromDevice::Open { session_id }, Stream::Unopened) => {
-            let session = host
-                .session(session_id)
-                .ok_or(RefuseReason::NoSuchSession)?;
-            if viewable(session.cols, session.rows) {
-                Ok(())
-            } else {
-                Err(RefuseReason::ScreenTooLarge)
-            }
+        (FromDevice::Open { session_id, screen }, Stream::Unopened) => {
+            may_show(host, session_id, *screen)
         }
+        (FromDevice::Screen { on }, Stream::Session(id)) => may_show(host, id, *on),
         (
             FromDevice::Resync | FromDevice::RequestEntries { .. } | FromDevice::StopEntries,
             Stream::Session(id),
@@ -472,6 +477,7 @@ mod tests {
                 Stream::Unopened,
                 FromDevice::Open {
                     session_id: S.into(),
+                    screen: true,
                 },
             ),
             (SESSION, FromDevice::Resync),
@@ -507,6 +513,7 @@ mod tests {
         assert_eq!(check(&h, VIEWER, Stream::Control, hello(2)), Ok(()));
         let open = FromDevice::Open {
             session_id: S.into(),
+            screen: true,
         };
         assert_eq!(check(&h, VIEWER, Stream::Unopened, open), Ok(()));
         assert_eq!(check(&h, VIEWER, SESSION, FromDevice::Resync), Ok(()));
@@ -528,6 +535,7 @@ mod tests {
         h.session_exists = false;
         let open = FromDevice::Open {
             session_id: S.into(),
+            screen: true,
         };
         assert_eq!(
             check(&h, VIEWER, Stream::Unopened, open),
@@ -546,6 +554,7 @@ mod tests {
         let (mut h, _) = host();
         let open = || FromDevice::Open {
             session_id: S.into(),
+            screen: true,
         };
         h.screen = (500, 500);
         assert_eq!(check(&h, VIEWER, Stream::Unopened, open()), Ok(()));
@@ -553,6 +562,29 @@ mod tests {
         assert_eq!(
             check(&h, VIEWER, Stream::Unopened, open()),
             Err(RefuseReason::ScreenTooLarge)
+        );
+        // Its entries can still be read; its screen can't be turned on.
+        let entries_only = FromDevice::Open {
+            session_id: S.into(),
+            screen: false,
+        };
+        assert_eq!(check(&h, VIEWER, Stream::Unopened, entries_only), Ok(()));
+        assert_eq!(
+            check(&h, VIEWER, SESSION, FromDevice::Screen { on: true }),
+            Err(RefuseReason::ScreenTooLarge)
+        );
+        assert_eq!(
+            check(&h, VIEWER, SESSION, FromDevice::Screen { on: false }),
+            Ok(())
+        );
+        assert_eq!(
+            check(
+                &h,
+                VIEWER,
+                Stream::Control,
+                FromDevice::Screen { on: false }
+            ),
+            Err(RefuseReason::NotAllowed)
         );
     }
 
@@ -580,6 +612,7 @@ mod tests {
         let (h, _) = host();
         let open = || FromDevice::Open {
             session_id: S.into(),
+            screen: true,
         };
         for (stream, message) in [
             (SESSION, hello(2)),

@@ -452,7 +452,7 @@ impl HostFacts for Facts {
 fn named_session<'a>(stream: Option<&'a str>, message: &'a Decoded<FromDevice>) -> Option<&'a str> {
     match message {
         Decoded::Message(
-            FromDevice::Open { session_id } | FromDevice::TakeControl { session_id },
+            FromDevice::Open { session_id, .. } | FromDevice::TakeControl { session_id },
         ) => Some(session_id),
         _ => stream,
     }
@@ -1072,6 +1072,95 @@ impl Serve {
         });
     }
 
+    /// The first message on a session stream, `Open`, checked: the session
+    /// served, its id, and the device's waker; `None` once refused (the
+    /// refusal sent, the stream finished).
+    async fn open_stream(
+        &self,
+        device: EndpointId,
+        role: Role,
+        first: &Decoded<FromDevice>,
+        writer: &mut MessageWriter<ToDevice>,
+    ) -> Option<(Arc<Served>, String, Arc<Notify>)> {
+        let opened = authorize(
+            &device,
+            Stream::Unopened,
+            first,
+            &self
+                .facts(device, role, named_session(None, first), false)
+                .await,
+            Instant::now(),
+        )
+        .and_then(|()| match first {
+            Decoded::Message(FromDevice::Open { session_id, screen }) => {
+                Ok((session_id.clone(), *screen))
+            }
+            _ => Err(RefuseReason::NotAllowed),
+        })
+        .and_then(|(id, screen)| {
+            Ok((
+                self.served(&id).ok_or(RefuseReason::NoSuchSession)?,
+                id,
+                screen,
+            ))
+        });
+        let (served, id, screen) = match opened {
+            Ok(opened) => opened,
+            Err(reason) => {
+                let _ = writer.send(&ToDevice::Refused { reason }).await;
+                writer.finish();
+                return None;
+            }
+        };
+        let wake = Arc::new(Notify::new());
+        let opened = {
+            let mut fanout = served.fanout.lock();
+            // Once per device: two streams would share, and split, one queue.
+            (!fanout.is_open(&device)).then(|| {
+                let ask = if screen {
+                    fanout.open(device)
+                } else {
+                    // Its entries only: no screen until it turns it on.
+                    fanout.open_without_screen(device);
+                    None
+                };
+                (ask, fanout.open_count())
+            })
+        };
+        let Some((ask, open)) = opened else {
+            let _ = writer
+                .send(&ToDevice::Refused {
+                    reason: RefuseReason::NotAllowed,
+                })
+                .await;
+            writer.finish();
+            return None;
+        };
+        served.wakers.lock().insert(device, Arc::clone(&wake));
+        if open == 1 {
+            let looked_at = id.clone();
+            self.blocking(move |host| host.set_onlooked(&looked_at, true))
+                .await;
+        }
+        // An older daemon can't make a snapshot for one device: nothing to
+        // show it but a refusal.
+        match ask {
+            Some(ask) => (served.ask)(ask),
+            None if screen => {
+                self.close_session(&served, &id, &device);
+                let _ = writer
+                    .send(&ToDevice::Refused {
+                        reason: RefuseReason::NotAllowed,
+                    })
+                    .await;
+                writer.finish();
+                return None;
+            }
+            None => {}
+        }
+        Some((served, id, wake))
+    }
+
     /// Serve one session stream: its `Open`, then the session's screen, until
     /// the device closes it or the session ends.
     async fn serve_session(
@@ -1084,62 +1173,10 @@ impl Serve {
         let Ok(Some(first)) = reader.next().await else {
             return;
         };
-        let opened = authorize(
-            &device,
-            Stream::Unopened,
-            &first,
-            &self
-                .facts(device, role, named_session(None, &first), false)
-                .await,
-            Instant::now(),
-        )
-        .and_then(|()| match &first {
-            Decoded::Message(FromDevice::Open { session_id }) => Ok(session_id.clone()),
-            _ => Err(RefuseReason::NotAllowed),
-        })
-        .and_then(|id| Ok((self.served(&id).ok_or(RefuseReason::NoSuchSession)?, id)));
-        let (served, id) = match opened {
-            Ok(opened) => opened,
-            Err(reason) => {
-                let _ = writer.send(&ToDevice::Refused { reason }).await;
-                writer.finish();
-                return;
-            }
-        };
-        let wake = Arc::new(Notify::new());
-        let opened = {
-            let mut fanout = served.fanout.lock();
-            // Once per device: two streams would share, and split, one queue.
-            (!fanout.is_open(&device)).then(|| (fanout.open(device), fanout.open_count()))
-        };
-        let Some((ask, open)) = opened else {
-            let _ = writer
-                .send(&ToDevice::Refused {
-                    reason: RefuseReason::NotAllowed,
-                })
-                .await;
-            writer.finish();
+        let Some((served, id, wake)) = self.open_stream(device, role, &first, &mut writer).await
+        else {
             return;
         };
-        served.wakers.lock().insert(device, Arc::clone(&wake));
-        if open == 1 {
-            let looked_at = id.clone();
-            self.blocking(move |host| host.set_onlooked(&looked_at, true))
-                .await;
-        }
-        // An older daemon can't make a snapshot for one device: nothing to
-        // show it but a refusal.
-        let Some(ask) = ask else {
-            self.close_session(&served, &id, &device);
-            let _ = writer
-                .send(&ToDevice::Refused {
-                    reason: RefuseReason::NotAllowed,
-                })
-                .await;
-            writer.finish();
-            return;
-        };
-        (served.ask)(ask);
         let (answers, answered) = tokio::sync::mpsc::channel::<ToDevice>(8);
         let writing = tokio::spawn(write_session(
             writer,
@@ -1270,9 +1307,9 @@ impl Serve {
         })
     }
 
-    /// A device's `Resync` (a fresh snapshot), `RequestEntries` (start
-    /// reading entries) or `StopEntries` on session `id`'s stream, done;
-    /// `false` for any other message (a write).
+    /// A device's `Resync` (a fresh snapshot), `Screen` (turn its screen on
+    /// or off), `RequestEntries` (start reading entries) or `StopEntries` on
+    /// session `id`'s stream, done; `false` for any other message (a write).
     fn stream_request(
         &self,
         served: &Arc<Served>,
@@ -1291,6 +1328,12 @@ impl Serve {
             }
             FromDevice::Resync => {
                 let ask = served.fanout.lock().resync(&device, Instant::now());
+                if let Some(ask) = ask {
+                    (served.ask)(ask);
+                }
+            }
+            FromDevice::Screen { on } => {
+                let ask = served.fanout.lock().set_screen(&device, *on);
                 if let Some(ask) = ask {
                     (served.ask)(ask);
                 }
@@ -1496,6 +1539,7 @@ mod tests {
             writer
                 .send(&FromDevice::Open {
                     session_id: "nope".into(),
+                    screen: true,
                 })
                 .await
                 .expect("open");
@@ -1724,6 +1768,41 @@ mod tests {
             assert_eq!(
                 world.fake.builds.load(std::sync::atomic::Ordering::Relaxed),
                 builds
+            );
+        });
+    }
+
+    #[test]
+    fn a_session_opened_for_its_entries_sends_no_screen_until_turned_on() {
+        run(async {
+            let world = world().await;
+            *world.fake.entries.lock() = Ok(vec![note("a", "A")]);
+            let (_phone, link, _cw, _cr) = device(&world, 3, Role::Viewer).await;
+            let (mut sw, mut sr) = open_with(&link, false).await;
+            sw.send(&FromDevice::RequestEntries { since: 0 })
+                .await
+                .expect("asked");
+            assert!(matches!(next(&mut sr).await, ToDevice::Entries { .. }));
+            assert!(world.fake.onlooked.lock().contains("s"), "an onlooker");
+            assert!(world.asks.lock().is_empty(), "no snapshot asked for");
+            let _ = world.serve.on_event("s", DaemonEvent::Output(b"unseen"));
+            // On: a snapshot, then output.
+            sw.send(&FromDevice::Screen { on: true }).await.expect("on");
+            let id = asked(&world).await;
+            answer(&world, id, b"screen");
+            assert!(matches!(next(&mut sr).await, ToDevice::Snapshot { .. }));
+            let _ = world.serve.on_event("s", DaemonEvent::Output(b"seen"));
+            assert!(matches!(next(&mut sr).await, ToDevice::Update { .. }));
+            // Off: no more output; the entries go on.
+            sw.send(&FromDevice::Screen { on: false })
+                .await
+                .expect("off");
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            let _ = world.serve.on_event("s", DaemonEvent::Output(b"unseen"));
+            *world.fake.entries.lock() = Ok(vec![note("a", "A"), note("b", "B")]);
+            assert!(
+                matches!(next(&mut sr).await, ToDevice::Entries { .. }),
+                "not an update"
             );
         });
     }

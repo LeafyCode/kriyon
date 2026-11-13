@@ -76,8 +76,9 @@ calls while Remote access is off.
   numbered `SnapshotPart`s (each repeats the snapshot fields, at most
   1 MiB − 1 KiB of compressed bytes).
 - **Screen size for remote viewing.** A host screen over 250,000 cells (for
-  example 500 × 500) can't be viewed remotely: `Open` is refused
-  `ScreenTooLarge`, and a remote `Resize` past 250,000 cells is `OutOfRange`,
+  example 500 × 500) can't be viewed remotely: `Open` with its screen, or
+  `Screen { on: true }`, is refused `ScreenTooLarge` (its entries can still
+  be read), and a remote `Resize` past 250,000 cells is `OutOfRange`,
   so a Controller can't grow the screen past what it may view. That keeps the worst snapshot (about 67 bytes a cell) under
   the 24 MiB cap.
 
@@ -143,10 +144,17 @@ never waits on a network write. A full session queue means [Skip ahead]
   hooks are off or status is stale, so a device never shows a confident "idle"
   the desktop wouldn't. `SessionStatus { session }` sends one whole updated
   entry.
-- `Open { session_id }` on a new session stream. Host checks the session
-  exists, then sends `Snapshot { run, seq, cols, rows, bytes, skipped }`
-  (the [Screen snapshot], ADR-0004) followed by `Update { run, seq, bytes }`
-  for every chunk of output.
+- `Open { session_id, screen: bool }` on a new session stream. Host checks
+  the session exists, then, with `screen`, sends `Snapshot { run, seq, cols,
+  rows, bytes, skipped }` (the [Screen snapshot], ADR-0004) followed by
+  `Update { run, seq, bytes }` for every chunk of output. Without it the
+  stream is open for [Readable view] entries only: no snapshot or update
+  crosses the link (or the relay, with its rate cap), and the device still
+  counts as an onlooker.
+- `Screen { on: bool }` on an open session stream turns its screen on (a
+  fresh snapshot, then updates) or off (no more updates, a snapshot under
+  way dropped), so switching between the readable view and the terminal
+  never closes the stream. A device with its screen off sends no `Resync`.
 - **[Session run]** — a random u64 made each time the session's process
   starts. `seq` restarts with each run. A device that sees a gap in `seq` or a
   new `run` sends `Resync` (at most once a second) and gets a fresh
@@ -279,7 +287,7 @@ removal or new dialog between the check and the write still wins.
 
 | Message | Roles | Stream | Checks (refusal) |
 |---|---|---|---|
-| `Hello`, `Resync`, `Open`, `RequestEntries`, `StopEntries` | Viewer, Controller | control / session | paired (`NotPaired`), session exists (`NoSuchSession`) |
+| `Hello`, `Resync`, `Open`, `Screen`, `RequestEntries`, `StopEntries` | Viewer, Controller | control / session | paired (`NotPaired`), session exists (`NoSuchSession`); with the screen, its size (`ScreenTooLarge`) |
 | `TakeControl` | Controller | control | role (`NotAllowed`), control rules §7 (`NotInControl`) |
 | `Input`, `Resize` | Controller | session | role, holds control, run + epoch + `seen_seq` (`Stale`), size bounds shared with the local resize command (`OutOfRange`) |
 | `Compose` | Controller | session | as `Input`, plus no dialog showing (`DialogOpen`) |
@@ -292,9 +300,9 @@ the host without the payload.
 
 **Rules the table implies:**
 
-- Session-stream messages (`Input`, `Compose`, `Resize`, `Resync`,
-  `RequestEntries`, `StopEntries`) carry no session id: the stream names it. `Open
-  { session_id }` is the first message on a new session stream. `authorize`
+- Session-stream messages (`Input`, `Compose`, `Resize`, `Resync`, `Screen`,
+  `RequestEntries`, `StopEntries`) carry no session id: the stream names it.
+  `Open { session_id, screen }` is the first message on a new session stream. `authorize`
   takes the stream (`Control` or `Session(id)`) as input.
 - A message on the wrong stream is refused `NotAllowed`.
 - A Viewer sending a Controller-only message gets `NotAllowed`; a Controller

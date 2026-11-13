@@ -97,6 +97,15 @@ pub trait EntriesListener: Send + Sync {
     fn entries_changed(&self, summary: String);
 }
 
+/// A screen's events as the frames `listener` reads; `Resync` is Rust's own.
+fn screen_sink(listener: Arc<dyn ScreenListener>) -> ScreenSink {
+    Arc::new(move |event| {
+        if let Some(frame) = screen_frame(&event) {
+            listener.frame(frame);
+        }
+    })
+}
+
 /// Why a phone action couldn't happen, in words the app can show. Its
 /// words (Display) cross to the app as they are.
 #[derive(Debug, PartialEq, Eq, uniffi::Error)]
@@ -871,6 +880,8 @@ impl MobileDevice {
     }
 
     /// Open a session; its screen goes to `listener`, again on every link.
+    /// With no listener it opens for its [Readable view] entries only: no
+    /// screen crosses the link (or the relay) until [`Self::set_screen`].
     ///
     /// # Errors
     /// An id that isn't one, or not connected to that computer.
@@ -878,18 +889,34 @@ impl MobileDevice {
         &self,
         host_id: String,
         session_id: String,
-        listener: Arc<dyn ScreenListener>,
+        listener: Option<Arc<dyn ScreenListener>>,
     ) -> Result<(), MobileError> {
         let host = parse_host_id(&host_id)?;
-        let sink: ScreenSink = Arc::new(move |event| {
-            // `Resync` is Rust's own; the rest goes to the screen.
-            if let Some(frame) = screen_frame(&event) {
-                listener.frame(frame);
-            }
-        });
+        let sink = listener.map(screen_sink);
         let device = Arc::clone(&self.shared.device);
         self.shared
             .on_runtime(async move { device.open_session(&host, &session_id, sink).await })
+            .await??;
+        Ok(())
+    }
+
+    /// Turn an open session's screen on (to `listener`) or off (`None`),
+    /// without closing it: switching between the readable view and the
+    /// terminal.
+    ///
+    /// # Errors
+    /// An id that isn't one, a session not open here, or the link failed.
+    pub async fn set_screen(
+        &self,
+        host_id: String,
+        session_id: String,
+        listener: Option<Arc<dyn ScreenListener>>,
+    ) -> Result<(), MobileError> {
+        let host = parse_host_id(&host_id)?;
+        let sink = listener.map(screen_sink);
+        let device = Arc::clone(&self.shared.device);
+        self.shared
+            .on_runtime(async move { device.set_screen(&host, &session_id, sink).await })
             .await??;
         Ok(())
     }

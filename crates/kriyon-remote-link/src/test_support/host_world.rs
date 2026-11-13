@@ -430,10 +430,19 @@ pub fn answer(world: &World, id: RequesterId, screen: &[u8]) {
 }
 
 pub async fn open(link: &DeviceLink) -> (MessageWriter<FromDevice>, MessageReader<ToDevice>) {
+    open_with(link, true).await
+}
+
+/// Open session "s", with its screen or for its entries only.
+pub async fn open_with(
+    link: &DeviceLink,
+    screen: bool,
+) -> (MessageWriter<FromDevice>, MessageReader<ToDevice>) {
     let (mut writer, reader) = link.open_stream().await.expect("session stream");
     writer
         .send(&FromDevice::Open {
             session_id: "s".into(),
+            screen,
         })
         .await
         .expect("open");

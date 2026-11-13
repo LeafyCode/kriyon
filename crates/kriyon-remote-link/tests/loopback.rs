@@ -207,7 +207,8 @@ async fn a_session_stream_carries_a_snapshot_then_updates() {
             assert_eq!(
                 open,
                 Some(Decoded::Message(FromDevice::Open {
-                    session_id: "s1".into()
+                    session_id: "s1".into(),
+                    screen: true,
                 }))
             );
             out.send(&ToDevice::Snapshot {
@@ -253,6 +254,7 @@ async fn a_session_stream_carries_a_snapshot_then_updates() {
     let (mut out, mut incoming) = link.open_stream().await.expect("session");
     out.send(&FromDevice::Open {
         session_id: "s1".into(),
+        screen: true,
     })
     .await
     .expect("sends");

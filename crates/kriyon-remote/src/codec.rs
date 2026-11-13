@@ -32,7 +32,7 @@ pub trait Wire: Serialize + DeserializeOwned {
 }
 
 impl Wire for FromDevice {
-    const KNOWN_TAGS: u32 = 11;
+    const KNOWN_TAGS: u32 = 12;
     const MAX_LEN: usize = 64 * KIB;
     fn max_len(tag: u32) -> usize {
         match FromDeviceKind::from_tag(tag) {

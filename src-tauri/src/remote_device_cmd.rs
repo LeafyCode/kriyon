@@ -259,7 +259,7 @@ pub async fn remote_host_open_session(
         }
     });
     runtime(&app)
-        .open_session(&id, &session_id, sink)
+        .open_session(&id, &session_id, Some(sink))
         .await
         .map_err(|e| e.to_string())
 }

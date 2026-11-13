@@ -146,12 +146,16 @@ impl Phone {
 
     /// Open session "s"; its screen events are kept in `seen.screen`.
     async fn open(&self) {
-        let screen = Arc::clone(&self.screen);
-        let sink: ScreenSink = Arc::new(move |event| screen.lock().push(event));
         self.rt
-            .open_session(&self.host, "s", sink)
+            .open_session(&self.host, "s", Some(self.sink()))
             .await
             .expect("opens");
+    }
+
+    /// Where this phone's screen events go.
+    fn sink(&self) -> ScreenSink {
+        let screen = Arc::clone(&self.screen);
+        Arc::new(move |event| screen.lock().push(event))
     }
 
     /// Wait until the screen shows `bytes` as a whole new screen.
@@ -263,6 +267,54 @@ fn note(key: &str, text: &str) -> kriyon_core::readable::Keyed {
         key: key.into(),
         kind: kriyon_remote::message::EntryKind::Note { text: text.into() },
     }
+}
+
+#[test]
+fn a_phone_reading_entries_turns_the_screen_on_and_off_without_closing_the_session() {
+    use kriyon_remote::device_view::EntriesEvent;
+    run(async {
+        let world = world().await;
+        let _beats = Beats::start(&world);
+        *world.fake.entries.lock() = Ok(vec![note("a", "A")]);
+        let phone = Phone::connect(&world, 3, Role::Viewer).await;
+        phone
+            .rt
+            .open_session(&phone.host, "s", None)
+            .await
+            .expect("opens for entries");
+        let seen: Arc<Mutex<Vec<EntriesEvent>>> = Arc::default();
+        let into = Arc::clone(&seen);
+        phone
+            .rt
+            .read_entries(
+                &phone.host,
+                "s",
+                Arc::new(move |event| into.lock().push(event)),
+            )
+            .await
+            .expect("reads");
+        wait_until("the entries", || !seen.lock().is_empty()).await;
+        assert!(world.asks.lock().is_empty(), "no screen asked for");
+        // The terminal: the screen comes on the same stream.
+        phone
+            .rt
+            .set_screen(&phone.host, "s", Some(phone.sink()))
+            .await
+            .expect("on");
+        let id = asked(&world).await;
+        answer(&world, id, b"the screen");
+        phone.until_screen(b"the screen").await;
+        // Back to reading: the session stays open, its entries go on.
+        phone
+            .rt
+            .set_screen(&phone.host, "s", None)
+            .await
+            .expect("off");
+        let before = seen.lock().len();
+        *world.fake.entries.lock() = Ok(vec![note("a", "A"), note("b", "B")]);
+        wait_until("more entries", || seen.lock().len() > before).await;
+        assert!(world.fake.onlooked.lock().contains("s"));
+    });
 }
 
 #[test]
@@ -526,6 +578,7 @@ fn an_oversize_length_ends_that_stream_and_nothing_else() {
         again
             .send(&FromDevice::Open {
                 session_id: "s".into(),
+                screen: true,
             })
             .await
             .expect("open");
