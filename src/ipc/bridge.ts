@@ -98,6 +98,19 @@ export function createSession(
   if (!hasTauri()) {
     return Promise.resolve(false);
   }
+  return invoke<boolean>("create_session", {
+    cwd,
+    id,
+    ...sessionChannels(onBytes, onBusy, onExit),
+  });
+}
+
+/** The three channels a session's shell reports through. */
+function sessionChannels(
+  onBytes: (bytes: Uint8Array) => void,
+  onBusy: (busy: boolean) => void,
+  onExit: () => void
+) {
   const channel = new Channel<ArrayBuffer>();
   channel.onmessage = (msg) => onBytes(new Uint8Array(msg));
   const busyChannel = new Channel<boolean>();
@@ -106,12 +119,29 @@ export function createSession(
   // crashed) — never for an app-initiated close or client handover.
   const exitChannel = new Channel<boolean>();
   exitChannel.onmessage = () => onExit();
-  return invoke<boolean>("create_session", {
-    id,
-    cwd,
-    onBusy: busyChannel,
-    onExit: exitChannel,
-    onOutput: channel,
+  return { onBusy: busyChannel, onExit: exitChannel, onOutput: channel };
+}
+
+/**
+ * Start a new session: Rust saves its rows (its project's first, when given),
+ * then opens its shell, so no shell starts before the rows that approve its
+ * folder (ADR-0058), capturing its git baseline alongside when `baseline`.
+ * Rejects with the reason when a folder is refused.
+ */
+export function startSession(
+  rows: { baseline: boolean; project: ProjectRow | null; session: SessionRow },
+  onBytes: (bytes: Uint8Array) => void,
+  onBusy: (busy: boolean) => void,
+  onExit: () => void
+): Promise<{ baselineOid: string | null; reattached: boolean }> {
+  if (!hasTauri()) {
+    return Promise.resolve({ baselineOid: null, reattached: false });
+  }
+  return invoke("start_session", {
+    baseline: rows.baseline,
+    project: rows.project,
+    session: rows.session,
+    ...sessionChannels(onBytes, onBusy, onExit),
   });
 }
 
@@ -1128,15 +1158,6 @@ export function writeFile(
     expectedMtime,
     expectedLen,
   });
-}
-
-/**
- * Capture a hook-free snapshot of `cwd`'s working tree as a dangling tree
- * object oid — the baseline a session's Changes view diffs against. Persist
- * the result on the session row (`baselineOid`) so it survives app restart.
- */
-export function captureBaseline(cwd: string): Promise<string> {
-  return invoke("capture_baseline", { cwd });
 }
 
 /**

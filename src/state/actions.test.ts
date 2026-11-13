@@ -5,12 +5,10 @@ vi.mock("../ipc/bridge.ts", () => ({
   bootstrapWorktree: vi.fn(() =>
     Promise.resolve({ ok: true, output: "", steps: [] })
   ),
-  captureBaseline: vi.fn(() => Promise.resolve("default-baseline-oid")),
   createWorktree: vi.fn(() => Promise.resolve()),
   isTauriRuntime: () => true,
   pickDirectory: vi.fn(),
   sleepIdleSessions: vi.fn(() => Promise.resolve(0)),
-  upsertProject: vi.fn(() => Promise.resolve()),
   upsertSession: vi.fn(() => Promise.resolve()),
   worktreePathFor: vi.fn((_r: string, b: string) =>
     Promise.resolve(`/repo-worktrees/${b}`)
@@ -21,25 +19,18 @@ vi.mock("../terminal/sessionHost.ts", () => ({
   disposeSession: vi.fn(() => Promise.resolve()),
   ensureSession: vi.fn(() => Promise.resolve()),
   launchClaudeOnce: vi.fn(() => Promise.resolve({ kind: "skipped" })),
-  noteRowSave: vi.fn(),
   noteSessionStarted: vi.fn(),
   startFreshClaude: vi.fn(() => Promise.resolve()),
 }));
 
 vi.mock("../ui/Toast.tsx", () => ({ showToast: vi.fn() }));
 
-import {
-  captureBaseline,
-  sleepIdleSessions,
-  upsertProject,
-  upsertSession,
-} from "../ipc/bridge.ts";
+import { sleepIdleSessions, upsertSession } from "../ipc/bridge.ts";
 import {
   disposeSession,
   ensureSession,
   type LaunchResult,
   launchClaudeOnce,
-  noteRowSave,
 } from "../terminal/sessionHost.ts";
 import { showToast } from "../ui/Toast.tsx";
 import {
@@ -72,7 +63,7 @@ import {
 } from "./sessions.ts";
 import { useTerminals } from "./terminals.ts";
 
-/** Flush pending microtasks — the `captureBaseline().then(setBaseline)` chain
+/** Flush pending microtasks — the start's `then` chains
  * fired-and-forgotten by `createSession` after it returns synchronously. */
 function flushPromises(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
@@ -206,44 +197,35 @@ describe("createSessionInFolder", () => {
     expect(Object.keys(state.sessions)).toHaveLength(2);
   });
 
-  it("saves a new project before its session, which the core checks against it", async () => {
-    // `upsert_session` refuses a session whose project is not saved yet
-    // (ADR-0058), so the session's write waits for the project's.
-    let projectSaved: () => void = () => undefined;
-    vi.mocked(upsertProject).mockReturnValueOnce(
-      new Promise<void>((resolve) => {
-        projectSaved = resolve;
+  it("hands its rows to the session's start, which saves them before the shell opens", () => {
+    // Rust saves the project, then the session, then opens the shell
+    // (ADR-0058): one call, so nothing can start the shell first.
+    vi.mocked(ensureSession).mockClear();
+    createSessionInFolder("/work/proj");
+    const id = useSessions.getState().activeSessionId as string;
+    expect(ensureSession).toHaveBeenCalledWith(
+      id,
+      "/work/proj",
+      expect.any(Function),
+      expect.objectContaining({
+        project: expect.objectContaining({ id: "/work/proj" }),
+        session: expect.objectContaining({ cwd: "/work/proj", id }),
       })
     );
-    vi.mocked(upsertSession).mockClear();
-    createSessionInFolder("/work/proj");
-    await Promise.resolve();
-    expect(upsertSession).not.toHaveBeenCalled();
-    projectSaved();
-    await vi.waitFor(() => expect(upsertSession).toHaveBeenCalled());
   });
 
-  it("says why the core refused to save a new session's folder", async () => {
-    vi.mocked(upsertProject).mockRejectedValueOnce(
+  it("says why the core refused to start a new session in its folder", async () => {
+    vi.mocked(ensureSession).mockRejectedValueOnce(
       "project folder: folder was not chosen on this computer"
     );
     vi.mocked(showToast).mockClear();
     createSessionInFolder("/work/proj");
     await vi.waitFor(() =>
       expect(showToast).toHaveBeenCalledWith(
-        "Could not save the session: project folder: folder was not chosen on this computer",
+        "Could not start the session: project folder: folder was not chosen on this computer",
         "error"
       )
     );
-  });
-
-  it("hands the session host its rows' save, so the shell waits for it", () => {
-    // `create_session` refuses a folder that no saved row approves yet
-    // (ADR-0058); the session host holds the shell until this settles.
-    vi.mocked(noteRowSave).mockClear();
-    createSessionInFolder("/work/proj");
-    const id = useSessions.getState().activeSessionId as string;
-    expect(noteRowSave).toHaveBeenCalledWith(id, expect.any(Promise));
   });
 });
 
@@ -256,49 +238,48 @@ describe("createSession baseline capture", () => {
     setupCommand: null,
   };
 
+  /** The rows the last session start was handed. */
+  const startedWith = () => vi.mocked(ensureSession).mock.lastCall?.[3];
+
   beforeEach(() => {
     useSessions.setState({ projects: [], sessions: {}, activeSessionId: null });
-    vi.mocked(captureBaseline).mockReset();
+    vi.mocked(ensureSession).mockClear();
     setDefaultCwd("");
   });
 
-  it("captures and stores a baseline oid on session creation", async () => {
-    vi.mocked(captureBaseline).mockResolvedValue("cafebabe");
+  it("asks the start for a baseline and stores the one it took", async () => {
     createSessionInProject(project);
     const [id] = Object.keys(useSessions.getState().sessions);
+    expect(startedWith()?.baseline).toBe(true);
+    startedWith()?.onBaseline("cafebabe");
     await flushPromises();
-    expect(captureBaseline).toHaveBeenCalledWith("/repo");
     expect(useSessions.getState().sessions[id].baselineOid).toBe("cafebabe");
     expect(upsertSession).toHaveBeenLastCalledWith(
       expect.objectContaining({ baselineOid: "cafebabe" })
     );
   });
 
-  it("falls back to null baseline when capture fails", async () => {
-    vi.mocked(captureBaseline).mockRejectedValue(new Error("not a repo"));
+  it("leaves the baseline null when none was taken", async () => {
     createSessionInProject(project);
     const [id] = Object.keys(useSessions.getState().sessions);
     await flushPromises();
     expect(useSessions.getState().sessions[id].baselineOid).toBeNull();
   });
 
-  it("never captures a baseline for a Home (default-cwd) session — git add -A over $HOME is unsafe", async () => {
-    // MEDIUM: `capture_baseline` runs `git add -A` over the whole tree. If
-    // `~` is itself a git repo (a dotfiles checkout), that walks and
-    // content-hashes every non-ignored file under the user's HOME directory
-    // on every Home session. A Home session must never trigger it.
+  it("never asks for a baseline for a Home (default-cwd) session — git add -A over $HOME is unsafe", () => {
+    // `capture_baseline` runs `git add -A` over the whole tree. If `~` is
+    // itself a git repo (a dotfiles checkout), that walks and content-hashes
+    // every non-ignored file under the user's HOME directory on every Home
+    // session. A Home session must never trigger it.
     setDefaultCwd("/Users/test-home");
     createSessionInDefaultProject();
-    await flushPromises();
-    expect(captureBaseline).not.toHaveBeenCalled();
+    expect(startedWith()?.baseline).toBe(false);
   });
 
-  it("still captures a baseline for a normal project session even when a default cwd is set", async () => {
+  it("still asks for a baseline for a normal project session even when a default cwd is set", () => {
     setDefaultCwd("/Users/test-home");
-    vi.mocked(captureBaseline).mockResolvedValue("cafebabe");
     createSessionInProject(project);
-    await flushPromises();
-    expect(captureBaseline).toHaveBeenCalledWith("/repo");
+    expect(startedWith()?.baseline).toBe(true);
   });
 });
 
@@ -1054,7 +1035,7 @@ describe("parking a project", () => {
   });
 
   it("a new session in a known folder saves the stored project row, not a blank one", () => {
-    vi.mocked(upsertProject).mockClear();
+    vi.mocked(ensureSession).mockClear();
     useSessions.setState({
       activeSessionId: null,
       projects: [
@@ -1075,7 +1056,7 @@ describe("parking a project", () => {
 
     // The folder pick builds a fresh row with no colour or setup command;
     // saving that one would wipe the project's own settings.
-    const saved = vi.mocked(upsertProject).mock.lastCall?.[0];
+    const saved = vi.mocked(ensureSession).mock.lastCall?.[3]?.project;
     expect(saved?.color).toBe("#a293e8");
     expect(saved?.setupCommand).toBe("make");
     // A new session joins the rail; the parked ones stay parked.

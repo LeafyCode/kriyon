@@ -5,7 +5,6 @@ vi.mock("../ipc/bridge.ts", () => ({
   bootstrapWorktree: vi.fn(() =>
     Promise.resolve({ ok: true, output: "", steps: [] })
   ),
-  captureBaseline: vi.fn(() => Promise.resolve(null)),
   createWorktree: vi.fn(() => Promise.resolve()),
   isTauriRuntime: () => true,
   nestedOutcome: vi.fn(
@@ -18,7 +17,6 @@ vi.mock("../ipc/bridge.ts", () => ({
   ),
   takeSessionRequests: vi.fn(() => Promise.resolve([])),
   unwatchWorkingTree: vi.fn(() => Promise.resolve()),
-  upsertProject: vi.fn(() => Promise.resolve()),
   upsertSession: vi.fn(() => Promise.resolve()),
   worktreePathFor: vi.fn((_r: string, b: string) =>
     Promise.resolve(`/repo-worktrees/${b}`)
@@ -29,7 +27,6 @@ vi.mock("../terminal/sessionHost.ts", () => ({
   disposeSession: vi.fn(() => Promise.resolve()),
   ensureSession: vi.fn(() => Promise.resolve()),
   launchClaudeOnce: vi.fn(() => Promise.resolve({ kind: "skipped" })),
-  noteRowSave: vi.fn(),
   noteSessionStarted: vi.fn(),
   startFreshClaude: vi.fn(() => Promise.resolve()),
 }));

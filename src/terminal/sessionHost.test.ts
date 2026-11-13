@@ -6,13 +6,13 @@ import {
   reportDrained,
   requestRepaint,
   startFreshClaude as startFreshClaudeIpc,
+  startSession,
 } from "../ipc/bridge.ts";
 import {
   attachTerminal,
   disposeSession,
   ensureSession,
   launchClaudeOnce,
-  noteRowSave,
   noteSessionStarted,
   registerSizeSync,
   setResumeFailedHandler,
@@ -24,6 +24,7 @@ vi.mock("../ipc/bridge", () => ({
   createSession: vi.fn(),
   closeSession: vi.fn(),
   launchClaude: vi.fn(),
+  startSession: vi.fn(),
   reportDrained: vi.fn(),
   requestRepaint: vi.fn(),
   startFreshClaude: vi.fn(),
@@ -33,6 +34,7 @@ const mockedCreateSession = vi.mocked(createSession);
 const mockedCloseSession = vi.mocked(closeSession);
 const mockedLaunchClaude = vi.mocked(launchClaude);
 const mockedStartFreshClaude = vi.mocked(startFreshClaudeIpc);
+const mockedStartSession = vi.mocked(startSession);
 const mockedReportDrained = vi.mocked(reportDrained);
 const mockedRequestRepaint = vi.mocked(requestRepaint);
 
@@ -79,6 +81,10 @@ beforeEach(() => {
     });
   });
   mockedStartFreshClaude.mockResolvedValue(undefined);
+  mockedStartSession.mockResolvedValue({
+    baselineOid: null,
+    reattached: false,
+  });
   mockedReportDrained.mockResolvedValue(undefined);
   mockedRequestRepaint.mockResolvedValue(undefined);
   // Reset the seams so handlers don't leak across tests.
@@ -514,33 +520,51 @@ test("a failed launch write reports writeFailed and arms no resume watchdog", as
   }
 });
 
-test("a session whose rows are still saving starts its shell only after the save", async () => {
-  // `create_session` refuses a folder no saved row approves yet (ADR-0058).
-  let saved: () => void = () => undefined;
-  noteRowSave(
-    "s-new",
-    new Promise<void>((resolve) => {
-      saved = resolve;
-    })
-  );
-  const ready = ensureSession("s-new", "/work/new", noop);
-  await flush();
-  expect(mockedCreateSession).not.toHaveBeenCalled();
-  saved();
-  await ready;
-  expect(mockedCreateSession).toHaveBeenCalledWith(
-    "s-new",
-    "/work/new",
+test("a new session's rows go with its first open, which Rust saves before the shell", async () => {
+  const project = {
+    color: null,
+    id: "/work",
+    name: "work",
+    path: "/work",
+    setupCommand: null,
+  };
+  const session = {
+    archivedAt: null,
+    baselineOid: null,
+    claudeSessionId: null,
+    createdAt: 1,
+    cwd: "/work",
+    id: "s-new",
+    projectId: "/work",
+    title: "work",
+    titleLocked: false,
+    worktreePath: null,
+  };
+  const baselines: string[] = [];
+  mockedStartSession.mockResolvedValueOnce({
+    baselineOid: "cafebabe",
+    reattached: false,
+  });
+  const rows = {
+    baseline: true,
+    onBaseline: (oid: string) => baselines.push(oid),
+    project,
+    session,
+  };
+  await ensureSession("s-new", "/work", noop, rows);
+  // The baseline Rust captured alongside the open reaches the store.
+  expect(baselines).toEqual(["cafebabe"]);
+  expect(mockedStartSession).toHaveBeenCalledWith(
+    rows,
     expect.any(Function),
     expect.any(Function),
     expect.any(Function)
   );
-});
-
-test("a failed row save still starts the shell, so Rust's refusal is what the person sees", async () => {
-  noteRowSave("s-failed-save", Promise.reject(new Error("disk full")));
-  await ensureSession("s-failed-save", "/work/new", noop);
-  expect(mockedCreateSession).toHaveBeenCalledTimes(1);
+  expect(mockedCreateSession).not.toHaveBeenCalled();
+  // Opened: a later ensure (the pane mounting) joins it, opening nothing more.
+  await ensureSession("s-new", "/work", noop);
+  expect(mockedCreateSession).not.toHaveBeenCalled();
+  disposeSession("s-new");
 });
 
 test("a second launch asked while one is under way joins it", async () => {

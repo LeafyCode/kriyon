@@ -190,23 +190,15 @@ fn session_cwd(store: &StoreState, cwd: &str, home: &Path) -> Result<String, Str
 /// tracker, and the pending-ask cache all key on the same id and
 /// `close_session(id)` tears them all down together.
 ///
-/// Returns `true` if it reattached to a daemon that survived a previous app run
-/// (its shell — and the `claude` already launched into it — are still live), and
-/// `false` if it spawned a fresh daemon. The frontend uses this to avoid
-/// re-launching `claude` into a session that already has it running.
+/// Returns `true` if it reattached to a daemon that survived a previous app
+/// run, or took over a session a device started, and `false` if it spawned
+/// a fresh daemon.
 ///
 /// # Errors
-/// Returns an error string if writing the temporary `ZDOTDIR` fails, the daemon
-/// cannot be spawned, the session id is invalid, or `cwd` fails the
-/// folder check.
-// The reattach fast-path, the fresh-daemon path, and the full callback wiring
-// are one cohesive lifecycle; splitting them across helpers would scatter the
-// session-creation story rather than clarify it.
-#[allow(clippy::too_many_lines)]
+/// As [`open_session`].
 #[tauri::command]
 pub async fn create_session(
     app: tauri::AppHandle,
-    state: tauri::State<'_, AppState>,
     id: String,
     cwd: String,
     // Channel<Vec<u8>> rather than Channel<&[u8]>: the reader callback is
@@ -223,6 +215,46 @@ pub async fn create_session(
     // silently wedged pane. Never fired for an app-initiated close/handover.
     on_exit: tauri::ipc::Channel<bool>,
 ) -> Result<bool, String> {
+    let sink = std::sync::Arc::new(crate::session_start::WindowSink {
+        output: on_output,
+        busy: on_busy,
+        exit: on_exit,
+    });
+    open_session(&app, id, cwd, sink).await
+}
+
+/// Open session `id`'s shell in `cwd`, its output going to `sink`: reattach
+/// to its daemon if one survived, else spawn one. A session already open
+/// whose shell is alive (one a device started) only changes sink: a window
+/// takes over its output and is sent the screen.
+///
+/// Returns `true` if the shell was already running (reattached or taken
+/// over), and `false` if it spawned a fresh daemon.
+///
+/// # Errors
+/// Returns an error string if writing the temporary `ZDOTDIR` fails, the daemon
+/// cannot be spawned, the session id is invalid, or `cwd` fails the
+/// folder check.
+// The reattach fast-path, the fresh-daemon path, and the full callback wiring
+// are one cohesive lifecycle; splitting them across helpers would scatter the
+// session-creation story rather than clarify it.
+#[allow(clippy::too_many_lines)]
+pub(crate) async fn open_session(
+    app: &tauri::AppHandle,
+    id: String,
+    cwd: String,
+    sink: std::sync::Arc<dyn crate::session_start::SessionSink>,
+) -> Result<bool, String> {
+    use tauri::Manager as _;
+    let app = app.clone();
+    let state = app.state::<AppState>();
+    let viewer = sink.viewer();
+    let slot = std::sync::Arc::new(crate::session_start::SinkSlot::new(std::sync::Arc::clone(
+        &sink,
+    )));
+    let busy_slot = std::sync::Arc::clone(&slot);
+    let output_slot = std::sync::Arc::clone(&slot);
+    let exit_slot = std::sync::Arc::clone(&slot);
     // Every byte the session's pty produces passes here as soon as it is read —
     // even while the webview is too far behind to take it — which makes it the one
     // place that knows whether the session has actually stopped printing. The
@@ -255,16 +287,12 @@ pub async fn create_session(
                     std::thread::spawn(move || crate::integration::note_sideload_refused(&app));
                 }
             }
-            crate::daemon_client::DaemonEvent::Busy(busy) => {
-                let _ = on_busy.send(busy);
-            }
+            crate::daemon_client::DaemonEvent::Busy(busy) => busy_slot.busy(busy),
             _ => {}
         }
     };
     // Output and repaints on their way to the webview, paced by `report_drained`.
-    let output_callback = move |bytes: Vec<u8>| {
-        let _ = on_output.send(bytes);
-    };
+    let output_callback = move |bytes: Vec<u8>| output_slot.output(bytes);
     // The session died underneath the app. Record it on the [Session runtime]
     // *first*: nothing else can retire the tracker's last word (a killed
     // `claude` fires no closing hook), so until this lands the menu bar counts
@@ -289,7 +317,7 @@ pub async fn create_session(
         if let Ok(home) = crate::commands::resolve_home(&exit_app) {
             crate::activity_rt::note_session_exited(&exit_app, &home, &exit_id.0);
         }
-        let _ = on_exit.send(true);
+        exit_slot.exited();
     };
 
     // Resolve the per-session daemon socket under ~/.claude/kriyon/run. The id
@@ -355,6 +383,26 @@ pub async fn create_session(
         .closed_mid_create
         .lock()
         .remove(&SessionId(id.clone()));
+    // Already open with a live shell (a session a device started, or a
+    // window that reloaded): this window takes over its output, from an empty
+    // gate (anything the old sink had in flight will never be reported), and
+    // is sent the screen. It keeps its daemon client, so the devices watching
+    // it see no gap.
+    let taken = {
+        let sessions = state.sessions.lock();
+        sessions.get(&SessionId(id.clone())).and_then(|session| {
+            let live = session.sink.as_ref().filter(|live| !live.is_exited())?;
+            live.replace(std::sync::Arc::clone(&sink));
+            Some(std::sync::Arc::clone(&session.engine))
+        })
+    };
+    if let Some(engine) = taken {
+        engine.set_viewer(viewer);
+        if viewer {
+            let _ = engine.request_repaint();
+        }
+        return Ok(true);
+    }
     // Served to remote devices from its daemon's first frame on; no longer
     // if this start fails.
     let served = crate::remote_host_rt::attach(&app, &SessionId(id.clone()));
@@ -406,7 +454,10 @@ pub async fn create_session(
             &engine,
             (INITIAL_COLS, INITIAL_ROWS),
         );
-        register_session(&app, &state, SessionId(id), engine, None, true)?;
+        if !viewer {
+            engine.set_viewer(false);
+        }
+        register_session(&app, &state, SessionId(id), engine, None, true, slot)?;
         served.keep();
         return Ok(true);
     }
@@ -516,7 +567,10 @@ pub async fn create_session(
         &engine,
         (INITIAL_COLS, INITIAL_ROWS),
     );
-    register_session(&app, &state, SessionId(id), engine, zdotdir, false)?;
+    if !viewer {
+        engine.set_viewer(false);
+    }
+    register_session(&app, &state, SessionId(id), engine, zdotdir, false, slot)?;
     served.keep();
 
     Ok(false)
@@ -534,6 +588,7 @@ fn register_session(
     engine: DaemonClient,
     zdotdir: Option<tempfile::TempDir>,
     reattached: bool,
+    sink: std::sync::Arc<crate::session_start::SinkSlot>,
 ) -> Result<(), String> {
     if state.closed_mid_create.lock().remove(&id) {
         crate::daemon_rt::stop_held(crate::daemon_rt::owns_run_dir(app), &engine);
@@ -541,10 +596,13 @@ fn register_session(
     }
     let engine = std::sync::Arc::new(engine);
     crate::remote_host_rt::note_engine(app, &id, &engine);
-    state
-        .sessions
-        .lock()
-        .insert(id, Session::new(engine, zdotdir, reattached));
+    state.sessions.lock().insert(
+        id,
+        Session {
+            sink: Some(sink),
+            ..Session::new(engine, zdotdir, reattached)
+        },
+    );
     Ok(())
 }
 

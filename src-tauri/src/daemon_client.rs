@@ -383,6 +383,26 @@ impl DaemonClient {
         self.outlet.progress.notify_all();
     }
 
+    /// Whether a window shows this session's output. Without one (a session
+    /// a [Remote device] started) nothing reports bytes drained, so output
+    /// goes out unpaced and is dropped, as an adopted client's is; with one,
+    /// it is paced by [`Self::report_drained`] again from an empty gate.
+    pub fn set_viewer(&self, viewer: bool) {
+        let now = Instant::now();
+        let mut gate = if viewer {
+            OutputGate::for_webview(now)
+        } else {
+            OutputGate::unpaced(now)
+        };
+        if self.hello.load(Ordering::Relaxed) {
+            gate.expect_screens();
+        }
+        gate.set_remote_onlooker(self.onlooked.load(Ordering::Relaxed));
+        self.outlet.delivery.lock().gate = gate;
+        // A reader waiting on the old gate stops waiting.
+        self.outlet.progress.notify_all();
+    }
+
     /// The [CLI dialog] on the daemon's screen and its [Dialog generation], as
     /// the daemon last said; `None` before it said anything (an older daemon
     /// never does). Stored by the reader thread in the order the frames came,
@@ -579,6 +599,38 @@ mod tests {
     use kriyon_core::output_gate::{
         WEBVIEW_HIGH_WATER as HIGH_WATER, WEBVIEW_HOLD_CAP as HOLD_CAP,
     };
+
+    #[test]
+    fn with_no_viewer_output_is_not_held_for_one() {
+        let (daemon, app) = UnixStream::pair().expect("pair");
+        let delivered = Arc::new(StdMutex::new(0usize));
+        let counted = Arc::clone(&delivered);
+        let client = DaemonClient::from_stream(
+            app,
+            SessionId("s".into()),
+            |_| {},
+            move |bytes: Vec<u8>| *counted.lock().expect("lock") += bytes.len(),
+            || {},
+        )
+        .expect("client");
+        client.set_viewer(false);
+        let mut daemon = daemon;
+        let chunk = vec![b'x'; 16 * 1024];
+        let total = HIGH_WATER * 4;
+        for _ in 0..total / chunk.len() {
+            std::io::Write::write_all(&mut daemon, &Frame::Output(chunk.clone()).encode())
+                .expect("write");
+        }
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while *delivered.lock().expect("lock") < total {
+            assert!(
+                Instant::now() < deadline,
+                "held for a viewer that isn't there: {}",
+                *delivered.lock().expect("lock")
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
 
     #[test]
     fn the_client_keeps_the_last_dialog_state_the_daemon_sent() {

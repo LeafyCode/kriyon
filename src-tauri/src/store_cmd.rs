@@ -144,6 +144,38 @@ pub fn upsert_project(
         .map_err(|e| e.to_string())
 }
 
+/// Save a session's rows, its project's first when given, each through the
+/// same checks as [`upsert_project`] and [`upsert_session`]: what every start
+/// does before its shell opens, since the shell's folder must be one a saved
+/// row approves (ADR-0058).
+///
+/// # Errors
+/// A folder refused, or a database write that failed.
+pub(crate) fn save_rows(
+    app: &tauri::AppHandle,
+    project: Option<&ProjectRow>,
+    session: &SessionRow,
+) -> Result<(), String> {
+    use tauri::Manager as _;
+    let store = app.state::<StoreState>();
+    if let Some(project) = project {
+        let home = crate::commands::resolve_home(app)?;
+        check_project_row(&store, &app.state::<ChosenFolders>(), &home, project)?;
+        store
+            .0
+            .lock()
+            .upsert_project(project)
+            .map_err(|e| e.to_string())?;
+    }
+    check_session_row(&store, &app.state::<MadeWorktrees>(), session)?;
+    let saved = store
+        .0
+        .lock()
+        .upsert_session(session)
+        .map_err(|e| e.to_string());
+    saved
+}
+
 /// List all persisted projects.
 ///
 /// # Errors

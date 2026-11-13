@@ -1,12 +1,10 @@
 import {
   type BootstrapReport,
   bootstrapWorktree,
-  captureBaseline,
   createWorktree,
   isTauriRuntime,
   pickDirectory,
   sleepIdleSessions,
-  upsertProject,
   upsertSession,
   worktreePathFor,
 } from "../ipc/bridge.ts";
@@ -15,7 +13,6 @@ import {
   disposeSession,
   ensureSession,
   launchClaudeOnce,
-  noteRowSave,
   noteSessionStarted,
   startFreshClaude,
 } from "../terminal/sessionHost.ts";
@@ -222,31 +219,35 @@ function ignore(promise: Promise<unknown>): void {
   });
 }
 
-function persistThenWarm(
+function startAndWarm(
   project: ProjectRow,
-  session: SessionRow
-): Promise<void> {
+  session: SessionRow,
+  baseline: boolean
+): void {
   const warm = (): void => {
     ignore(useCompletions.getState().warmup(session.cwd));
   };
   if (!isTauriRuntime()) {
     warm();
-    return Promise.resolve();
+    return;
   }
-  // The project first: the core saves a session only once its project is
-  // saved, and checks the session's folders against it (ADR-0058). Settles
-  // either way, so the start still runs and reports its own failure.
-  const saved = upsertProject(project)
-    .then(() => upsertSession(session))
-    .catch((err: unknown) => {
-      // Usually the core refusing the folder: say why here, where the reason
-      // is known, rather than leave the start to fail without one.
-      showToast(`Could not save the session: ${failureMessage(err)}`, "error");
-    });
-  // Its shell must not start before these rows approve its folder.
-  noteRowSave(session.id, saved);
-  ignore(saved.then(warm));
-  return saved;
+  // Rust saves the rows, project first, then opens the shell, capturing the
+  // git baseline alongside: the core saves a session only once its project is
+  // saved, no shell starts before the rows that approve its folder
+  // (ADR-0058), and the launch that follows (it waits on this same open)
+  // comes after the baseline, so claude's first edits show in the Changes
+  // view. A baseline that can't be taken (not a git repo) leaves
+  // `baselineOid` null: the Changes view then diffs the whole working tree.
+  ensureSession(session.id, session.cwd, () => undefined, {
+    baseline,
+    onBaseline: (oid) => useSessions.getState().setBaseline(session.id, oid),
+    project,
+    session,
+  }).then(warm, (err: unknown) => {
+    // A refusal says why here, where the reason is known; nothing else runs
+    // against rows that were never saved.
+    showToast(`Could not start the session: ${failureMessage(err)}`, "error");
+  });
 }
 
 /**
@@ -314,11 +315,10 @@ export function createSession(
     // Mounted out of sight, then launched: the activation effect that starts
     // a shown session never runs for it.
     state.warmSession(id);
-    const saved = persistThenWarm(stored, row);
+    startAndWarm(stored, row, wantsBaseline(cwd));
     // Its [Boot phase] reads `launching` from this call on, so a second
     // request in the same batch counts it against the [Nested session cap].
     ignore(launchActiveSession(id));
-    captureBaselineFor(id, cwd, saved);
     return id;
   }
   // `addSession` only activates the *first* session, so switch explicitly —
@@ -328,42 +328,22 @@ export function createSession(
   // full view is indistinguishable from a button that did nothing.
   state.setActiveSession(id);
   useLayout.getState().revealSessionView();
-  // Persist the row, then warm the composer's slash-command catalog for this
-  // cwd so it's ready before the user's first `/`.
-  const saved = persistThenWarm(stored, row);
-  // Fire-and-forget: capture a git baseline for the Changes view to diff
-  // against later. Must never block session creation or throw — `ignore`
-  // swallows a rejection (cwd isn't a git repo, capture failed), leaving
-  // `baselineOid` null, which the Changes view already treats as "fall back
-  // to the whole-working-tree diff path".
-  //
-  // Skipped entirely for the default ("Home") cwd: `captureBaseline` runs
-  // `git add -A` over the whole tree (see `snapshot_tree`), and if `~` is
-  // itself a git repo (a dotfiles checkout — common), that walks and
-  // content-hashes every non-ignored file under the user's HOME directory,
-  // blocking a pool thread for minutes and permanently growing
-  // `~/.git/objects` — once per Home session. There is no real "project" to
-  // baseline for a Home session anyway.
-  captureBaselineFor(id, cwd, saved);
+  // Save the rows, open the shell, then warm the composer's slash-command
+  // catalog for this cwd so it's ready before the user's first `/`.
+  startAndWarm(stored, row, wantsBaseline(cwd));
   return id;
 }
 
-/** Capture the session's git baseline, except for the Home cwd (see
- *  {@link createSession}). Never blocks and never throws. */
-function captureBaselineFor(
-  id: string,
-  cwd: string,
-  saved: Promise<void>
-): void {
-  if (cwd !== defaultCwd) {
-    // After the rows are saved: recording the baseline rewrites the session
-    // row, which the core refuses before its project is saved.
-    ignore(
-      saved
-        .then(() => captureBaseline(cwd))
-        .then((oid) => useSessions.getState().setBaseline(id, oid))
-    );
-  }
+/**
+ * Whether a new session gets a git baseline for its Changes view: not for the
+ * default ("Home") cwd. A baseline runs `git add -A` over the whole tree
+ * (see `snapshot_tree`), and if `~` is itself a git repo (a dotfiles
+ * checkout, which is common) that walks and content-hashes every non-ignored
+ * file under HOME, for minutes, and grows `~/.git/objects` once per Home
+ * session. There is no real project to baseline there anyway.
+ */
+function wantsBaseline(cwd: string): boolean {
+  return cwd !== defaultCwd;
 }
 
 /**
@@ -448,7 +428,7 @@ export function resumePastSession(past: PastSession): void {
   useLayout.getState().revealSessionView();
   // Persist + warm so the composer's completions validate against a known root
   // and are ready before the first `/`, the same as a fresh session.
-  ignore(persistThenWarm(stored, row));
+  startAndWarm(stored, row, false);
 }
 
 /**

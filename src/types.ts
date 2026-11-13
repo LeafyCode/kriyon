@@ -182,7 +182,7 @@ export interface SessionRow {
   /** When the session was archived (ms since epoch), or null while active. */
   archivedAt: number | null;
   /**
-   * The git oid captured at session start (see `captureBaseline`), used as the
+   * The git oid captured at session start (see `capture_baseline` in Rust, taken as the session starts), used as the
    * base of the working-tree diff for the Changes view. `null` until a
    * baseline has been captured, or when the session's cwd is not a git repo.
    */

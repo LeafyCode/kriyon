@@ -42,6 +42,7 @@ mod remote_test_support;
 pub mod sandbox;
 pub mod session_list_rt;
 pub mod session_registry;
+pub mod session_start;
 pub mod session_writer;
 pub mod settings_cmd;
 pub mod shell_path;
@@ -84,6 +85,9 @@ pub struct Session {
     /// Whether `claude` was launched into this client's shell: once per
     /// shell, however many ways ask (see `commands::launch_claude`).
     pub launched: std::sync::atomic::AtomicBool,
+    /// Where its output goes, which a window can take over; `None` for an
+    /// adopted client, whose output goes nowhere.
+    pub sink: Option<std::sync::Arc<crate::session_start::SinkSlot>>,
 }
 
 impl Session {
@@ -99,6 +103,7 @@ impl Session {
             zdotdir,
             reattached,
             launched: std::sync::atomic::AtomicBool::new(false),
+            sink: None,
         }
     }
 }
@@ -550,7 +555,6 @@ pub fn run() {
             git_cmd::diff_worktree,
             git_cmd::diff_working_tree,
             git_cmd::merge_worktree,
-            git_cmd::capture_baseline,
             git_cmd::diff_session_changes,
             git_cmd::repo_toplevel,
             git_cmd::read_baseline,
@@ -566,6 +570,7 @@ pub fn run() {
             commands::worktree_path,
             commands::bootstrap_worktree,
             commands::launch_claude,
+            session_start::start_session,
             commands::start_fresh_claude,
             store_cmd::save_layout,
             store_cmd::load_layout,

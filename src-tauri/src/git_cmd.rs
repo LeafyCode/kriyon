@@ -1127,19 +1127,20 @@ fn capture_baseline_sync(cwd_str: &str, home: &Path) -> Result<String, String> {
 /// for the same reason [`diff_working_tree`] validates it: an unvalidated
 /// `cwd` would let the frontend run arbitrary git commands anywhere on disk.
 ///
+/// Taken by a session's start (`session_start::start`), alongside opening
+/// its shell. Blocking: git snapshots the working tree.
+///
 /// # Errors
 /// Returns an error string if `cwd` looks like a flag, is not a known
 /// session/project root, resolves to the user's home directory, or the git
 /// invocation fails.
-#[tauri::command(async)]
-#[allow(clippy::needless_pass_by_value)]
-pub fn capture_baseline(
-    app: tauri::AppHandle,
-    store: tauri::State<'_, StoreState>,
-    cwd: String,
+pub(crate) fn capture_baseline(
+    app: &tauri::AppHandle,
+    store: &StoreState,
+    cwd: &str,
 ) -> Result<String, String> {
-    let root = SandboxRoot::validate(store.inner(), &cwd)?;
-    let home = crate::commands::resolve_home(&app)?;
+    let root = SandboxRoot::validate(store, cwd)?;
+    let home = crate::commands::resolve_home(app)?;
     capture_baseline_sync(root.as_str(), &home)
 }
 
