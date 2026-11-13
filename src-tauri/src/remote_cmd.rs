@@ -56,11 +56,7 @@ pub fn parse_device_id(text: &str) -> Result<[u8; 32], String> {
 /// A device id as the webview gets it.
 #[must_use]
 pub fn device_id_text(id: &[u8; 32]) -> String {
-    use std::fmt::Write as _;
-    id.iter().fold(String::with_capacity(64), |mut text, b| {
-        let _ = write!(text, "{b:02x}");
-        text
-    })
+    crate::store::hex(id)
 }
 
 /// A pairing code from the webview: exactly six ASCII digits.

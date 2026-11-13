@@ -195,9 +195,157 @@ pub struct SenderKey {
     pub public_key: String,
 }
 
+/// The host's side of the rule for waking phones: a session that newly
+/// needs you, while no device is connected to see it, wakes each paired
+/// phone that gave a token, at most once a minute each. What already needs
+/// you when watching starts wakes nobody.
+///
+/// While a device is connected nothing is marked seen: a phone that locked
+/// still looks connected until its link times out, so a session that comes
+/// to need you then wakes the phone once the link is gone, if it still
+/// needs you.
+#[derive(Debug, Default)]
+pub struct WakePlanner {
+    needing: std::collections::HashSet<String>,
+    primed: bool,
+    last_wake: std::collections::HashMap<[u8; 32], u64>,
+}
+
+/// The least time between two wake-ups of one phone, in seconds (the push
+/// sender holds each phone to the same).
+pub const WAKE_EVERY_SECS: u64 = 60;
+
+impl WakePlanner {
+    /// The sessions needing you now (`needing`), whether any device is
+    /// connected, the phones with tokens, and the time (Unix seconds): the
+    /// phones to wake now.
+    pub fn observe(
+        &mut self,
+        needing: impl IntoIterator<Item = String>,
+        device_connected: bool,
+        phones: &[[u8; 32]],
+        now: u64,
+    ) -> Vec<[u8; 32]> {
+        let needing: std::collections::HashSet<String> = needing.into_iter().collect();
+        if !std::mem::replace(&mut self.primed, true) {
+            self.needing = needing;
+            return Vec::new();
+        }
+        if device_connected {
+            // Kept for later, not marked seen; but what stopped needing you
+            // is forgotten, so it can't wake anyone afterwards.
+            self.needing.retain(|id| needing.contains(id));
+            return Vec::new();
+        }
+        let newly = needing.difference(&self.needing).next().is_some();
+        self.needing = needing;
+        if !newly {
+            return Vec::new();
+        }
+        let due: Vec<[u8; 32]> = phones
+            .iter()
+            .copied()
+            .filter(|phone| {
+                self.last_wake
+                    .get(phone)
+                    // A clock that went back counts as due, not as held.
+                    .is_none_or(|&at| now < at || now - at >= WAKE_EVERY_SECS)
+            })
+            .collect();
+        for phone in &due {
+            self.last_wake.insert(*phone, now);
+        }
+        due
+    }
+
+    /// Start watching afresh: remote access went off.
+    pub fn reset(&mut self) {
+        *self = Self::default();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    mod planner {
+        use super::super::WakePlanner;
+
+        const A: [u8; 32] = [1; 32];
+        const B: [u8; 32] = [2; 32];
+
+        const NOBODY: Vec<[u8; 32]> = Vec::new();
+
+        fn ids(list: &[&str]) -> Vec<String> {
+            list.iter().map(|id| (*id).to_string()).collect()
+        }
+
+        #[test]
+        fn what_already_needs_you_when_watching_starts_wakes_nobody() {
+            let mut planner = WakePlanner::default();
+            assert_eq!(planner.observe(ids(&["s"]), false, &[A], 0), NOBODY);
+        }
+
+        #[test]
+        fn a_session_that_newly_needs_you_wakes_every_phone_with_a_token() {
+            let mut planner = WakePlanner::default();
+            let _ = planner.observe(ids(&[]), false, &[A, B], 0);
+            assert_eq!(
+                planner.observe(ids(&["s"]), false, &[A, B], 100),
+                vec![A, B]
+            );
+            assert_eq!(
+                planner.observe(ids(&["s"]), false, &[A, B], 200),
+                NOBODY,
+                "still needing you is not new"
+            );
+        }
+
+        #[test]
+        fn nobody_is_woken_while_a_device_is_connected_but_it_waits_not_lost() {
+            let mut planner = WakePlanner::default();
+            let _ = planner.observe(ids(&[]), false, &[A], 0);
+            assert_eq!(planner.observe(ids(&["s"]), true, &[A], 100), NOBODY);
+            // The device went (a phone locked and its link timed out), and
+            // the session still needs you: now the phone is woken.
+            assert_eq!(planner.observe(ids(&["s"]), false, &[A], 200), vec![A]);
+        }
+
+        #[test]
+        fn a_session_that_stopped_needing_you_while_a_device_watched_wakes_nobody() {
+            let mut planner = WakePlanner::default();
+            let _ = planner.observe(ids(&[]), false, &[A], 0);
+            let _ = planner.observe(ids(&["s"]), true, &[A], 100);
+            assert_eq!(planner.observe(ids(&[]), false, &[A], 200), NOBODY);
+        }
+
+        #[test]
+        fn a_clock_that_went_back_does_not_hold_wakes_up() {
+            let mut planner = WakePlanner::default();
+            let _ = planner.observe(ids(&[]), false, &[A], 10_000);
+            assert_eq!(planner.observe(ids(&["s"]), false, &[A], 10_000), vec![A]);
+            let _ = planner.observe(ids(&[]), false, &[A], 6_400);
+            assert_eq!(planner.observe(ids(&["s"]), false, &[A], 6_400), vec![A]);
+        }
+
+        #[test]
+        fn a_phone_is_woken_at_most_once_a_minute() {
+            let mut planner = WakePlanner::default();
+            let _ = planner.observe(ids(&[]), false, &[A], 0);
+            assert_eq!(planner.observe(ids(&["s"]), false, &[A], 100), vec![A]);
+            assert_eq!(planner.observe(ids(&["s", "t"]), false, &[A], 130), NOBODY);
+            let _ = planner.observe(ids(&[]), false, &[A], 140);
+            assert_eq!(planner.observe(ids(&["s"]), false, &[A], 160), vec![A]);
+        }
+
+        #[test]
+        fn starting_over_watches_afresh() {
+            let mut planner = WakePlanner::default();
+            let _ = planner.observe(ids(&[]), false, &[A], 0);
+            planner.reset();
+            assert_eq!(planner.observe(ids(&["s"]), false, &[A], 100), NOBODY);
+        }
+    }
 
     const SECRET: [u8; 32] = [7; 32];
     const HOST: [u8; 32] = [9; 32];

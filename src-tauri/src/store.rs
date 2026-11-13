@@ -18,6 +18,9 @@ pub enum StoreError {
     Sqlite(#[from] rusqlite::Error),
 }
 
+/// A paired device's sealed push token: its endpoint id and the sealed bytes.
+pub type PushTokenRow = ([u8; 32], Vec<u8>);
+
 /// A [Paired device] as the host keeps it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PairedDeviceRow {
@@ -65,7 +68,8 @@ fn role_from_text(text: &str) -> kriyon_remote::message::Role {
     }
 }
 
-fn hex(bytes: &[u8]) -> String {
+/// Lowercase hex, two digits a byte.
+pub(crate) fn hex(bytes: &[u8]) -> String {
     use std::fmt::Write as _;
     bytes
         .iter()
@@ -344,6 +348,10 @@ impl Store {
                  role        TEXT NOT NULL,
                  paired_at   INTEGER NOT NULL
              );
+             CREATE TABLE IF NOT EXISTS push_tokens (
+                 device_id TEXT PRIMARY KEY,
+                 sealed    BLOB NOT NULL
+             );
              CREATE TABLE IF NOT EXISTS paired_hosts (
                  host_id    TEXT PRIMARY KEY,
                  name       TEXT NOT NULL,
@@ -571,7 +579,51 @@ impl Store {
             "UPDATE paired_devices SET role = ?2 WHERE endpoint_id = ?1",
             rusqlite::params![hex(endpoint_id), role_text(role)],
         )?;
+        // A device made a Viewer gives a new token when it connects again
+        // (spec §4).
+        if role == kriyon_remote::message::Role::Viewer {
+            self.conn.execute(
+                "DELETE FROM push_tokens WHERE device_id = ?1",
+                [hex(endpoint_id)],
+            )?;
+        }
         Ok(changed > 0)
+    }
+
+    /// Keep paired device `device`'s sealed push token (spec §10), in place
+    /// of any it gave before. A device not paired here is ignored.
+    ///
+    /// # Errors
+    /// Returns [`StoreError::Sqlite`] if the statement fails.
+    pub fn set_push_token(&self, device: &[u8; 32], sealed: &[u8]) -> Result<(), StoreError> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO push_tokens (device_id, sealed)
+             SELECT ?1, ?2 WHERE EXISTS
+                 (SELECT 1 FROM paired_devices WHERE endpoint_id = ?1)",
+            rusqlite::params![hex(device), sealed],
+        )?;
+        Ok(())
+    }
+
+    /// Every paired device's sealed push token: (device id, sealed).
+    ///
+    /// # Errors
+    /// Returns [`StoreError::Sqlite`] if the query fails.
+    pub fn push_tokens(&self) -> Result<Vec<PushTokenRow>, StoreError> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT device_id, sealed FROM push_tokens ORDER BY device_id")?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (id, sealed) = row?;
+            if let Some(id) = endpoint_from_hex(&id) {
+                out.push((id, sealed));
+            }
+        }
+        Ok(out)
     }
 
     /// Forget a paired device and the session starts it asked for. Returns
@@ -583,6 +635,8 @@ impl Store {
         let id = hex(endpoint_id);
         self.conn
             .execute("DELETE FROM remote_starts WHERE device_id = ?1", [&id])?;
+        self.conn
+            .execute("DELETE FROM push_tokens WHERE device_id = ?1", [&id])?;
         let removed = self
             .conn
             .execute("DELETE FROM paired_devices WHERE endpoint_id = ?1", [&id])?;
@@ -1153,6 +1207,40 @@ mod tests {
                 Some("s2".to_string())
             );
             assert!(!s.remove_paired_device(&PHONE).expect("already gone"));
+        }
+
+        #[test]
+        fn a_push_token_is_kept_per_device_and_replaced_by_a_newer_one() {
+            let s = store();
+            s.add_paired_device(&phone()).expect("adds");
+            assert_eq!(s.push_tokens().expect("lists"), vec![]);
+            s.set_push_token(&PHONE, b"old").expect("keeps");
+            s.set_push_token(&PHONE, b"sealed").expect("keeps");
+            assert_eq!(
+                s.push_tokens().expect("lists"),
+                vec![(PHONE, b"sealed".to_vec())]
+            );
+        }
+
+        #[test]
+        fn a_push_token_goes_with_its_device_or_when_it_becomes_a_viewer() {
+            let s = store();
+            s.add_paired_device(&phone()).expect("adds");
+            s.set_push_token(&PHONE, b"sealed").expect("keeps");
+            assert!(s
+                .set_paired_device_role(&PHONE, Role::Viewer)
+                .expect("changes"));
+            assert_eq!(s.push_tokens().expect("lists"), vec![]);
+            s.set_push_token(&PHONE, b"again").expect("keeps");
+            assert!(s.remove_paired_device(&PHONE).expect("removes"));
+            assert_eq!(s.push_tokens().expect("lists"), vec![]);
+        }
+
+        #[test]
+        fn a_token_from_a_device_not_paired_is_not_kept() {
+            let s = store();
+            s.set_push_token(&LAPTOP, b"sealed").expect("ignored");
+            assert_eq!(s.push_tokens().expect("lists"), vec![]);
         }
 
         #[test]

@@ -33,6 +33,8 @@ pub(crate) struct FakeHost {
     pub(crate) typed: Mutex<Vec<u8>>,
     pub(crate) onlooked: Mutex<HashSet<String>>,
     pub(crate) title: Mutex<String>,
+    /// The push tokens devices gave, in order.
+    pub(crate) push_tokens: Mutex<Vec<(EndpointId, Vec<u8>)>>,
     /// Told every change of control, as the app's writers tell it.
     pub(crate) serve: Mutex<Option<Serve>>,
 }
@@ -56,6 +58,7 @@ impl Default for FakeHost {
             typed: Mutex::default(),
             onlooked: Mutex::default(),
             title: Mutex::default(),
+            push_tokens: Mutex::default(),
             serve: Mutex::default(),
         }
     }
@@ -134,6 +137,9 @@ impl ServeHost for FakeHost {
     fn release(&self, device: &EndpointId) {
         let change = self.gate.lock().release(*device).change;
         self.tell(change);
+    }
+    fn set_push_token(&self, device: &EndpointId, sealed: Vec<u8>) {
+        self.push_tokens.lock().push((*device, sealed));
     }
     fn set_onlooked(&self, id: &str, onlooked: bool) {
         let mut set = self.onlooked.lock();

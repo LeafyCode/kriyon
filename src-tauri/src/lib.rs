@@ -35,6 +35,7 @@ pub mod remote_endpoint;
 #[cfg(test)]
 mod remote_faults;
 pub mod remote_host_rt;
+pub mod remote_push_rt;
 pub mod remote_rt;
 pub mod remote_serve;
 #[cfg(test)]
@@ -336,6 +337,7 @@ pub fn run() {
         .manage(AppState::default())
         .manage(remote_rt::RemoteRuntime::default())
         .manage(remote_device_rt::DeviceRuntime::default())
+        .manage(remote_push_rt::PushRt::from_build())
         .manage(remote_endpoint::RemoteEndpoint::new(
             std::net::SocketAddr::from(([0, 0, 0, 0], 0)),
         ))
@@ -450,6 +452,9 @@ pub fn run() {
                     std::thread::sleep(TICK_INTERVAL);
                     tick += 1;
                     background_tick(&handle, tick);
+                    // Phones hear a session newly needs you, when no device
+                    // is connected to see it (spec §10).
+                    crate::remote_push_rt::tick(&handle);
                 }
             });
 

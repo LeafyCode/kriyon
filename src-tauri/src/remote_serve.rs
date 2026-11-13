@@ -54,6 +54,9 @@ pub trait ServeHost: Send + Sync + 'static {
     fn session(&self, id: &str) -> Option<LiveSession>;
     /// Whether any remote device has session `id` open (an [Onlooker]).
     fn set_onlooked(&self, id: &str, onlooked: bool);
+    /// Keep paired `device`'s sealed push token (spec §10), in place of any
+    /// it gave before.
+    fn set_push_token(&self, device: &EndpointId, sealed: Vec<u8>);
     /// A device's typing into session `id`, checked again atomically with
     /// the write: whether it reached the PTY.
     ///
@@ -273,6 +276,13 @@ impl Serve {
             .filter(|(_, served)| served.fanout.lock().open_count() > 0)
             .map(|(id, _)| id)
             .collect()
+    }
+
+    /// Whether any device is connected now: it sees what needs you for
+    /// itself, so no phone needs waking.
+    #[must_use]
+    pub fn has_devices(&self) -> bool {
+        !self.0.controls.lock().is_empty()
     }
 
     /// Whether `device` has a connection served now.
@@ -534,6 +544,10 @@ impl Serve {
                     // the webview (plan Step C).
                     Decoded::Message(FromDevice::StartSession { .. }) => {
                         Err(RefuseReason::NotAllowed)
+                    }
+                    Decoded::Message(FromDevice::PushToken { sealed }) => {
+                        self.0.host.set_push_token(&device, sealed.clone());
+                        Ok(())
                     }
                     _ => Ok(()),
                 });
@@ -1041,6 +1055,34 @@ mod tests {
                 next(&mut cr).await,
                 ToDevice::Heartbeat { at: 42, .. }
             ));
+        });
+    }
+
+    #[test]
+    fn a_devices_push_token_is_kept_for_it_and_nothing_is_said_back() {
+        run(async {
+            let world = world().await;
+            let (phone, _link, mut cw, mut cr) = device(&world, 3, Role::Viewer).await;
+            assert!(world.serve.has_devices());
+            cw.send(&FromDevice::PushToken {
+                sealed: b"sealed".to_vec(),
+            })
+            .await
+            .expect("sent");
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while world.fake.push_tokens.lock().is_empty() {
+                assert!(Instant::now() < deadline, "the token never arrived");
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            assert_eq!(
+                world.fake.push_tokens.lock().clone(),
+                vec![(phone.id(), b"sealed".to_vec())]
+            );
+            world.serve.heartbeat(5);
+            assert!(
+                matches!(next(&mut cr).await, ToDevice::Heartbeat { at: 5, .. }),
+                "no refusal came first"
+            );
         });
     }
 

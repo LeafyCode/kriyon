@@ -3052,6 +3052,7 @@ dependencies = [
  "ignore",
  "iroh",
  "kriyon-core",
+ "kriyon-push",
  "kriyon-remote",
  "kriyon-remote-link",
  "libc",
