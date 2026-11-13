@@ -5,6 +5,7 @@
 
 pub mod authorize;
 pub mod codec;
+pub mod compress;
 pub mod control;
 pub mod message;
 pub mod pairing;
