@@ -456,7 +456,7 @@ pub async fn remote_enter_code(app: tauri::AppHandle, code: String) -> Result<Co
     use tauri::Manager as _;
     check_code_text(&code)?;
     let store_app = app.clone();
-    let now_ms = chrono_now_ms();
+    let now_ms = crate::remote_rt::now_ms();
     let outcome = app
         .state::<crate::remote_rt::RemoteRuntime>()
         .enter_code(&code, &host_name(), move |device, name, role| {
@@ -484,12 +484,6 @@ pub async fn remote_enter_code(app: tauri::AppHandle, code: String) -> Result<Co
         CodeOutcome::Burned => CodeResult::Burned,
         CodeOutcome::NoAttempt => CodeResult::NoAttempt,
     })
-}
-
-fn chrono_now_ms() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
 }
 
 /// A paired device, for the UI.

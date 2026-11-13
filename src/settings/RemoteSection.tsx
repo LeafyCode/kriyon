@@ -125,13 +125,13 @@ const nameInputStyle: CSSProperties = {
 /** A pairing invite's QR code, from the grid Rust drew. */
 function QrCode({ grid }: { grid: QrGrid }) {
   const span = grid.size + QUIET_ZONE * 2;
-  const modules: { x: number; y: number }[] = [];
+  // One path, a unit square per dark module, rather than a node per module.
+  let path = "";
   for (let index = 0; index < grid.dark.length; index += 1) {
     if (grid.dark[index] === "1") {
-      modules.push({
-        x: (index % grid.size) + QUIET_ZONE,
-        y: Math.floor(index / grid.size) + QUIET_ZONE,
-      });
+      const x = (index % grid.size) + QUIET_ZONE;
+      const y = Math.floor(index / grid.size) + QUIET_ZONE;
+      path += `M${x} ${y}h1v1h-1z`;
     }
   }
   return (
@@ -143,34 +143,26 @@ function QrCode({ grid }: { grid: QrGrid }) {
       viewBox={`0 0 ${span} ${span}`}
     >
       <rect fill={tokens.qr.light} height={span} width={span} />
-      {modules.map(({ x, y }) => (
-        <rect
-          data-dark
-          fill={tokens.qr.dark}
-          height={1}
-          key={`${x}:${y}`}
-          width={1}
-          x={x}
-          y={y}
-        />
-      ))}
+      <path d={path} fill={tokens.qr.dark} />
     </svg>
   );
 }
 
-/** "4:59" until `expiresAtMs`; asks Rust again once it passes. */
+/** "4:59" until `expiresAtMs`; once it passes, asks Rust every second until
+ *  the pairing's state moves on (this view goes away then). */
 function Countdown({ expiresAtMs }: { expiresAtMs: number }) {
   const [now, setNow] = useState(() => Date.now());
   const refresh = useRemote((state) => state.refresh);
-  const over = now >= expiresAtMs;
   useEffect(() => {
-    if (over) {
-      refresh().catch(() => undefined);
-      return;
-    }
-    const tick = setInterval(() => setNow(Date.now()), 1000);
+    const tick = setInterval(() => {
+      const at = Date.now();
+      setNow(at);
+      if (at >= expiresAtMs) {
+        refresh().catch(() => undefined);
+      }
+    }, 1000);
     return () => clearInterval(tick);
-  }, [over, refresh]);
+  }, [expiresAtMs, refresh]);
   return <span style={countdownStyle}>{countdownText(expiresAtMs, now)}</span>;
 }
 
@@ -190,6 +182,7 @@ function ConsentDialog() {
             Cancel
           </button>
           <button
+            className="kr-hover-accent"
             onClick={() => {
               turnOn().catch(() => undefined);
             }}
@@ -228,8 +221,14 @@ function CodeEntry({
   const { enterCode, stopPairing } = useRemote.getState();
   const submit = (event: SyntheticEvent) => {
     event.preventDefault();
-    enterCode(code.trim()).catch(() => undefined);
-    setCode("");
+    enterCode(code.trim())
+      .then((sent) => {
+        // A code the field refused stays, to be fixed.
+        if (sent) {
+          setCode("");
+        }
+      })
+      .catch(() => undefined);
   };
   const line = codeError ?? (codeResult ? codeResultLine(codeResult) : null);
   return (
@@ -252,7 +251,11 @@ function CodeEntry({
           style={codeInputStyle}
           value={code}
         />
-        <button style={button("primary")} type="submit">
+        <button
+          className="kr-hover-accent"
+          style={button("primary")}
+          type="submit"
+        >
           Confirm code
         </button>
         <button
@@ -413,7 +416,10 @@ function DeviceRow({
           <Segmented
             ariaLabel={`Role of ${device.name}`}
             onChange={(role) => {
-              setRole(device.id, role).catch(() => undefined);
+              // Choosing the role it has would only reconnect it.
+              if (role !== device.role) {
+                setRole(device.id, role).catch(() => undefined);
+              }
             }}
             options={ROLE_OPTIONS}
             value={device.role}
@@ -459,10 +465,12 @@ function DevicesGroup({ devices }: { devices: RemoteDevice[] }) {
     );
   }
   return (
-    <SettingGroup label="Paired devices">
-      {devices.map((device) => (
-        <DeviceRow device={device} key={device.id} onRemove={setRemoving} />
-      ))}
+    <>
+      <SettingGroup label="Paired devices">
+        {devices.map((device) => (
+          <DeviceRow device={device} key={device.id} onRemove={setRemoving} />
+        ))}
+      </SettingGroup>
       {removing ? (
         <ConfirmDialog
           body={`${removing.name} is cut off at once and forgotten. To use it again, pair it again.`}
@@ -476,7 +484,7 @@ function DevicesGroup({ devices }: { devices: RemoteDevice[] }) {
           title={`Remove ${removing.name}?`}
         />
       ) : null}
-    </SettingGroup>
+    </>
   );
 }
 
@@ -527,7 +535,8 @@ export function RemoteSection() {
         {error ? <span style={errorTextStyle}>{error}</span> : null}
       </SettingGroup>
       {enabled && status ? <PairingGroup pairing={status.pairing} /> : null}
-      {enabled ? <DevicesGroup devices={devices} /> : null}
+      {/* Always: a lost device must be removable without turning access on. */}
+      <DevicesGroup devices={devices} />
       {consentOpen ? <ConsentDialog /> : null}
     </SectionPage>
   );

@@ -36,6 +36,7 @@ const COUNTDOWN = /^[45]:\d\d$/;
 const SHELL_ACCESS = /full shell access as you/;
 const NAMED_BY_DEVICE = /named by the device/;
 const RECONNECTS = /reconnects/;
+const DARK_MODULE = /h1v1h-1z/g;
 
 const off: RemoteStatus = {
   enabled: false,
@@ -80,10 +81,52 @@ test("Turn on on the consent screen turns it on", async () => {
   ).toBeTruthy();
 });
 
-test("with it off, nothing about pairing or devices shows", async () => {
+test("with it off, there is no pairing", async () => {
   render(<RemoteSection />);
   await screen.findByRole("switch", { name: "Remote access" });
   expect(screen.queryByRole("button", { name: "Pair a device" })).toBeNull();
+});
+
+test("a paired device can be removed while remote access is off", async () => {
+  // A stolen phone must not need the door opened to be removed.
+  vi.mocked(remoteDevices).mockResolvedValue([phone]);
+  render(<RemoteSection />);
+  expect(
+    await screen.findByRole("button", { name: "Remove Test phone" })
+  ).toBeTruthy();
+});
+
+test("choosing the role a device already has changes nothing", async () => {
+  vi.mocked(remoteStatus).mockResolvedValue(on);
+  vi.mocked(remoteDevices).mockResolvedValue([phone]);
+  render(<RemoteSection />);
+  const group = await screen.findByRole("tablist", {
+    name: "Role of Test phone",
+  });
+  fireEvent.click(
+    Array.from(group.querySelectorAll('[role="tab"]')).find(
+      (tab) => tab.textContent === "Viewer"
+    ) as HTMLElement
+  );
+  expect(remoteSetDeviceRole).not.toHaveBeenCalled();
+});
+
+test("a code the field refuses stays there to be fixed", async () => {
+  vi.mocked(remoteStatus).mockResolvedValue({
+    ...on,
+    pairing: {
+      deviceName: "Test phone",
+      expiresAtMs: Date.now() + 200_000,
+      role: "viewer",
+      state: "codeWanted",
+    },
+  });
+  render(<RemoteSection />);
+  const field = await screen.findByRole("textbox", { name: "Pairing code" });
+  fireEvent.change(field, { target: { value: "12345" } });
+  fireEvent.submit(field);
+  expect(await screen.findByText("The code is six digits.")).toBeTruthy();
+  expect((field as HTMLInputElement).value).toBe("12345");
 });
 
 test("a Controller is paired only after the shell-access warning shows", async () => {
@@ -108,7 +151,9 @@ test("a Controller is paired only after the shell-access warning shows", async (
     expect(remoteStartPairing).toHaveBeenCalledWith("controller")
   );
   const code = await screen.findByRole("img", { name: QR_CODE });
-  expect(code.querySelectorAll("rect[data-dark]").length).toBe(2);
+  // "1001": two dark modules, drawn as two unit squares in one path.
+  const d = code.querySelector("path")?.getAttribute("d") ?? "";
+  expect(d.match(DARK_MODULE)?.length).toBe(2);
   expect(screen.getByText(COUNTDOWN)).toBeTruthy();
 });
 

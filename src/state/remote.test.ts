@@ -119,6 +119,24 @@ test("pairing fetches the QR code for the invite Rust made", async () => {
   expect(useRemote.getState().status).toEqual(waiting);
 });
 
+test("a QR code that can't be drawn stops the pairing it was for", async () => {
+  vi.mocked(remoteStartPairing).mockResolvedValue("kriyon-pair:1:00");
+  vi.mocked(remotePairingQr).mockRejectedValue("not a pairing invite");
+  vi.mocked(remoteStopPairing).mockResolvedValue();
+  vi.mocked(remoteStatus).mockResolvedValue(on);
+  await useRemote.getState().startPairing("viewer");
+  expect(remoteStopPairing).toHaveBeenCalled();
+  expect(useRemote.getState().qr).toBeNull();
+  expect(useRemote.getState().error).toContain("not a pairing invite");
+  expect(useRemote.getState().status).toEqual(on);
+});
+
+test("enterCode says whether the code was sent", async () => {
+  expect(await useRemote.getState().enterCode("12")).toBe(false);
+  vi.mocked(remoteEnterCode).mockResolvedValue({ outcome: "burned" });
+  expect(await useRemote.getState().enterCode("123456")).toBe(true);
+});
+
 test("a code that isn't six digits never reaches Rust", async () => {
   await useRemote.getState().enterCode("12 34");
   expect(remoteEnterCode).not.toHaveBeenCalled();

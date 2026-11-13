@@ -131,6 +131,15 @@ impl Host {
             .set_alpns(vec![ALPN_REMOTE.to_vec(), ALPN_PAIR.to_vec()]);
     }
 
+    /// How long the pending pairing has left, by the host's own clock, or
+    /// `None` when there is none. Zero once it expired or was burned.
+    #[must_use]
+    pub fn pairing_time_left(&self) -> Option<Duration> {
+        lock(&self.shared.pairing)
+            .as_ref()
+            .map(|pairing| pairing.time_left(Instant::now()))
+    }
+
     /// Stop serving `kriyon/pair/1`.
     pub fn stop_pairing(&self) {
         self.shared.stop_pairing();

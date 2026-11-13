@@ -54,15 +54,10 @@ pub enum PairingStatus {
 }
 
 /// Now, in ms since the epoch.
-fn now_ms() -> i64 {
+pub(crate) fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
-}
-
-/// How long a pairing's QR code is good, in ms (spec section 4).
-fn pairing_valid_for_ms() -> i64 {
-    i64::try_from(kriyon_remote::link_policy::PAIRING_VALID_FOR.as_millis()).unwrap_or(i64::MAX)
 }
 
 /// The host side of [Remote access], one per app.
@@ -83,7 +78,6 @@ struct Running {
 struct Pairing {
     role: Option<Role>,
     attempt: Option<PairAttempt>,
-    expires_at_ms: i64,
     /// Three wrong codes ended it; shown until the person starts again.
     burned: bool,
 }
@@ -170,7 +164,6 @@ impl RemoteRuntime {
         *running.pairing.lock().await = Pairing {
             role: Some(role),
             attempt: None,
-            expires_at_ms: now_ms() + pairing_valid_for_ms(),
             burned: false,
         };
         Ok(kriyon_remote_link::invite::invite(&running.host, secret))
@@ -185,11 +178,12 @@ impl RemoteRuntime {
     }
 
     pub async fn pairing_status(&self) -> PairingStatus {
-        self.pairing_status_at(now_ms()).await
+        self.pairing_status_after(std::time::Duration::ZERO).await
     }
 
-    /// The pairing state as it stands at `now_ms`.
-    pub async fn pairing_status_at(&self, now_ms: i64) -> PairingStatus {
+    /// The pairing state as it will stand `elapsed` from now. The deadline is
+    /// the host's own (its pending pairing's), so the two never disagree.
+    pub async fn pairing_status_after(&self, elapsed: std::time::Duration) -> PairingStatus {
         let running = self.running.lock().await;
         let Some(running) = running.as_ref() else {
             return PairingStatus::Idle;
@@ -198,13 +192,14 @@ impl RemoteRuntime {
         if pairing.burned {
             return PairingStatus::Burned;
         }
-        let Some(role) = pairing.role else {
+        let (Some(role), Some(left)) = (pairing.role, running.host.pairing_time_left()) else {
             return PairingStatus::Idle;
         };
-        let expires_at_ms = pairing.expires_at_ms;
-        if now_ms >= expires_at_ms {
+        let left = left.saturating_sub(elapsed);
+        if left.is_zero() {
             return PairingStatus::Expired;
         }
+        let expires_at_ms = now_ms() + i64::try_from(left.as_millis()).unwrap_or(i64::MAX);
         match &pairing.attempt {
             None => PairingStatus::Waiting {
                 role,
@@ -539,15 +534,16 @@ mod tests {
                 panic!("waiting");
             };
             let five_min = 5 * 60 * 1000;
-            assert!((before + five_min..=now_ms() + five_min).contains(&expires_at_ms));
+            // The host's own deadline, read back through its time left: within
+            // a second of five minutes from when the pairing started.
+            assert!((before + five_min - 1000..=now_ms() + five_min).contains(&expires_at_ms));
+            let valid = kriyon_remote::link_policy::PAIRING_VALID_FOR;
             assert!(matches!(
-                rt.pairing_status_at(expires_at_ms - 1).await,
+                rt.pairing_status_after(valid.saturating_sub(std::time::Duration::from_secs(1)))
+                    .await,
                 PairingStatus::Waiting { .. }
             ));
-            assert_eq!(
-                rt.pairing_status_at(expires_at_ms).await,
-                PairingStatus::Expired
-            );
+            assert_eq!(rt.pairing_status_after(valid).await, PairingStatus::Expired);
             rt.stop_pairing().await;
             assert_eq!(rt.pairing_status().await, PairingStatus::Idle);
         });

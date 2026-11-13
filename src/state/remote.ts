@@ -34,7 +34,8 @@ interface RemoteStore {
   codeResult: RemoteCodeResult | null;
   consentOpen: boolean;
   devices: RemoteDevice[];
-  enterCode: (code: string) => Promise<void>;
+  /** Send a typed code. Resolves to whether it was sent (it was six digits). */
+  enterCode: (code: string) => Promise<boolean>;
   /** Why the last command failed, if it did. */
   error: string | null;
   load: () => Promise<void>;
@@ -80,7 +81,7 @@ export const useRemote = create<RemoteStore>((set, get) => {
     enterCode: async (code) => {
       if (!SIX_DIGITS.test(code)) {
         set({ codeError: "The code is six digits." });
-        return;
+        return false;
       }
       set({ codeError: null });
       await attempt(async () => {
@@ -92,6 +93,7 @@ export const useRemote = create<RemoteStore>((set, get) => {
         }
         set({ status: await remoteStatus() });
       });
+      return true;
     },
     error: null,
     load: () =>
@@ -122,13 +124,23 @@ export const useRemote = create<RemoteStore>((set, get) => {
         await remoteSetDeviceRole(id, role);
         await reloadDevices();
       }),
-    startPairing: (role) =>
-      attempt(async () => {
-        set({ codeError: null, codeResult: null });
+    startPairing: async (role) => {
+      set({ codeError: null, codeResult: null });
+      await attempt(async () => {
         const text = await remoteStartPairing(role);
-        set({ qr: await remotePairingQr(text) });
-        set({ status: await remoteStatus() });
-      }),
+        try {
+          set({ qr: await remotePairingQr(text) });
+        } catch (error) {
+          // A pairing nobody can scan is only an open door: end it.
+          await remoteStopPairing().catch(() => undefined);
+          throw error;
+        }
+      });
+      // Whatever happened, show the pairing as Rust has it now.
+      await remoteStatus()
+        .then((status) => set({ status }))
+        .catch(() => undefined);
+    },
     status: null,
     stopPairing: () =>
       attempt(async () => {

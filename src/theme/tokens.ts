@@ -230,12 +230,6 @@ export const tokens = {
     hover: "var(--kr-motion-hover)",
   },
   /**
-   * The [Mascot]s' own colours: illustration, not chrome, so they stay the
-   * same in every theme — except `thought`, which sits on the plane. Named for
-   * scripts/mascots.py, which draws with them. The body's colours come from the hue the user picks
-   * (`layout.mascotHue`), set on the drawing as `--kr-m-*` variables.
-   */
-  /**
    * A QR code's two colours: black on white in every theme, since scanners
    * read dark modules on a light ground.
    */
@@ -243,6 +237,12 @@ export const tokens = {
     dark: "#000000",
     light: "#ffffff",
   },
+  /**
+   * The [Mascot]s' own colours: illustration, not chrome, so they stay the
+   * same in every theme — except `thought`, which sits on the plane. Named for
+   * scripts/mascots.py, which draws with them. The body's colours come from the hue the user picks
+   * (`layout.mascotHue`), set on the drawing as `--kr-m-*` variables.
+   */
   mascot: {
     glint: "#ffffff",
     light: "#eef1ff",

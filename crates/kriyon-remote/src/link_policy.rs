@@ -198,6 +198,16 @@ impl PendingPairing {
         &self.secret
     }
 
+    /// How long the pairing has left at `now`: zero once it expired or was
+    /// burned.
+    #[must_use]
+    pub fn time_left(&self, now: Instant) -> Duration {
+        if self.tries_left == 0 {
+            return Duration::ZERO;
+        }
+        self.expires_at.saturating_duration_since(now)
+    }
+
     /// The device whose proof took this pairing, if one has.
     #[must_use]
     pub fn taken_by(&self) -> Option<EndpointId> {
@@ -372,6 +382,8 @@ mod tests {
         let mut p = PendingPairing::new(SECRET, Role::Viewer, t);
         let late = t + PAIRING_VALID_FOR;
         assert!(!p.open(late));
+        assert_eq!(p.time_left(t), PAIRING_VALID_FOR);
+        assert_eq!(p.time_left(late), Duration::ZERO);
         assert_eq!(
             p.take(&PHONE, &HOST, &proof(&PHONE), late),
             Err(RefuseReason::NotPaired)
