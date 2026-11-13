@@ -110,6 +110,7 @@ pub(crate) fn forget(state: &AppState, id: &SessionId) -> Option<Session> {
     // greet a future session that reused the id. One call clears every phase.
     state.sleep.lock().forget(&id.0);
     state.memory.lock().forget(&id.0);
+    state.writers.forget(id);
     state.sessions.lock().remove(id)
 }
 
@@ -235,6 +236,7 @@ mod tests {
         state.sessions.lock().insert(id.clone(), session);
         ensure_runtime(&state, &id);
         state.sleep.lock().note_running_shells(&id.0, true);
+        state.writers.ensure(&id);
         {
             let mut sweep = state.memory.lock();
             sweep.per_session.insert(
@@ -257,6 +259,7 @@ mod tests {
             "the sleep ledger"
         );
         assert_eq!(state.memory.lock().total_mb, 0, "the footprint sweep");
+        assert!(!state.writers.has_gate(&id), "the writer gate");
     }
 
     #[test]

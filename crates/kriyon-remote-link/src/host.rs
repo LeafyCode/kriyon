@@ -338,6 +338,11 @@ impl RemoteLink {
     pub fn close(&self, code: CloseCode) {
         close(&self.connection, code);
     }
+
+    /// Wait until the connection closes, for whatever reason.
+    pub async fn closed(&self) {
+        self.connection.closed().await;
+    }
 }
 
 /// A device's pairing connection, before its request is read.

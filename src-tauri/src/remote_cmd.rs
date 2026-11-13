@@ -190,10 +190,15 @@ async fn turn_on(app: &tauri::AppHandle) -> Result<(), String> {
     use tauri::{Emitter as _, Manager as _};
     let secret_key = device_key(app)?;
     let emitter = app.clone();
+    let releaser = app.clone();
     let setup = crate::remote_rt::HostSetup {
         secret_key,
         bind: std::net::SocketAddr::from(([0, 0, 0, 0], 0)),
         paired: std::sync::Arc::new(StoreDevices(app.clone())),
+        on_device_gone: std::sync::Arc::new(move |device| {
+            let app = releaser.clone();
+            tauri::async_runtime::spawn(async move { release_everywhere(&app, device).await });
+        }),
         on_code_wanted: std::sync::Arc::new(move |device_name| {
             let _ = emitter.emit(
                 CODE_WANTED_EVENT,
@@ -459,7 +464,7 @@ pub async fn remote_remove_device(app: tauri::AppHandle, id: String) -> Result<(
     if !removed {
         return Err("no such device".to_string());
     }
-    release_everywhere(&app, &id);
+    release_everywhere(&app, id).await;
     app.state::<crate::remote_rt::RemoteRuntime>()
         .cut_off(&id)
         .await;
@@ -467,17 +472,22 @@ pub async fn remote_remove_device(app: tauri::AppHandle, id: String) -> Result<(
 }
 
 /// Give back typing control, and the host's size, on every session `device`
-/// held (spec section 4: removal or a change to Viewer).
-fn release_everywhere(app: &tauri::AppHandle, device: &[u8; 32]) {
-    use tauri::Manager as _;
-    let state = app.state::<crate::AppState>();
-    state.writers.release_device(device, |id| {
-        state
+/// held (spec sections 4 and 5: it left, was removed or became a Viewer). On
+/// the blocking pool: it may resize several sessions.
+async fn release_everywhere(app: &tauri::AppHandle, device: [u8; 32]) {
+    let app = app.clone();
+    let _ = tauri::async_runtime::spawn_blocking(move || {
+        use tauri::Manager as _;
+        let state = app.state::<crate::AppState>();
+        let engines: Vec<_> = state
             .sessions
             .lock()
-            .get(id)
-            .map(|session| std::sync::Arc::clone(&session.engine))
-    });
+            .iter()
+            .map(|(id, session)| (id.clone(), std::sync::Arc::clone(&session.engine)))
+            .collect();
+        state.writers.release_device(&device, &engines);
+    })
+    .await;
 }
 
 /// Change a paired device's role. Its connections close so it comes back
@@ -503,7 +513,7 @@ pub async fn remote_set_device_role(
         return Err("no such device".to_string());
     }
     if role == RoleArg::Viewer {
-        release_everywhere(&app, &id);
+        release_everywhere(&app, id).await;
     }
     app.state::<crate::remote_rt::RemoteRuntime>()
         .reconnect(&id)

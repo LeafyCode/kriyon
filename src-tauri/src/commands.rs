@@ -563,13 +563,11 @@ pub fn write_stdin(
     let id = SessionId(id.to_owned());
     // Cloned out, so the write happens with the sessions lock released.
     let engine = engine_of(&state, &id)?;
-    state
-        .writers
-        .host_write(&id, &engine, |known| is_live(&state, known), data)
+    state.writers.host_write(&id, &engine, data).map(|_took| ())
 }
 
 /// The engine of session `id`, cloned out from under the sessions lock.
-fn engine_of(
+pub(crate) fn engine_of(
     state: &AppState,
     id: &SessionId,
 ) -> Result<std::sync::Arc<crate::daemon_client::DaemonClient>, String> {
@@ -579,10 +577,6 @@ fn engine_of(
         .get(id)
         .map(|session| std::sync::Arc::clone(&session.engine))
         .ok_or_else(|| "session not found".to_string())
-}
-
-fn is_live(state: &AppState, id: &SessionId) -> bool {
-    state.sessions.lock().contains_key(id)
 }
 
 /// The user stopped the session's turn with Esc (the frontend saw the proof:
@@ -679,9 +673,7 @@ pub fn resize_pty(
     kriyon_core::session::check_screen_size(cols, rows).map_err(|e| e.to_string())?;
     let id = SessionId(id);
     let engine = engine_of(&state, &id)?;
-    state
-        .writers
-        .host_resize(&id, &engine, |known| is_live(&state, known), (cols, rows))
+    state.writers.host_resize(&id, &engine, (cols, rows))
 }
 
 /// Close the session, removing it from state and [Tree stop]ping its daemon —

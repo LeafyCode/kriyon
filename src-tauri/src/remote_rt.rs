@@ -28,6 +28,9 @@ pub struct HostSetup {
     /// Called with the device's name when a device has taken the pairing and
     /// the person should type the code it shows.
     pub on_code_wanted: Arc<dyn Fn(String) + Send + Sync>,
+    /// Called with a paired device's id when its connection closes: it
+    /// gives back typing control (spec section 5).
+    pub on_device_gone: Arc<dyn Fn(EndpointId) + Send + Sync>,
 }
 
 /// The pairing state the UI shows.
@@ -52,7 +55,7 @@ struct Running {
     accept: JoinHandle<()>,
     pairing: Arc<Mutex<Pairing>>,
     /// Paired devices' connections, held until they are served (next step).
-    links: Arc<Mutex<Vec<RemoteLink>>>,
+    links: Arc<Mutex<Vec<Arc<RemoteLink>>>>,
 }
 
 #[derive(Default)]
@@ -104,6 +107,7 @@ impl RemoteRuntime {
             Arc::clone(&pairing),
             Arc::clone(&links),
             setup.on_code_wanted,
+            setup.on_device_gone,
         ));
         *running = Some(Running {
             host,
@@ -247,12 +251,23 @@ impl RemoteRuntime {
 async fn accept_loop(
     host: Arc<Host>,
     pairing: Arc<Mutex<Pairing>>,
-    links: Arc<Mutex<Vec<RemoteLink>>>,
+    links: Arc<Mutex<Vec<Arc<RemoteLink>>>>,
     on_code_wanted: Arc<dyn Fn(String) + Send + Sync>,
+    on_device_gone: Arc<dyn Fn(EndpointId) + Send + Sync>,
 ) {
     while let Some(accepted) = host.accept().await {
         match accepted {
-            Accepted::Remote(link) => links.lock().await.push(link),
+            Accepted::Remote(link) => {
+                let link = Arc::new(link);
+                links.lock().await.push(Arc::clone(&link));
+                let links = Arc::clone(&links);
+                let on_device_gone = Arc::clone(&on_device_gone);
+                tokio::spawn(async move {
+                    link.closed().await;
+                    links.lock().await.retain(|held| !Arc::ptr_eq(held, &link));
+                    on_device_gone(link.device());
+                });
+            }
             Accepted::Pair(link) => {
                 let pairing = Arc::clone(&pairing);
                 let on_code_wanted = Arc::clone(&on_code_wanted);
@@ -304,6 +319,7 @@ mod tests {
             bind: loopback(),
             paired: Arc::clone(store) as Arc<dyn PairedDevices>,
             on_code_wanted: Arc::new(move |name| names.lock().expect("lock").push(name)),
+            on_device_gone: Arc::new(|_| {}),
         }
     }
 
@@ -409,6 +425,54 @@ mod tests {
             assert_eq!(answer, Ok("Test Mac".to_string()));
             assert_eq!(store.role(&phone.id()), Some(Role::Controller));
             assert_eq!(rt.pairing_status().await, PairingStatus::Idle);
+        });
+    }
+
+    #[test]
+    fn a_paired_device_that_disconnects_is_reported_gone() {
+        run(async {
+            let rt = RemoteRuntime::default();
+            let store = Arc::new(Store::default());
+            let phone = Device::bind(&LinkConfig {
+                bind: loopback(),
+                ..LinkConfig::new([2; 32])
+            })
+            .await
+            .expect("binds");
+            store
+                .0
+                .lock()
+                .expect("lock")
+                .insert(phone.id(), ("Test phone".into(), Role::Controller));
+            let names = Arc::new(StdMutex::new(Vec::new()));
+            let gone = Arc::new(StdMutex::new(Vec::new()));
+            let mut with_gone = setup(&store, &names);
+            let noted = Arc::clone(&gone);
+            with_gone.on_device_gone = Arc::new(move |id| noted.lock().expect("lock").push(id));
+            rt.turn_on(with_gone).await.expect("on");
+            let qr = rt
+                .start_pairing(Role::Viewer)
+                .await
+                .expect("pairing")
+                .to_qr_text();
+            let host = host_addr(&PairingInvite::from_qr_text(&qr).expect("reads")).expect("addr");
+            rt.stop_pairing().await;
+
+            let link = phone.connect(host).await.expect("connects");
+            let (mut out, incoming) = link.open_stream().await.expect("control");
+            out.send(&kriyon_remote::message::FromDevice::Resync)
+                .await
+                .expect("sends");
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            assert!(gone.lock().expect("lock").is_empty(), "still connected");
+            drop((out, incoming));
+            phone.close().await;
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while gone.lock().expect("lock").is_empty() {
+                assert!(std::time::Instant::now() < deadline, "never reported gone");
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+            assert_eq!(*gone.lock().expect("lock"), vec![phone.id()]);
         });
     }
 

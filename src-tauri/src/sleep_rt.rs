@@ -14,7 +14,7 @@ use std::time::Instant;
 
 use kriyon_core::onlooker::{Onlooker, Onlookers};
 use kriyon_core::proc::{ProcessTree, PtyForeground};
-use kriyon_core::session::{SessionEngine as _, SessionId, SessionStatus};
+use kriyon_core::session::{SessionId, SessionStatus};
 use kriyon_core::sleep::{
     can_type_resume, is_quiescent, should_sleep, SleepCandidate, SleepState, SleepTransition,
 };
@@ -596,9 +596,15 @@ fn type_resume<R: tauri::Runtime>(
     // shell owns the terminal, not that its input line is empty. Without it a
     // wake that races the user's keystrokes would run `<their text>claude
     // --resume …` as one garbled command.
-    engine
-        .write_stdin(format!("\x15claude --resume {claude_id}\r").as_bytes())
-        .map_err(|e| e.to_string())
+    // Through the session's writer, as the host typing.
+    app.state::<AppState>()
+        .writers
+        .host_write(
+            &SessionId(id.to_string()),
+            &engine,
+            format!("\x15claude --resume {claude_id}\r").as_bytes(),
+        )
+        .map(|_took| ())
 }
 
 #[cfg(test)]
