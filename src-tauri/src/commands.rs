@@ -209,7 +209,8 @@ pub async fn create_session(
     // silently wedged pane. Never fired for an app-initiated close/handover.
     on_exit: tauri::ipc::Channel<bool>,
 ) -> Result<bool, String> {
-    // Every byte the session's pty produces passes here, which makes it the one
+    // Every byte the session's pty produces passes here as soon as it is read —
+    // even while the webview is too far behind to take it — which makes it the one
     // place that knows whether the terminal has actually stopped painting. The
     // notification path reads that to confirm a turn really settled before it
     // pings — a hook alone cannot tell "done" from "mid-sentence", because hook
@@ -220,7 +221,7 @@ pub async fn create_session(
     // `claude` exits at startup when the org forbids the companion folder; the
     // message is the only sign, so the output is watched for it.
     let refusal = parking_lot::Mutex::new(kriyon_core::integration::RefusalWatch::default());
-    let callback = move |bytes: Vec<u8>| {
+    let read_callback = move |bytes: &[u8]| {
         {
             use tauri::Manager as _;
             let state = output_app.state::<AppState>();
@@ -229,10 +230,13 @@ pub async fn create_session(
                 runtime.note_pty_output(Instant::now());
             }
         }
-        if refusal.lock().feed(&bytes) {
+        if refusal.lock().feed(bytes) {
             let app = output_app.clone();
             std::thread::spawn(move || crate::integration::note_sideload_refused(&app));
         }
+    };
+    // The same bytes on their way to the webview, paced by `report_drained`.
+    let output_callback = move |bytes: Vec<u8>| {
         let _ = on_output.send(bytes);
     };
     let busy_callback = move |busy: bool| {
@@ -343,7 +347,8 @@ pub async fn create_session(
         let engine = DaemonClient::from_stream(
             stream,
             SessionId(id.clone()),
-            callback,
+            read_callback,
+            output_callback,
             busy_callback,
             exit_callback,
         )
@@ -438,7 +443,8 @@ pub async fn create_session(
     let engine = DaemonClient::connect(
         &socket,
         SessionId(id.clone()),
-        callback,
+        read_callback,
+        output_callback,
         busy_callback,
         exit_callback,
     )
@@ -738,11 +744,15 @@ pub fn report_drained(
     id: String,
     bytes: usize,
 ) -> Result<(), String> {
-    let sessions = state.sessions.lock();
-    let session = sessions
+    // Let go of the sessions lock first: releasing held output can hand the
+    // webview a slice of up to the high-water mark.
+    let engine = state
+        .sessions
+        .lock()
         .get(&SessionId(id))
+        .map(|session| std::sync::Arc::clone(&session.engine))
         .ok_or_else(|| "session not found".to_string())?;
-    session.engine.report_drained(bytes);
+    engine.report_drained(bytes);
     Ok(())
 }
 

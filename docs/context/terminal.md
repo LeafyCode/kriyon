@@ -47,16 +47,22 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
 - **Write queue** (`WriteQueue`) — the frontend buffer that coalesces incoming PTY output
   (`Uint8Array` chunks) and flushes them to xterm once per `requestAnimationFrame` via a single
   `term.write` of the concatenated bytes, instead of one write per channel message. Each flush
-  reports the byte count it consumed (see [Drained counter]) so the reader can resume. _Avoid_:
-  render buffer, frame buffer.
-- **Backpressure** — the Rust PTY reader's flow control on the output path. It tracks
-  `pending = sent − drained` bytes; when `pending` exceeds the high-water mark (128 KB) the reader
-  thread parks on a condvar, resuming once it falls below the low-water mark (16 KB). Keeps a fast
-  `claude` from outrunning the renderer without dropping or reordering bytes. _Avoid_: throttle,
+  reports the byte count it consumed (see [Drained counter]) so the [Output gate] can send more.
+  It flushes only on animation frames, so a hidden window's queue stops flushing. _Avoid_: render
+  buffer, frame buffer.
+- **Output gate** (`OutputGate`) — decides what a [Session]'s output does on its way to the
+  webview, so the [Daemon client]'s reader never waits on a webview that has stopped drawing
+  (ADR-0059). It tracks `in_flight = delivered − drained`: under the high-water mark (128 KB)
+  output goes straight through; above it the reader waits while the webview still drains. After
+  500 ms with no drain the webview is stalled: output is held (up to 1 MB) and released in order,
+  128 KB at a time, once in-flight bytes drain to the low-water mark (16 KB); past that cap the
+  held bytes are dropped and, once the webview catches up, it repaints from the
+  [Screen snapshot]. Replaced **Backpressure**, which parked the
+  reader and so froze every session while the window was hidden. _Avoid_: backpressure, throttle,
   flow control (ambiguous with terminal XON/XOFF).
 - **Drained counter** (`report_drained`) — the per-[Session] count of output bytes the frontend has
   taken ownership of from the output channel. The `report_drained(id, bytes)` command adds to it and
-  signals the [Backpressure] condvar so a parked reader can resume. `pending = sent − drained`.
+  lets the [Output gate] release held output or ask for a repaint.
   _Avoid_: ack, acknowledged bytes.
 - **PTY daemon** (`kriyon-ptyd`) — the long-lived, out-of-process daemon that owns one [Session]'s
   PTY and child shell, one process per [Session], so the [Session] outlives an app crash. It
@@ -77,8 +83,8 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
   decoded by the pure `wire` module, which tolerates partial reads and skips unknown tags.
   _Avoid_: packet, message.
 - **Daemon client** (`DaemonClient`) — the app-side [Engine] that connects to a [Session socket],
-  runs the framed reader thread feeding [Backpressure] (so [Drained counter] and pacing are
-  unchanged), and sends stdin/resize/shutdown frames. Implements `SessionEngine`, so the app's hot
+  runs the framed reader thread feeding the [Output gate] (which never blocks it), and sends
+  stdin/resize/shutdown/repaint frames. Implements `SessionEngine`, so the app's hot
   path does not change when the PTY moves out of process. _Avoid_: pty client.
 - **Screen snapshot** (`state_formatted`) — the escape codes the [PTY daemon]'s headless `vt100`
   emulator emits to reconstruct the current screen (contents, colours, cursor, input modes), sent to

@@ -158,7 +158,7 @@ export function writeStdin(id: string, data: Uint8Array): Promise<void> {
 
 /**
  * Report bytes the frontend has drained from a session's PTY output, so the
- * backend reader can resume after parking at its high-water mark. Fire-and-
+ * backend output gate can send what it held. Fire-and-
  * forget from the caller's perspective; the backend just advances a counter.
  */
 export function reportDrained(id: string, bytes: number): Promise<void> {
