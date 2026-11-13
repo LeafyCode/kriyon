@@ -27,10 +27,14 @@ case: the desktop app is often hidden while someone uses their phone.
   webview takes it.
 - **An [Output gate] in `kriyon-core` decides what the webview gets.** Under
   128 KB in flight, output goes straight through, as before. Above it, while
-  the webview still drains, the reader waits for it, as before: a window that
-  draws still paces a fast program, so a visible build log loses no lines.
+  the webview still drains, the reader waits for it, as before, so a fast
+  program's output waits in the daemon's per-client queue instead of being
+  dropped here. Only a burst past that queue is skipped, and the daemon's
+  Output history still has it (ADR-0060).
 - **After 500 ms with no drain, the webview counts as stalled** and the reader
-  stops waiting. Output is then held, up to 1 MB per session, and released in
+  stops waiting. It paces again as soon as the webview drains again, held
+  output or not, so one slow frame on a visible window does not turn into
+  lost output. A report of nothing drained is not progress. Output is then held, up to 1 MB per session, and released in
   order, 128 KB at a time, as the webview drains back to 16 KB. Past 1 MB,
   the held bytes are dropped, and so is everything after them until the
   webview catches up; the client then asks the daemon for a screen repaint.
@@ -50,5 +54,14 @@ case: the desktop app is often hidden while someone uses their phone.
   ("Show earlier output") is separate work.
 - Between the drop and the repaint, a few stale bytes can reach the terminal
   and be drawn briefly; the repaint opens with a clear and overwrites them.
-- The daemon's blocking socket write stays as it is. It still paces the child
-  while a window draws; it no longer blocks behind one that does not.
+- `report_drained` is an async command whose work runs on the blocking pool:
+  it can wait on the reader's lock, hand the webview a slice of held output,
+  or write a repaint request, none of which may happen on the main thread.
+- Not solved yet, both because a repaint arrives as ordinary `Output`: the
+  repaint's bytes count as fresh session output (the "still printing" clock,
+  the refusal watch), and output read between the cut and the repaint is
+  drawn on the old screen until the repaint clears it. Both need the daemon to
+  mark its screen snapshot with a frame of its own.
+- The daemon never blocks on the app either: it queues each client's output
+  and skips ahead when the queue is full. So the child is paced by no one; the
+  gate only decides how much reaches the webview, and in what order.

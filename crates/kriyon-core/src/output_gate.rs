@@ -9,7 +9,7 @@
 //!
 //! - below the high-water mark, output is delivered straight through;
 //! - above it, while the webview is still draining, the reader briefly waits,
-//!   so a fast program is paced by a window that draws and nothing is lost;
+//!   so a window that draws paces the reader and nothing is dropped here;
 //! - once the webview has drained nothing for [`STALL_AFTER`], it counts as
 //!   stalled: the reader stops waiting, and output is held, up to a byte cap,
 //!   then released in order, a slice at a time, as the webview drains again;
@@ -60,8 +60,8 @@ pub struct OutputGate {
     cap: usize,
     /// Bytes delivered to the webview but not yet reported drained.
     in_flight: usize,
-    /// When the webview last showed it is draining: its last report, or the
-    /// delivery that put bytes in flight after none were.
+    /// When the webview last showed it is keeping up: its last report of
+    /// bytes drained, or a delivery made while next to nothing was in flight.
     progress_at: Instant,
     held: VecDeque<u8>,
     /// Output has been dropped since the webview last caught up.
@@ -91,11 +91,13 @@ impl OutputGate {
     }
 
     /// Until when the reader should wait before offering more output: `Some`
-    /// while the webview is behind but still draining, `None` when output can
-    /// be offered now (it is under the high mark, or the webview has stalled).
+    /// while the webview is behind — past the high mark, or with output still
+    /// held — but still draining. `None` when output can be offered now: the
+    /// webview is keeping up, or it has stalled, or output is being dropped.
     #[must_use]
     pub fn pace_until(&self, now: Instant) -> Option<Instant> {
-        if self.in_flight < self.high || self.skipped || !self.held.is_empty() {
+        let behind = self.in_flight >= self.high || !self.held.is_empty();
+        if !behind || self.skipped {
             return None;
         }
         let deadline = self.progress_at + STALL_AFTER;
@@ -110,7 +112,8 @@ impl OutputGate {
             return None;
         }
         if self.held.is_empty() && self.in_flight < self.high {
-            if self.in_flight == 0 {
+            // A few bytes left in flight from earlier say nothing about now.
+            if self.in_flight <= self.low {
                 self.progress_at = now;
             }
             self.in_flight = self.in_flight.saturating_add(bytes.len());
@@ -127,8 +130,11 @@ impl OutputGate {
     }
 
     /// The webview reported `n` bytes drained. Safe to call with more than
-    /// are in flight.
+    /// are in flight. A report of nothing is not progress.
     pub fn drained(&mut self, n: usize, now: Instant) -> CatchUp {
+        if n == 0 {
+            return CatchUp::Nothing;
+        }
         self.progress_at = now;
         self.in_flight = self.in_flight.saturating_sub(n);
         if self.in_flight > self.low {
@@ -142,7 +148,12 @@ impl OutputGate {
             return CatchUp::Nothing;
         }
         let take = self.held.len().min(self.high);
-        let slice: Vec<u8> = self.held.drain(..take).collect();
+        let (front, back) = self.held.as_slices();
+        let from_front = take.min(front.len());
+        let mut slice = Vec::with_capacity(take);
+        slice.extend_from_slice(&front[..from_front]);
+        slice.extend_from_slice(&back[..take - from_front]);
+        self.held.drain(..take);
         self.in_flight = self.in_flight.saturating_add(slice.len());
         CatchUp::Deliver(slice)
     }
@@ -202,6 +213,44 @@ mod tests {
     }
 
     #[test]
+    fn a_webview_that_drains_again_after_a_stall_paces_the_reader_again() {
+        let t0 = Instant::now();
+        let (mut g, t1) = stalled(t0);
+        assert_eq!(g.offer(vec![1; 140], t1), None);
+        // The window is back: a slice goes out, the rest is still held.
+        let t2 = t1 + Duration::from_millis(50);
+        assert_eq!(g.drained(95, t2), CatchUp::Deliver(vec![1; 100]));
+        // Pace again, or a fast program fills the cap and is cut while the
+        // window draws.
+        assert_eq!(g.pace_until(t2), Some(t2 + STALL_AFTER));
+    }
+
+    #[test]
+    fn a_burst_after_a_quiet_spell_is_paced_not_taken_for_a_stall() {
+        let t0 = Instant::now();
+        let mut g = gate(t0);
+        assert!(g.offer(vec![0; 20], t0).is_some());
+        // A few bytes are still in flight when the session goes quiet.
+        assert_eq!(g.drained(15, t0), CatchUp::Nothing);
+
+        let later = t0 + Duration::from_secs(10);
+        assert!(g.offer(vec![0; 100], later).is_some());
+        assert_eq!(g.pace_until(later), Some(later + STALL_AFTER));
+    }
+
+    #[test]
+    fn a_report_of_nothing_drained_is_not_progress() {
+        let t0 = Instant::now();
+        let mut g = gate(t0);
+        assert!(g.offer(vec![0; 120], t0).is_some());
+        assert_eq!(
+            g.drained(0, t0 + Duration::from_millis(400)),
+            CatchUp::Nothing
+        );
+        assert_eq!(g.pace_until(t0 + STALL_AFTER), None);
+    }
+
+    #[test]
     fn held_output_is_released_in_order_once_drained() {
         let t0 = Instant::now();
         let (mut g, t1) = stalled(t0);
@@ -223,6 +272,45 @@ mod tests {
         let first = g.drained(100, t1);
         assert_eq!(first, CatchUp::Deliver([vec![1; 70], vec![2; 30]].concat()));
         assert_eq!(g.drained(100, t1), CatchUp::Deliver(vec![2; 40]));
+    }
+
+    /// Numbered bytes, so any reordering or loss shows.
+    fn numbered(from: &mut u8, len: usize) -> Vec<u8> {
+        (0..len)
+            .map(|_| {
+                *from = from.wrapping_add(1);
+                *from
+            })
+            .collect()
+    }
+
+    #[test]
+    fn held_output_keeps_its_order_across_many_holds_and_releases() {
+        let t0 = Instant::now();
+        let (mut g, t) = stalled(t0);
+        let (mut n, mut sent, mut got) = (0u8, Vec::new(), Vec::new());
+        for _ in 0..20 {
+            // 70 + 70 held; a slice of 100 out; 70 more held while 40 still
+            // are, so the held bytes wrap around inside the gate.
+            for step in ["hold", "hold", "release", "hold", "release", "release"] {
+                if step == "hold" {
+                    let c = numbered(&mut n, 70);
+                    sent.extend_from_slice(&c);
+                    assert_eq!(g.offer(c, t), None, "behind, so held");
+                } else {
+                    let CatchUp::Deliver(out) = g.drained(usize::MAX, t) else {
+                        panic!("expected held output");
+                    };
+                    got.extend_from_slice(&out);
+                }
+            }
+            assert_eq!(g.drained(usize::MAX, t), CatchUp::Nothing);
+            // Put the webview behind again for the next round.
+            let c = numbered(&mut n, 100);
+            sent.extend_from_slice(&c);
+            got.extend_from_slice(&g.offer(c, t).expect("not behind"));
+        }
+        assert_eq!(got, sent);
     }
 
     #[test]

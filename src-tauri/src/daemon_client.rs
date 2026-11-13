@@ -335,7 +335,11 @@ impl DaemonClient {
         // Mark the disconnect as ours BEFORE severing, so the reader thread
         // never mistakes it for the daemon dying and fires a phantom exit.
         self.closing.store(true, Ordering::Relaxed);
+        // Under the lock, or the wake can land between a pacing reader's
+        // check of `closing` and its wait, and be lost for a whole stall.
+        let held = self.outlet.delivery.lock();
         self.outlet.progress.notify_all();
+        drop(held);
         let _ = self.writer.lock().shutdown(std::net::Shutdown::Both);
         if let Some(handle) = self.reader_thread.lock().take() {
             let _ = handle.join();
@@ -546,140 +550,24 @@ mod tests {
         drop(client);
     }
 
+    /// What a [`spawn_flooding_daemon`] has seen.
+    struct Flood {
+        /// Every write went through.
+        wrote_all: Arc<StdMutex<bool>>,
+        /// The client asked for a repaint after that.
+        saw_repaint: Arc<StdMutex<bool>>,
+    }
+
     /// A fake daemon that writes `total` bytes of output in 64 KB frames as fast
-    /// as the client takes them, and flags once every write has gone through —
-    /// the stand-in for a pty whose reads never stall.
-    fn spawn_flooding_daemon(socket: &Path, total: usize) -> Arc<StdMutex<bool>> {
+    /// as the client takes them — the stand-in for a pty whose reads never
+    /// stall — then stays connected, reading frames, until the client leaves.
+    fn spawn_flooding_daemon(socket: &Path, total: usize) -> Flood {
         let listener = UnixListener::bind(socket).expect("bind");
-        let wrote_all = Arc::new(StdMutex::new(false));
-        let flag = Arc::clone(&wrote_all);
-        std::thread::spawn(move || {
-            let Ok((mut stream, _)) = listener.accept() else {
-                return;
-            };
-            let chunk = Frame::Output(vec![b'x'; 64 * 1024]).encode();
-            for _ in 0..(total / (64 * 1024)) {
-                if stream.write_all(&chunk).is_err() {
-                    return;
-                }
-            }
-            *flag.lock().expect("lock") = true;
-            // Stay connected, like a live daemon.
-            std::thread::sleep(Duration::from_secs(5));
-        });
-        wrote_all
-    }
-
-    fn wait_for(flag: &StdMutex<bool>, what: &str) {
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while !*flag.lock().expect("lock") {
-            assert!(Instant::now() < deadline, "{what}");
-            std::thread::sleep(Duration::from_millis(20));
-        }
-    }
-
-    /// The hidden-window freeze (12 Nov): a hidden webview gets no animation
-    /// frames, so its write queue never flushes and never reports bytes
-    /// drained. The session must keep being read anyway — the daemon's writes,
-    /// and so its pty reads, must never wait on the webview.
-    #[test]
-    fn output_keeps_flowing_while_the_webview_drains_nothing() {
-        let dir = tempfile::tempdir().expect("tmp dir");
-        let socket = dir.path().join("s.sock");
-        // Far past the old high-water mark, and past any bound the app holds.
-        let wrote_all = spawn_flooding_daemon(&socket, 64 * HIGH_WATER);
-
-        // A live, attached sink that takes bytes but never reports them drained.
-        let client = DaemonClient::connect(
-            &socket,
-            SessionId("s".into()),
-            |_| {},
-            |_| {},
-            |_| {},
-            || {},
-        )
-        .expect("connect");
-
-        wait_for(
-            &wrote_all,
-            "the daemon's writes stalled: the reader waited on the webview",
-        );
-        drop(client);
-    }
-
-    /// A window that draws drains every frame. A program printing faster than
-    /// that must still be paced by it, as before, rather than have its output
-    /// dropped: scrollback keeps every line of a fast build log.
-    #[test]
-    fn a_webview_that_keeps_draining_paces_the_session_and_gets_every_byte() {
-        let dir = tempfile::tempdir().expect("tmp dir");
-        let socket = dir.path().join("s.sock");
-        // Well past what the app would hold for a stalled webview.
-        let total = 4 * HOLD_CAP;
-        let wrote_all = spawn_flooding_daemon(&socket, total);
-
-        let (tx, rx) = std::sync::mpsc::channel::<usize>();
-        let delivered = Arc::new(StdMutex::new(0usize));
-        let seen = Arc::clone(&delivered);
-        let client = Arc::new(
-            DaemonClient::connect(
-                &socket,
-                SessionId("s".into()),
-                |_| {},
-                move |bytes| {
-                    *seen.lock().expect("lock") += bytes.len();
-                    let _ = tx.send(bytes.len());
-                },
-                |_| {},
-                || {},
-            )
-            .expect("connect"),
-        );
-        // The write queue: once a "frame", report everything that arrived.
-        let drainer = Arc::clone(&client);
-        std::thread::spawn(move || loop {
-            std::thread::sleep(Duration::from_millis(5));
-            let mut n = 0;
-            loop {
-                match rx.try_recv() {
-                    Ok(len) => n += len,
-                    Err(std::sync::mpsc::TryRecvError::Empty) => break,
-                    Err(std::sync::mpsc::TryRecvError::Disconnected) => return,
-                }
-            }
-            drainer.report_drained(n);
-        });
-
-        wait_for(&wrote_all, "the daemon's writes stalled");
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while *delivered.lock().expect("lock") < total {
-            assert!(
-                Instant::now() < deadline,
-                "the webview did not get every byte"
-            );
-            std::thread::sleep(Duration::from_millis(20));
-        }
-        assert_eq!(
-            *delivered.lock().expect("lock"),
-            total,
-            "nothing dropped, nothing added"
-        );
-    }
-
-    /// While the webview is away, every byte still reaches `on_read` (status,
-    /// notifications), the webview is sent no more than a bounded amount, and
-    /// once it drains it is caught up by a screen repaint from the daemon.
-    #[test]
-    fn a_webview_that_comes_back_after_a_flood_is_caught_up_by_a_repaint() {
-        let dir = tempfile::tempdir().expect("tmp dir");
-        let socket = dir.path().join("s.sock");
-        let total = 64 * HIGH_WATER;
-        let listener = UnixListener::bind(&socket).expect("bind");
-        let (wrote_all, saw_repaint) = (
-            Arc::new(StdMutex::new(false)),
-            Arc::new(StdMutex::new(false)),
-        );
-        let (wrote, repaint) = (Arc::clone(&wrote_all), Arc::clone(&saw_repaint));
+        let flood = Flood {
+            wrote_all: Arc::new(StdMutex::new(false)),
+            saw_repaint: Arc::new(StdMutex::new(false)),
+        };
+        let (wrote, repaint) = (Arc::clone(&flood.wrote_all), Arc::clone(&flood.saw_repaint));
         std::thread::spawn(move || {
             let Ok((mut stream, _)) = listener.accept() else {
                 return;
@@ -705,6 +593,117 @@ mod tests {
                 }
             }
         });
+        flood
+    }
+
+    fn wait_for(flag: &StdMutex<bool>, what: &str) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !*flag.lock().expect("lock") {
+            assert!(Instant::now() < deadline, "{what}");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    /// The hidden-window freeze (12 Nov): a hidden webview gets no animation
+    /// frames, so its write queue never flushes and never reports bytes
+    /// drained. The session must keep being read anyway — the daemon's writes,
+    /// and so its pty reads, must never wait on the webview.
+    #[test]
+    fn output_keeps_flowing_while_the_webview_drains_nothing() {
+        let dir = tempfile::tempdir().expect("tmp dir");
+        let socket = dir.path().join("s.sock");
+        // Far past the old high-water mark, and past any bound the app holds.
+        let flood = spawn_flooding_daemon(&socket, 64 * HIGH_WATER);
+
+        // A live, attached sink that takes bytes but never reports them drained.
+        let client = DaemonClient::connect(
+            &socket,
+            SessionId("s".into()),
+            |_| {},
+            |_| {},
+            |_| {},
+            || {},
+        )
+        .expect("connect");
+
+        wait_for(
+            &flood.wrote_all,
+            "the daemon's writes stalled: the reader waited on the webview",
+        );
+        drop(client);
+    }
+
+    /// A window that draws drains every frame. A program printing faster than
+    /// that must still be paced by it, as before, rather than have its output
+    /// dropped: scrollback keeps every line of a fast build log.
+    #[test]
+    fn a_webview_that_keeps_draining_paces_the_session_and_gets_every_byte() {
+        let dir = tempfile::tempdir().expect("tmp dir");
+        let socket = dir.path().join("s.sock");
+        // Well past what the app would hold for a stalled webview.
+        let total = 4 * HOLD_CAP;
+        let flood = spawn_flooding_daemon(&socket, total);
+
+        let (tx, rx) = std::sync::mpsc::channel::<usize>();
+        let delivered = Arc::new(StdMutex::new(0usize));
+        let seen = Arc::clone(&delivered);
+        let client = Arc::new(
+            DaemonClient::connect(
+                &socket,
+                SessionId("s".into()),
+                |_| {},
+                move |bytes| {
+                    *seen.lock().expect("lock") += bytes.len();
+                    let _ = tx.send(bytes.len());
+                },
+                |_| {},
+                || {},
+            )
+            .expect("connect"),
+        );
+        // The write queue: report what arrived as soon as it is taken. Holds
+        // the client weakly, and ends when the client (and its sender) goes.
+        let drainer = Arc::downgrade(&client);
+        std::thread::spawn(move || {
+            while let Ok(first) = rx.recv() {
+                let n = first + rx.try_iter().sum::<usize>();
+                let Some(client) = drainer.upgrade() else {
+                    return;
+                };
+                client.report_drained(n);
+            }
+        });
+
+        wait_for(&flood.wrote_all, "the daemon's writes stalled");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while *delivered.lock().expect("lock") < total {
+            assert!(
+                Instant::now() < deadline,
+                "the webview did not get every byte"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(
+            *delivered.lock().expect("lock"),
+            total,
+            "nothing dropped, nothing added"
+        );
+        assert!(
+            !*flood.saw_repaint.lock().expect("lock"),
+            "a webview that kept up never needs a repaint"
+        );
+        drop(client);
+    }
+
+    /// While the webview is away, every byte still reaches `on_read` (status,
+    /// notifications), the webview is sent no more than a bounded amount, and
+    /// once it drains it is caught up by a screen repaint from the daemon.
+    #[test]
+    fn a_webview_that_comes_back_after_a_flood_is_caught_up_by_a_repaint() {
+        let dir = tempfile::tempdir().expect("tmp dir");
+        let socket = dir.path().join("s.sock");
+        let total = 64 * HIGH_WATER;
+        let flood = spawn_flooding_daemon(&socket, total);
 
         let read = Arc::new(StdMutex::new(0usize));
         let sent = Arc::new(StdMutex::new(0usize));
@@ -719,7 +718,7 @@ mod tests {
         )
         .expect("connect");
 
-        wait_for(&wrote_all, "the daemon's writes stalled");
+        wait_for(&flood.wrote_all, "the daemon's writes stalled");
         let deadline = Instant::now() + Duration::from_secs(5);
         while *read.lock().expect("lock") < total {
             assert!(Instant::now() < deadline, "not every byte reached on_read");
@@ -734,7 +733,7 @@ mod tests {
         // The window shows again: the write queue flushes what it had.
         client.report_drained(delivered);
         wait_for(
-            &saw_repaint,
+            &flood.saw_repaint,
             "the catching-up webview never asked for a repaint",
         );
         drop(client);

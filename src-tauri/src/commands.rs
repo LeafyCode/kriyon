@@ -227,7 +227,7 @@ pub async fn create_session(
 ) -> Result<bool, String> {
     // Every byte the session's pty produces passes here as soon as it is read —
     // even while the webview is too far behind to take it — which makes it the one
-    // place that knows whether the terminal has actually stopped painting. The
+    // place that knows whether the session has actually stopped printing. The
     // notification path reads that to confirm a turn really settled before it
     // pings — a hook alone cannot tell "done" from "mid-sentence", because hook
     // events and pty bytes arrive on separate channels with no ordering between
@@ -764,32 +764,35 @@ pub async fn sleep_idle_sessions(app: tauri::AppHandle) -> Result<usize, String>
 /// Acknowledge that `bytes` of a session's output have drained from the
 /// frontend's terminal sink.
 ///
-/// The pty reader pauses when too much output is sent-but-not-drained (so a
-/// fast-printing child cannot outrun the UI); the frontend calls this as it
-/// flushes bytes into xterm, resuming the reader once enough has drained.
-/// Looking the session up by `id` IS the validation — an unknown id returns an
-/// error and is never trusted further.
+/// The frontend calls this as it flushes bytes into xterm. The session's
+/// [Output gate] then lets the reader go on, releases output it held while the
+/// webview was behind, or asks the daemon for a repaint (ADR-0059). Looking the
+/// session up by `id` IS the validation — an unknown id returns an error and is
+/// never trusted further.
+///
+/// Async, and the work goes to the blocking pool: a sync command runs on the
+/// main thread, and this one can wait on the reader's lock, hand the webview a
+/// slice of held output, or write a repaint request to the daemon.
 ///
 /// # Errors
 /// Returns an error string if the session is unknown.
 // Signature is dictated by Tauri's command macro (State + by-value args).
 #[allow(clippy::needless_pass_by_value)]
 #[tauri::command]
-pub fn report_drained(
+pub async fn report_drained(
     state: tauri::State<'_, AppState>,
     id: String,
     bytes: usize,
 ) -> Result<(), String> {
-    // Let go of the sessions lock first: releasing held output can hand the
-    // webview a slice of up to the high-water mark.
     let engine = state
         .sessions
         .lock()
         .get(&SessionId(id))
         .map(|session| std::sync::Arc::clone(&session.engine))
         .ok_or_else(|| "session not found".to_string())?;
-    engine.report_drained(bytes);
-    Ok(())
+    tauri::async_runtime::spawn_blocking(move || engine.report_drained(bytes))
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// Begin streaming a session's live status and Claude Code transcript.
