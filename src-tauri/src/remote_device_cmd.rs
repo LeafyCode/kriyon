@@ -154,14 +154,12 @@ fn entry(row: &crate::store::PairedHostRow) -> Result<HostEntry, String> {
 }
 
 async fn connect(app: &tauri::AppHandle, row: &crate::store::PairedHostRow) -> Result<(), String> {
-    let key = crate::remote_cmd::device_key(app)?;
-    let rt = runtime(app);
-    let me = rt.device(key).await?.id();
+    let me = crate::remote_cmd::bound(app).await?.host.id();
     let events = Arc::new(Emitter {
         app: app.clone(),
         me,
     });
-    rt.connect(key, entry(row)?, events).await
+    runtime(app).connect(entry(row)?, events).await
 }
 
 /// Connect to every host this computer paired with, at launch.
@@ -203,9 +201,9 @@ pub enum PairingEnded {
 #[tauri::command]
 pub async fn remote_host_pair(app: tauri::AppHandle, invite: String) -> Result<String, String> {
     check_invite_text(&invite)?;
-    let key = crate::remote_cmd::device_key(&app)?;
+    crate::remote_cmd::bound(&app).await?;
     let start = runtime(&app)
-        .start_pairing(key, &invite, &crate::remote_cmd::host_name())
+        .start_pairing(&invite, &crate::remote_cmd::host_name())
         .await?;
     let code = start.code.clone();
     let invite = start.invite;
@@ -291,6 +289,7 @@ pub async fn remote_host_forget(app: tauri::AppHandle, host_id: String) -> Resul
         .lock()
         .forget_paired_host(&id)
         .map_err(|e| e.to_string())?;
+    crate::remote_cmd::release_endpoint_if_unused(&app).await;
     Ok(())
 }
 

@@ -7,7 +7,6 @@
 //! `remote_device_cmd` wires it to the app.
 
 use std::collections::HashMap;
-use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -19,7 +18,7 @@ use kriyon_remote::message::{EndpointId, FromDevice, Holder, RefuseReason, Sessi
 use kriyon_remote::pairing::PairingInvite;
 use kriyon_remote_link::device::{stay_connected_waking, Device, DeviceLink};
 use kriyon_remote_link::framed::{MessageReader, MessageWriter};
-use kriyon_remote_link::{LinkConfig, LinkError};
+use kriyon_remote_link::LinkError;
 use serde::Serialize;
 use tokio::sync::{Mutex, Notify};
 use tokio::task::JoinHandle;
@@ -97,8 +96,8 @@ pub struct DevicePairingStart {
 }
 
 /// The device side, one per app.
+#[derive(Default)]
 pub struct DeviceRuntime {
-    bind: SocketAddr,
     device: Mutex<Option<Arc<Device>>>,
     hosts: Mutex<HashMap<EndpointId, Arc<HostConn>>>,
     wake: Arc<Notify>,
@@ -125,33 +124,33 @@ struct OpenSession {
 }
 
 impl DeviceRuntime {
-    /// A device side that listens on `bind` (any port in production).
-    #[must_use]
-    pub fn new(bind: SocketAddr) -> Self {
-        Self {
-            bind,
-            device: Mutex::new(None),
-            hosts: Mutex::new(HashMap::new()),
-            wake: Arc::new(Notify::new()),
+    /// Dial from this computer's one endpoint ([`crate::remote_endpoint`]),
+    /// which may also host. Replaces an endpoint that was closed.
+    pub async fn attach(&self, endpoint: iroh::Endpoint) -> Arc<Device> {
+        let mut device = self.device.lock().await;
+        match device.as_ref() {
+            Some(device) if device.id() == *endpoint.id().as_bytes() && !endpoint.is_closed() => {
+                Arc::clone(device)
+            }
+            _ => {
+                let attached = Arc::new(Device::from_endpoint(endpoint));
+                *device = Some(Arc::clone(&attached));
+                attached
+            }
         }
     }
 
-    /// This device's endpoint, bound on first use with the [Device key].
-    ///
-    /// # Errors
-    /// Why it couldn't be bound.
-    pub async fn device(&self, secret_key: [u8; 32]) -> Result<Arc<Device>, String> {
-        let mut device = self.device.lock().await;
-        if let Some(device) = device.as_ref() {
-            return Ok(Arc::clone(device));
-        }
-        let config = LinkConfig {
-            bind: self.bind,
-            ..LinkConfig::new(secret_key)
-        };
-        let bound = Arc::new(Device::bind(&config).await.map_err(|e| e.to_string())?);
-        *device = Some(Arc::clone(&bound));
-        Ok(bound)
+    async fn attached(&self) -> Result<Arc<Device>, String> {
+        self.device
+            .lock()
+            .await
+            .clone()
+            .ok_or_else(|| "remote access isn't ready".to_string())
+    }
+
+    /// Whether this computer is connected, or connecting, to any host.
+    pub async fn in_use(&self) -> bool {
+        !self.hosts.lock().await.is_empty()
     }
 
     async fn my_id(&self) -> Option<EndpointId> {
@@ -174,14 +173,13 @@ impl DeviceRuntime {
     /// For text that isn't an invite, an unreachable host, or a refusal.
     pub async fn start_pairing(
         &self,
-        secret_key: [u8; 32],
         invite_text: &str,
         device_name: &str,
     ) -> Result<DevicePairingStart, String> {
         let invite = PairingInvite::from_qr_text(invite_text.trim())
             .map_err(|_| "that isn't a Kriyon pairing code".to_string())?;
         let addr = kriyon_remote_link::invite::host_addr(&invite).map_err(|e| e.to_string())?;
-        let device = self.device(secret_key).await?;
+        let device = self.attached().await?;
         let finish = device
             .pair(addr, &invite.secret, device_name)
             .await
@@ -197,14 +195,13 @@ impl DeviceRuntime {
     /// device. Does nothing if already connected or connecting.
     ///
     /// # Errors
-    /// Why this device's endpoint couldn't be bound.
+    /// When no endpoint is attached.
     pub async fn connect(
         &self,
-        secret_key: [u8; 32],
         host: HostEntry,
         events: Arc<dyn DeviceEvents>,
     ) -> Result<(), String> {
-        let device = self.device(secret_key).await?;
+        let device = self.attached().await?;
         let mut hosts = self.hosts.lock().await;
         if hosts.contains_key(&host.id) {
             return Ok(());
@@ -590,6 +587,10 @@ mod tests {
     use kriyon_remote::message::{Epoch, Role, SessionInfo};
     use kriyon_remote_link::host::{Accepted, Host, PairedDevices};
 
+    use std::net::SocketAddr;
+
+    use kriyon_remote_link::LinkConfig;
+
     use super::*;
 
     const EPOCH: Epoch = Epoch {
@@ -600,6 +601,22 @@ mod tests {
 
     fn run<F: std::future::Future>(f: F) -> F::Output {
         tauri::async_runtime::block_on(f)
+    }
+
+    /// A device runtime on its own loopback endpoint; returns its id.
+    async fn device_runtime() -> (DeviceRuntime, EndpointId) {
+        let rt = DeviceRuntime::default();
+        let endpoint = kriyon_remote_link::endpoint::bind(
+            &LinkConfig {
+                bind: loopback(),
+                ..LinkConfig::new(DEVICE_KEY)
+            },
+            Vec::new(),
+        )
+        .await
+        .expect("binds");
+        let me = rt.attach(endpoint).await.id();
+        (rt, me)
     }
 
     fn loopback() -> SocketAddr {
@@ -788,11 +805,10 @@ mod tests {
     #[test]
     fn a_device_connects_says_hello_and_sees_the_hosts_sessions() {
         run(async {
-            let rt = DeviceRuntime::new(loopback());
-            let me = rt.device(DEVICE_KEY).await.expect("binds").id();
+            let (rt, me) = device_runtime().await;
             let (host, _serving) = fake_host(me, true).await;
             let seen = Arc::new(Seen::default());
-            rt.connect(DEVICE_KEY, entry(&host), seen.clone())
+            rt.connect(entry(&host), seen.clone())
                 .await
                 .expect("connects");
             wait_until("welcomed", || {
@@ -810,11 +826,10 @@ mod tests {
     #[test]
     fn a_session_streams_its_screen_then_takes_control_and_types() {
         run(async {
-            let rt = DeviceRuntime::new(loopback());
-            let me = rt.device(DEVICE_KEY).await.expect("binds").id();
+            let (rt, me) = device_runtime().await;
             let (host, serving) = fake_host(me, true).await;
             let seen = Arc::new(Seen::default());
-            rt.connect(DEVICE_KEY, entry(&host), seen.clone())
+            rt.connect(entry(&host), seen.clone())
                 .await
                 .expect("connects");
             wait_until("welcomed", || {
@@ -890,7 +905,7 @@ mod tests {
     #[test]
     fn opening_a_session_with_no_link_is_refused() {
         run(async {
-            let rt = DeviceRuntime::new(loopback());
+            let rt = DeviceRuntime::default();
             let sink: ScreenSink = Arc::new(|_| {});
             assert_eq!(
                 rt.open_session(&[9; 32], "s1", sink).await,
@@ -902,12 +917,11 @@ mod tests {
     #[test]
     fn a_removed_device_hears_it_and_stops() {
         run(async {
-            let rt = DeviceRuntime::new(loopback());
-            rt.device(DEVICE_KEY).await.expect("binds");
+            let (rt, _me) = device_runtime().await;
             // A host that never paired this device.
             let (host, _serving) = fake_host([7; 32], true).await;
             let seen = Arc::new(Seen::default());
-            rt.connect(DEVICE_KEY, entry(&host), seen.clone())
+            rt.connect(entry(&host), seen.clone())
                 .await
                 .expect("connects");
             wait_until("removed", || {

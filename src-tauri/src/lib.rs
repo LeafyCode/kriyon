@@ -28,6 +28,7 @@ pub mod quit;
 pub mod remote_cmd;
 pub mod remote_device_cmd;
 pub mod remote_device_rt;
+pub mod remote_endpoint;
 pub mod remote_rt;
 pub mod sandbox;
 pub mod session_list_rt;
@@ -310,7 +311,8 @@ pub fn run() {
         .plugin(tauri_plugin_positioner::init())
         .manage(AppState::default())
         .manage(remote_rt::RemoteRuntime::default())
-        .manage(remote_device_rt::DeviceRuntime::new(
+        .manage(remote_device_rt::DeviceRuntime::default())
+        .manage(remote_endpoint::RemoteEndpoint::new(
             std::net::SocketAddr::from(([0, 0, 0, 0], 0)),
         ))
         .manage(attachment_cmd::AttachmentRegistry::default())

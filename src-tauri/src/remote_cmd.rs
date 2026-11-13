@@ -265,15 +265,48 @@ pub(crate) fn device_key(app: &tauri::AppHandle) -> Result<[u8; 32], String> {
     }
 }
 
+/// This computer's one endpoint, bound now if it isn't, with the device side
+/// attached to it.
+///
+/// # Errors
+/// Why the Device key or the endpoint couldn't be had.
+pub(crate) async fn bound(app: &tauri::AppHandle) -> Result<crate::remote_endpoint::Bound, String> {
+    use tauri::Manager as _;
+    let secret_key = device_key(app)?;
+    let devices = app.clone();
+    let bound = app
+        .state::<crate::remote_endpoint::RemoteEndpoint>()
+        .get(secret_key, move || {
+            std::sync::Arc::new(StoreDevices(devices))
+        })
+        .await?;
+    app.state::<crate::remote_device_rt::DeviceRuntime>()
+        .attach(bound.endpoint.clone())
+        .await;
+    Ok(bound)
+}
+
+/// Close the endpoint if neither side uses it: remote access is off and no
+/// paired computer is connected to.
+pub(crate) async fn release_endpoint_if_unused(app: &tauri::AppHandle) {
+    use tauri::Manager as _;
+    let unused = !app.state::<crate::remote_rt::RemoteRuntime>().is_on().await
+        && !app
+            .state::<crate::remote_device_rt::DeviceRuntime>()
+            .in_use()
+            .await;
+    app.state::<crate::remote_endpoint::RemoteEndpoint>()
+        .close_if(unused)
+        .await;
+}
+
 async fn turn_on(app: &tauri::AppHandle) -> Result<(), String> {
     use tauri::{Emitter as _, Manager as _};
-    let secret_key = device_key(app)?;
+    let host = bound(app).await?.host;
     let emitter = app.clone();
     let releaser = app.clone();
     let setup = crate::remote_rt::HostSetup {
-        secret_key,
-        bind: std::net::SocketAddr::from(([0, 0, 0, 0], 0)),
-        paired: std::sync::Arc::new(StoreDevices(app.clone())),
+        host,
         on_device_gone: std::sync::Arc::new(move |device| {
             let app = releaser.clone();
             tauri::async_runtime::spawn(async move { release_everywhere(&app, device).await });
@@ -397,6 +430,8 @@ pub async fn remote_set_enabled(
         app.state::<crate::remote_rt::RemoteRuntime>()
             .turn_off()
             .await;
+        // Off means no endpoint, unless this computer is using another one.
+        release_endpoint_if_unused(&app).await;
     }
     app.state::<crate::StoreState>()
         .0

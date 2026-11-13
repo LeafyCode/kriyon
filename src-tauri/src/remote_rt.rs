@@ -4,27 +4,19 @@
 //! Kept free of Tauri types so it is tested end to end with a real device
 //! over loopback; `remote_cmd` wires it to the app's store and windows.
 
-use std::net::SocketAddr;
 use std::sync::Arc;
 
 use kriyon_remote::link_policy::CodeCheck;
 use kriyon_remote::message::{EndpointId, Role};
 use kriyon_remote::pairing::PairingInvite;
-use kriyon_remote_link::host::{Accepted, Host, PairAttempt, PairedDevices, RemoteLink};
-use kriyon_remote_link::LinkConfig;
+use kriyon_remote_link::host::{Accepted, Host, PairAttempt, RemoteLink};
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 
-/// Refused handshakes one source may cause a minute before it is ignored.
-const UNPAIRED_PER_MINUTE: u32 = 10;
-
 /// What the host needs to come up.
 pub struct HostSetup {
-    /// The [Device key]'s secret.
-    pub secret_key: [u8; 32],
-    /// Where to listen.
-    pub bind: SocketAddr,
-    pub paired: Arc<dyn PairedDevices>,
+    /// The host on this computer's one endpoint ([`crate::remote_endpoint`]).
+    pub host: Arc<Host>,
     /// Called with the device's name when a device has taken the pairing and
     /// the person should type the code it shows.
     pub on_code_wanted: Arc<dyn Fn(String) + Send + Sync>,
@@ -109,15 +101,8 @@ impl RemoteRuntime {
         if running.is_some() {
             return Ok(());
         }
-        let config = LinkConfig {
-            bind: setup.bind,
-            ..LinkConfig::new(setup.secret_key)
-        };
-        let host = Arc::new(
-            Host::bind(&config, setup.paired, UNPAIRED_PER_MINUTE)
-                .await
-                .map_err(|e| e.to_string())?,
-        );
+        let host = setup.host;
+        host.start_accepting();
         let pairing = Arc::new(Mutex::new(Pairing::default()));
         let links = Arc::new(Mutex::new(Vec::new()));
         let accept = tokio::spawn(accept_loop(
@@ -136,7 +121,8 @@ impl RemoteRuntime {
         Ok(())
     }
 
-    /// Take the host endpoint down: every connection and any pairing go.
+    /// Stop accepting: every device's connection and any pairing go. The
+    /// endpoint itself is its owner's to close.
     pub async fn turn_off(&self) {
         let Some(running) = self.running.lock().await.take() else {
             return;
@@ -144,7 +130,7 @@ impl RemoteRuntime {
         running.accept.abort();
         running.links.lock().await.clear();
         running.pairing.lock().await.attempt = None;
-        running.host.close().await;
+        running.host.stop_accepting();
     }
 
     pub async fn is_on(&self) -> bool {
@@ -333,7 +319,10 @@ mod tests {
     use std::sync::Mutex as StdMutex;
 
     use kriyon_remote_link::device::Device;
+    use kriyon_remote_link::host::PairedDevices;
     use kriyon_remote_link::invite::host_addr;
+    use kriyon_remote_link::LinkConfig;
+    use std::net::SocketAddr;
 
     use super::*;
 
@@ -354,12 +343,20 @@ mod tests {
         SocketAddr::from(([127, 0, 0, 1], 0))
     }
 
-    fn setup(store: &Arc<Store>, names: &Arc<StdMutex<Vec<String>>>) -> HostSetup {
+    async fn setup(store: &Arc<Store>, names: &Arc<StdMutex<Vec<String>>>) -> HostSetup {
         let names = Arc::clone(names);
+        let host = Host::bind(
+            &LinkConfig {
+                bind: loopback(),
+                ..LinkConfig::new([1; 32])
+            },
+            Arc::clone(store) as Arc<dyn PairedDevices>,
+            10,
+        )
+        .await
+        .expect("binds");
         HostSetup {
-            secret_key: [1; 32],
-            bind: loopback(),
-            paired: Arc::clone(store) as Arc<dyn PairedDevices>,
+            host: Arc::new(host),
             on_code_wanted: Arc::new(move |name| names.lock().expect("lock").push(name)),
             on_device_gone: Arc::new(|_| {}),
         }
@@ -380,7 +377,7 @@ mod tests {
             );
             let store = Arc::new(Store::default());
             let names = Arc::new(StdMutex::new(Vec::new()));
-            rt.turn_on(setup(&store, &names)).await.expect("on");
+            rt.turn_on(setup(&store, &names).await).await.expect("on");
             assert!(rt.is_on().await);
             assert_eq!(rt.host_id().await.map(|id| id.len()), Some(32));
             rt.turn_off().await;
@@ -395,7 +392,7 @@ mod tests {
             let rt = Arc::new(RemoteRuntime::default());
             let store = Arc::new(Store::default());
             let names = Arc::new(StdMutex::new(Vec::new()));
-            rt.turn_on(setup(&store, &names)).await.expect("on");
+            rt.turn_on(setup(&store, &names).await).await.expect("on");
             assert_eq!(rt.pairing_status().await, PairingStatus::Idle);
 
             let qr = rt
@@ -491,7 +488,7 @@ mod tests {
                 .insert(phone.id(), ("Test phone".into(), Role::Controller));
             let names = Arc::new(StdMutex::new(Vec::new()));
             let gone = Arc::new(StdMutex::new(Vec::new()));
-            let mut with_gone = setup(&store, &names);
+            let mut with_gone = setup(&store, &names).await;
             let noted = Arc::clone(&gone);
             with_gone.on_device_gone = Arc::new(move |id| noted.lock().expect("lock").push(id));
             rt.turn_on(with_gone).await.expect("on");
@@ -527,7 +524,7 @@ mod tests {
             let rt = RemoteRuntime::default();
             let store = Arc::new(Store::default());
             let names = Arc::new(StdMutex::new(Vec::new()));
-            rt.turn_on(setup(&store, &names)).await.expect("on");
+            rt.turn_on(setup(&store, &names).await).await.expect("on");
             let before = now_ms();
             rt.start_pairing(Role::Viewer).await.expect("pairing");
             let PairingStatus::Waiting { expires_at_ms, .. } = rt.pairing_status().await else {
@@ -555,7 +552,7 @@ mod tests {
             let rt = Arc::new(RemoteRuntime::default());
             let store = Arc::new(Store::default());
             let names = Arc::new(StdMutex::new(Vec::new()));
-            rt.turn_on(setup(&store, &names)).await.expect("on");
+            rt.turn_on(setup(&store, &names).await).await.expect("on");
             let qr = rt
                 .start_pairing(Role::Viewer)
                 .await
@@ -621,7 +618,7 @@ mod tests {
             let rt = RemoteRuntime::default();
             let store = Arc::new(Store::default());
             let names = Arc::new(StdMutex::new(Vec::new()));
-            rt.turn_on(setup(&store, &names)).await.expect("on");
+            rt.turn_on(setup(&store, &names).await).await.expect("on");
             rt.start_pairing(Role::Viewer).await.expect("pairing");
             assert_eq!(
                 rt.enter_code("123456", "Test Mac", |_, _, _| -> bool {
