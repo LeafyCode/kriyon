@@ -5,14 +5,18 @@ import {
   remoteHostInput,
   remoteHostOpenSession,
   remoteHostPair,
+  remoteHostReadEntries,
   remoteHostStartSession,
+  remoteHostStopEntries,
   remoteHosts,
   remoteHostsWake,
   remoteHostTakeControl,
 } from "../ipc/bridge.ts";
 import type { HostSummary, SessionSummary } from "../remote/hostSummary.ts";
+import type { ReadableSummary } from "../remote/readableSummary.ts";
 import {
   installRemoteHostListeners,
+  readableOf,
   remoteNeedsYouCount,
   useRemoteHosts,
 } from "./remoteHosts.ts";
@@ -24,7 +28,9 @@ vi.mock("../ipc/bridge.ts", async (importOriginal) => ({
   remoteHostInput: vi.fn(),
   remoteHostOpenSession: vi.fn(),
   remoteHostPair: vi.fn(),
+  remoteHostReadEntries: vi.fn(),
   remoteHosts: vi.fn(),
+  remoteHostStopEntries: vi.fn(),
   remoteHostStartSession: vi.fn(),
   remoteHostsWake: vi.fn(),
   remoteHostTakeControl: vi.fn(),
@@ -173,6 +179,46 @@ test("opening and closing one session reach Rust in the order asked", async () =
   finishFirstOpen();
   await Promise.all([first, closed, second]);
   expect(order).toEqual(["open 1", "close", "open 2"]);
+});
+
+test("reading a session as entries goes after its open and keeps what Rust last sent", async () => {
+  const order: string[] = [];
+  let finishOpen: () => void = () => {
+    // Replaced once Rust's open is under way.
+  };
+  vi.mocked(remoteHostOpenSession).mockImplementationOnce(
+    () =>
+      new Promise<void>((resolve) => {
+        finishOpen = () => {
+          order.push("open");
+          resolve();
+        };
+      })
+  );
+  let send: (summary: ReadableSummary) => void = () => {
+    // Replaced when Rust starts reading.
+  };
+  vi.mocked(remoteHostReadEntries).mockImplementation((_h, _s, onEntries) => {
+    order.push("read");
+    send = onEntries;
+    return Promise.resolve();
+  });
+  const store = useRemoteHosts.getState();
+  const opened = store.open(HOST, "s1", vi.fn());
+  const reading = store.readEntries(HOST, "s1");
+  await vi.waitFor(() => expect(remoteHostOpenSession).toHaveBeenCalled());
+  expect(remoteHostReadEntries).not.toHaveBeenCalled();
+  finishOpen();
+  await Promise.all([opened, reading]);
+  expect(order).toEqual(["open", "read"]);
+  send({
+    entries: [{ kind: "note", seq: 1, text: "Hi" }],
+    unavailable: null,
+  });
+  expect(readableOf(HOST, "s1")?.entries).toHaveLength(1);
+  await store.stopEntries(HOST, "s1");
+  expect(remoteHostStopEntries).toHaveBeenCalledWith(HOST, "s1");
+  expect(readableOf(HOST, "s1")).toBeUndefined();
 });
 
 test("a failure to open says why", async () => {

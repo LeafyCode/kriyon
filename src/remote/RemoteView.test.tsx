@@ -113,6 +113,57 @@ test("choosing a session shows its screen", () => {
   expect(screen.getByTestId("remote-terminal").textContent).toBe("s2");
 });
 
+test("a session can be read as entries, and goes back to its terminal", () => {
+  const readEntries = vi.fn(() => Promise.resolve());
+  const stopEntries = vi.fn(() => Promise.resolve());
+  useRemoteHosts.setState({
+    hosts: [{ hostId: HOST, name: "Studio", pairedAt: 0 }],
+    links: { [HOST]: link() },
+    readEntries,
+    stopEntries,
+  });
+  render(<RemoteView />);
+  fireEvent.click(screen.getByRole("button", { name: DOCS }));
+  fireEvent.click(screen.getByRole("tab", { name: "Readable" }));
+  expect(readEntries).toHaveBeenCalledWith(HOST, "s2");
+  act(() =>
+    useRemoteHosts.setState({
+      readable: {
+        [`${HOST}:s2`]: {
+          entries: [{ kind: "note", seq: 1, text: "Context compacted" }],
+          unavailable: null,
+        },
+      },
+    })
+  );
+  expect(screen.getByText("Context compacted")).toBeInTheDocument();
+  expect(screen.getByTestId("remote-terminal")).not.toBeVisible();
+  fireEvent.click(screen.getByRole("tab", { name: "Terminal" }));
+  expect(stopEntries).toHaveBeenCalledWith(HOST, "s2");
+  expect(screen.getByTestId("remote-terminal")).toBeVisible();
+});
+
+test("with no entries to read there, the terminal shows with why", () => {
+  useRemoteHosts.setState({
+    hosts: [{ hostId: HOST, name: "Studio", pairedAt: 0 }],
+    links: { [HOST]: link() },
+    readEntries: vi.fn(() => Promise.resolve()),
+    stopEntries: vi.fn(() => Promise.resolve()),
+  });
+  render(<RemoteView />);
+  fireEvent.click(screen.getByRole("button", { name: DOCS }));
+  fireEvent.click(screen.getByRole("tab", { name: "Readable" }));
+  act(() =>
+    useRemoteHosts.setState({
+      readable: {
+        [`${HOST}:s2`]: { entries: [], unavailable: "The Companion is off." },
+      },
+    })
+  );
+  expect(screen.getByText("The Companion is off.")).toBeInTheDocument();
+  expect(screen.getByTestId("remote-terminal")).toBeVisible();
+});
+
 test("a session that ended there stops showing here", () => {
   useRemoteHosts.setState({
     hosts: [{ hostId: HOST, name: "Studio", pairedAt: 0 }],

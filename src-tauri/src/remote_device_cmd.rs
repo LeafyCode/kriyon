@@ -264,6 +264,45 @@ pub async fn remote_host_open_session(
         .map_err(|e| e.to_string())
 }
 
+/// Read an open host session as [Readable view] entries too; what to show
+/// comes on `on_entries`, whole, on every change, until stopped or closed.
+///
+/// # Errors
+/// For a bad id, a session not open here, or a link failure.
+#[tauri::command]
+pub async fn remote_host_read_entries(
+    app: tauri::AppHandle,
+    host_id: String,
+    session_id: String,
+    on_entries: tauri::ipc::Channel<kriyon_remote::device_view::ReadableSummary>,
+) -> Result<(), String> {
+    let id = parse_device_id(&host_id)?;
+    check_session_id(&session_id)?;
+    let sink = Arc::new(move |event: kriyon_remote::device_view::EntriesEvent| {
+        let _ = on_entries.send(kriyon_remote::device_view::readable_summary(&event));
+    });
+    runtime(&app)
+        .read_entries(&id, &session_id, sink)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Stop reading a host session as entries: back to its terminal.
+///
+/// # Errors
+/// For a bad id.
+#[tauri::command]
+pub async fn remote_host_stop_entries(
+    app: tauri::AppHandle,
+    host_id: String,
+    session_id: String,
+) -> Result<(), String> {
+    let id = parse_device_id(&host_id)?;
+    check_session_id(&session_id)?;
+    runtime(&app).stop_entries(&id, &session_id).await;
+    Ok(())
+}
+
 /// Close a host's session stream; the session keeps running there.
 ///
 /// # Errors

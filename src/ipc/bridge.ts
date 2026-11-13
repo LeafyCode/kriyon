@@ -2,6 +2,7 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type { HostSummary } from "../remote/hostSummary.ts";
+import type { ReadableSummary } from "../remote/readableSummary.ts";
 import type {
   DirEntry,
   FileBlame,
@@ -2087,6 +2088,30 @@ export function remoteHostOpenSession(
   const onScreen = new Channel<ArrayBuffer>();
   onScreen.onmessage = (message) => onFrame(new Uint8Array(message));
   return invoke("remote_host_open_session", { hostId, onScreen, sessionId });
+}
+
+/** Read an open session there as [Readable view] entries too: each change
+ *  comes to `onEntries`, whole, until stopped or closed. */
+export function remoteHostReadEntries(
+  hostId: string,
+  sessionId: string,
+  onEntries: (summary: ReadableSummary) => void
+): Promise<void> {
+  const channel = new Channel<ReadableSummary>();
+  channel.onmessage = (summary) => onEntries(summary);
+  return invoke("remote_host_read_entries", {
+    hostId,
+    onEntries: channel,
+    sessionId,
+  });
+}
+
+/** Stop reading a session there as entries: back to its terminal. */
+export function remoteHostStopEntries(
+  hostId: string,
+  sessionId: string
+): Promise<void> {
+  return invoke("remote_host_stop_entries", { hostId, sessionId });
 }
 
 /** Close a paired computer's session here; it keeps running there. */

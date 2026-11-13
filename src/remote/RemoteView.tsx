@@ -4,7 +4,9 @@ import type { PairedHost } from "../ipc/bridge.ts";
 import { useRemoteHosts } from "../state/remoteHosts.ts";
 import { button, card, inputBox, sectionLabel } from "../theme/recipes.ts";
 import { tokens } from "../theme/tokens.ts";
+import { Segmented } from "../ui/Segmented.tsx";
 import type { HostSummary, SessionSummary } from "./hostSummary.ts";
+import { RemoteReadable } from "./RemoteReadable.tsx";
 import { RemoteTerminal } from "./RemoteTerminal.tsx";
 import { linkLine } from "./remoteScreen.ts";
 
@@ -66,14 +68,72 @@ export function RemoteView() {
         ))}
       </div>
       {shown ? (
-        <div style={screenStyle}>
-          <RemoteTerminal
-            hostId={shown.hostId}
-            key={`${shown.hostId}:${shown.sessionId}`}
-            sessionId={shown.sessionId}
-          />
-        </div>
+        <RemoteSession
+          hostId={shown.hostId}
+          key={`${shown.hostId}:${shown.sessionId}`}
+          sessionId={shown.sessionId}
+        />
       ) : null}
+    </div>
+  );
+}
+
+type SessionMode = "terminal" | "readable";
+
+const MODES = [
+  { label: "Terminal", value: "terminal" },
+  { label: "Readable", value: "readable" },
+] as const;
+
+/**
+ * The chosen session: its terminal, or read as entries. The terminal stays
+ * open underneath, so going back is instant and a question can be answered
+ * there. With no entries to read, the terminal shows with why.
+ */
+function RemoteSession({
+  hostId,
+  sessionId,
+}: {
+  hostId: string;
+  sessionId: string;
+}) {
+  const [mode, setMode] = useState<SessionMode>("terminal");
+  const summary = useRemoteHosts(
+    (state) => state.readable[`${hostId}:${sessionId}`]
+  );
+  useEffect(() => {
+    if (mode !== "readable") {
+      return;
+    }
+    const store = useRemoteHosts.getState();
+    store.readEntries(hostId, sessionId).catch(() => undefined);
+    return () => {
+      store.stopEntries(hostId, sessionId).catch(() => undefined);
+    };
+  }, [hostId, sessionId, mode]);
+  const unavailable =
+    mode === "readable" ? (summary?.unavailable ?? null) : null;
+  const reading = mode === "readable" && unavailable === null;
+  return (
+    <div style={sessionStyle}>
+      <div style={sessionHeadStyle}>
+        <Segmented
+          ariaLabel="Show the session as"
+          onChange={setMode}
+          options={MODES}
+          value={mode}
+        />
+        {unavailable ? <span style={warnStyle}>{unavailable}</span> : null}
+      </div>
+      {reading ? (
+        <RemoteReadable
+          onTerminal={() => setMode("terminal")}
+          summary={summary}
+        />
+      ) : null}
+      <div style={reading ? hiddenStyle : screenStyle}>
+        <RemoteTerminal hostId={hostId} sessionId={sessionId} />
+      </div>
     </div>
   );
 }
@@ -284,7 +344,27 @@ const listStyle: CSSProperties = {
 const screenStyle: CSSProperties = {
   display: "flex",
   flex: 1,
+  minHeight: 0,
   minWidth: 0,
+};
+
+const hiddenStyle: CSSProperties = {
+  ...screenStyle,
+  display: "none",
+};
+
+const sessionStyle: CSSProperties = {
+  display: "flex",
+  flex: 1,
+  flexDirection: "column",
+  gap: tokens.space.sm,
+  minWidth: 0,
+};
+
+const sessionHeadStyle: CSSProperties = {
+  alignItems: "center",
+  display: "flex",
+  gap: tokens.space.md,
 };
 
 const emptyStyle: CSSProperties = {

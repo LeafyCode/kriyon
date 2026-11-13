@@ -548,6 +548,8 @@ pub fn run() {
             remote_device_cmd::remote_host_forget,
             remote_device_cmd::remote_host_open_session,
             remote_device_cmd::remote_host_close_session,
+            remote_device_cmd::remote_host_read_entries,
+            remote_device_cmd::remote_host_stop_entries,
             remote_device_cmd::remote_host_take_control,
             remote_device_cmd::remote_host_start_session,
             remote_device_cmd::remote_host_input,

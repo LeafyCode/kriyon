@@ -9,7 +9,9 @@ import {
   remoteHostInput,
   remoteHostOpenSession,
   remoteHostPair,
+  remoteHostReadEntries,
   remoteHostStartSession,
+  remoteHostStopEntries,
   remoteHosts,
   remoteHostsWake,
   remoteHostTakeControl,
@@ -17,6 +19,7 @@ import {
 import { failureMessage } from "../ipc/failures.ts";
 import { onEvent, stopAll } from "../ipc/onEvent.ts";
 import { type HostSummary, needsYouCount } from "../remote/hostSummary.ts";
+import type { ReadableSummary } from "../remote/readableSummary.ts";
 
 /**
  * This computer as a [Remote device] of other computers (plan Step D). Rust
@@ -56,6 +59,10 @@ interface RemoteHostsStore {
   pairing: HostPairing;
   /** A pairing started here ended (`remote-host-pairing-ended`). */
   pairingEnded: (ended: HostPairingEnded) => Promise<void>;
+  /** Sessions read here as entries, by `host:session`: what Rust last sent. */
+  readable: Record<string, ReadableSummary>;
+  /** Read an open session as entries too, after its open. */
+  readEntries: (hostId: string, sessionId: string) => Promise<void>;
   resetPairing: () => void;
   /** Why the last start on each computer was refused, in its words. */
   startErrors: Record<string, string>;
@@ -72,9 +79,23 @@ interface RemoteHostsStore {
     projectId: string,
     title: string
   ) => Promise<string | null>;
+  /** Stop reading it as entries; forget what was read. */
+  stopEntries: (hostId: string, sessionId: string) => Promise<void>;
   takeControl: (hostId: string, sessionId: string) => Promise<void>;
   takeStarted: () => void;
   type: (hostId: string, sessionId: string, text: string) => Promise<void>;
+}
+
+function readableKey(hostId: string, sessionId: string): string {
+  return `${hostId}:${sessionId}`;
+}
+
+/** What session `sessionId` there shows read as entries, if it is read. */
+export function readableOf(
+  hostId: string,
+  sessionId: string
+): ReadableSummary | undefined {
+  return useRemoteHosts.getState().readable[readableKey(hostId, sessionId)];
 }
 
 export const useRemoteHosts = create<RemoteHostsStore>((set, get) => {
@@ -98,6 +119,14 @@ export const useRemoteHosts = create<RemoteHostsStore>((set, get) => {
     return turn;
   }
 
+  function forgetReadable(hostId: string, sessionId: string) {
+    const key = readableKey(hostId, sessionId);
+    if (key in get().readable) {
+      const { [key]: _gone, ...readable } = get().readable;
+      set({ readable });
+    }
+  }
+
   async function attempt(step: () => Promise<void>): Promise<void> {
     try {
       await step();
@@ -109,9 +138,10 @@ export const useRemoteHosts = create<RemoteHostsStore>((set, get) => {
 
   return {
     close: (hostId, sessionId) =>
-      inTurn(hostId, sessionId, () =>
-        attempt(() => remoteHostCloseSession(hostId, sessionId))
-      ),
+      inTurn(hostId, sessionId, async () => {
+        forgetReadable(hostId, sessionId);
+        await attempt(() => remoteHostCloseSession(hostId, sessionId));
+      }),
     error: null,
     forget: (hostId) =>
       attempt(async () => {
@@ -131,6 +161,25 @@ export const useRemoteHosts = create<RemoteHostsStore>((set, get) => {
       inTurn(hostId, sessionId, () =>
         attempt(() => remoteHostOpenSession(hostId, sessionId, onFrame))
       ),
+    readable: {},
+    readEntries: (hostId, sessionId) =>
+      inTurn(hostId, sessionId, () =>
+        attempt(() =>
+          remoteHostReadEntries(hostId, sessionId, (summary) =>
+            set((state) => ({
+              readable: {
+                ...state.readable,
+                [readableKey(hostId, sessionId)]: summary,
+              },
+            }))
+          )
+        )
+      ),
+    stopEntries: (hostId, sessionId) =>
+      inTurn(hostId, sessionId, async () => {
+        forgetReadable(hostId, sessionId);
+        await attempt(() => remoteHostStopEntries(hostId, sessionId));
+      }),
     pair: async (invite) => {
       const text = invite.trim();
       if (text === "") {
