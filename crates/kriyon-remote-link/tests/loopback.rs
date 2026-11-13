@@ -770,3 +770,56 @@ async fn a_device_the_host_could_not_store_is_told_pairing_failed() {
     assert_eq!(check.expect("told"), CodeCheck::Burned);
     assert_eq!(answer, Err(LinkError::Refused(RefuseReason::NotPaired)));
 }
+
+#[tokio::test]
+async fn a_wake_skips_the_backoff_wait() {
+    use kriyon_remote_link::device::stay_connected_waking;
+    use std::time::Instant;
+    use tokio::sync::Notify;
+
+    let store = Arc::new(Store::default());
+    let host = Arc::new(host(&store, 10).await);
+    let phone = device(2).await;
+    pair(Arc::clone(&host), &store, &phone, Role::Viewer).await;
+    // The host drops every connection at once, so the device keeps backing off.
+    let dropper = {
+        let host = Arc::clone(&host);
+        tokio::spawn(async move {
+            while let Some(Accepted::Remote(link)) = host.accept().await {
+                link.close(CloseCode::HostClosing);
+            }
+        })
+    };
+    let wake = Arc::new(Notify::new());
+    let tries = Arc::new(Mutex::new(Vec::<Instant>::new()));
+    let noted = Arc::clone(&tries);
+    let waker = Arc::clone(&wake);
+    let staying = tokio::spawn(async move {
+        stay_connected_waking(&phone, reach(&host), &waker, move |link| {
+            let noted = Arc::clone(&noted);
+            async move {
+                noted.lock().expect("lock").push(Instant::now());
+                (false, link.closed().await)
+            }
+        })
+        .await
+    });
+    // Three tries: waits of 1 s then 2 s; the next wait is 4 s.
+    let deadline = Instant::now() + WAIT;
+    while tries.lock().expect("lock").len() < 3 {
+        assert!(Instant::now() < deadline, "too few tries");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let woke_at = Instant::now();
+    wake.notify_one();
+    while tries.lock().expect("lock").len() < 4 {
+        assert!(
+            woke_at.elapsed() < Duration::from_secs(2),
+            "the wake didn't cut the 4 s wait short"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    staying.abort();
+    dropper.abort();
+}

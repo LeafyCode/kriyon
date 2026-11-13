@@ -175,6 +175,21 @@ where
     F: FnMut(DeviceLink) -> Fut,
     Fut: Future<Output = (bool, Option<CloseCode>)>,
 {
+    stay_connected_waking(device, host, &tokio::sync::Notify::new(), run).await
+}
+
+/// [`stay_connected`], where `wake` cuts a backoff wait short: the app calls
+/// it on a network change or when it comes to the front (spec section 5).
+pub async fn stay_connected_waking<F, Fut>(
+    device: &Device,
+    host: EndpointAddr,
+    wake: &tokio::sync::Notify,
+    run: F,
+) -> LinkError
+where
+    F: FnMut(DeviceLink) -> Fut,
+    Fut: Future<Output = (bool, Option<CloseCode>)>,
+{
     let mut run = run;
     let mut backoff = Backoff::default();
     loop {
@@ -192,6 +207,9 @@ where
         if code == Some(CloseCode::NotPaired) {
             return LinkError::Closed(code);
         }
-        tokio::time::sleep(backoff.next_delay()).await;
+        tokio::select! {
+            () = tokio::time::sleep(backoff.next_delay()) => {}
+            () = wake.notified() => {}
+        }
     }
 }
