@@ -39,6 +39,7 @@ pub mod projection;
 pub mod prompt_files;
 pub mod prompt_history;
 pub mod quit;
+pub mod readable;
 pub mod redact;
 pub mod runtime;
 pub mod session;
