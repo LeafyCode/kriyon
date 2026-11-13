@@ -52,8 +52,17 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
   session or anyone else. The [PTY daemon] does it for the app (ADR-0059), and the [Host] for each
   [Remote device]. Both use `kriyon_core::skip_ahead`.
 - **Relay pass** — a signed, short-lived pass from a BisBig subscription, bound to one [Device
-  key], that our relay checks by itself. Its format is the relay contract's. _Avoid_: ticket
-  (iroh uses that for addresses), token.
+  key], that our relay checks by itself. Opaque to the app: stored, sent, never parsed. Its format
+  is the relay contract's (`docs/superpowers/specs/2026-11-13-relay-pass-contract.md`). _Avoid_:
+  ticket (iroh uses that for addresses), token.
+- **Relay account** — the BisBig subscriber a [Relay pass] names (16 random bytes, not the BisBig
+  user id). Our relay only forwards between devices of the same relay account, so a [Host] and
+  every [Remote device] that reaches it through our relay sign in with the same BisBig account.
+  _Avoid_: relay user, subscription (that is what pays for it).
+- **Device sign-in** — signing Kriyon in to BisBig with a device code (OAuth device grant, RFC
+  8628): the app shows a short code and opens the BisBig sign-in page in the browser; the person
+  approves there. The app never sees a password. Its access token is kept in the keychain.
+  _Avoid_: login, account link.
 - **Sealed push token** — a phone's push token locked to the push sender's public key, one copy
   per [Host], with an expiry. Only the push sender can open it, in memory, for one alert. No
   server keeps it. _Avoid_: encrypted token, push id.
