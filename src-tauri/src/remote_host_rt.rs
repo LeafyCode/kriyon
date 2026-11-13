@@ -265,14 +265,13 @@ impl ServeHost for AppServeHost {
             std::time::Instant::now(),
         ) {
             None => Err(RefuseReason::NoSuchSession),
-            Some(Err(RefuseReason::NotInControl)) => {
-                // The person typed here just now: they can let it type.
-                control_asked(&self.0, id, &device);
-                Err(RefuseReason::NotInControl)
-            }
             Some(Err(reason)) => Err(reason),
             Some(Ok(_)) => Ok(()),
         }
+    }
+
+    fn control_asked(&self, id: &str, device: &EndpointId) {
+        control_asked(&self.0, id, device);
     }
 
     fn role_now(&self, device: &EndpointId, connected: Role) -> Option<Role> {

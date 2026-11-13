@@ -7,7 +7,6 @@ import { type CSSProperties, useEffect, useState } from "react";
 import { useControlAsks } from "../state/controlAsks.ts";
 import { button } from "../theme/recipes.ts";
 import { tokens } from "../theme/tokens.ts";
-import { showToast } from "../ui/Toast.tsx";
 
 /** How often shown asks are checked for having gone stale. */
 const TICK_MS = 1000;
@@ -38,22 +37,20 @@ const askStyle: CSSProperties = {
 
 export function ControlAsks() {
   const asks = useControlAsks((state) => state.asks);
-  const error = useControlAsks((state) => state.error);
   const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
     if (asks.length === 0) {
       return;
     }
-    const timer = setInterval(() => setNow(Date.now()), TICK_MS);
+    // Stale asks are forgotten, so the tick stops once none are left.
+    const timer = setInterval(() => {
+      const at = Date.now();
+      useControlAsks.getState().prune(at);
+      setNow(at);
+    }, TICK_MS);
     return () => clearInterval(timer);
   }, [asks.length]);
-
-  useEffect(() => {
-    if (error !== null) {
-      showToast(error, "error");
-    }
-  }, [error]);
 
   const shown = useControlAsks.getState().current(Math.max(now, Date.now()));
   if (shown.length === 0) {

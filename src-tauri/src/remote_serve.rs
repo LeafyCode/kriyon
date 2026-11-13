@@ -16,15 +16,16 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use kriyon_core::cli_dialog::DialogState;
 use kriyon_remote::authorize::{
     authorize, Dialog, HostFacts, PendingWrite, ProjectFolder, SessionView, Stream,
 };
 use kriyon_remote::codec::{encode, Decoded};
+use kriyon_remote::compress::Packer;
 use kriyon_remote::control::{Change, Control};
-use kriyon_remote::fanout::{pack_snapshot, Pop, RequesterId, SessionFanout, SnapshotEnd};
+use kriyon_remote::fanout::{pack_snapshot, Pop, RequesterId, SessionFanout, SnapshotToPack};
 use kriyon_remote::link_policy::CloseCode;
 use kriyon_remote::message::{
     EndpointId, FromDevice, ProjectInfo, RefuseReason, Role, SessionInfo, ToDevice,
@@ -37,15 +38,26 @@ use tokio::sync::Notify;
 
 use crate::daemon_client::DaemonEvent;
 
+/// Whether `message` is a write (typing, compose, resize): its answer is
+/// what the device waits on, as it would on an `InputAck`.
+fn is_write(message: &Decoded<FromDevice>) -> bool {
+    matches!(
+        message,
+        Decoded::Message(
+            FromDevice::Input { .. } | FromDevice::Compose { .. } | FromDevice::Resize { .. }
+        )
+    )
+}
+
 /// The first 8 hex digits of a device's id: enough to tell devices apart in
 /// a log, and no more of it.
 fn short_id(device: &EndpointId) -> String {
-    use std::fmt::Write as _;
-    device[..4].iter().fold(String::new(), |mut out, byte| {
-        let _ = write!(out, "{byte:02x}");
-        out
-    })
+    kriyon_remote::message::hex(&device[..4])
 }
+
+/// The least time between two notices to the app of one device asking for
+/// control of one session.
+const CONTROL_ASK_EVERY: Duration = Duration::from_secs(5);
 
 /// How often the main loop's tick looks at the project list.
 const PROJECTS_EVERY: std::time::Duration = std::time::Duration::from_secs(10);
@@ -74,6 +86,10 @@ pub trait ServeHost: Send + Sync + 'static {
     /// Keep paired `device`'s push token, sealed to the sender's key
     /// `key_id` (spec §10), in place of any it gave before.
     fn set_push_token(&self, device: &EndpointId, key_id: u32, sealed: Vec<u8>);
+    /// A Controller asked for control of session `id` and the host's
+    /// ten-second rule refused it: the person can let it type. Called at
+    /// most once per `CONTROL_ASK_EVERY` for a device and session.
+    fn control_asked(&self, _id: &str, _device: &EndpointId) {}
     /// A line for the host's log (stderr unless told otherwise). Never given
     /// a message's payload.
     fn log(&self, line: &str) {
@@ -161,6 +177,26 @@ struct Served {
     wakers: Mutex<HashMap<EndpointId, Arc<Notify>>>,
     /// The session closed: its device streams finish.
     ended: std::sync::atomic::AtomicBool,
+    /// Snapshots to compress, on the session's own packing thread (one
+    /// thread, one compressor, reused), never the daemon's reader.
+    packs: Mutex<Option<std::sync::mpsc::Sender<SnapshotToPack>>>,
+}
+
+/// The packing thread of `served`: snapshots in, queued for their devices.
+/// It ends when the session is detached or dropped (its sender goes).
+fn packing(served: &std::sync::Weak<Served>, snapshots: std::sync::mpsc::Receiver<SnapshotToPack>) {
+    let Ok(mut packer) = Packer::new() else {
+        return;
+    };
+    for snapshot in snapshots {
+        let Some(served) = served.upgrade() else {
+            return;
+        };
+        let frames = pack_snapshot(&mut packer, &snapshot);
+        let again = served.fanout.lock().snapshot_packed(&snapshot, frames);
+        served.ask_all(again.into_iter().collect());
+        served.wake_all();
+    }
 }
 
 impl Served {
@@ -210,6 +246,9 @@ struct Inner {
     /// When the tick last looked at the project list: it changes seldom, and
     /// looking checks every project's folder.
     projects_looked: Mutex<Option<Instant>>,
+    /// When each (session, device) last had its ask for control told to the
+    /// app: a device asking in a loop costs a notice now and then.
+    control_asks: Mutex<HashMap<(String, EndpointId), Instant>>,
     /// Refusals answered per device, rate-limited (spec §8).
     refusals: Mutex<kriyon_remote::link_policy::RateLimit<EndpointId>>,
 }
@@ -287,6 +326,7 @@ impl Serve {
             heard: Mutex::new(HashMap::new()),
             heard_projects: Mutex::new(None),
             projects_looked: Mutex::new(None),
+            control_asks: Mutex::default(),
             refusals: Mutex::new(kriyon_remote::link_policy::RateLimit::new(
                 kriyon_remote::link_policy::REFUSALS_PER_WINDOW,
                 kriyon_remote::link_policy::REFUSAL_WINDOW,
@@ -312,16 +352,24 @@ impl Serve {
         let Ok(fanout) = SessionFanout::new(SESSION_QUEUE_LIMIT) else {
             return;
         };
-        sessions.insert(
-            id.to_string(),
-            Arc::new(Served {
-                fanout: Mutex::new(fanout),
-                ask: Box::new(ask),
-                size: Box::new(size),
-                wakers: Mutex::new(HashMap::new()),
-                ended: std::sync::atomic::AtomicBool::new(false),
-            }),
-        );
+        let served = Arc::new(Served {
+            fanout: Mutex::new(fanout),
+            ask: Box::new(ask),
+            size: Box::new(size),
+            wakers: Mutex::new(HashMap::new()),
+            ended: std::sync::atomic::AtomicBool::new(false),
+            packs: Mutex::new(None),
+        });
+        let (packs, snapshots) = std::sync::mpsc::channel();
+        let weak = Arc::downgrade(&served);
+        if std::thread::Builder::new()
+            .name("kriyon-remote-pack".into())
+            .spawn(move || packing(&weak, snapshots))
+            .is_ok()
+        {
+            *served.packs.lock() = Some(packs);
+        }
+        sessions.insert(id.to_string(), served);
     }
 
     /// Stop serving session `id`: it closed. Its device streams end.
@@ -329,6 +377,7 @@ impl Serve {
         let served = self.0.sessions.lock().remove(id);
         if let Some(served) = served {
             served.ended.store(true, Ordering::Relaxed);
+            served.packs.lock().take();
             served.wake_all();
         }
     }
@@ -358,9 +407,15 @@ impl Serve {
         !self.0.controls.lock().is_empty()
     }
 
-    /// Whether `device` has a connection served now.
+    /// Whether `device` has session `id` open now.
     #[must_use]
-    pub fn has_control(&self, device: &EndpointId) -> bool {
+    pub fn has_open(&self, id: &str, device: &EndpointId) -> bool {
+        self.served(id)
+            .is_some_and(|served| served.fanout.lock().is_open(device))
+    }
+
+    /// Whether `device` has a connection served now.
+    fn has_control(&self, device: &EndpointId) -> bool {
         self.0.controls.lock().contains_key(device)
     }
 
@@ -403,25 +458,20 @@ impl Serve {
                     Vec::new()
                 }
                 DaemonEvent::SnapshotEnd { id } => {
-                    match fanout
-                        .snapshot_end(id, size.unwrap_or(crate::session_writer::DEFAULT_SCREEN))
-                    {
-                        SnapshotEnd::Pack(snapshot) => {
-                            // Compressing a big screen takes a while: never
-                            // on the daemon's reader, never under this lock.
-                            let packing = Arc::clone(&served);
-                            std::thread::spawn(move || {
-                                let frames = pack_snapshot(&snapshot);
-                                let again =
-                                    packing.fanout.lock().snapshot_packed(&snapshot, frames);
-                                packing.ask_all(again.into_iter().collect());
-                                packing.wake_all();
-                            });
-                            Vec::new()
-                        }
-                        SnapshotEnd::Ask(again) => vec![again],
-                        SnapshotEnd::Nothing => Vec::new(),
-                    }
+                    // Compressing a big screen takes a while: never on the
+                    // daemon's reader, never under this lock.
+                    let snapshot = fanout
+                        .snapshot_end(id, size.unwrap_or(crate::session_writer::DEFAULT_SCREEN));
+                    let unsent = snapshot.and_then(|snapshot| match served.packs.lock().as_ref() {
+                        Some(packs) => packs.send(snapshot).err().map(|e| e.0),
+                        None => Some(snapshot),
+                    });
+                    // No packing thread: it counts as not packed, and is
+                    // asked for again.
+                    unsent
+                        .and_then(|snapshot| fanout.snapshot_packed(&snapshot, None))
+                        .into_iter()
+                        .collect()
                 }
                 DaemonEvent::Busy(_)
                 | DaemonEvent::History { .. }
@@ -512,14 +562,24 @@ impl Serve {
 
     /// Whether to answer refusing `device` for `reason` on `stream`: logged
     /// (the reason, the stream and the device's short id, never the
-    /// payload), and at most `REFUSALS_PER_WINDOW` answered per
+    /// payload), and at most `REFUSALS_PER_WINDOW` logged and answered per
     /// `REFUSAL_WINDOW` (spec §8). The log says once when a device goes
-    /// over, not for every refusal after.
-    fn refusal(&self, device: &EndpointId, reason: RefuseReason, stream: &str) -> bool {
+    /// over, not for every refusal after. Always answered past the limit:
+    /// a refused write (`answers_write`: the device waits on its answer as
+    /// it would on an `InputAck`) and `NotPaired`, which a removed device
+    /// must hear.
+    fn refusal(
+        &self,
+        device: &EndpointId,
+        reason: RefuseReason,
+        stream: &str,
+        answers_write: bool,
+    ) -> bool {
+        let always = answers_write || reason == RefuseReason::NotPaired;
         let now = Instant::now();
         let mut limit = self.0.refusals.lock();
         if limit.over(device, now) {
-            return false;
+            return always;
         }
         limit.record(*device, now);
         let now_over = limit.over(device, now);
@@ -534,6 +594,23 @@ impl Serve {
             ));
         }
         true
+    }
+
+    /// Tell the app `device` asked for control of session `id`, at most once
+    /// per `CONTROL_ASK_EVERY` for the pair.
+    async fn control_asked(&self, id: String, device: EndpointId) {
+        let now = Instant::now();
+        {
+            let mut asks = self.0.control_asks.lock();
+            asks.retain(|_, at| now.saturating_duration_since(*at) < CONTROL_ASK_EVERY);
+            let key = (id.clone(), device);
+            if asks.contains_key(&key) {
+                return;
+            }
+            asks.insert(key, now);
+        }
+        self.blocking(move |host| host.control_asked(&id, &device))
+            .await;
     }
 
     /// Run `call` on the app, off the async runtime: any [`ServeHost`] call
@@ -742,6 +819,12 @@ impl Serve {
                 .facts(device, role, named_session(None, &message), false)
                 .await;
             let checked = authorize(&device, Stream::Control, &message, &facts, Instant::now());
+            let asked = match &message {
+                Decoded::Message(FromDevice::TakeControl { session_id }) => {
+                    Some(session_id.clone())
+                }
+                _ => None,
+            };
             let verdict = match (checked, message) {
                 (Err(reason), _) => Err(reason),
                 (Ok(()), Decoded::Message(FromDevice::TakeControl { session_id })) => self
@@ -755,8 +838,12 @@ impl Serve {
                 }
                 (Ok(()), _) => Ok(()),
             };
+            if let (Some(asked), Err(RefuseReason::NotInControl)) = (asked, verdict) {
+                // The host's ten-second rule: the person can let it type.
+                self.control_asked(asked, device).await;
+            }
             if let Err(reason) = verdict {
-                if self.refusal(&device, reason, "control") {
+                if self.refusal(&device, reason, "control", false) {
                     out.send(&ToDevice::Refused { reason });
                 }
             }
@@ -924,6 +1011,7 @@ impl Serve {
                 &facts,
                 Instant::now(),
             );
+            let answers_write = is_write(&message);
             let answer = match (checked, message) {
                 (Err(reason), _) => Some(ToDevice::Refused { reason }),
                 (Ok(()), Decoded::Message(FromDevice::Resync)) => {
@@ -941,7 +1029,8 @@ impl Serve {
                 }),
             };
             if let Some(answer) = answer {
-                self.answer_on_session(&device, answer, &answers, &wake);
+                self.answer_on_session(&device, answer, answers_write, &answers, &wake)
+                    .await;
             }
         }
         writing.abort();
@@ -949,21 +1038,28 @@ impl Serve {
     }
 
     /// Send `answer` on a session stream: a refusal only within its rate
-    /// ([`Self::refusal`]); answers past a handful waiting are dropped, not
-    /// queued.
-    fn answer_on_session(
+    /// ([`Self::refusal`]). The answer to a write always goes, waiting for
+    /// room (the device waits on it); other answers past a handful waiting
+    /// are dropped, not queued.
+    async fn answer_on_session(
         &self,
         device: &EndpointId,
         answer: ToDevice,
+        answers_write: bool,
         answers: &tokio::sync::mpsc::Sender<ToDevice>,
         wake: &Notify,
     ) {
         if let ToDevice::Refused { reason } = &answer {
-            if !self.refusal(device, *reason, "session") {
+            if !self.refusal(device, *reason, "session", answers_write) {
                 return;
             }
         }
-        let _ = answers.try_send(answer);
+        if answers_write {
+            wake.notify_one();
+            let _ = answers.send(answer).await;
+        } else {
+            let _ = answers.try_send(answer);
+        }
         wake.notify_one();
     }
 
@@ -1351,6 +1447,63 @@ mod tests {
                     reason: RefuseReason::NotAllowed
                 }
             );
+        });
+    }
+
+    #[test]
+    fn a_device_asking_for_control_while_the_host_types_is_told_to_the_person_once_a_while() {
+        run(async {
+            let world = world().await;
+            let (_phone, _link, mut cw, mut cr) = device(&world, 3, Role::Controller).await;
+            world.fake.gate.lock().host_input(Instant::now());
+            for _ in 0..10 {
+                cw.send(&FromDevice::TakeControl {
+                    session_id: "s".into(),
+                })
+                .await
+                .expect("take");
+            }
+            for _ in 0..10 {
+                assert_eq!(
+                    next(&mut cr).await,
+                    ToDevice::Refused {
+                        reason: RefuseReason::NotInControl
+                    }
+                );
+            }
+            let asks = world.fake.control_asks.lock().clone();
+            assert_eq!(asks.len(), 1, "{asks:?}");
+            assert_eq!(asks[0].0, "s");
+        });
+    }
+
+    #[test]
+    fn every_refused_write_is_answered_however_many_there_are() {
+        // The answer to a write is what the device waits on, instead of
+        // an InputAck: the refusal limit never drops one.
+        run(async {
+            let world = world().await;
+            let (_phone, link, _cw, _cr) = device(&world, 3, Role::Viewer).await;
+            let (mut sw, mut sr) = open(&link).await;
+            let id = asked(&world).await;
+            answer(&world, id, b"x");
+            assert!(matches!(next(&mut sr).await, ToDevice::Snapshot { .. }));
+            let writes = kriyon_remote::link_policy::REFUSALS_PER_WINDOW + 10;
+            let epoch = Epoch {
+                host_boot_id: 5,
+                counter: 0,
+            };
+            for _ in 0..writes {
+                sw.send(&typing(epoch, 0, b"x")).await.expect("input");
+            }
+            for _ in 0..writes {
+                assert_eq!(
+                    next(&mut sr).await,
+                    ToDevice::Refused {
+                        reason: RefuseReason::NotAllowed
+                    }
+                );
+            }
         });
     }
 

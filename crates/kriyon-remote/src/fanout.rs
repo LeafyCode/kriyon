@@ -44,26 +44,26 @@ struct DeviceStream {
     /// until then it gets no updates, which the snapshot will show.
     awaiting: Option<Awaiting>,
     /// Its snapshot came and is being packed elsewhere: updates made since
-    /// wait here, to follow it in order, with their size.
-    held: Option<(Vec<Vec<u8>>, usize)>,
+    /// wait here, to follow it in order.
+    held: Option<Held>,
 }
 
-/// What the end of a snapshot calls for.
+/// Updates waiting for the snapshot of `requester` to be packed.
 #[derive(Debug)]
-pub enum SnapshotEnd {
-    /// Pack this (off the daemon's reader thread: compressing a big screen
-    /// takes a while), then hand it back with [`SessionFanout::snapshot_packed`].
-    Pack(SnapshotToPack),
-    /// It couldn't be used: ask the daemon for one again.
-    Ask(RequesterId),
-    /// Nobody waits for it any more.
-    Nothing,
+struct Held {
+    requester: RequesterId,
+    frames: Vec<Vec<u8>>,
+    bytes: usize,
 }
 
-/// A device's snapshot, to be compressed and framed.
+/// A device's snapshot, to be compressed and framed (off the daemon's
+/// reader thread: compressing a big screen takes a while), then handed back
+/// with [`SessionFanout::snapshot_packed`].
 #[derive(Debug)]
 pub struct SnapshotToPack {
     pub device: EndpointId,
+    /// The ask it answers: a pack for an ask since replaced is dropped.
+    pub requester: RequesterId,
     pub head: SnapshotHead,
     pub bytes: Vec<u8>,
 }
@@ -71,12 +71,9 @@ pub struct SnapshotToPack {
 /// Compress and frame a snapshot: what [`SessionFanout::snapshot_packed`]
 /// queues. `None` when it can't be.
 #[must_use]
-pub fn pack_snapshot(snapshot: &SnapshotToPack) -> Option<Vec<Vec<u8>>> {
-    let packed = Packer::new()
-        .ok()?
-        .pack(Kind::Snapshot, &snapshot.bytes)
-        .ok()?;
-    snapshot_messages(snapshot.head, &packed)
+pub fn pack_snapshot(packer: &mut Packer, snapshot: &SnapshotToPack) -> Option<Vec<Vec<u8>>> {
+    let compressed = packer.pack(Kind::Snapshot, &snapshot.bytes).ok()?;
+    snapshot_messages(snapshot.head, &compressed)
         .iter()
         .map(|message| encode(message).ok())
         .collect()
@@ -195,12 +192,12 @@ impl SessionFanout {
             if stream.awaiting.is_some() {
                 continue;
             }
-            if let Some((held, size)) = stream.held.as_mut() {
+            if let Some(held) = stream.held.as_mut() {
                 // Waits for its snapshot; too much of it, and the device
                 // starts over from a fresh one instead.
-                *size += frame.len();
-                held.push(frame.clone());
-                if *size > self.limit {
+                held.bytes += frame.len();
+                held.frames.push(frame.clone());
+                if held.bytes > self.limit {
                     overflowed.push(*device);
                 }
                 continue;
@@ -260,22 +257,23 @@ impl SessionFanout {
     /// The end of the snapshot for requester `id`, taken at the session's
     /// `size` (columns, rows): to be packed, after which its device follows.
     /// Updates made meanwhile wait for it ([`Self::snapshot_packed`]).
-    pub fn snapshot_end(&mut self, id: RequesterId, size: (u16, u16)) -> SnapshotEnd {
-        let Some(seq) = self.seq.as_ref() else {
-            return SnapshotEnd::Nothing;
-        };
+    pub fn snapshot_end(&mut self, id: RequesterId, size: (u16, u16)) -> Option<SnapshotToPack> {
+        let seq = self.seq.as_ref()?;
         let (run, at) = (seq.run(), seq.snapshot_seq());
-        let Some((device, awaiting)) = self.devices.iter_mut().find_map(|(device, stream)| {
+        let (device, awaiting) = self.devices.iter_mut().find_map(|(device, stream)| {
             let awaiting = stream
                 .awaiting
                 .take_if(|awaiting| awaiting.requester == id)?;
-            stream.held = Some((Vec::new(), 0));
+            stream.held = Some(Held {
+                requester: id,
+                frames: Vec::new(),
+                bytes: 0,
+            });
             Some((*device, awaiting))
-        }) else {
-            return SnapshotEnd::Nothing;
-        };
-        SnapshotEnd::Pack(SnapshotToPack {
+        })?;
+        Some(SnapshotToPack {
             device,
+            requester: id,
             head: SnapshotHead {
                 run,
                 seq: at,
@@ -301,11 +299,13 @@ impl SessionFanout {
         if current != Some(snapshot.head.run) {
             return None;
         }
-        let (held, _) = stream.held.take()?;
+        let held = stream
+            .held
+            .take_if(|held| held.requester == snapshot.requester)?;
         let Some(frames) = frames else {
             return self.ask(&snapshot.device, true);
         };
-        for frame in frames.into_iter().chain(held) {
+        for frame in frames.into_iter().chain(held.frames) {
             stream.queue.push(frame);
         }
         None
@@ -407,16 +407,15 @@ mod tests {
         }
     }
 
+    fn pack(snapshot: &SnapshotToPack) -> Option<Vec<Vec<u8>>> {
+        pack_snapshot(&mut Packer::new().expect("packer"), snapshot)
+    }
+
     /// The end of snapshot `id`, packed and queued as the host does it.
     fn finish(fanout: &mut SessionFanout, id: RequesterId) -> Option<RequesterId> {
-        match fanout.snapshot_end(id, SIZE) {
-            SnapshotEnd::Pack(to_pack) => {
-                let frames = pack_snapshot(&to_pack);
-                fanout.snapshot_packed(&to_pack, frames)
-            }
-            SnapshotEnd::Ask(again) => Some(again),
-            SnapshotEnd::Nothing => None,
-        }
+        let to_pack = fanout.snapshot_end(id, SIZE)?;
+        let frames = pack(&to_pack);
+        fanout.snapshot_packed(&to_pack, frames)
     }
 
     /// A device opened and given its snapshot showing `screen`.
@@ -432,12 +431,12 @@ mod tests {
         fanout.hello(7);
         let id = fanout.open(A).expect("asks");
         fanout.snapshot_part(id, b"screen");
-        let SnapshotEnd::Pack(to_pack) = fanout.snapshot_end(id, SIZE) else {
+        let Some(to_pack) = fanout.snapshot_end(id, SIZE) else {
             panic!("a snapshot to pack");
         };
         // Packed elsewhere, meanwhile output goes on.
         fanout.output(b"during");
-        let frames = pack_snapshot(&to_pack);
+        let frames = pack(&to_pack);
         assert_eq!(fanout.snapshot_packed(&to_pack, frames), None);
         fanout.output(b"after");
         let (messages, _) = drain(&mut fanout, &A);
@@ -458,7 +457,7 @@ mod tests {
         let mut fanout = SessionFanout::new(1 << 20).expect("fanout");
         fanout.hello(7);
         let id = fanout.open(A).expect("asks");
-        let SnapshotEnd::Pack(to_pack) = fanout.snapshot_end(id, SIZE) else {
+        let Some(to_pack) = fanout.snapshot_end(id, SIZE) else {
             panic!("a snapshot to pack");
         };
         assert!(
@@ -467,14 +466,43 @@ mod tests {
         );
         // A new run meanwhile: a pack for the old one is dropped.
         let id = fanout.open(B).expect("asks");
-        let SnapshotEnd::Pack(old) = fanout.snapshot_end(id, SIZE) else {
+        let Some(old) = fanout.snapshot_end(id, SIZE) else {
             panic!("a snapshot to pack");
         };
         fanout.hello(8);
-        let frames = pack_snapshot(&old);
+        let frames = pack(&old);
         assert_eq!(fanout.snapshot_packed(&old, frames), None);
         let (messages, _) = drain(&mut fanout, &B);
         assert!(messages.is_empty(), "{messages:?}");
+    }
+
+    #[test]
+    fn a_slow_pack_of_a_snapshot_since_asked_again_never_takes_the_new_ones_place() {
+        let mut fanout = SessionFanout::new(1 << 20).expect("fanout");
+        fanout.hello(7);
+        let first = fanout.open(A).expect("asks");
+        let old = fanout.snapshot_end(first, SIZE).expect("to pack");
+        let again = fanout.resync(&A, Instant::now()).expect("asks again");
+        let new = fanout.snapshot_end(again, SIZE).expect("to pack");
+        fanout.output(b"after");
+        // The old pack finishes first: dropped, the new one still waits.
+        let frames = pack(&old);
+        assert_eq!(fanout.snapshot_packed(&old, frames), None);
+        assert_eq!(drain(&mut fanout, &A).0, Vec::new());
+        let frames = pack(&new);
+        assert_eq!(fanout.snapshot_packed(&new, frames), None);
+        let (messages, _) = drain(&mut fanout, &A);
+        let snapshots = messages
+            .iter()
+            .filter(|message| matches!(message, ToDevice::Snapshot { .. }))
+            .count();
+        assert_eq!(snapshots, 1, "{messages:?}");
+        let updates: Vec<String> = messages
+            .iter()
+            .filter_map(update_text)
+            .map(|(_, t)| t)
+            .collect();
+        assert_eq!(updates, vec!["after".to_string()]);
     }
 
     #[test]
@@ -482,7 +510,7 @@ mod tests {
         let mut fanout = SessionFanout::new(64).expect("fanout");
         fanout.hello(7);
         let id = fanout.open(A).expect("asks");
-        let SnapshotEnd::Pack(_) = fanout.snapshot_end(id, SIZE) else {
+        let Some(_) = fanout.snapshot_end(id, SIZE) else {
             panic!("a snapshot to pack");
         };
         let noise: Vec<u8> = (0..4096_u32)

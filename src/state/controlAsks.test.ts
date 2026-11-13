@@ -1,6 +1,9 @@
 import { beforeEach, expect, test, vi } from "vitest";
 import { remoteLetDeviceType } from "../ipc/bridge.ts";
+import { showToast } from "../ui/Toast.tsx";
 import { ASK_SHOWN_MS, useControlAsks } from "./controlAsks.ts";
+
+vi.mock("../ui/Toast.tsx", () => ({ showToast: vi.fn() }));
 
 vi.mock("../ipc/bridge.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../ipc/bridge.ts")>()),
@@ -29,21 +32,27 @@ test("an ask goes after a while unanswered", () => {
   expect(useControlAsks.getState().current(1000 + ASK_SHOWN_MS)).toEqual([]);
 });
 
-test("letting it type asks Rust and clears the ask; a refusal says why", async () => {
+test("letting it type asks Rust and clears the ask", async () => {
   vi.mocked(remoteLetDeviceType).mockResolvedValue();
   useControlAsks.getState().asked(ask, 1000);
   await useControlAsks.getState().letType(ask);
   expect(remoteLetDeviceType).toHaveBeenCalledWith("s1", "ab".repeat(32));
   expect(useControlAsks.getState().current(1000)).toEqual([]);
+  expect(showToast).not.toHaveBeenCalled();
+});
 
-  vi.mocked(remoteLetDeviceType).mockRejectedValue(
-    "That device isn't connected now."
-  );
-  useControlAsks.getState().asked(ask, 1000);
+test("every refusal says why, the same one twice too", async () => {
+  vi.mocked(remoteLetDeviceType).mockRejectedValue("Not watching.");
   await useControlAsks.getState().letType(ask);
-  expect(useControlAsks.getState().error).toBe(
-    "That device isn't connected now."
-  );
+  await useControlAsks.getState().letType(ask);
+  expect(showToast).toHaveBeenCalledTimes(2);
+  expect(showToast).toHaveBeenLastCalledWith("Not watching.", "error");
+});
+
+test("pruning forgets asks no longer shown", () => {
+  useControlAsks.getState().asked(ask, 1000);
+  useControlAsks.getState().prune(1000 + ASK_SHOWN_MS);
+  expect(useControlAsks.getState().asks).toEqual([]);
 });
 
 test("not now clears it without asking Rust", () => {

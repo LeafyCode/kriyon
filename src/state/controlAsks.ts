@@ -6,6 +6,7 @@ import {
 } from "../ipc/bridge.ts";
 import { failureMessage } from "../ipc/failures.ts";
 import { onEvent, stopAll } from "../ipc/onEvent.ts";
+import { showToast } from "../ui/Toast.tsx";
 
 /**
  * Devices that asked for [Typing control] of a session the person typed in
@@ -29,10 +30,10 @@ interface ControlAsksStore {
   current: (now: number) => Asked[];
   /** Not now: drop it. */
   dismiss: (ask: ControlAsk) => void;
-  /** Why letting a device type failed, if it did. */
-  error: string | null;
-  /** Let that device type in that session. */
+  /** Let that device type in that session; a refusal shows as a toast. */
   letType: (ask: ControlAsk) => Promise<void>;
+  /** Forget the asks no longer shown at `now`. */
+  prune: (now: number) => void;
 }
 
 const same = (a: ControlAsk, b: ControlAsk) =>
@@ -53,16 +54,19 @@ export const useControlAsks = create<ControlAsksStore>((set, get) => ({
       .sort((a, b) => b.at - a.at),
   dismiss: (ask) =>
     set((state) => ({ asks: state.asks.filter((one) => !same(one, ask)) })),
-  error: null,
   letType: async (ask) => {
     get().dismiss(ask);
     try {
       await remoteLetDeviceType(ask.sessionId, ask.deviceId);
-      set({ error: null });
     } catch (error) {
-      set({ error: failureMessage(error) });
+      showToast(failureMessage(error), "error");
     }
   },
+  prune: (now) =>
+    set((state) => {
+      const kept = state.asks.filter((ask) => now - ask.at < ASK_SHOWN_MS);
+      return kept.length === state.asks.length ? state : { asks: kept };
+    }),
 }));
 
 /** Hear devices asking to type. Returns the cleanup. */

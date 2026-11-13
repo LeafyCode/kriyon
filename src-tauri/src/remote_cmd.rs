@@ -675,11 +675,11 @@ async fn release_everywhere(app: &tauri::AppHandle, device: [u8; 32]) {
 
 /// The person clicked "Let <device> type" on a session: control goes to
 /// that device even though they typed here just now. It must still be a
-/// connected Controller.
+/// Controller with that session open.
 ///
 /// # Errors
-/// For a bad id, a device not paired as a Controller or not connected now,
-/// or a session that closed.
+/// For a bad id, a device not paired as a Controller or without the
+/// session open now, or a session that closed.
 #[tauri::command]
 pub async fn remote_let_device_type(
     app: tauri::AppHandle,
@@ -691,9 +691,9 @@ pub async fn remote_let_device_type(
     crate::remote_device_cmd::check_session_id(&session_id)?;
     let connected = app
         .try_state::<crate::remote_serve::Serve>()
-        .is_some_and(|serve| serve.has_control(&device));
+        .is_some_and(|serve| serve.has_open(&session_id, &device));
     if !connected {
-        return Err("That device isn't connected now.".to_string());
+        return Err("That device isn't watching this session now.".to_string());
     }
     tauri::async_runtime::spawn_blocking(move || {
         let role = app
