@@ -1,11 +1,5 @@
 import { Minus, Play, Plus, Search } from "lucide-react";
-import {
-  Children,
-  type CSSProperties,
-  type ReactNode,
-  useEffect,
-  useState,
-} from "react";
+import { type CSSProperties, type ReactNode, useEffect, useState } from "react";
 import { keptFor } from "../inspector/activityLog/activityLog.ts";
 import {
   type ActivityStats,
@@ -27,7 +21,6 @@ import { useTour } from "../state/tour.ts";
 import { useUpdates } from "../state/updates.ts";
 import {
   button,
-  card,
   inputBox,
   pickerOption,
   row30,
@@ -48,6 +41,17 @@ import {
 } from "../welcome/integrationCopy.ts";
 import { MascotPicker } from "./MascotPicker.tsx";
 import {
+  errorTextStyle,
+  groupLabelStyle,
+  groupStyle,
+  rowHintStyle,
+  rowLabelStyle,
+  rowTextStyle,
+  SectionPage,
+  SettingGroup,
+  SettingRow,
+} from "./SettingParts.tsx";
+import {
   AUTO_SLEEP_OPTIONS,
   MEMORY_BUDGET_OPTIONS,
   MENU_BAR_OPTIONS,
@@ -61,7 +65,6 @@ import {
   SETTINGS_GROUPS,
   SETTINGS_SECTIONS,
   type SettingsSectionId,
-  sectionTitle,
 } from "./settingsSections.ts";
 import { ThemePicker } from "./ThemePicker.tsx";
 
@@ -126,27 +129,6 @@ const mainStyle: CSSProperties = {
   padding: "28px 40px 56px",
 };
 
-const pageStyle: CSSProperties = {
-  display: "flex",
-  flexDirection: "column",
-  gap: "28px",
-  maxWidth: "1120px",
-};
-
-const pageTitleStyle: CSSProperties = {
-  color: tokens.color.ink.bright,
-  fontSize: "20px",
-  fontWeight: 500,
-  margin: 0,
-};
-
-const pageLeadStyle: CSSProperties = {
-  color: tokens.color.ink.secondary,
-  fontSize: "13px",
-  lineHeight: 1.5,
-  margin: "6px 0 0",
-};
-
 const codeStyle: CSSProperties = {
   color: tokens.color.accentInk,
   fontFamily: tokens.font.mono,
@@ -164,76 +146,12 @@ const searchBoxStyle: CSSProperties = {
   width: "240px",
 };
 
-const groupStyle: CSSProperties = {
-  display: "flex",
-  flexDirection: "column",
-  gap: tokens.space.sm,
-};
-
-const groupLabelStyle: CSSProperties = {
-  ...sectionLabel(),
-  paddingLeft: "2px",
-};
-
-/** The group's card; its rows are hairline-separated, not boxed one by one. */
-const groupCardStyle: CSSProperties = {
-  ...card(),
-  display: "flex",
-  flexDirection: "column",
-  overflow: "hidden",
-};
-
 /** Two groups side by side when the column has room for both. */
 const groupGridStyle: CSSProperties = {
   alignItems: "start",
   display: "grid",
   gap: "20px",
   gridTemplateColumns: "repeat(auto-fit, minmax(380px, 1fr))",
-};
-
-const dividerStyle: CSSProperties = {
-  borderTop: `1px solid ${tokens.color.line.soft}`,
-};
-
-/**
- * A preference row: the name and hint on the left, the control on the right.
- * `minHeight`, not `height`: a couple of the hints run to a sentence or two,
- * and clipping the explanation to hold the rhythm costs more than it's worth.
- */
-const rowStyle: CSSProperties = {
-  alignItems: "center",
-  display: "flex",
-  gap: tokens.space.xl,
-  justifyContent: "space-between",
-  minHeight: "56px",
-  padding: "14px 18px",
-};
-
-const stackedRowStyle: CSSProperties = {
-  display: "flex",
-  flexDirection: "column",
-  gap: tokens.space.md,
-  padding: "14px 18px",
-};
-
-const rowTextStyle: CSSProperties = {
-  display: "flex",
-  flexDirection: "column",
-  gap: "4px",
-  maxWidth: "62ch",
-  minWidth: 0,
-};
-
-const rowLabelStyle: CSSProperties = {
-  color: tokens.color.ink.primary,
-  fontSize: "13px",
-  fontWeight: 500,
-};
-
-const rowHintStyle: CSSProperties = {
-  color: tokens.color.ink.muted,
-  fontSize: "12px",
-  lineHeight: 1.5,
 };
 
 const controlRowStyle: CSSProperties = {
@@ -384,93 +302,6 @@ function NestedCapControl({
     </div>
   );
 }
-
-/** One labelled preference row: a name (with optional hint) and its control. */
-function SettingRow({
-  label,
-  hint,
-  control,
-  stacked = false,
-}: {
-  control: ReactNode;
-  hint?: ReactNode;
-  label: string;
-  /** Put the control under the label — for one too wide to sit beside it. */
-  stacked?: boolean;
-}) {
-  return (
-    <div style={stacked ? stackedRowStyle : rowStyle}>
-      <div style={rowTextStyle}>
-        <span data-setting-label style={rowLabelStyle}>
-          {label}
-        </span>
-        {hint ? <span style={rowHintStyle}>{hint}</span> : null}
-      </div>
-      {control}
-    </div>
-  );
-}
-
-/**
- * A group of related preference rows on one card, with a hairline between
- * rows (never after the last — a trailing rule under the card's own border
- * reads as a doubled edge). `label` names the region, and is shown above the
- * card unless `hideLabel` (when the page title already says it).
- */
-function SettingGroup({
-  label,
-  children,
-  hideLabel = false,
-}: {
-  children: ReactNode;
-  hideLabel?: boolean;
-  label: string;
-}) {
-  const rows = Children.toArray(children);
-  return (
-    <section aria-label={label} style={groupStyle}>
-      {hideLabel ? null : <span style={groupLabelStyle}>{label}</span>}
-      <div style={groupCardStyle}>
-        {rows.map((row, index) => (
-          <div
-            key={typeof row === "object" && "key" in row ? row.key : label}
-            style={index === 0 ? undefined : dividerStyle}
-          >
-            {row}
-          </div>
-        ))}
-      </div>
-    </section>
-  );
-}
-
-/** One Settings section: its title (its side-menu entry), a line on what it
- *  covers, its groups. */
-function SectionPage({
-  children,
-  id,
-  lead,
-}: {
-  children: ReactNode;
-  id: SettingsSectionId;
-  lead: ReactNode;
-}) {
-  return (
-    <div style={pageStyle}>
-      <div>
-        <h2 style={pageTitleStyle}>{sectionTitle(id)}</h2>
-        <p style={pageLeadStyle}>{lead}</p>
-      </div>
-      {children}
-    </div>
-  );
-}
-
-const errorTextStyle: CSSProperties = {
-  ...rowHintStyle,
-  color: tokens.color.status.error,
-  padding: `${tokens.space.sm} 14px`,
-};
 
 /**
  * What Kriyon adds to Claude Code — the [Integration] — with a switch for each
