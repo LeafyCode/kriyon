@@ -2,6 +2,7 @@
 //! with one live session "s" whose daemon is the test, a real host endpoint
 //! serving it, and paired devices that dial it.
 
+use kriyon_remote::device_view::LinkState;
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -27,7 +28,7 @@ use kriyon_remote::device_view::HostView;
 use crate::daemon_client::DaemonEvent;
 use crate::remote_serve::{LiveSession, RemoteStart, Serve, ServeHost};
 use kriyon_remote::authorize::ProjectFolder;
-use kriyon_remote_link::device_runtime::{DeviceEvents, DeviceRuntime, LinkState};
+use kriyon_remote_link::device_runtime::{DeviceEvents, DeviceRuntime};
 
 /// The app, faked: one session "s", paired devices in a map.
 pub(crate) struct FakeHost {

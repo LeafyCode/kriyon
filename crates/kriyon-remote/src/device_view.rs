@@ -6,6 +6,7 @@
 //! a fresh snapshot, and input names the run, the control epoch and the last
 //! update drawn, so the host can refuse what was meant for an older screen.
 
+use serde::Serialize;
 use std::collections::HashMap;
 use std::time::Instant;
 
@@ -14,6 +15,20 @@ use crate::message::{
     Epoch, FromDevice, Holder, ProjectInfo, RefuseReason, Role, SessionId, SessionInfo, ToDevice,
 };
 use crate::screen::{Follow, ScreenFollower};
+
+/// Where a paired host's link stands, as the UI shows it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum LinkState {
+    /// Dialing, or waiting to dial again.
+    Connecting,
+    /// Welcomed, and the heartbeat is coming.
+    Connected,
+    /// No heartbeat for 40 s: "Disconnected, reconnecting. Typing is off."
+    Lost,
+    /// The host says this device isn't paired any more.
+    Removed,
+}
 
 /// Who holds [Typing control] of a session, as the host last said.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -254,6 +269,125 @@ pub fn refusal_words(reason: RefuseReason) -> &'static str {
         RefuseReason::NoSuchProject => "That project isn't on that computer any more.",
         RefuseReason::ScreenTooLarge => "That screen is too big to show here.",
         RefuseReason::StartFailed => "The session couldn't be started on that computer.",
+    }
+}
+
+/// Who types into a session now, seen from one device.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Typing {
+    /// The person at the host's keyboard.
+    Host,
+    /// This device.
+    You,
+    /// Another device.
+    Other,
+}
+
+/// One session, as a device's screens show it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionSummary {
+    pub id: SessionId,
+    pub title: String,
+    pub project_id: String,
+    pub status: kriyon_core::session::SessionStatus,
+    pub standing: kriyon_core::standing::StandingState,
+    pub needs_you: bool,
+    pub dialog_open: bool,
+    pub last_change_ms: i64,
+    /// `None` until the host says who holds control.
+    pub typing: Option<Typing>,
+    /// This device may type now: connected, a Controller, holding control.
+    /// The host checks again at the write.
+    pub may_type: bool,
+}
+
+/// A paired host as a device's screens show it: one record, made here,
+/// read by the desktop's webview and the phone's screens alike.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HostSummary {
+    pub host_id: String,
+    /// From the host's welcome; `None` until it comes.
+    pub host_name: Option<String>,
+    pub link: LinkState,
+    /// `viewer` or `controller`, from the welcome.
+    pub role: Option<&'static str>,
+    /// The last refusal the host sent, by its name (`NotInControl`).
+    pub refused: Option<String>,
+    pub sessions: Vec<SessionSummary>,
+    /// Where a session can be started there.
+    pub projects: Vec<ProjectInfo>,
+    /// This device may start a session there now: connected, a Controller,
+    /// with a project. The host checks again.
+    pub may_start: bool,
+}
+
+/// Who `holder` is, seen from device `me`.
+#[must_use]
+pub fn typing(holder: &Holder, me: &crate::message::EndpointId) -> Typing {
+    match holder {
+        Holder::Host => Typing::Host,
+        Holder::Device(device) if device == me => Typing::You,
+        Holder::Device(_) => Typing::Other,
+    }
+}
+
+/// The name serde gives `value`: a unit variant's name, or a variant with
+/// fields by its name alone (`TooOld`).
+#[must_use]
+pub fn name_of(value: &impl Serialize) -> String {
+    match serde_json::to_value(value) {
+        Ok(serde_json::Value::String(name)) => name,
+        Ok(serde_json::Value::Object(fields)) => fields.keys().next().cloned().unwrap_or_default(),
+        _ => String::new(),
+    }
+}
+
+/// The summary of `view` for host `host`, seen from device `me`.
+#[must_use]
+pub fn host_summary(
+    host: &crate::message::EndpointId,
+    me: &crate::message::EndpointId,
+    link: LinkState,
+    view: &HostView,
+) -> HostSummary {
+    let connected = link == LinkState::Connected;
+    let controller = view.role == Some(Role::Controller);
+    HostSummary {
+        host_id: crate::message::hex(host),
+        host_name: view.host_name.clone(),
+        link,
+        role: view.role.map(|role| match role {
+            Role::Viewer => "viewer",
+            Role::Controller => "controller",
+        }),
+        refused: view.refused.as_ref().map(name_of),
+        sessions: view
+            .sessions
+            .iter()
+            .map(|session| {
+                let typing = view
+                    .control
+                    .get(&session.id)
+                    .map(|control| typing(&control.holder, me));
+                SessionSummary {
+                    id: session.id.clone(),
+                    title: session.title.clone(),
+                    project_id: session.project_id.clone(),
+                    status: session.status,
+                    standing: session.standing,
+                    needs_you: session.needs_you,
+                    dialog_open: session.dialog_open,
+                    last_change_ms: session.last_change_ms,
+                    typing,
+                    may_type: connected && controller && typing == Some(Typing::You),
+                }
+            })
+            .collect(),
+        projects: view.projects.clone(),
+        may_start: connected && controller && !view.projects.is_empty(),
     }
 }
 
@@ -547,5 +681,98 @@ mod tests {
                 bytes: b"y".to_vec()
             })
         );
+    }
+
+    #[test]
+    fn a_hosts_summary_is_one_record_both_apps_read() {
+        let me = [2; 32];
+        let mut control = HashMap::new();
+        control.insert(
+            "s1".to_string(),
+            ControlState {
+                holder: Holder::Device(me),
+                epoch: Epoch {
+                    host_boot_id: 1,
+                    counter: 2,
+                },
+            },
+        );
+        let view = HostView {
+            host_name: Some("Mac".into()),
+            role: Some(Role::Controller),
+            sessions: vec![SessionInfo {
+                id: "s1".into(),
+                title: "Fix the build".into(),
+                project_id: "p1".into(),
+                status: kriyon_core::session::SessionStatus::Waiting,
+                standing: kriyon_core::standing::StandingState::AwaitingInput,
+                needs_you: true,
+                dialog_open: false,
+                last_change_ms: 5,
+            }],
+            control,
+            refused: Some(RefuseReason::NotInControl),
+            projects: vec![ProjectInfo {
+                id: "p1".into(),
+                name: "app".into(),
+                parked: false,
+            }],
+        };
+        let summary = host_summary(&[0xab; 32], &me, LinkState::Connected, &view);
+        let json = serde_json::to_value(&summary).expect("json");
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "hostId": "ab".repeat(32),
+                "hostName": "Mac",
+                "link": "connected",
+                "role": "controller",
+                "refused": "NotInControl",
+                "sessions": [{
+                    "id": "s1",
+                    "title": "Fix the build",
+                    "projectId": "p1",
+                    "status": "waiting",
+                    "standing": "awaiting_input",
+                    "needsYou": true,
+                    "dialogOpen": false,
+                    "lastChangeMs": 5,
+                    "typing": "you",
+                    "mayType": true,
+                }],
+                "projects": [{ "id": "p1", "name": "app", "parked": false }],
+                "mayStart": true,
+            })
+        );
+    }
+
+    #[test]
+    fn typing_and_starting_need_a_connected_controller() {
+        let me = [2; 32];
+        let view = HostView {
+            role: Some(Role::Viewer),
+            projects: vec![ProjectInfo {
+                id: "p1".into(),
+                name: "app".into(),
+                parked: false,
+            }],
+            ..HostView::default()
+        };
+        let summary = host_summary(&[1; 32], &me, LinkState::Connected, &view);
+        assert!(!summary.may_start, "a Viewer");
+        let controller = HostView {
+            role: Some(Role::Controller),
+            ..view.clone()
+        };
+        assert!(host_summary(&[1; 32], &me, LinkState::Connected, &controller).may_start);
+        assert!(!host_summary(&[1; 32], &me, LinkState::Lost, &controller).may_start);
+        let no_projects = HostView {
+            projects: vec![],
+            ..controller
+        };
+        assert!(!host_summary(&[1; 32], &me, LinkState::Connected, &no_projects).may_start);
+        assert_eq!(typing(&Holder::Host, &me), Typing::Host);
+        assert_eq!(typing(&Holder::Device(me), &me), Typing::You);
+        assert_eq!(typing(&Holder::Device([9; 32]), &me), Typing::Other);
     }
 }

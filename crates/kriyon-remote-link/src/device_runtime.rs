@@ -16,13 +16,12 @@ use crate::framed::{MessageReader, MessageWriter};
 use crate::LinkError;
 use iroh::EndpointAddr;
 use kriyon_remote::codec::Decoded;
-use kriyon_remote::device_view::{HostView, ScreenEvent, SessionScreen};
+use kriyon_remote::device_view::{HostView, LinkState, ScreenEvent, SessionScreen};
 use kriyon_remote::link_policy::{CloseCode, HeartbeatWatch};
 use kriyon_remote::message::{
     EndpointId, FromDevice, Holder, RefuseReason, RequestId, SessionId, ToDevice,
 };
 use kriyon_remote::pairing::PairingInvite;
-use serde::Serialize;
 use tokio::sync::{Mutex, Notify};
 use tokio::task::JoinHandle;
 
@@ -34,20 +33,6 @@ const TICK: Duration = Duration::from_secs(1);
 
 /// How long a link that ended by itself waits for the host's close reason.
 const HOST_CLOSE_WAIT: Duration = Duration::from_secs(2);
-
-/// Where a paired host's link stands, as the UI shows it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub enum LinkState {
-    /// Dialing, or waiting to dial again.
-    Connecting,
-    /// Welcomed, and the heartbeat is coming.
-    Connected,
-    /// No heartbeat for 40 s: "Disconnected, reconnecting. Typing is off."
-    Lost,
-    /// The host says this device isn't paired any more.
-    Removed,
-}
 
 /// Told when a host's link or view changes.
 pub trait DeviceEvents: Send + Sync + 'static {

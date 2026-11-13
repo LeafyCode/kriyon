@@ -2,8 +2,8 @@
 //! plain records the TypeScript side reads as is.
 
 use kriyon_remote::device_view::HostView;
+use kriyon_remote::device_view::LinkState;
 use kriyon_remote::message::{hex, EndpointId, Holder, Role};
-use kriyon_remote_link::device_runtime::LinkState;
 
 /// Where a host's link stands.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, uniffi::Enum)]

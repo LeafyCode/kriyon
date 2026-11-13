@@ -5,15 +5,13 @@
 
 use std::sync::Arc;
 
-use kriyon_remote::device_view::{HostView, ScreenEvent};
+use kriyon_remote::device_view::{HostView, LinkState, ScreenEvent};
 use kriyon_remote::message::{hex, EndpointId, Holder, Role, SessionInfo};
 use serde::Serialize;
 use tauri::{Emitter as _, Manager as _};
 
 use crate::remote_cmd::parse_device_id;
-use kriyon_remote_link::device_runtime::{
-    screen_frame, DeviceEvents, DeviceRuntime, HostEntry, LinkState,
-};
+use kriyon_remote_link::device_runtime::{screen_frame, DeviceEvents, DeviceRuntime, HostEntry};
 
 /// The longest invite text taken: a QR code's worth, with room.
 const MAX_INVITE_TEXT: usize = 8 * 1024;

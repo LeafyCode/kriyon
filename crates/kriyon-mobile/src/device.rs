@@ -4,6 +4,7 @@
 //! pairing code's text, keeps each paired computer connected, and passes a
 //! session's screen to the app as frames.
 
+use kriyon_remote::device_view::LinkState;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
@@ -14,8 +15,7 @@ use kriyon_remote::pairing::PairingInvite;
 use kriyon_remote::relay::RelayAction;
 use kriyon_remote_link::device::DevicePairing;
 use kriyon_remote_link::device_runtime::{
-    screen_frame, DeviceError, DeviceEvents, DeviceRuntime, HostEntry, LinkState, ScreenSink,
-    StartError,
+    screen_frame, DeviceError, DeviceEvents, DeviceRuntime, HostEntry, ScreenSink, StartError,
 };
 use kriyon_remote_link::keys::{load_or_create, KeyVault};
 use kriyon_remote_link::{LinkConfig, RelayAccess};

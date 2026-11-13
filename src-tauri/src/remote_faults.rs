@@ -29,6 +29,7 @@
 //! Each runs in a few seconds: the device counts the host lost after
 //! [`LOST_AFTER`] here, not the spec's 40 s.
 
+use kriyon_remote::device_view::LinkState;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -43,7 +44,7 @@ use crate::remote_test_support::{
     answer, asked, device, next, on_loopback, run, wait_until, world, world_on, DeviceSeen, World,
 };
 use kriyon_remote_link::device_runtime::{
-    DeviceError, DeviceEvents, DeviceRuntime, HostEntry, LinkState, ScreenSink, StartError, Timing,
+    DeviceError, DeviceEvents, DeviceRuntime, HostEntry, ScreenSink, StartError, Timing,
 };
 
 /// How long the device here waits on a quiet host before it counts it lost.
