@@ -5,7 +5,7 @@ import {
   requestPermissionsAsync,
 } from "expo-notifications";
 import { KriyonNative } from "../../modules/kriyon-native/index.ts";
-import { registerPush } from "./push.ts";
+import { pushLine, registerPush } from "./push.ts";
 
 jest.mock("expo-notifications", () => ({
   addPushTokenListener: jest.fn(() => ({ remove: jest.fn() })),
@@ -14,7 +14,7 @@ jest.mock("expo-notifications", () => ({
 }));
 
 jest.mock("../../modules/kriyon-native/index.ts", () => ({
-  KriyonNative: { setPushToken: jest.fn() },
+  KriyonNative: { hasPushService: jest.fn(), setPushToken: jest.fn() },
 }));
 
 const native = jest.mocked(KriyonNative);
@@ -24,6 +24,7 @@ const rotated = jest.mocked(addPushTokenListener);
 
 beforeEach(() => {
   jest.clearAllMocks();
+  native.hasPushService.mockReturnValue(true);
 });
 
 test("with alerts allowed, the raw push token goes to Rust", async () => {
@@ -88,4 +89,19 @@ test("a token the push service renews goes to Rust again", async () => {
   ];
   listener({ data: "c3d4", type: "ios" });
   expect(native.setPushToken).toHaveBeenLastCalledWith("c3d4", "apns");
+});
+
+test("an Android build without a Firebase file says so, and asks nothing", async () => {
+  native.hasPushService.mockReturnValue(false);
+  expect(await registerPush()).toBe("needs Firebase");
+  expect(permissions).not.toHaveBeenCalled();
+  expect(token).not.toHaveBeenCalled();
+});
+
+test("the alerts line is in plain words", () => {
+  expect(pushLine("needs Firebase")).toBe(
+    "Alerts need a Firebase setup on this build."
+  );
+  expect(pushLine("on")).toBe("Alerts: on");
+  expect(pushLine("not allowed")).toBe("Alerts: not allowed");
 });

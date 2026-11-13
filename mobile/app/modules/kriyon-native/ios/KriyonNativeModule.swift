@@ -231,6 +231,9 @@ public final class KriyonNativeModule: Module {
       parsed(try await rust { try await self.started().relayAccount() })
     }
 
+    // Apple's push service is the system's: there is nothing to set up.
+    Function("hasPushService") { true }
+
     Function("wake") {
       try self.started().wake()
     }

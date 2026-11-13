@@ -146,6 +146,14 @@ test("home says where alerts stand", async () => {
   ).toBeOnTheScreen();
 });
 
+test("an Android build without Firebase says so in plain words", async () => {
+  usePhone.setState({ push: "needs Firebase" });
+  await render(<HomeScreen />);
+  expect(
+    screen.getByText("Alerts need a Firebase setup on this build.")
+  ).toBeOnTheScreen();
+});
+
 test("a computer can be forgotten from home", async () => {
   usePhone.setState({ hosts: [paired], states: { [MAC]: connected } });
   await render(<HomeScreen />);

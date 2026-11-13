@@ -10,6 +10,7 @@ import {
 import { linkLine } from "../../../../src/remote/remoteScreen.ts";
 import type { PairedHost } from "../../modules/kriyon-native/index.ts";
 import { standingMeta, usePhone } from "../state/phone.ts";
+import { pushLine } from "../state/push.ts";
 import { colors, ui } from "../ui.ts";
 import { RelaySection } from "./RelaySection.tsx";
 
@@ -113,7 +114,7 @@ export function HomeScreen() {
       })}
       <RelaySection />
       {push ? (
-        <Text style={[ui.hint, { marginTop: 16 }]}>Alerts: {push}</Text>
+        <Text style={[ui.hint, { marginTop: 16 }]}>{pushLine(push)}</Text>
       ) : null}
       <Pressable
         accessibilityRole="button"

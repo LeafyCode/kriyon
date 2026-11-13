@@ -23,6 +23,7 @@ jest.mock("../modules/kriyon-native/index.ts", () => ({
 }));
 
 jest.mock("./state/push.ts", () => ({
+  pushLine: (status: string) => `Alerts: ${status}`,
   registerPush: jest.fn(() => Promise.resolve("off")),
 }));
 

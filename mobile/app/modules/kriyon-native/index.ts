@@ -88,6 +88,12 @@ interface KriyonNativeModule {
   closeSession: (hostId: string, sessionId: string) => Promise<void>;
   finishPairing: () => Promise<PairedHost>;
   forget: (hostId: string) => Promise<void>;
+  /**
+   * Whether this build can get a push token at all: always on iPhone
+   * (Apple's service is the system's); on Android, whether it was built
+   * with a Firebase file.
+   */
+  hasPushService: () => boolean;
   hosts: () => Promise<PairedHost[]>;
   input: (
     hostId: string,

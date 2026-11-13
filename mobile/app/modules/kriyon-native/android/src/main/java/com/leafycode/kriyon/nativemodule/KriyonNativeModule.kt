@@ -160,6 +160,14 @@ class KriyonNativeModule : Module() {
       parsed(rust { started().relayAccount() })
     }
 
+    // Firebase starts from the resources its google-services.json makes:
+    // a build without the file has none, and no push token can come.
+    Function("hasPushService") {
+      val context = appContext.reactContext ?: return@Function false
+      @Suppress("DiscouragedApi")
+      context.resources.getIdentifier("google_app_id", "string", context.packageName) != 0
+    }
+
     Function("wake") {
       started().wake()
     }

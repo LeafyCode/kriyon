@@ -17,6 +17,8 @@ import { KriyonNative } from "../../modules/kriyon-native/index.ts";
 export type PushStatus =
   | "on"
   | "off"
+  /** An Android build made without the person's Firebase file. */
+  | "needs Firebase"
   | "not allowed"
   | `unavailable: ${string}`;
 
@@ -44,7 +46,19 @@ async function give(token: DevicePushToken): Promise<PushStatus> {
 
 let renewals: EventSubscription | null = null;
 
+/** The alerts line on Home. */
+export function pushLine(status: PushStatus): string {
+  return status === "needs Firebase"
+    ? "Alerts need a Firebase setup on this build."
+    : `Alerts: ${status}`;
+}
+
 export async function registerPush(): Promise<PushStatus> {
+  if (!KriyonNative.hasPushService()) {
+    // An Android build without the person's Firebase file (app.config.ts):
+    // no token can come, so don't ask to show alerts that can't arrive.
+    return "needs Firebase";
+  }
   try {
     const allowed = await requestPermissionsAsync();
     if (!allowed.granted) {
