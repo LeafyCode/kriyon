@@ -30,7 +30,6 @@ pub mod relay_cmd;
 pub mod relay_rt;
 pub mod remote_cmd;
 pub mod remote_device_cmd;
-pub mod remote_device_rt;
 pub mod remote_endpoint;
 #[cfg(test)]
 mod remote_faults;
@@ -336,7 +335,7 @@ pub fn run() {
         .plugin(tauri_plugin_positioner::init())
         .manage(AppState::default())
         .manage(remote_rt::RemoteRuntime::default())
-        .manage(remote_device_rt::DeviceRuntime::default())
+        .manage(kriyon_remote_link::device_runtime::DeviceRuntime::default())
         .manage(remote_push_rt::PushRt::from_build())
         .manage(remote_endpoint::RemoteEndpoint::new(
             std::net::SocketAddr::from(([0, 0, 0, 0], 0)),

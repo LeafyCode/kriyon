@@ -88,7 +88,7 @@ async fn quiet(app: &tauri::AppHandle) -> bool {
         .is_some_and(|serve| !serve.onlooked_sessions().is_empty());
     !watched
         && !app
-            .state::<crate::remote_device_rt::DeviceRuntime>()
+            .state::<kriyon_remote_link::device_runtime::DeviceRuntime>()
             .in_use()
             .await
 }

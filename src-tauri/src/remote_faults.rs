@@ -39,11 +39,11 @@ use kriyon_remote::link_policy::CloseCode;
 use kriyon_remote::message::{EndpointId, FromDevice, Holder, RefuseReason, Role, ToDevice};
 use parking_lot::Mutex;
 
-use crate::remote_device_rt::{
-    DeviceError, DeviceEvents, DeviceRuntime, HostEntry, LinkState, ScreenSink, Timing,
-};
 use crate::remote_test_support::{
     answer, asked, device, next, on_loopback, run, wait_until, world, world_on, DeviceSeen, World,
+};
+use kriyon_remote_link::device_runtime::{
+    DeviceError, DeviceEvents, DeviceRuntime, HostEntry, LinkState, ScreenSink, Timing,
 };
 
 /// How long the device here waits on a quiet host before it counts it lost.

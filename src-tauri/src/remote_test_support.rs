@@ -23,8 +23,8 @@ use parking_lot::Mutex;
 use kriyon_remote::device_view::HostView;
 
 use crate::daemon_client::DaemonEvent;
-use crate::remote_device_rt::{DeviceEvents, DeviceRuntime, LinkState};
 use crate::remote_serve::{LiveSession, Serve, ServeHost};
+use kriyon_remote_link::device_runtime::{DeviceEvents, DeviceRuntime, LinkState};
 
 /// The app, faked: one session "s", paired devices in a map.
 pub(crate) struct FakeHost {

@@ -1,7 +1,7 @@
 //! Commands for this computer as a [Remote device] of another computer:
 //! pairing from an invite's text, the paired hosts, and their sessions.
 //! Every argument comes from the webview and is checked here (trust
-//! boundary); the work is [`crate::remote_device_rt`]'s.
+//! boundary); the work is [`kriyon_remote_link::device_runtime`]'s.
 
 use std::sync::Arc;
 
@@ -11,7 +11,9 @@ use serde::Serialize;
 use tauri::{Emitter as _, Manager as _};
 
 use crate::remote_cmd::{device_id_text, parse_device_id};
-use crate::remote_device_rt::{screen_frame, DeviceEvents, DeviceRuntime, HostEntry, LinkState};
+use kriyon_remote_link::device_runtime::{
+    screen_frame, DeviceEvents, DeviceRuntime, HostEntry, LinkState,
+};
 
 /// The longest invite text taken: a QR code's worth, with room.
 const MAX_INVITE_TEXT: usize = 8 * 1024;

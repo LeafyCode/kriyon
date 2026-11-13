@@ -9,9 +9,11 @@ description = "The network link of Kriyon's remote access, over iroh: endpoints,
 [dependencies]
 iroh = { version = "1.4.1", default-features = false, features = ["tls-ring"] }
 kriyon-remote = { path = "../kriyon-remote" }
+serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", default-features = false, features = ["macros", "rt", "sync", "time"] }
 
 [dev-dependencies]
+kriyon-core = { path = "../kriyon-core" }
 tokio = { version = "1", default-features = false, features = ["macros", "rt-multi-thread", "sync", "time"] }
 
 [lints.clippy]

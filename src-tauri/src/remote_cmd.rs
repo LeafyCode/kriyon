@@ -329,7 +329,7 @@ pub(crate) async fn bound(app: &tauri::AppHandle) -> Result<crate::remote_endpoi
             std::sync::Arc::new(StoreDevices(devices))
         })
         .await?;
-    app.state::<crate::remote_device_rt::DeviceRuntime>()
+    app.state::<kriyon_remote_link::device_runtime::DeviceRuntime>()
         .attach(bound.endpoint.clone())
         .await;
     Ok(bound)
@@ -341,7 +341,7 @@ pub(crate) async fn release_endpoint_if_unused(app: &tauri::AppHandle) {
     use tauri::Manager as _;
     let unused = !app.state::<crate::remote_rt::RemoteRuntime>().is_on().await
         && !app
-            .state::<crate::remote_device_rt::DeviceRuntime>()
+            .state::<kriyon_remote_link::device_runtime::DeviceRuntime>()
             .in_use()
             .await;
     app.state::<crate::remote_endpoint::RemoteEndpoint>()

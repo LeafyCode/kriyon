@@ -3,22 +3,23 @@
 //! sessions, and the session streams shown in a terminal.
 //!
 //! The protocol's decisions are `kriyon_remote::device_view`'s; this does the
-//! IO. Kept free of Tauri types so it is tested against a host in-process;
-//! `remote_device_cmd` wires it to the app.
+//! IO, the same on the desktop and the phone. It keeps nothing itself: the
+//! app stores paired hosts and keys (`HostEntry` in, `DeviceEvents` out).
+//! Tested against a host in-process.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use crate::device::{stay_connected_waking, Device, DeviceLink};
+use crate::framed::{MessageReader, MessageWriter};
+use crate::LinkError;
 use iroh::EndpointAddr;
 use kriyon_remote::codec::Decoded;
 use kriyon_remote::device_view::{HostView, ScreenEvent, SessionScreen};
 use kriyon_remote::link_policy::{CloseCode, HeartbeatWatch};
 use kriyon_remote::message::{EndpointId, FromDevice, Holder, RefuseReason, SessionId, ToDevice};
 use kriyon_remote::pairing::PairingInvite;
-use kriyon_remote_link::device::{stay_connected_waking, Device, DeviceLink};
-use kriyon_remote_link::framed::{MessageReader, MessageWriter};
-use kriyon_remote_link::LinkError;
 use serde::Serialize;
 use tokio::sync::{Mutex, Notify};
 use tokio::task::JoinHandle;
@@ -92,17 +93,17 @@ impl std::fmt::Display for DeviceError {
 pub struct DevicePairingStart {
     pub code: String,
     pub invite: PairingInvite,
-    pub finish: kriyon_remote_link::device::DevicePairing,
+    pub finish: crate::device::DevicePairing,
 }
 
 /// How long the device waits on the host's heartbeat, and how often it
 /// looks: the spec's timing, shortened only by tests.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct Timing {
+pub struct Timing {
     /// Quiet this long and the host counts as lost.
-    pub(crate) lost_after: Duration,
+    pub lost_after: Duration,
     /// How often the heartbeat is checked.
-    pub(crate) tick: Duration,
+    pub tick: Duration,
 }
 
 impl Default for Timing {
@@ -149,17 +150,15 @@ struct OpenSession {
 impl DeviceRuntime {
     /// A device side that counts a host lost on other than the spec's
     /// timing: for tests that can't wait 40 s.
-    #[cfg(test)]
     #[must_use]
-    pub(crate) fn with_timing(timing: Timing) -> Self {
+    pub fn with_timing(timing: Timing) -> Self {
         Self {
             timing,
             ..Self::default()
         }
     }
 
-    /// Dial from this computer's one endpoint ([`crate::remote_endpoint`]),
-    /// which may also host. Replaces an endpoint that was closed.
+    /// Dial from this device's one endpoint, which may also host. Replaces an endpoint that was closed.
     pub async fn attach(&self, endpoint: iroh::Endpoint) -> Arc<Device> {
         let mut device = self.device.lock().await;
         match device.as_ref() {
@@ -212,7 +211,7 @@ impl DeviceRuntime {
     ) -> Result<DevicePairingStart, String> {
         let invite = PairingInvite::from_qr_text(invite_text.trim())
             .map_err(|_| "that isn't a Kriyon pairing code".to_string())?;
-        let addr = kriyon_remote_link::invite::host_addr(&invite).map_err(|e| e.to_string())?;
+        let addr = crate::invite::host_addr(&invite).map_err(|e| e.to_string())?;
         let device = self.attached().await?;
         let finish = device
             .pair(addr, &invite.secret, device_name)
@@ -686,16 +685,65 @@ fn reason_number(reason: RefuseReason) -> u8 {
 mod tests {
     use std::sync::Mutex as StdMutex;
 
+    use crate::host::{Accepted, Host, PairedDevices};
+    use crate::LinkConfig;
     use kriyon_core::session::SessionStatus;
     use kriyon_core::standing::StandingState;
     use kriyon_remote::compress::{compress, Kind};
     use kriyon_remote::message::{Epoch, Role, SessionInfo};
-    use kriyon_remote_link::host::{Accepted, Host, PairedDevices};
-
-    use kriyon_remote_link::LinkConfig;
 
     use super::*;
-    use crate::remote_test_support::{loopback, on_loopback, run, wait_until, DeviceSeen};
+
+    fn loopback() -> std::net::SocketAddr {
+        std::net::SocketAddr::from(([127, 0, 0, 1], 0))
+    }
+
+    fn run<F: std::future::Future>(f: F) -> F::Output {
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("runtime")
+            .block_on(f)
+    }
+
+    /// What a device side told the app: each link state with the host view.
+    #[derive(Default)]
+    struct DeviceSeen(StdMutex<Vec<(LinkState, HostView)>>);
+
+    impl DeviceEvents for DeviceSeen {
+        fn host_changed(&self, _host: EndpointId, state: LinkState, view: &HostView) {
+            self.0.lock().expect("seen").push((state, view.clone()));
+        }
+    }
+
+    impl DeviceSeen {
+        fn last(&self) -> Option<(LinkState, HostView)> {
+            self.0.lock().expect("seen").last().cloned()
+        }
+    }
+
+    /// Attach `rt` to a new loopback endpoint with `key`; returns its id.
+    async fn on_loopback(rt: &DeviceRuntime, key: [u8; 32]) -> EndpointId {
+        let endpoint = crate::endpoint::bind(
+            &LinkConfig {
+                bind: loopback(),
+                ..LinkConfig::new(key)
+            },
+            Vec::new(),
+        )
+        .await
+        .expect("binds");
+        rt.attach(endpoint).await.id()
+    }
+
+    /// Wait until `check` holds, failing with `what` after ten seconds.
+    async fn wait_until(what: &str, mut check: impl FnMut() -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !check() {
+            assert!(Instant::now() < deadline, "never saw {what}");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
 
     const EPOCH: Epoch = Epoch {
         host_boot_id: 8,

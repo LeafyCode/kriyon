@@ -14,6 +14,7 @@
 //! - [`framed`]: messages over a QUIC stream, with the `kriyon-remote` codec.
 
 pub mod device;
+pub mod device_runtime;
 pub mod endpoint;
 pub mod framed;
 pub mod host;

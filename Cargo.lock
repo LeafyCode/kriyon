@@ -3155,7 +3155,9 @@ name = "kriyon-remote-link"
 version = "0.16.0"
 dependencies = [
  "iroh",
+ "kriyon-core",
  "kriyon-remote",
+ "serde",
  "tokio",
 ]
 
