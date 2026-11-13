@@ -11,6 +11,7 @@ import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 import java.io.File
 import java.lang.ref.WeakReference
+import uniffi.kriyon_mobile.EntriesListener
 import uniffi.kriyon_mobile.HostListener
 import uniffi.kriyon_mobile.MobileDevice
 import uniffi.kriyon_mobile.MobileException
@@ -38,6 +39,22 @@ private class ScreenEvents(
     module.get()?.sendEvent(
       "onScreenFrame",
       mapOf("hostId" to hostId, "sessionId" to sessionId, "frame" to frame),
+    )
+  }
+}
+
+/** One open session's readable view, as events: Rust's summary, whole. */
+private class EntriesEvents(
+  module: KriyonNativeModule,
+  private val hostId: String,
+  private val sessionId: String,
+) : EntriesListener {
+  private val module = WeakReference(module)
+
+  override fun entriesChanged(summary: String) {
+    module.get()?.sendEvent(
+      "onEntriesChanged",
+      mapOf("hostId" to hostId, "sessionId" to sessionId, "summary" to parsed(summary)),
     )
   }
 }
@@ -73,7 +90,7 @@ class KriyonNativeModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("KriyonNative")
 
-    Events("onHostChanged", "onScreenFrame")
+    Events("onEntriesChanged", "onHostChanged", "onScreenFrame")
 
     // Once per app run: a later call returns the same device and its name
     // stays the first one given.
@@ -175,6 +192,15 @@ class KriyonNativeModule : Module() {
     AsyncFunction("openSession") Coroutine { hostId: String, sessionId: String ->
       val screen = ScreenEvents(this@KriyonNativeModule, hostId, sessionId)
       rust { started().openSession(hostId, sessionId, screen) }
+    }
+
+    AsyncFunction("readEntries") Coroutine { hostId: String, sessionId: String ->
+      val entries = EntriesEvents(this@KriyonNativeModule, hostId, sessionId)
+      rust { started().readEntries(hostId, sessionId, entries) }
+    }
+
+    AsyncFunction("stopEntries") Coroutine { hostId: String, sessionId: String ->
+      rust { started().stopEntries(hostId, sessionId) }
     }
 
     AsyncFunction("closeSession") Coroutine { hostId: String, sessionId: String ->

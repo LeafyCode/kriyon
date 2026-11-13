@@ -10,18 +10,21 @@
 //! It prints the pairing code (the QR code's text) and writes it to
 //! `invite-file` if given. Paste it into the phone; then type the six digits
 //! the phone shows here, one line. The session prints a line every two
-//! seconds; what the phone types is echoed into it.
+//! seconds; what the phone types is echoed into it. Its readable view is a
+//! short made-up conversation that grows from when it is opened, ending on a
+//! question.
 
 use std::collections::HashMap;
 use std::io::BufRead as _;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use kriyon_core::readable::{EntryKind, Keyed, StepState};
 use kriyon_core::session::SessionStatus;
 use kriyon_core::standing::StandingState;
 use kriyon_lib::daemon_client::DaemonEvent;
 use kriyon_lib::remote_rt::{CodeOutcome, HostSetup, RemoteRuntime};
-use kriyon_lib::remote_serve::{LiveSession, RemoteStart, Serve, ServeHost};
+use kriyon_lib::remote_serve::{EntriesBuilt, LiveSession, RemoteStart, Serve, ServeHost};
 use kriyon_remote::authorize::{PendingWrite, ProjectFolder};
 use kriyon_remote::control::{Change, HostIsTyping};
 use kriyon_remote::message::{EndpointId, ProjectInfo, RefuseReason, Role, SessionInfo};
@@ -44,6 +47,9 @@ struct DevApp {
     /// The session's last lines, for snapshots.
     lines: Mutex<Vec<String>>,
     serve: Mutex<Option<Serve>>,
+    /// When the readable view was first read since nobody read it: its
+    /// conversation follows the clock from there.
+    reading_since: Mutex<Instant>,
 }
 
 impl DevApp {
@@ -77,6 +83,94 @@ impl DevApp {
         }
         screen
     }
+}
+
+/// Claude's reply in the made-up conversation, which arrives a few words at
+/// a time.
+const REPLY: &str = "The login form sends the password before the token is ready, so the \
+first try always fails. I'll wait for the token, then send.";
+
+/// The made-up conversation at `beat` (one every two seconds): the reply
+/// grows in place, a step runs then finishes, a report, then a question
+/// answered only in the terminal, where it stays.
+fn conversation(beat: u64) -> Vec<Keyed> {
+    let keyed = |key: &str, kind: EntryKind| Keyed {
+        key: key.into(),
+        kind,
+    };
+    let mut entries = vec![keyed(
+        "you",
+        EntryKind::You {
+            text: "Fix the login bug on the sign-in page".into(),
+        },
+    )];
+    let words: Vec<&str> = REPLY.split(' ').collect();
+    let shown = usize::try_from(beat * 4)
+        .unwrap_or(usize::MAX)
+        .min(words.len());
+    entries.push(keyed(
+        "claude",
+        EntryKind::Claude {
+            text: words[..shown.max(1)].join(" "),
+            done: shown == words.len(),
+        },
+    ));
+    if beat >= 3 {
+        entries.push(keyed(
+            "read",
+            EntryKind::Step {
+                name: "Read".into(),
+                target: "src/login.ts".into(),
+                state: if beat >= 5 {
+                    StepState::Done
+                } else {
+                    StepState::Running
+                },
+            },
+        ));
+    }
+    if beat >= 6 {
+        entries.push(keyed(
+            "test",
+            EntryKind::Step {
+                name: "Bash".into(),
+                target: "npm test".into(),
+                state: if beat >= 8 {
+                    StepState::Failed
+                } else {
+                    StepState::Running
+                },
+            },
+        ));
+    }
+    if beat >= 8 {
+        entries.push(keyed(
+            "report",
+            EntryKind::Report {
+                summary: "Waited for the token before sending; one test still fails.".into(),
+                outcome: "Finished".into(),
+            },
+        ));
+    }
+    if beat >= 9 {
+        entries.push(keyed(
+            "note",
+            EntryKind::Note {
+                text: "Context compacted".into(),
+            },
+        ));
+    }
+    if beat >= 10 {
+        entries.push(keyed(
+            "asking",
+            EntryKind::Asking {
+                header: "Tests".into(),
+                question: "Fix the failing test too?".into(),
+                options: vec!["Yes, fix it".into(), "No, leave it".into()],
+            },
+        ));
+    }
+    entries
 }
 
 impl PairedDevices for DevApp {
@@ -133,6 +227,27 @@ impl ServeHost for DevApp {
             kriyon_remote::message::hex(device),
             sealed.len()
         );
+    }
+
+    fn entries(&self, id: &str, stamp: Option<u64>) -> EntriesBuilt {
+        if id != SESSION {
+            return EntriesBuilt::Unavailable(
+                kriyon_remote::message::EntriesUnavailable::NoTranscript,
+            );
+        }
+        // A first build (no stamp yet): someone opened the readable view,
+        // so the conversation starts from the beginning for them.
+        if stamp.is_none() {
+            *self.reading_since.lock() = Instant::now();
+        }
+        let beat = self.reading_since.lock().elapsed().as_secs() / 2;
+        if stamp == Some(beat) {
+            return EntriesBuilt::Unchanged;
+        }
+        EntriesBuilt::Built {
+            stamp: beat,
+            entries: conversation(beat),
+        }
     }
 
     fn projects(&self) -> Vec<ProjectInfo> {
@@ -226,6 +341,7 @@ async fn run(invite_file: Option<String>) {
         gate: Mutex::new(gate),
         lines: Mutex::default(),
         serve: Mutex::default(),
+        reading_since: Mutex::new(Instant::now()),
     });
     let serve = Serve::new(Arc::clone(&app) as Arc<dyn ServeHost>);
     *app.serve.lock() = Some(serve.clone());

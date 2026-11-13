@@ -51,7 +51,6 @@ jest.mock("../../modules/kriyon-native/index.ts", () => ({
 
 const native = jest.mocked(KriyonNative);
 const MAC = "ab".repeat(32);
-const READABLE = /readable view/i;
 
 /**
  * A summary as Rust would send it: `typing` is who holds control, `mayType`
@@ -200,21 +199,6 @@ test("a Viewer is never offered control", async () => {
   await render(<TerminalView hostId={MAC} sessionId="s1" />);
   expect(screen.queryByRole("button", { name: "Take control" })).toBeNull();
   expect(screen.getByText("This phone may only watch.")).toBeOnTheScreen();
-});
-
-test("a session opens on its readable view, and the terminal is one tap away", async () => {
-  const { SessionScreen } = jest.requireActual<
-    typeof import("./SessionScreen.tsx")
-  >("./SessionScreen.tsx");
-  usePhone.setState({ states: { [MAC]: state({}, "host") } });
-  await render(<SessionScreen hostId={MAC} sessionId="s1" />);
-  expect(screen.getByText("Fix the build")).toBeOnTheScreen();
-  expect(screen.getByText(READABLE)).toBeOnTheScreen();
-  expect(screen.queryByTestId("terminal-page")).toBeNull();
-  await fireEvent.press(screen.getByRole("button", { name: "Terminal" }));
-  expect(screen.getByTestId("terminal-page")).toBeOnTheScreen();
-  await fireEvent.press(screen.getByRole("button", { name: "‹ Back" }));
-  expect(usePhone.getState().screen).toEqual({ kind: "home" });
 });
 
 test("while connecting or removed, the link's own words show and control isn't offered", async () => {

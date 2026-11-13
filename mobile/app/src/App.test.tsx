@@ -68,6 +68,18 @@ test("what Rust says about a computer reaches the store", async () => {
   expect(usePhone.getState().states["ab".repeat(32)]?.hostName).toBe("Mac");
 });
 
+test("a session's entries from Rust reach the store", async () => {
+  await render(<App />);
+  const call = native.addListener.mock.calls.find(
+    ([name]) => name === "onEntriesChanged"
+  ) as unknown as [string, (event: unknown) => void] | undefined;
+  const summary = { entries: [], unavailable: "off" };
+  call?.[1]({ hostId: "ab".repeat(32), sessionId: "s1", summary });
+  expect(usePhone.getState().readable[`${"ab".repeat(32)}/s1`]).toEqual(
+    summary
+  );
+});
+
 test("a start that fails says so instead of an empty home", async () => {
   native.start.mockRejectedValueOnce(
     new Error("keychain read failed (-25308)")

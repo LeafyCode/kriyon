@@ -3,7 +3,7 @@ import type { HostSummary } from "../../../../src/remote/hostSummary.ts";
 import { steel } from "../../../../src/theme/themes/steel.ts";
 import type { PairedHost } from "../../modules/kriyon-native/index.ts";
 import { KriyonNative } from "../../modules/kriyon-native/index.ts";
-import { standingMeta, toBase64, usePhone } from "./phone.ts";
+import { readableKey, standingMeta, toBase64, usePhone } from "./phone.ts";
 
 jest.mock("../../modules/kriyon-native/index.ts", () => ({
   KriyonNative: {
@@ -15,6 +15,7 @@ jest.mock("../../modules/kriyon-native/index.ts", () => ({
     forget: jest.fn(),
     hosts: jest.fn(),
     pair: jest.fn(),
+    readEntries: jest.fn(),
     start: jest.fn(),
     wake: jest.fn(),
   },
@@ -214,4 +215,73 @@ test("a failed open doesn't stop the next one", async () => {
   const { openSession } = usePhone.getState();
   await expect(openSession(MAC, "s")).rejects.toThrow("NotConnected");
   await expect(openSession(MAC, "s")).resolves.toBeUndefined();
+});
+
+const ENTRIES = {
+  entries: [
+    { kind: "you" as const, seq: 1, text: "Fix the login bug" },
+    { done: false, kind: "claude" as const, seq: 2, text: "Looking" },
+  ],
+  unavailable: null,
+};
+
+test("the readable view opens the session, then reads its entries", async () => {
+  const order: string[] = [];
+  native.openSession.mockImplementation(() => {
+    order.push("open");
+    return Promise.resolve();
+  });
+  native.readEntries.mockImplementation(() => {
+    order.push("read");
+    return Promise.resolve();
+  });
+  await usePhone.getState().openReadable(MAC, "s1");
+  expect(order).toEqual(["open", "read"]);
+  expect(native.readEntries).toHaveBeenCalledWith(MAC, "s1");
+});
+
+test("entries are kept whole as Rust last sent them, for their session only", () => {
+  const { entriesChanged } = usePhone.getState();
+  entriesChanged({ hostId: MAC, sessionId: "s1", summary: ENTRIES });
+  const grown = {
+    ...ENTRIES,
+    entries: [
+      ENTRIES.entries[0],
+      { done: true, kind: "claude" as const, seq: 2, text: "Looking at it" },
+    ],
+  };
+  entriesChanged({ hostId: MAC, sessionId: "s1", summary: grown });
+  expect(usePhone.getState().readable[readableKey(MAC, "s1")]).toEqual(grown);
+  expect(usePhone.getState().readable[readableKey(MAC, "s2")]).toBeUndefined();
+});
+
+test("a read that fails says why, as having no entries", async () => {
+  native.openSession.mockResolvedValue();
+  native.readEntries.mockRejectedValue(new Error("not connected"));
+  await usePhone.getState().openReadable(MAC, "s1");
+  expect(usePhone.getState().readable[readableKey(MAC, "s1")]).toEqual({
+    entries: [],
+    unavailable: "not connected",
+  });
+});
+
+test("closing the readable view closes the session, and keeps why it had none", async () => {
+  native.closeSession.mockResolvedValue();
+  const off = { entries: [], unavailable: "The Kriyon Companion is off." };
+  usePhone
+    .getState()
+    .entriesChanged({ hostId: MAC, sessionId: "s1", summary: off });
+  await usePhone.getState().closeReadable(MAC, "s1");
+  expect(native.closeSession).toHaveBeenCalledWith(MAC, "s1");
+  expect(usePhone.getState().readable[readableKey(MAC, "s1")]).toEqual(off);
+});
+
+test("showing the session again tries its readable view afresh", () => {
+  usePhone.getState().entriesChanged({
+    hostId: MAC,
+    sessionId: "s1",
+    summary: { entries: [], unavailable: "off" },
+  });
+  usePhone.getState().show({ hostId: MAC, kind: "session", sessionId: "s1" });
+  expect(usePhone.getState().readable[readableKey(MAC, "s1")]).toBeUndefined();
 });

@@ -87,6 +87,27 @@ final class ScreenEvents: ScreenListener, @unchecked Sendable {
   }
 }
 
+/// One open session's readable view, as events: Rust's summary, whole.
+final class EntriesEvents: EntriesListener, @unchecked Sendable {
+  weak var module: KriyonNativeModule?
+  let hostId: String
+  let sessionId: String
+
+  init(module: KriyonNativeModule, hostId: String, sessionId: String) {
+    self.module = module
+    self.hostId = hostId
+    self.sessionId = sessionId
+  }
+
+  func entriesChanged(summary: String) {
+    module?.sendEvent("onEntriesChanged", [
+      "hostId": hostId,
+      "sessionId": sessionId,
+      "summary": parsed(summary),
+    ])
+  }
+}
+
 /// Rust's JSON as a JavaScript value, as it is: the module adds nothing, so
 /// a Kotlin module reads the same JSON.
 func parsed(_ text: String) -> Any {
@@ -106,6 +127,15 @@ func rust<T>(_ call: () async throws -> T) async throws -> T {
     return try await call()
   } catch let error as MobileError {
     // The words are Rust's own (its Display, exported through UniFFI).
+    throw Exception(name: "MobileError", description: error.description, code: kind(error))
+  }
+}
+
+/// `rust`, for a call that doesn't wait (`start`, under the module's lock).
+func rustNow<T>(_ call: () throws -> T) throws -> T {
+  do {
+    return try call()
+  } catch let error as MobileError {
     throw Exception(name: "MobileError", description: error.description, code: kind(error))
   }
 }
@@ -144,7 +174,7 @@ public final class KriyonNativeModule: Module {
   public func definition() -> ModuleDefinition {
     Name("KriyonNative")
 
-    Events("onHostChanged", "onScreenFrame")
+    Events("onEntriesChanged", "onHostChanged", "onScreenFrame")
 
     // Once per app run: a later call returns the same device and its name
     // stays the first one given.
@@ -153,8 +183,10 @@ public final class KriyonNativeModule: Module {
       defer { self.lock.unlock() }
       if let device = self.device { return device.id() }
       self.events.module = self
-      let device = try MobileDevice.start(
-        store: KeychainStore(), listener: self.events, deviceName: deviceName)
+      let device = try rustNow {
+        try MobileDevice.start(
+          store: KeychainStore(), listener: self.events, deviceName: deviceName)
+      }
       self.device = device
       return device.id()
     }
@@ -243,6 +275,17 @@ public final class KriyonNativeModule: Module {
       try await rust {
         try await self.started().openSession(hostId: hostId, sessionId: sessionId, listener: screen)
       }
+    }
+
+    AsyncFunction("readEntries") { (hostId: String, sessionId: String) in
+      let entries = EntriesEvents(module: self, hostId: hostId, sessionId: sessionId)
+      try await rust {
+        try await self.started().readEntries(hostId: hostId, sessionId: sessionId, listener: entries)
+      }
+    }
+
+    AsyncFunction("stopEntries") { (hostId: String, sessionId: String) in
+      try await rust { try await self.started().stopEntries(hostId: hostId, sessionId: sessionId) }
     }
 
     AsyncFunction("closeSession") { (hostId: String, sessionId: String) in

@@ -5,6 +5,7 @@
  */
 import { type EventSubscription, requireNativeModule } from "expo";
 import type { HostSummary } from "../../../../src/remote/hostSummary.ts";
+import type { ReadableSummary } from "../../../../src/remote/readableSummary.ts";
 
 /** A paired computer as kept (Rust `PairedHost`). */
 export interface PairedHost {
@@ -56,6 +57,13 @@ export interface ScreenFrameEvent {
   sessionId: string;
 }
 
+/** An open session's readable view, whole, each time it changes. */
+export interface EntriesChangedEvent {
+  hostId: string;
+  sessionId: string;
+  summary: ReadableSummary;
+}
+
 /**
  * A Rust refusal's kind, the `code` of the error a call rejects with
  * (Rust `MobileError`), plus the module's own two.
@@ -74,6 +82,7 @@ export type KriyonErrorCode =
 
 /** The module's events, by name. */
 interface KriyonNativeEvents {
+  onEntriesChanged: (event: EntriesChangedEvent) => void;
   onHostChanged: (summary: HostSummary) => void;
   onScreenFrame: (frame: ScreenFrameEvent) => void;
 }
@@ -103,6 +112,11 @@ interface KriyonNativeModule {
   openSession: (hostId: string, sessionId: string) => Promise<void>;
   /** Starts pairing; resolves to the code to type into the computer. */
   pair: (inviteText: string) => Promise<string>;
+  /**
+   * Reads a session opened here as readable-view entries too, as
+   * `onEntriesChanged` events, until stopped or closed.
+   */
+  readEntries: (hostId: string, sessionId: string) => Promise<void>;
   /** Our relay as it stands. */
   relay: () => Promise<PhoneRelay>;
   /** The relay account's subscription and devices: status only. */
@@ -136,6 +150,8 @@ interface KriyonNativeModule {
     projectId: string,
     title: string | null
   ) => Promise<string>;
+  /** Stops reading a session as entries. */
+  stopEntries: (hostId: string, sessionId: string) => Promise<void>;
   takeControl: (hostId: string, sessionId: string) => Promise<void>;
   wake: () => void;
 }

@@ -4,9 +4,11 @@ import {
   pairingCodeFrom,
   standingLabel,
 } from "../../../../src/remote/hostSummary.ts";
+import type { ReadableSummary } from "../../../../src/remote/readableSummary.ts";
 import type { ThemeColors } from "../../../../src/theme/themes/types.ts";
 import type { StandingState } from "../../../../src/types.ts";
 import {
+  type EntriesChangedEvent,
   KriyonNative,
   type PairedHost,
 } from "../../modules/kriyon-native/index.ts";
@@ -35,9 +37,13 @@ interface PhoneStore {
    */
   back: () => boolean;
   cancelPairing: () => Promise<void>;
+  /** Close a session's readable view (and its stream); why it had none stays. */
+  closeReadable: (hostId: string, sessionId: string) => Promise<void>;
   /** Close a session's stream, after any open asked before it. */
   closeSession: (hostId: string, sessionId: string) => Promise<void>;
   deviceId: string | null;
+  /** A session's readable view changed in Rust: kept whole. */
+  entriesChanged: (event: EntriesChangedEvent) => void;
   forget: (hostId: string) => Promise<void>;
   hostChanged: (state: HostSummary) => void;
   hosts: PairedHost[];
@@ -54,17 +60,39 @@ interface PhoneStore {
   newSessionError: string | null;
   /** A new session is being started. */
   newSessionStarting: boolean;
+  /** Open a session's stream, then read it as readable-view entries. */
+  openReadable: (hostId: string, sessionId: string) => Promise<void>;
   /** Open a session's stream, after any open or close asked before it. */
   openSession: (hostId: string, sessionId: string) => Promise<void>;
   pair: (inviteText: string) => Promise<void>;
   pairing: Pairing;
   /** Where phone alerts stand; `null` until asked. */
   push: PushStatus | null;
+  /**
+   * Each session's readable view as Rust last sent it, by [`readableKey`];
+   * none until its first entries come. `unavailable` words mean show the
+   * terminal; they stay until the session is shown again, which reads afresh.
+   */
+  readable: Record<string, ReadableSummary>;
   screen: Screen;
   show: (screen: Screen) => void;
   start: (deviceName: string) => Promise<void>;
   startError: string | null;
   states: Record<string, HostSummary>;
+}
+
+/** A session's key in `readable`. */
+export function readableKey(hostId: string, sessionId: string): string {
+  return `${hostId}/${sessionId}`;
+}
+
+/** `readable` without `key`. */
+function without(
+  readable: Record<string, ReadableSummary>,
+  key: string
+): Record<string, ReadableSummary> {
+  const { [key]: _gone, ...rest } = readable;
+  return rest;
 }
 
 /** Words for a failure, from whatever was thrown. */
@@ -106,9 +134,19 @@ export const usePhone = create<PhoneStore>((set, get) => ({
     set({ pairing: { phase: "idle" } });
     await KriyonNative.cancelPairing().catch(() => undefined);
   },
+  closeReadable: (hostId, sessionId) =>
+    // Closing the stream stops its entries too.
+    inTurn(() => KriyonNative.closeSession(hostId, sessionId)),
   closeSession: (hostId, sessionId) =>
     inTurn(() => KriyonNative.closeSession(hostId, sessionId)),
   deviceId: null,
+  entriesChanged: ({ hostId, sessionId, summary }) =>
+    set((state) => ({
+      readable: {
+        ...state.readable,
+        [readableKey(hostId, sessionId)]: summary,
+      },
+    })),
   forget: async (hostId) => {
     await KriyonNative.forget(hostId);
     set((state) => {
@@ -153,6 +191,20 @@ export const usePhone = create<PhoneStore>((set, get) => ({
   },
   newSessionError: null,
   newSessionStarting: false,
+  openReadable: (hostId, sessionId) =>
+    inTurn(async () => {
+      try {
+        await KriyonNative.openSession(hostId, sessionId);
+        await KriyonNative.readEntries(hostId, sessionId);
+      } catch (error) {
+        // No entries to show: the terminal, with why.
+        get().entriesChanged({
+          hostId,
+          sessionId,
+          summary: { entries: [], unavailable: reasonOf(error) },
+        });
+      }
+    }),
   openSession: (hostId, sessionId) =>
     inTurn(() => KriyonNative.openSession(hostId, sessionId)),
   pair: async (inviteText) => {
@@ -191,8 +243,21 @@ export const usePhone = create<PhoneStore>((set, get) => ({
   },
   pairing: { phase: "idle" },
   push: null,
+  readable: {},
   screen: { kind: "home" },
-  show: (screen) => set({ newSessionError: null, screen }),
+  show: (screen) =>
+    set((state) => ({
+      newSessionError: null,
+      // A session shown again reads its entries afresh.
+      readable:
+        screen.kind === "session"
+          ? without(
+              state.readable,
+              readableKey(screen.hostId, screen.sessionId)
+            )
+          : state.readable,
+      screen,
+    })),
   start: async (deviceName) => {
     try {
       const deviceId = await KriyonNative.start(deviceName);

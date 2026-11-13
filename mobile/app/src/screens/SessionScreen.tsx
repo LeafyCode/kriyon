@@ -1,12 +1,14 @@
 /**
  * A session on a paired computer, in one of the plan's two views: the
  * readable view (Claude's messages at phone width; it doesn't touch the
- * terminal's size) and the real terminal.
+ * terminal's size), shown first, and the real terminal. A session with no
+ * entries to read shows its terminal, saying why; Readable tries again.
  */
 import { useState } from "react";
 import { Pressable, Text, View } from "react-native";
-import { usePhone } from "../state/phone.ts";
+import { readableKey, usePhone } from "../state/phone.ts";
 import { colors, ui } from "../ui.ts";
+import { ReadableView } from "./ReadableView.tsx";
 import { TerminalView } from "./TerminalView.tsx";
 
 type View_ = "readable" | "terminal";
@@ -47,6 +49,11 @@ export function SessionScreen({
   const session = usePhone((state) =>
     state.states[hostId]?.sessions.find((one) => one.id === sessionId)
   );
+  // Why there are no entries: the terminal shows instead.
+  const unavailable = usePhone(
+    (state) => state.readable[readableKey(hostId, sessionId)]?.unavailable
+  );
+  const readable = view === "readable" && !unavailable;
   const { show } = usePhone.getState();
   return (
     <View style={[ui.screen, { gap: 12, padding: 16 }]}>
@@ -62,22 +69,34 @@ export function SessionScreen({
       <View style={{ flexDirection: "row", gap: 18 }}>
         <Tab
           label="Readable"
-          on={view === "readable"}
-          onPress={() => setView("readable")}
+          on={readable}
+          onPress={() => {
+            if (unavailable) {
+              // Shown again, the session reads its entries afresh.
+              show({ hostId, kind: "session", sessionId });
+            }
+            setView("readable");
+          }}
         />
         <Tab
           label="Terminal"
-          on={view === "terminal"}
+          on={!readable}
           onPress={() => setView("terminal")}
         />
       </View>
-      {view === "terminal" ? (
-        <TerminalView hostId={hostId} sessionId={sessionId} />
+      {readable ? (
+        <ReadableView
+          hostId={hostId}
+          onAnswer={() => setView("terminal")}
+          sessionId={sessionId}
+        />
       ) : (
-        <Text style={ui.hint}>
-          The readable view, Claude's messages at phone width, comes in a later
-          step. Use Terminal to watch and type for now.
-        </Text>
+        <>
+          {view === "readable" && unavailable ? (
+            <Text style={ui.hint}>{unavailable}</Text>
+          ) : null}
+          <TerminalView hostId={hostId} sessionId={sessionId} />
+        </>
       )}
     </View>
   );

@@ -61,8 +61,12 @@ function Current() {
 
 export function App() {
   useEffect(() => {
-    const { hostChanged, start } = usePhone.getState();
+    const { entriesChanged, hostChanged, start } = usePhone.getState();
     const changes = KriyonNative.addListener("onHostChanged", hostChanged);
+    const entries = KriyonNative.addListener(
+      "onEntriesChanged",
+      entriesChanged
+    );
     start(deviceName()).catch(() => undefined);
     // Back in front, or the network came back: dial now, not after backoff.
     const front = AppState.addEventListener("change", (state) => {
@@ -87,6 +91,7 @@ export function App() {
     );
     return () => {
       changes.remove();
+      entries.remove();
       front.remove();
       back.remove();
     };
