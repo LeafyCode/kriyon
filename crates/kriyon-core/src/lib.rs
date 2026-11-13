@@ -5,6 +5,7 @@ pub mod attachment;
 pub mod blame;
 pub mod bootstrap;
 pub mod bridge;
+pub mod cli_dialog;
 pub mod completion;
 pub mod daemon;
 pub mod failure;

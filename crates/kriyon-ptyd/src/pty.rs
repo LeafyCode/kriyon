@@ -13,7 +13,7 @@ use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize,
 
 const INITIAL_COLS: u16 = 80;
 const INITIAL_ROWS: u16 = 24;
-const READ_BUF_LEN: usize = 8192;
+pub(crate) const READ_BUF_LEN: usize = 8192;
 /// How long `close` waits for the reader thread once the [Tree stop] is done.
 /// The reader ends on PTY EOF, which needs every holder of the slave gone; a
 /// process that daemonised itself out of the session can keep it open forever,

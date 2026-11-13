@@ -81,8 +81,10 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
 - **Daemon frame** (`Frame`) — one length-prefixed message on the [Session socket]
   (`[tag][u32 len][payload]`): `Output` / `Stdin` / `Resize` / `Attach` / `Shutdown` / `Busy` /
   `Repaint`, and for the [Output history] `RequestHistory` (app → daemon), then `History` frames
-  closed by one `HistoryEnd` (daemon → app). Encoded and decoded by the pure `wire` module, which
-  tolerates partial reads and skips unknown tags.
+  closed by one `HistoryEnd` (daemon → app), and `Dialog` (daemon → app), the [Dialog
+  generation] each time a [CLI dialog] appears, changes or closes on the daemon's screen, and
+  once on attach. Encoded and decoded by the pure `wire` module, which tolerates partial reads
+  and skips unknown tags, so an older app ignores a newer daemon's `Dialog`.
   _Avoid_: packet, message.
 - **Daemon client** (`DaemonClient`) — the app-side [Engine] that connects to a [Session socket],
   runs the framed reader thread feeding the [Output gate] (which never blocks it), and sends

@@ -2341,6 +2341,8 @@ dependencies = [
  "libc",
  "parking_lot",
  "portable-pty",
+ "serde",
+ "serde_json",
  "tempfile",
  "vt100",
 ]

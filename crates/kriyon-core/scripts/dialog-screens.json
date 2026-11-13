@@ -1,0 +1,196 @@
+[
+  {
+    "name": "/mcp: footer hint",
+    "dialog": true,
+    "rows": [
+      "❯ /mcp",
+      "",
+      "──────────────────────────────────────────────────────────────",
+      "  Manage MCP servers",
+      "  7 servers",
+      "",
+      "  ❯ ✔ claude.ai Claude Docs    8 tools",
+      "",
+      "  https://code.claude.com/docs/en/mcp for help",
+      " ↑/↓ to navigate · Enter to confirm · Esc to cancel",
+      "",
+      ""
+    ]
+  },
+  {
+    "name": "question: footer hint",
+    "dialog": true,
+    "rows": [
+      "──────────────────────────────────────────────────────────────",
+      "←  ☐ Color  ☐ Pet  ✔ Submit  →",
+      "",
+      "What is your favourite color?",
+      "",
+      "❯ 1. Red",
+      "  2. Blue",
+      "  3. Type something.",
+      "──────────────────────────────────────────────────────────────",
+      "  4. Chat about this",
+      "",
+      "Enter to select · Tab/Arrow keys to navigate · Esc to cancel"
+    ]
+  },
+  {
+    "name": "permission: footer hint",
+    "dialog": true,
+    "rows": [
+      " Do you want to proceed?",
+      " ❯ 1. Yes",
+      "   2. Yes, and always allow access to play/ from this project",
+      "   4. No",
+      "",
+      " Esc to cancel · Tab to amend"
+    ]
+  },
+  {
+    "name": "/resume: hint wrapped onto a second row",
+    "dialog": true,
+    "rows": [
+      "     1 minute ago · HEAD · 2.5KB",
+      "",
+      "     Ctrl+A to show all projects · Ctrl+B to only show current branch",
+      "     · Type to search · Esc to cancel"
+    ]
+  },
+  {
+    "name": "/config: footer hint",
+    "dialog": true,
+    "rows": [
+      "    ↓ 25 more",
+      "",
+      "  Enter/Space to change · / to search · Esc to close"
+    ]
+  },
+  {
+    "name": "/usage: pane rule, hint scrolled out of sight",
+    "dialog": true,
+    "rows": [
+      " ▝▝   ▝▝   ~/Projects/kriyon",
+      "▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔",
+      "   Settings  Status   Config   Usage   Stats",
+      "   Current session",
+      "   ████▌                                              9% used",
+      "   Resets 2:40pm (Europe/Lisbon)",
+      "   What's contributing to your limits usage?                  ↓"
+    ]
+  },
+  {
+    "name": "/skills: pane rule, hint at the top",
+    "dialog": true,
+    "rows": [
+      "▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔ ◐ medium · /effort ▔",
+      "   Skills",
+      "   55 skills · enter/space to cycle, / to search, t to sort, Esc to close",
+      "   ❯ ✔ anthropic-skills:deep-research          claude.ai sync · ~200 tok",
+      "     ↓ 37 more",
+      "   Plugin skills are managed via /plugin"
+    ]
+  },
+  {
+    "name": "pane rule in a narrow terminal",
+    "dialog": true,
+    "rows": ["▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔ ◐ medium · /effort ▔", "   Skills"]
+  },
+  {
+    "name": "a rule in Claude's reply never starts the row",
+    "dialog": false,
+    "rows": [
+      "⏺ Here is the divider:",
+      "  ▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔",
+      "",
+      "──────────────────────────────────────────────────────────────",
+      "❯ Try \"refactor <filepath>\"",
+      "──────────────────────────────────────────────────────────────",
+      "  Opus 5.5",
+      "  ⏵⏵ auto mode on (shift+tab to cycle)"
+    ]
+  },
+  {
+    "name": "a rule in tool output never starts the row",
+    "dialog": false,
+    "rows": [
+      "  ⎿  cat banner.txt",
+      "     ▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔",
+      "",
+      "──────────────────────────────────────────────────────────────",
+      "❯ Try \"refactor <filepath>\"",
+      "──────────────────────────────────────────────────────────────",
+      "  Opus 5.5",
+      "  ⏵⏵ auto mode on (shift+tab to cycle)"
+    ]
+  },
+  {
+    "name": "a short rule then mostly words is no pane",
+    "dialog": false,
+    "rows": [
+      "▔▔▔▔▔▔▔▔ words words words words words words words words words words words words ",
+      "──────────────────────────────────────────────────────────────",
+      "❯ Try \"refactor <filepath>\"",
+      "──────────────────────────────────────────────────────────────",
+      "  Opus 5.5",
+      "  ⏵⏵ auto mode on (shift+tab to cycle)"
+    ]
+  },
+  {
+    "name": "a short run of the glyph in Claude's words",
+    "dialog": false,
+    "rows": [
+      "⏺ The ▔▔▔ glyph is an upper block.",
+      "──────────────────────────────────────────────────────────────",
+      "❯ Try \"refactor <filepath>\"",
+      "──────────────────────────────────────────────────────────────",
+      "  Opus 5.5",
+      "  ⏵⏵ auto mode on (shift+tab to cycle)"
+    ]
+  },
+  {
+    "name": "idle input box",
+    "dialog": false,
+    "rows": [
+      "──────────────────────────────────────────────────────────────",
+      "❯ Try \"refactor <filepath>\"",
+      "──────────────────────────────────────────────────────────────",
+      "  Opus 5.5",
+      "  ⏵⏵ auto mode on (shift+tab to cycle)"
+    ]
+  },
+  {
+    "name": "working: lower-case esc to interrupt",
+    "dialog": false,
+    "rows": [
+      "✻ Brewing… (3s · esc to interrupt)",
+      "",
+      "──────────────────────────────────────────────────────────────",
+      "❯ ",
+      "──────────────────────────────────────────────────────────────",
+      "  ? for shortcuts"
+    ]
+  },
+  {
+    "name": "Claude's words mention Esc above the input box",
+    "dialog": false,
+    "rows": [
+      "⏺ Press the button. Esc to cancel works too.",
+      "",
+      "──────────────────────────────────────────────────────────────",
+      "❯ ",
+      "──────────────────────────────────────────────────────────────",
+      "  ? for shortcuts"
+    ]
+  },
+  {
+    "name": "no screen",
+    "dialog": false,
+    "rows": []
+  },
+  {
+    "name": "blank screen",
+    "dialog": false,
+    "rows": ["", "", ""]
+  }
+]

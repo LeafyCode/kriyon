@@ -19,6 +19,7 @@ const TAG_REPAINT: u8 = 6;
 const TAG_REQUEST_HISTORY: u8 = 7;
 const TAG_HISTORY: u8 = 8;
 const TAG_HISTORY_END: u8 = 9;
+const TAG_DIALOG: u8 = 10;
 
 const HEADER_LEN: usize = 5;
 
@@ -38,6 +39,8 @@ pub struct FrameTooLarge {
 }
 const DIMS_LEN: usize = 4;
 const BUSY_LEN: usize = 1;
+/// `[open u8][generation u64 LE]`.
+const DIALOG_LEN: usize = 9;
 
 /// One message on the session socket.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -71,6 +74,11 @@ pub enum Frame {
     /// The last frame of an [Output history] answer, daemon → app: the
     /// `History` frames before it, since the request, are all of it.
     HistoryEnd,
+    /// The [CLI dialog] on the daemon's screen, daemon → app: whether one
+    /// shows, and its [Dialog generation]. Sent when the generation moves,
+    /// and once on attach. In order with `Output`, so the receiver knows
+    /// which output the change came after.
+    Dialog { open: bool, generation: u64 },
 }
 
 /// Split a byte stream into frames small enough for any decoder to accept. The
@@ -104,6 +112,12 @@ impl Frame {
             Frame::RequestHistory => (TAG_REQUEST_HISTORY, Vec::new()),
             Frame::History(b) => (TAG_HISTORY, b.clone()),
             Frame::HistoryEnd => (TAG_HISTORY_END, Vec::new()),
+            Frame::Dialog { open, generation } => {
+                let mut v = Vec::with_capacity(DIALOG_LEN);
+                v.push(u8::from(*open));
+                v.extend_from_slice(&generation.to_le_bytes());
+                (TAG_DIALOG, v)
+            }
         };
         debug_assert!(
             payload.len() <= MAX_PAYLOAD_LEN,
@@ -196,7 +210,15 @@ impl FrameDecoder {
                 TAG_REQUEST_HISTORY => return Ok(Some(Frame::RequestHistory)),
                 TAG_HISTORY => return Ok(Some(Frame::History(payload))),
                 TAG_HISTORY_END => return Ok(Some(Frame::HistoryEnd)),
-                // Unknown tag, or a Resize/Attach/Busy with bad length: skip.
+                TAG_DIALOG if payload.len() == DIALOG_LEN => {
+                    let mut generation = [0; 8];
+                    generation.copy_from_slice(&payload[1..]);
+                    return Ok(Some(Frame::Dialog {
+                        open: payload[0] != 0,
+                        generation: u64::from_le_bytes(generation),
+                    }));
+                }
+                // Unknown tag, or a Resize/Attach/Busy/Dialog with bad length: skip.
                 _ => {}
             }
         }
@@ -231,6 +253,14 @@ mod tests {
             Frame::RequestHistory,
             Frame::History(b"earlier\n".to_vec()),
             Frame::HistoryEnd,
+            Frame::Dialog {
+                open: true,
+                generation: u64::MAX - 1,
+            },
+            Frame::Dialog {
+                open: false,
+                generation: 7,
+            },
         ];
         let mut dec = FrameDecoder::new();
         for f in &frames {
@@ -241,6 +271,14 @@ mod tests {
             got.push(f);
         }
         assert_eq!(got, frames);
+    }
+
+    #[test]
+    fn a_dialog_frame_of_the_wrong_length_is_skipped() {
+        let mut dec = FrameDecoder::new();
+        dec.push(&[TAG_DIALOG, 2, 0, 0, 0, 1, 0]);
+        dec.push(&Frame::Busy(true).encode());
+        assert_eq!(dec.next_frame(), Ok(Some(Frame::Busy(true))));
     }
 
     #[test]

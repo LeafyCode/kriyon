@@ -12,6 +12,7 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::Instant;
 
+use kriyon_core::cli_dialog::DialogState;
 use kriyon_core::output_gate::{CatchUp, OutputGate};
 use kriyon_core::session::{EngineError, SessionEngine, SessionId};
 use kriyon_core::wire::{self, Frame, FrameDecoder};
@@ -60,6 +61,9 @@ pub struct DaemonClient {
     /// that this connection *is* the daemon's client rather than one waiting in
     /// its accept backlog. See [`kriyon_core::daemon::may_stop_held`].
     accepted: Arc<AtomicBool>,
+    /// The last [`Frame::Dialog`] the daemon sent, for whoever must know
+    /// whether a [CLI dialog] shows without the window (ADR-0040).
+    dialog: Arc<Mutex<Option<DialogState>>>,
 }
 
 /// The [Output gate] and the sink it feeds, behind one lock.
@@ -188,6 +192,8 @@ impl DaemonClient {
         let reader_outlet = Arc::clone(&outlet);
         let closing = Arc::new(AtomicBool::new(false));
         let reader_closing = Arc::clone(&closing);
+        let dialog = Arc::new(Mutex::new(None));
+        let reader_dialog = Arc::clone(&dialog);
 
         let reader_thread = std::thread::spawn(move || {
             let mut dec = FrameDecoder::new();
@@ -227,6 +233,9 @@ impl DaemonClient {
                                     }
                                 }
                                 Frame::Busy(busy) => on_busy(busy),
+                                Frame::Dialog { open, generation } => {
+                                    *reader_dialog.lock() = Some(DialogState { open, generation });
+                                }
                                 // Other frames are app → daemon; never arrive here.
                                 _ => {}
                             }
@@ -249,7 +258,16 @@ impl DaemonClient {
             outlet,
             closing,
             accepted,
+            dialog,
         })
+    }
+
+    /// The [CLI dialog] on the daemon's screen and its [Dialog generation], as
+    /// the daemon last said; `None` before it said anything (an older daemon
+    /// never does).
+    #[must_use]
+    pub fn dialog(&self) -> Option<DialogState> {
+        *self.dialog.lock()
     }
 
     /// Wait up to `timeout` for proof that the daemon accepted this connection.
@@ -423,6 +441,46 @@ pub(crate) mod test_support {
 mod tests {
     use super::test_support::spawn_greeting_daemon;
     use super::*;
+
+    #[test]
+    fn the_client_keeps_the_last_dialog_state_the_daemon_sent() {
+        let (daemon, app) = UnixStream::pair().expect("pair");
+        let client = DaemonClient::adopt(app, SessionId("s".into())).expect("client");
+        assert_eq!(client.dialog(), None, "nothing heard yet");
+        let mut daemon = daemon;
+        std::io::Write::write_all(
+            &mut daemon,
+            &[
+                Frame::Dialog {
+                    open: true,
+                    generation: 41,
+                }
+                .encode(),
+                Frame::Dialog {
+                    open: false,
+                    generation: 42,
+                }
+                .encode(),
+            ]
+            .concat(),
+        )
+        .expect("write");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while client.dialog().map(|d| d.generation) != Some(42) {
+            assert!(
+                Instant::now() < deadline,
+                "the client never heard the dialog"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(
+            client.dialog(),
+            Some(DialogState {
+                open: false,
+                generation: 42
+            })
+        );
+    }
     use std::os::unix::net::UnixListener;
     use std::sync::Mutex as StdMutex;
     use std::time::{Duration, Instant};

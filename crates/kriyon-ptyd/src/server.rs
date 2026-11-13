@@ -13,6 +13,9 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use kriyon_core::cli_dialog::{
+    dialog_on_screen, look_due, DialogState, DialogWatch, HINT_ROWS, RULE_GLYPH,
+};
 use kriyon_core::lease::DetachedLease;
 use kriyon_core::output_history::OutputHistory;
 use kriyon_core::session::{check_screen_size, EngineError, SessionEngine, SessionId, SpawnSpec};
@@ -93,9 +96,110 @@ struct AttachedClient {
     history_requests: u32,
 }
 
+/// Whether `screen` shows a [CLI dialog], and a fingerprint of it while it does.
+///
+/// Runs after every output read with the client lock held, so it reads only
+/// the rows that can decide (see [`dialog_on_screen`]): those whose first cell
+/// is the pane rule's glyph, found one cell per row, and the last few
+/// non-blank rows. The whole screen is hashed only while a dialog shows.
+fn dialog_look(screen: &vt100::Screen) -> (bool, u64) {
+    let (rows, cols) = screen.size();
+    let row_text = |row: u16| -> String {
+        (0..cols)
+            .filter_map(|col| screen.cell(row, col))
+            .map(|cell| {
+                if cell.has_contents() {
+                    cell.contents()
+                } else {
+                    " "
+                }
+            })
+            .collect()
+    };
+    let rule = RULE_GLYPH.to_string();
+    let mut deciding: Vec<String> = (0..rows)
+        .filter(|row| {
+            screen
+                .cell(*row, 0)
+                .is_some_and(|cell| cell.contents() == rule)
+        })
+        .map(row_text)
+        .collect();
+    let filled = |row: &u16| {
+        (0..cols).any(|col| {
+            screen
+                .cell(*row, col)
+                .is_some_and(|cell| !cell.contents().trim().is_empty())
+        })
+    };
+    let mut bottom: Vec<String> = (0..rows)
+        .rev()
+        .filter(filled)
+        .take(HINT_ROWS)
+        .map(row_text)
+        .collect();
+    bottom.reverse();
+    deciding.extend(bottom);
+    if !dialog_on_screen(&deciding) {
+        return (false, 0);
+    }
+    let mut hasher = std::hash::DefaultHasher::new();
+    std::hash::Hash::hash(&screen.contents(), &mut hasher);
+    (true, std::hash::Hasher::finish(&hasher))
+}
+
+/// The daemon's [`DialogWatch`] and when it last looked at the screen.
+struct DialogSight {
+    watch: DialogWatch,
+    last_look: Option<Instant>,
+}
+
+impl DialogSight {
+    fn new(base: u64) -> Self {
+        Self {
+            watch: DialogWatch::new(base),
+            last_look: None,
+        }
+    }
+
+    /// After a read of `read_len` bytes: look at `screen` if one is due (see
+    /// [`look_due`]), and say the new state if the generation moved.
+    fn look(&mut self, read_len: usize, screen: &vt100::Screen) -> Option<DialogState> {
+        let now = Instant::now();
+        let since = self
+            .last_look
+            .map(|last| now.saturating_duration_since(last));
+        if !look_due(read_len, crate::pty::READ_BUF_LEN, since) {
+            return None;
+        }
+        self.last_look = Some(now);
+        let (open, fingerprint) = dialog_look(screen);
+        self.watch.observe(open, fingerprint)
+    }
+}
+
+/// A [`DialogState`] as its encoded frame.
+fn dialog_frame(state: DialogState) -> Vec<u8> {
+    Frame::Dialog {
+        open: state.open,
+        generation: state.generation,
+    }
+    .encode()
+}
+
+/// Where a daemon's [Dialog generation]s start: its start time, so a restart
+/// of the same session never repeats one.
+fn dialog_generation_base() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| {
+            u64::try_from(since.as_nanos()).unwrap_or(u64::MAX)
+        })
+}
+
 /// State shared between the PTY reader thread (which produces output), the
 /// accept loop (which attaches/detaches clients) and the client's writer
-/// thread. Lock order is always `client` then `emulator`, never the reverse,
+/// thread. Lock order is always `client` then `emulator` (then `dialog`), never the reverse,
 /// so no two paths can deadlock. No lock is ever held across a socket write.
 struct Shared {
     client: Mutex<Option<AttachedClient>>,
@@ -108,6 +212,10 @@ struct Shared {
     /// The [Output history], fed every output byte like the emulator. A leaf
     /// lock: taken last under `client`, or alone.
     history: Mutex<OutputHistory>,
+    /// The [CLI dialog] on the emulator's screen and its [Dialog generation],
+    /// looked at after every output read. A leaf lock: taken last under
+    /// `client` and `emulator`, or alone.
+    dialog: Mutex<DialogSight>,
     /// Last-known foreground-busy state, updated by the busy poller and sent
     /// with every screen snapshot, so a client that attaches or skips ahead
     /// learns it at once. An atomic (not a lock) so the writer can read it
@@ -129,9 +237,19 @@ impl Shared {
         // Output is the proof of work that keeps a detached daemon alive.
         self.lease.lock().note_output(Instant::now());
         let mut client = self.client.lock();
-        self.emulator.lock().process(bytes);
+        let moved = {
+            let mut emulator = self.emulator.lock();
+            emulator.process(bytes);
+            self.dialog.lock().look(bytes.len(), emulator.screen())
+        };
         self.history.lock().push(bytes);
-        self.queue_frame(&mut client, output_frames(bytes));
+        let mut frames = output_frames(bytes);
+        // After the output that drew it, so a receiver numbering updates knows
+        // which one the dialog changed after.
+        if let Some(state) = moved {
+            frames.extend(dialog_frame(state));
+        }
+        self.queue_frame(&mut client, frames);
     }
 
     /// Queue encoded frames for the live client, if any, and wake its writer.
@@ -246,6 +364,7 @@ impl Shared {
     fn screen_frames(&self) -> Vec<u8> {
         let mut bytes = output_frames(&screen_snapshot(&self.emulator.lock()));
         bytes.extend(Frame::Busy(self.busy.load(Ordering::Relaxed)).encode());
+        bytes.extend(dialog_frame(self.dialog.lock().watch.state()));
         bytes
     }
 
@@ -349,6 +468,7 @@ pub fn run(
         next_client: AtomicU64::new(0),
         emulator: Mutex::new(vt100::Parser::new(INITIAL_ROWS, INITIAL_COLS, 0)),
         history: Mutex::new(OutputHistory::new(OUTPUT_HISTORY_LIMIT)),
+        dialog: Mutex::new(DialogSight::new(dialog_generation_base())),
         busy: AtomicBool::new(false),
         lease: Mutex::new(DetachedLease::new(detached_ttl, Instant::now())),
     });
@@ -537,6 +657,7 @@ fn serve_client(stream: &mut UnixStream, engine: &Arc<PtyEngine>, shared: &Arc<S
                         // Daemon → app frames never arrive from a client; ignore.
                         Frame::Output(_)
                         | Frame::Busy(_)
+                        | Frame::Dialog { .. }
                         | Frame::History(_)
                         | Frame::HistoryEnd => {}
                     }
@@ -549,14 +670,14 @@ fn serve_client(stream: &mut UnixStream, engine: &Arc<PtyEngine>, shared: &Arc<S
 #[cfg(test)]
 mod tests {
     use super::{
-        deliver_stdin, screen_snapshot, AttachedClient, Shared, CLIENT_QUEUE_LIMIT,
+        deliver_stdin, dialog_look, screen_snapshot, AttachedClient, Shared, CLIENT_QUEUE_LIMIT,
         ENTER_ALTERNATE_SCREEN, LEAVE_ALTERNATE_SCREEN, OUTPUT_HISTORY_LIMIT,
     };
     use kriyon_core::lease::DetachedLease;
     use kriyon_core::output_history::OutputHistory;
     use kriyon_core::session::{EngineError, SessionEngine, SessionId};
-    use kriyon_core::skip_ahead::SkipAheadQueue;
-    use kriyon_core::wire::Frame;
+    use kriyon_core::skip_ahead::{Next, SkipAheadQueue};
+    use kriyon_core::wire::{Frame, FrameDecoder};
     use parking_lot::Mutex;
     use std::io::{self, Write};
     use std::os::unix::net::UnixStream;
@@ -571,6 +692,7 @@ mod tests {
             next_client: std::sync::atomic::AtomicU64::new(0),
             emulator: Mutex::new(vt100::Parser::new(24, 80, 0)),
             history: Mutex::new(OutputHistory::new(OUTPUT_HISTORY_LIMIT)),
+            dialog: Mutex::new(super::DialogSight::new(0)),
             busy: AtomicBool::new(false),
             lease: Mutex::new(DetachedLease::new(Duration::from_secs(60), Instant::now())),
         }
@@ -697,6 +819,82 @@ mod tests {
         assert_eq!(String::from_utf8_lossy(&log), "");
     }
 
+    #[derive(serde::Deserialize)]
+    struct DialogCase {
+        name: String,
+        dialog: bool,
+        rows: Vec<String>,
+    }
+
+    /// An emulator showing `rows` from the top, the rest of the screen blank.
+    fn screen_of(rows: &[String]) -> vt100::Parser {
+        let mut parser = vt100::Parser::new(40, 120, 0);
+        parser.process(rows.join("\r\n").as_bytes());
+        parser
+    }
+
+    #[test]
+    fn the_daemon_reads_every_shared_screen_as_the_desktop_does() {
+        // The look reads only the rows that can decide, so it must agree with
+        // the whole-screen rule on every shared screen.
+        let cases: Vec<DialogCase> = serde_json::from_str(include_str!(
+            "../../kriyon-core/scripts/dialog-screens.json"
+        ))
+        .expect("cases");
+        for case in cases {
+            let (open, _) = dialog_look(screen_of(&case.rows).screen());
+            assert_eq!(open, case.dialog, "{}", case.name);
+        }
+    }
+
+    #[test]
+    fn moving_the_selection_in_a_dialog_changes_its_fingerprint() {
+        let question = |selected: usize| {
+            let rows: Vec<String> = [
+                "Pick one",
+                "1. Red",
+                "2. Blue",
+                "",
+                "Enter to select · Esc to cancel",
+            ]
+            .iter()
+            .enumerate()
+            .map(|(i, row)| {
+                if i == selected {
+                    format!("❯ {row}")
+                } else {
+                    (*row).to_string()
+                }
+            })
+            .collect();
+            dialog_look(screen_of(&rows).screen())
+        };
+        let (open_a, a) = question(1);
+        let (open_b, b) = question(2);
+        assert!(open_a && open_b);
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn a_new_dialog_on_screen_queues_its_generation_after_the_output() {
+        let shared = with_client(SkipAheadQueue::new(CLIENT_QUEUE_LIMIT));
+        shared.on_output(b"Do you want to proceed?\r\n 1. Yes\r\n Esc to cancel");
+        let mut decoder = FrameDecoder::new();
+        while let Next::Frame(bytes) = shared.client.lock().as_mut().expect("client").queue.pop() {
+            decoder.push(&bytes);
+        }
+        let mut frames = Vec::new();
+        while let Ok(Some(frame)) = decoder.next_frame() {
+            frames.push(frame);
+        }
+        let last = frames.last().expect("frames");
+        assert!(
+            matches!(last, Frame::Dialog { open: true, .. }),
+            "the dialog frame follows the output that drew it: {frames:?}"
+        );
+        assert!(frames.iter().any(|f| matches!(f, Frame::Output(_))));
+    }
+
     /// An emulator fed `bytes`, at a size big enough that nothing wraps.
     fn emulator(bytes: &[u8]) -> vt100::Parser {
         let mut parser = vt100::Parser::new(24, 80, 0);
@@ -802,6 +1000,70 @@ mod tests {
         let mut queue = SkipAheadQueue::new(CLIENT_QUEUE_LIMIT);
         queue.push(Frame::Busy(true).encode());
         assert_eq!(first_write(&with_client(queue)), Frame::Busy(true).encode());
+    }
+
+    /// The frames queued for the client since the last call.
+    fn queued(shared: &Shared) -> Vec<Frame> {
+        let mut decoder = FrameDecoder::new();
+        while let Next::Frame(bytes) = shared.client.lock().as_mut().expect("client").queue.pop() {
+            decoder.push(&bytes);
+        }
+        let mut frames = Vec::new();
+        while let Ok(Some(frame)) = decoder.next_frame() {
+            frames.push(frame);
+        }
+        frames
+    }
+
+    /// One full PTY read that ends showing `text`: filler first, then a
+    /// clear, so the filler never scrolls `text` away.
+    fn full_read(text: &str) -> Vec<u8> {
+        let tail = format!("\x1b[2J\x1b[H{text}");
+        let mut bytes = vec![b'.'; crate::pty::READ_BUF_LEN - tail.len()];
+        bytes.extend_from_slice(tail.as_bytes());
+        bytes
+    }
+
+    #[test]
+    fn a_flood_of_full_reads_is_looked_at_once_per_interval() {
+        let shared = with_client(SkipAheadQueue::new(CLIENT_QUEUE_LIMIT));
+        let dialog = |n: u8| full_read(&format!("{n}\r\nEsc to cancel"));
+        shared.on_output(&dialog(1));
+        assert!(queued(&shared)
+            .iter()
+            .any(|f| matches!(f, Frame::Dialog { open: true, .. })));
+        shared.on_output(&dialog(2));
+        assert!(
+            !queued(&shared)
+                .iter()
+                .any(|f| matches!(f, Frame::Dialog { .. })),
+            "a second full read straight after is not looked at"
+        );
+        shared.on_output(b"\x1b[H3");
+        assert!(
+            queued(&shared)
+                .iter()
+                .any(|f| matches!(f, Frame::Dialog { open: true, .. })),
+            "the short read that ends the burst is looked at"
+        );
+    }
+
+    #[test]
+    fn a_skip_ahead_sends_the_dialog_state_too() {
+        let shared = with_client(SkipAheadQueue::starting_with_screen(CLIENT_QUEUE_LIMIT));
+        shared.on_output(b"Pick one\r\nEnter to select \xc2\xb7 Esc to cancel");
+        let mut decoder = FrameDecoder::new();
+        decoder.push(&shared.screen_frames());
+        let mut frames = Vec::new();
+        while let Ok(Some(frame)) = decoder.next_frame() {
+            frames.push(frame);
+        }
+        assert!(
+            frames
+                .iter()
+                .any(|f| matches!(f, Frame::Dialog { open: true, .. })),
+            "an attaching client learns a dialog is showing: {frames:?}"
+        );
     }
 
     #[test]
