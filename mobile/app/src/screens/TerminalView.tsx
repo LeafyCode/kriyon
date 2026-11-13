@@ -24,6 +24,8 @@ import { colors, ui } from "../ui.ts";
 interface PageHandle {
   injectJavaScript: (script: string) => void;
   reload: () => void;
+  /** Give the web view the phone's focus (Android shows no keyboard for it otherwise). */
+  requestFocus: () => void;
 }
 
 /**
@@ -122,6 +124,11 @@ export function TerminalView({
   }, [hostId, sessionId]);
 
   useEffect(() => {
+    if (typing) {
+      // Android keeps its focus on the app's own views until asked: the
+      // page's focus then brings no keyboard.
+      page.current?.requestFocus();
+    }
     runIn({ fresh, page, ready, waiting }, `window.kriyon.typing(${typing})`);
   }, [typing]);
 

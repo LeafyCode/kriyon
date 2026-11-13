@@ -114,6 +114,7 @@ test("a computer that is away says so, and its sessions don't need you here", as
 test("pairing takes the pasted code and shows the digits to type there", async () => {
   native.pair.mockResolvedValue("123456");
   native.finishPairing.mockReturnValue(new Promise(() => undefined));
+  usePhone.setState({ screen: { kind: "pair" } });
   await render(<PairScreen />);
   await fireEvent.changeText(
     screen.getByLabelText("Pairing code from the computer"),

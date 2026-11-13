@@ -28,6 +28,12 @@ export type Pairing =
   | { phase: "failed"; reason: string };
 
 interface PhoneStore {
+  /**
+   * The phone's Back (Android's gesture or button, and the screens' own):
+   * home from any screen, cancelling a pairing on the way. `false` at home,
+   * so Android leaves the app.
+   */
+  back: () => boolean;
   cancelPairing: () => Promise<void>;
   /** Close a session's stream, after any open asked before it. */
   closeSession: (hostId: string, sessionId: string) => Promise<void>;
@@ -85,6 +91,17 @@ function inTurn(call: () => Promise<void>): Promise<void> {
  * said.
  */
 export const usePhone = create<PhoneStore>((set, get) => ({
+  back: () => {
+    const { cancelPairing, screen, show } = get();
+    if (screen.kind === "home") {
+      return false;
+    }
+    if (screen.kind === "pair") {
+      cancelPairing().catch(() => undefined);
+    }
+    show({ kind: "home" });
+    return true;
+  },
   cancelPairing: async () => {
     set({ pairing: { phase: "idle" } });
     await KriyonNative.cancelPairing().catch(() => undefined);

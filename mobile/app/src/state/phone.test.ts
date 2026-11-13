@@ -110,6 +110,31 @@ test("backing out of a pairing cancels it in Rust", async () => {
   expect(usePhone.getState().pairing.phase).toBe("idle");
 });
 
+test("the phone's Back goes home from any screen, and leaves the app from home", () => {
+  native.cancelPairing.mockResolvedValue();
+  expect(usePhone.getState().back()).toBe(false);
+  usePhone.setState({
+    screen: { hostId: MAC, kind: "session", sessionId: "s1" },
+  });
+  expect(usePhone.getState().back()).toBe(true);
+  expect(usePhone.getState().screen).toEqual({ kind: "home" });
+  usePhone.setState({ screen: { hostId: MAC, kind: "new" } });
+  expect(usePhone.getState().back()).toBe(true);
+  expect(usePhone.getState().screen).toEqual({ kind: "home" });
+});
+
+test("Back from pairing cancels it in Rust, as its Cancel does", async () => {
+  native.cancelPairing.mockResolvedValue();
+  usePhone.setState({
+    pairing: { code: "123456", phase: "code" },
+    screen: { kind: "pair" },
+  });
+  expect(usePhone.getState().back()).toBe(true);
+  await Promise.resolve();
+  expect(native.cancelPairing).toHaveBeenCalled();
+  expect(usePhone.getState().screen).toEqual({ kind: "home" });
+});
+
 test("each computer's state is kept as Rust last said", () => {
   usePhone.getState().hostChanged(host({ link: "connecting" }));
   usePhone.getState().hostChanged(host({ link: "lost" }));

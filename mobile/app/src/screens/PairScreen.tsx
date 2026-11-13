@@ -3,8 +3,8 @@
  * device), or paste its pairing code (Copy pairing code), then type the six
  * digits shown here into it.
  */
-import { useState } from "react";
-import { Pressable, Text, TextInput, View } from "react-native";
+import { useEffect, useState } from "react";
+import { BackHandler, Pressable, Text, TextInput, View } from "react-native";
 import { usePhone } from "../state/phone.ts";
 import { colors, ui } from "../ui.ts";
 import { Scanner } from "./Scanner.tsx";
@@ -12,13 +12,24 @@ import { Scanner } from "./Scanner.tsx";
 export function PairScreen() {
   const [text, setText] = useState("");
   const [scanning, setScanning] = useState(false);
+  // While the camera is open, Android's Back closes it (it is heard before
+  // the app's own Back, which would leave pairing).
+  useEffect(() => {
+    if (!scanning) {
+      return;
+    }
+    const back = BackHandler.addEventListener("hardwareBackPress", () => {
+      setScanning(false);
+      return true;
+    });
+    return () => back.remove();
+  }, [scanning]);
   const pairing = usePhone((state) => state.pairing);
-  const { cancelPairing, pair, show } = usePhone.getState();
+  const { back, pair } = usePhone.getState();
   // A new pairing only while none runs: a second would cancel the first.
   const canStart = pairing.phase === "idle" || pairing.phase === "failed";
   const leave = () => {
-    cancelPairing().catch(() => undefined);
-    show({ kind: "home" });
+    back();
   };
   return (
     <View style={[ui.screen, { gap: 14, padding: 16 }]}>

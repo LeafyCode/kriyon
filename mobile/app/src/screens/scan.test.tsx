@@ -1,7 +1,7 @@
 import { beforeEach, expect, jest, test } from "@jest/globals";
 import { act, fireEvent, render, screen } from "@testing-library/react-native";
 import { useCameraPermissions } from "expo-camera";
-import { Linking } from "react-native";
+import { BackHandler, Linking } from "react-native";
 import { KriyonNative } from "../../modules/kriyon-native/index.ts";
 import { usePhone } from "../state/phone.ts";
 import { PairScreen } from "./PairScreen.tsx";
@@ -173,4 +173,29 @@ test("pasted text that isn't a pairing code is said so before Rust", async () =>
     phase: "failed",
     reason: "That isn't a Kriyon pairing code.",
   });
+});
+
+test("Back while scanning stops the camera and stays on pairing", async () => {
+  permissions.mockReturnValue([
+    { granted: true } as never,
+    ask,
+    jest.fn(),
+  ] as never);
+  const listen = jest.spyOn(BackHandler, "addEventListener");
+  usePhone.setState({ screen: { kind: "pair" } });
+  await render(<PairScreen />);
+  await fireEvent.press(
+    screen.getByRole("button", { name: "Scan the QR code" })
+  );
+  expect(screen.getByTestId("camera")).toBeOnTheScreen();
+  const onBack = listen.mock.calls.at(-1)?.[1] as (() => boolean) | undefined;
+  let handled = false;
+  await act(() => {
+    handled = onBack?.() ?? false;
+  });
+  expect(handled).toBe(true);
+  expect(screen.queryByTestId("camera")).toBeNull();
+  expect(usePhone.getState().screen).toEqual({ kind: "pair" });
+  expect(native.cancelPairing).not.toHaveBeenCalled();
+  listen.mockRestore();
 });

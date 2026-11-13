@@ -9,6 +9,7 @@ import { usePhone } from "../state/phone.ts";
 import { TerminalView } from "./TerminalView.tsx";
 
 const injected: string[] = [];
+const mockRequestFocus = jest.fn();
 let pageProps: {
   onMessage: (event: { nativeEvent: { data: string } }) => void;
 };
@@ -22,6 +23,7 @@ jest.mock("react-native-webview", () => {
       pageProps = props;
       React.useImperativeHandle(ref, () => ({
         injectJavaScript: (code: string) => injected.push(code),
+        requestFocus: mockRequestFocus,
       }));
       return <View testID="terminal-page" />;
     }),
@@ -100,6 +102,7 @@ async function pageReady() {
 beforeEach(() => {
   jest.clearAllMocks();
   injected.length = 0;
+  mockRequestFocus.mockClear();
   frameListeners.length = 0;
   usePhone.setState(usePhone.getInitialState());
 });
@@ -139,6 +142,15 @@ test("typing is off until this phone holds control, and Take control asks Rust",
   await act(() => usePhone.getState().hostChanged(state({}, "you")));
   expect(injected).toContain("window.kriyon.typing(true);true;");
   expect(screen.queryByRole("button", { name: "Take control" })).toBeNull();
+});
+
+test("with control the web view takes the phone's focus, so Android shows the keyboard", async () => {
+  usePhone.setState({ states: { [MAC]: state({}, "host") } });
+  await render(<TerminalView hostId={MAC} sessionId="s1" />);
+  await pageReady();
+  expect(mockRequestFocus).not.toHaveBeenCalled();
+  await act(() => usePhone.getState().hostChanged(state({}, "you")));
+  expect(mockRequestFocus).toHaveBeenCalled();
 });
 
 test("what is typed goes to Rust as UTF-8", async () => {

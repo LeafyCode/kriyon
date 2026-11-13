@@ -4,6 +4,15 @@ import { KriyonNative } from "../modules/kriyon-native/index.ts";
 import { App } from "./App.tsx";
 import { usePhone } from "./state/phone.ts";
 
+// No window to measure in Jest: the library's own stand-in, with insets.
+jest.mock(
+  "react-native-safe-area-context",
+  () =>
+    jest.requireActual<{ default: unknown }>(
+      "react-native-safe-area-context/jest/mock"
+    ).default
+);
+
 jest.mock("../modules/kriyon-native/index.ts", () => ({
   KriyonNative: {
     addListener: jest.fn(() => ({ remove: jest.fn() })),

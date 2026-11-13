@@ -6,7 +6,19 @@
 import { modelName, deviceName as phoneName } from "expo-device";
 import { StatusBar } from "expo-status-bar";
 import { useEffect } from "react";
-import { AppState, SafeAreaView, Text, View } from "react-native";
+import {
+  AppState,
+  BackHandler,
+  KeyboardAvoidingView,
+  Platform,
+  Text,
+  View,
+} from "react-native";
+import {
+  initialWindowMetrics,
+  SafeAreaProvider,
+  SafeAreaView,
+} from "react-native-safe-area-context";
 import { KriyonNative } from "../modules/kriyon-native/index.ts";
 import { HomeScreen } from "./screens/HomeScreen.tsx";
 import { NewSessionScreen } from "./screens/NewSessionScreen.tsx";
@@ -69,15 +81,31 @@ export function App() {
         // Not started yet: nothing to wake.
       }
     });
+    // Android's Back goes back a screen; at home it leaves the app.
+    const back = BackHandler.addEventListener("hardwareBackPress", () =>
+      usePhone.getState().back()
+    );
     return () => {
       changes.remove();
       front.remove();
+      back.remove();
     };
   }, []);
+  // Inside the status and navigation bars on both phones: Android draws
+  // the app edge to edge, under both.
   return (
-    <SafeAreaView style={ui.screen}>
-      <Current />
-      <StatusBar style="light" />
-    </SafeAreaView>
+    <SafeAreaProvider initialMetrics={initialWindowMetrics}>
+      <SafeAreaView style={ui.screen}>
+        {/* Android, edge to edge, no longer shrinks the app for the
+            keyboard: without this it covers the terminal's last rows. */}
+        <KeyboardAvoidingView
+          behavior={Platform.OS === "android" ? "padding" : undefined}
+          style={{ flex: 1 }}
+        >
+          <Current />
+        </KeyboardAvoidingView>
+        <StatusBar style="light" />
+      </SafeAreaView>
+    </SafeAreaProvider>
   );
 }
