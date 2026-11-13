@@ -286,9 +286,10 @@ impl RelayApi {
     }
 }
 
-/// A fake API on localhost for tests (no real network).
-#[cfg(test)]
-pub(crate) mod test_api {
+/// A fake API on localhost for tests (no real network); other crates' tests
+/// reach it through the `test-support` feature.
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_api {
     use std::io::{BufRead as _, BufReader, Read as _, Write as _};
     use std::net::TcpListener;
     use std::sync::{Arc, Mutex};
@@ -306,6 +307,9 @@ pub(crate) mod test_api {
 
     /// A fake API on localhost: `answer` gives the status and body for each
     /// request line (`POST /path`). Returns its base address and what it saw.
+    ///
+    /// # Panics
+    /// When the fake can't bind localhost: a broken test machine.
     pub fn fake_api(
         answer: impl Fn(&str, &str) -> (u16, String) + Send + 'static,
     ) -> (String, Arc<Mutex<Vec<Seen>>>) {
@@ -357,6 +361,10 @@ pub(crate) mod test_api {
         (base, seen)
     }
 
+    /// Run `f` to its end on a runtime of its own.
+    ///
+    /// # Panics
+    /// When the runtime can't be made.
     pub fn run<F: std::future::Future>(f: F) -> F::Output {
         tokio::runtime::Builder::new_multi_thread()
             .enable_all()

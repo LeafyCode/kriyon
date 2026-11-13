@@ -434,6 +434,22 @@ impl RelayRuntime {
         }
     }
 
+    /// [`Self::wait_for_sign_in`] for the sign-in in progress now; `false`
+    /// when there is none.
+    pub async fn wait_for_current_sign_in(&self, device: &ThisDevice) -> bool {
+        let code = self
+            .state
+            .lock()
+            .await
+            .sign_in
+            .as_ref()
+            .map(|flow| flow.device_code.clone());
+        match code {
+            Some(code) => self.wait_for_sign_in(device, &code).await,
+            None => false,
+        }
+    }
+
     /// Stop the sign-in in progress.
     pub async fn cancel_sign_in(&self) {
         self.state.lock().await.sign_in = None;
@@ -998,6 +1014,29 @@ mod tests {
             relay.start_sign_in().await.expect("started");
             assert!(!relay.wait_for_sign_in(&device(), "an-older-code").await);
             assert!(!relay.view().await.signed_in);
+        });
+    }
+
+    #[test]
+    fn the_current_sign_in_can_be_waited_for_without_its_code() {
+        let (base, _) = fake_api(|line, _| {
+            match line {
+            "POST /api/v1/admin/auth/device/code" => (
+                200,
+                r#"{"device_code":"dc","user_code":"X","verification_uri":"u","verification_uri_complete":"u","expires_in":600,"interval":0}"#.into(),
+            ),
+            _ => (200, r#"{"access_token":"tok"}"#.into()),
+        }
+        });
+        let relay = RelayRuntime::new(Some(setup(&base)), Box::new(Memory::default()));
+        run(async {
+            assert!(
+                !relay.wait_for_current_sign_in(&device()).await,
+                "none started"
+            );
+            relay.start_sign_in().await.expect("started");
+            assert!(relay.wait_for_current_sign_in(&device()).await);
+            assert!(relay.view().await.signed_in);
         });
     }
 }

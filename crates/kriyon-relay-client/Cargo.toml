@@ -6,6 +6,10 @@ license = "Apache-2.0"
 publish = false
 description = "Our relay as an app uses it: device sign-in, the BisBig API calls, the relay pass and its renewal. Shared by the desktop and the phone."
 
+[features]
+# The fake API, for other crates' tests.
+test-support = ["tokio/rt-multi-thread"]
+
 [dependencies]
 kriyon-remote = { path = "../kriyon-remote" }
 kriyon-remote-link = { path = "../kriyon-remote-link" }
