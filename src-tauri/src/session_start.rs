@@ -200,15 +200,6 @@ pub async fn start(
     })
 }
 
-/// The remote starts under way, one lock each by (device, request), so a
-/// resend that arrives while the first is still starting waits for it and
-/// finds the session it made, while other starts go ahead.
-static STARTING: std::sync::LazyLock<parking_lot::Mutex<Starting>> =
-    std::sync::LazyLock::new(Default::default);
-
-/// One lock for each (device, request) start under way.
-type Starting = std::collections::HashMap<([u8; 32], [u8; 16]), Arc<tokio::sync::Mutex<()>>>;
-
 /// The event that tells the window a session was started without it (by a
 /// [Remote device]): the session's row, for its sidebar.
 pub const SESSION_ADDED_EVENT: &str = "session-added";
@@ -233,21 +224,12 @@ pub async fn start_remote(
     device: kriyon_remote::message::EndpointId,
     request: kriyon_remote_link::host_runtime::RemoteStart,
 ) -> Result<String, kriyon_remote::message::RefuseReason> {
+    use tauri::Manager as _;
     let key = (device, request.request_id);
-    let lock = Arc::clone(STARTING.lock().entry(key).or_default());
-    let started = {
-        let _this_request = lock.lock().await;
-        start_remote_once(&app, device, request).await
-    };
-    // Gone once no one else waits on it.
-    let mut starting = STARTING.lock();
-    if starting
-        .get(&key)
-        .is_some_and(|held| Arc::strong_count(held) <= 2)
-    {
-        starting.remove(&key);
-    }
-    started
+    app.state::<crate::AppState>()
+        .remote_starts
+        .once(key, start_remote_once(&app, device, request))
+        .await
 }
 
 async fn start_remote_once(
@@ -258,6 +240,9 @@ async fn start_remote_once(
     use kriyon_remote::message::RefuseReason;
     use kriyon_remote_link::host_runtime::ServeHost as _;
     use tauri::{Emitter as _, Manager as _};
+    fn store(app: &tauri::AppHandle) -> tauri::State<'_, crate::StoreState> {
+        app.state::<crate::StoreState>()
+    }
     let now = kriyon_remote_link::host_runtime::now_ms();
     let request_id = request.request_id;
     // The store and the folder check touch the disk: off the runtime.
@@ -265,7 +250,8 @@ async fn start_remote_once(
     let (made, project) = tauri::async_runtime::spawn_blocking(move || {
         let (app, project_id) = looking;
         let host = crate::remote_host_rt::AppServeHost(app.clone());
-        if let Some(made) = host.started(&device, &request_id) {
+        let made = crate::remote_starts::answered(&store(&app).0.lock(), &device, &request_id, now);
+        if let Some(made) = made {
             return Ok((Some(made), None));
         }
         // Checked again here: the project may have changed since the check.
@@ -294,10 +280,9 @@ async fn start_remote_once(
     let recording = (app.clone(), id.clone());
     tauri::async_runtime::spawn_blocking(move || {
         let (app, id) = recording;
-        let store = app.state::<crate::StoreState>();
-        let store = store.0.lock();
-        let _ = store.prune_remote_starts(now);
-        store.record_remote_start(&device, &request_id, &id, now)
+        let recorded =
+            crate::remote_starts::record(&store(&app).0.lock(), &device, &request_id, &id, now);
+        recorded
     })
     .await
     .map_err(|_| RefuseReason::StartFailed)?
@@ -312,10 +297,7 @@ async fn start_remote_once(
             let failing = (app.clone(), id.clone());
             let _ = tauri::async_runtime::spawn_blocking(move || {
                 let (app, id) = failing;
-                let store = app.state::<crate::StoreState>();
-                let store = store.0.lock();
-                let _ = store.fail_remote_start(&device, &request_id);
-                let _ = store.delete_session(&id);
+                crate::remote_starts::fail(&store(&app).0.lock(), &device, &request_id, &id);
             })
             .await;
             return Err(RefuseReason::StartFailed);

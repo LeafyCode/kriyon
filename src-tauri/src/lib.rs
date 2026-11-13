@@ -32,6 +32,7 @@ pub mod remote_device_cmd;
 pub mod remote_endpoint;
 pub mod remote_host_rt;
 pub mod remote_push_rt;
+pub mod remote_starts;
 pub mod sandbox;
 pub mod session_list_rt;
 pub mod session_registry;
@@ -108,6 +109,8 @@ pub struct AppState {
     /// One writer gate per session: every PTY write and resize passes it
     /// (plan Step C, "one writer per session").
     pub writers: crate::session_writer::Writers,
+    /// The [Remote device] starts under way: a resend waits for the first.
+    pub remote_starts: crate::remote_starts::RemoteStarts,
     /// Live transcript watches keyed by session id. Held here so each watch is
     /// not dropped immediately (dropping it stops the notify watch and the poll
     /// thread); removing an entry stops watching that session's transcript.

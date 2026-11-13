@@ -352,22 +352,12 @@ impl ServeHost for AppServeHost {
         device: &EndpointId,
         request_id: &[u8; 16],
     ) -> Option<Result<String, RefuseReason>> {
-        let record = self
-            .0
-            .state::<StoreState>()
-            .0
-            .lock()
-            .remote_start(
-                device,
-                request_id,
-                kriyon_remote_link::host_runtime::now_ms(),
-            )
-            .ok()
-            .flatten()?;
-        Some(match record {
-            crate::store::RemoteStartRecord::Made(session_id) => Ok(session_id),
-            crate::store::RemoteStartRecord::Failed => Err(RefuseReason::StartFailed),
-        })
+        crate::remote_starts::answered(
+            &self.0.state::<StoreState>().0.lock(),
+            device,
+            request_id,
+            kriyon_remote_link::host_runtime::now_ms(),
+        )
     }
 
     fn start_session(
