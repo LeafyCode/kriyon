@@ -1,0 +1,68 @@
+name: Mobile
+
+# The phone app's lint, types and tests. Its Rust library (crates/kriyon-mobile)
+# is checked by CI's Rust job with the rest of the workspace; phone builds
+# (Xcode, EAS) are not part of CI yet.
+on:
+  push:
+    branches: [dev, main]
+    paths:
+      - mobile/**
+      - crates/kriyon-mobile/**
+      - crates/kriyon-remote/**
+      - crates/kriyon-remote-link/**
+      # The desktop files the phone app reads: the screen stream and themes.
+      - src/remote/remoteScreen.ts
+      - src/theme/**
+      - package.json
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      - biome.jsonc
+      - .github/workflows/mobile.yml
+  pull_request:
+    branches: [dev, main]
+    paths:
+      - mobile/**
+      - crates/kriyon-mobile/**
+      - crates/kriyon-remote/**
+      - crates/kriyon-remote-link/**
+      # The desktop files the phone app reads: the screen stream and themes.
+      - src/remote/remoteScreen.ts
+      - src/theme/**
+      - package.json
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      - biome.jsonc
+      - .github/workflows/mobile.yml
+  workflow_dispatch:
+
+# Nothing by default; each job asks for what it needs.
+permissions: {}
+
+# A new push to the same branch or pull request cancels the run it replaces.
+concurrency:
+  group: mobile-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  app:
+    name: Phone app (lint, types, test)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          # 24: the terminal page's build script imports the desktop's theme
+          # files (TypeScript) directly.
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec biome check mobile
+      - run: pnpm --filter @kriyon/mobile typecheck
+      - run: pnpm --filter @kriyon/mobile test
