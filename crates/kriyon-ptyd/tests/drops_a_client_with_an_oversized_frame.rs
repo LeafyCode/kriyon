@@ -8,6 +8,10 @@ use std::time::{Duration, Instant};
 
 use kriyon_core::wire::{Frame, FrameDecoder};
 
+/// How long to wait for something that must happen eventually. A passing run
+/// takes well under a second; a loaded machine can take several.
+const PATIENCE: Duration = Duration::from_secs(30);
+
 /// Ends the daemon when the test does, a failed assertion included, so a
 /// failure never leaves one behind.
 struct Daemon(std::process::Child);
@@ -73,7 +77,7 @@ fn closed_within(stream: &mut UnixStream, timeout: Duration) -> bool {
 
 /// Connect to the daemon socket, retrying until it appears.
 fn connect(path: &str) -> UnixStream {
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + PATIENCE;
     loop {
         if let Ok(s) = UnixStream::connect(path) {
             return s;
@@ -112,8 +116,10 @@ fn an_oversized_frame_ends_that_client_and_not_the_session() {
         .expect("attach");
     // A Stdin header (tag 1) announcing 4 GiB of payload that never comes.
     bad.write_all(&[1, 0xFF, 0xFF, 0xFF, 0xFF]).expect("header");
+    // The bound only catches a daemon that never closes it; how fast it does
+    // depends on the machine's load, so it is generous.
     assert!(
-        closed_within(&mut bad, Duration::from_secs(3)),
+        closed_within(&mut bad, PATIENCE),
         "the daemon kept waiting for a frame it can never finish"
     );
 
@@ -122,7 +128,7 @@ fn an_oversized_frame_ends_that_client_and_not_the_session() {
         .expect("attach next");
     next.write_all(&Frame::Stdin(b"printf STILL_ALIVE\n".to_vec()).encode())
         .expect("stdin next");
-    let seen = read_until(&mut next, "STILL_ALIVE", Duration::from_secs(5));
+    let seen = read_until(&mut next, "STILL_ALIVE", PATIENCE);
     assert!(
         seen.contains("STILL_ALIVE"),
         "the session should serve the next client, got: {seen:?}"
