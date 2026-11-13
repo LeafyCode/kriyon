@@ -16,6 +16,7 @@ import {
   decodeScreenFrame,
   installRemoteHostListeners,
   linkLine,
+  remoteNeedsYouCount,
   useRemoteHosts,
 } from "./remoteHosts.ts";
 
@@ -161,19 +162,57 @@ test("forgetting a computer drops it and its link", async () => {
   expect(useRemoteHosts.getState().links[HOST]).toBeUndefined();
 });
 
-test("opening a session shows it, and closing it lets it go", async () => {
-  vi.mocked(remoteHostOpenSession).mockResolvedValue();
-  vi.mocked(remoteHostCloseSession).mockResolvedValue();
-  const frames = vi.fn();
-  await useRemoteHosts.getState().open(HOST, "s1", frames);
-  expect(remoteHostOpenSession).toHaveBeenCalledWith(HOST, "s1", frames);
-  expect(useRemoteHosts.getState().opened).toEqual({
-    hostId: HOST,
-    sessionId: "s1",
+test("opening and closing one session reach Rust in the order asked", async () => {
+  const order: string[] = [];
+  let finishFirstOpen: () => void = () => {
+    // Replaced once Rust's first open is under way.
+  };
+  vi.mocked(remoteHostOpenSession)
+    .mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finishFirstOpen = () => {
+            order.push("open 1");
+            resolve();
+          };
+        })
+    )
+    .mockImplementationOnce(() => {
+      order.push("open 2");
+      return Promise.resolve();
+    });
+  vi.mocked(remoteHostCloseSession).mockImplementation(() => {
+    order.push("close");
+    return Promise.resolve();
   });
-  await useRemoteHosts.getState().close();
-  expect(remoteHostCloseSession).toHaveBeenCalledWith(HOST, "s1");
-  expect(useRemoteHosts.getState().opened).toBeNull();
+  const store = useRemoteHosts.getState();
+  // Shown, hidden and shown again before Rust finished the first open.
+  const first = store.open(HOST, "s1", vi.fn());
+  const closed = store.close(HOST, "s1");
+  const second = store.open(HOST, "s1", vi.fn());
+  await vi.waitFor(() => expect(remoteHostOpenSession).toHaveBeenCalled());
+  expect(remoteHostCloseSession).not.toHaveBeenCalled();
+  finishFirstOpen();
+  await Promise.all([first, closed, second]);
+  expect(order).toEqual(["open 1", "close", "open 2"]);
+});
+
+test("a failure to open says why", async () => {
+  vi.mocked(remoteHostOpenSession).mockRejectedValue("not connected");
+  await useRemoteHosts.getState().open(HOST, "s1", vi.fn());
+  expect(useRemoteHosts.getState().error).toBe("not connected");
+});
+
+test("only sessions on a connected, still-paired computer count as needing you", () => {
+  const other = "cd".repeat(32);
+  useRemoteHosts.setState({ hosts: [studio] });
+  useRemoteHosts.getState().linkChanged(link());
+  expect(remoteNeedsYouCount(useRemoteHosts.getState())).toBe(1);
+  useRemoteHosts.getState().linkChanged(link({ state: "removed" }));
+  expect(remoteNeedsYouCount(useRemoteHosts.getState())).toBe(0);
+  useRemoteHosts.getState().linkChanged(link());
+  useRemoteHosts.getState().linkChanged(link({ hostId: other }));
+  expect(remoteNeedsYouCount(useRemoteHosts.getState())).toBe(1);
 });
 
 test("typing goes only where this computer holds control", async () => {

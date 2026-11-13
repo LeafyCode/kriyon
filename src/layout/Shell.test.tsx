@@ -9,11 +9,13 @@ import {
 import { beforeEach, expect, test, vi } from "vitest";
 import { useDrafts } from "../state/drafts.ts";
 import { DEFAULT_LAYOUT, useLayout } from "../state/layout.ts";
+import { useRemoteHosts } from "../state/remoteHosts.ts";
 import { useSessions } from "../state/sessions.ts";
 import { showToast } from "../ui/Toast.tsx";
 import { Shell } from "./Shell.tsx";
 
 beforeEach(() => {
+  useRemoteHosts.setState(useRemoteHosts.getInitialState());
   useSessions.setState({
     activeSessionId: null,
     activity: {},
@@ -79,6 +81,8 @@ function setWindowRect(rect: {
   });
 }
 
+const OTHER_COMPUTERS = /^Other computers/;
+
 function renderShell() {
   return render(
     <Shell onCloseSession={vi.fn()} onNewSession={vi.fn()}>
@@ -102,6 +106,7 @@ test("session panes stay mounted through every view switch (terminals must never
     "focus",
     "command",
     "prompts",
+    "remote",
     "settings",
     "studio",
   ] as const) {
@@ -375,6 +380,61 @@ test("the sidebar nav rows switch views, and name themselves the way they read",
 
   fireEvent.click(screen.getByRole("button", { name: "Sessions" }));
   expect(useLayout.getState().layout.view).toBe("studio");
+});
+
+test("Other computers shows in the nav only once a computer is paired, with what needs you there", () => {
+  setWindowRect({ height: 820, width: 1280, x: 300, y: 200 });
+  renderShell();
+  expect(screen.queryByRole("button", { name: OTHER_COMPUTERS })).toBeNull();
+
+  const host = "ab".repeat(32);
+  act(() => {
+    useRemoteHosts.setState({
+      hosts: [{ hostId: host, name: "Studio", pairedAt: 0 }],
+      links: {
+        [host]: {
+          hostId: host,
+          name: "Studio",
+          role: "controller",
+          sessions: [
+            {
+              dialogOpen: false,
+              id: "s1",
+              lastChangeMs: 0,
+              mine: false,
+              needsYou: true,
+              standing: "awaiting_input",
+              status: "waiting",
+              title: "Fix login",
+            },
+          ],
+          state: "connected",
+        },
+      },
+    });
+  });
+  const row = screen.getByRole("button", { name: OTHER_COMPUTERS });
+  expect(row).toHaveTextContent("1");
+  fireEvent.click(row);
+  expect(useLayout.getState().layout.view).toBe("remote");
+  expect(screen.getByRole("region", { name: "Studio" })).toBeInTheDocument();
+  expect(screen.getByTestId("sidebar")).toBeInTheDocument();
+});
+
+test("the Focus rail offers Other computers once a computer is paired", () => {
+  setWindowRect({ height: 820, width: 1280, x: 300, y: 200 });
+  renderShell();
+  act(() => {
+    useLayout.getState().setView("focus");
+  });
+  expect(screen.queryByRole("button", { name: OTHER_COMPUTERS })).toBeNull();
+  act(() => {
+    useRemoteHosts.setState({
+      hosts: [{ hostId: "ab".repeat(32), name: "Studio", pairedAt: 0 }],
+    });
+  });
+  fireEvent.click(screen.getByRole("button", { name: OTHER_COMPUTERS }));
+  expect(useLayout.getState().layout.view).toBe("remote");
 });
 
 /**

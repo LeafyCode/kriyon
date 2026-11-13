@@ -36,7 +36,8 @@ export type HostPairing =
   | { phase: "failed"; reason: string };
 
 interface RemoteHostsStore {
-  close: () => Promise<void>;
+  /** Stop showing a session here; it keeps running there. */
+  close: (hostId: string, sessionId: string) => Promise<void>;
   /** Why the last command failed, if it did. */
   error: string | null;
   forget: (hostId: string) => Promise<void>;
@@ -50,8 +51,6 @@ interface RemoteHostsStore {
     sessionId: string,
     onFrame: (frame: Uint8Array) => void
   ) => Promise<void>;
-  /** The session shown here, if any. */
-  opened: { hostId: string; sessionId: string } | null;
   pair: (invite: string) => Promise<void>;
   pairing: HostPairing;
   /** A pairing started here ended (`remote-host-pairing-ended`). */
@@ -62,6 +61,26 @@ interface RemoteHostsStore {
 }
 
 export const useRemoteHosts = create<RemoteHostsStore>((set, get) => {
+  // Rust keeps one stream per session and an open replaces it, so a close
+  // sent after a newer open would end the newer stream. Each session's opens
+  // and closes go to Rust one at a time, in the order asked.
+  const queues = new Map<string, Promise<void>>();
+  function inTurn(
+    hostId: string,
+    sessionId: string,
+    step: () => Promise<void>
+  ) {
+    const key = `${hostId}:${sessionId}`;
+    const turn = (queues.get(key) ?? Promise.resolve()).then(step);
+    queues.set(key, turn);
+    turn.then(() => {
+      if (queues.get(key) === turn) {
+        queues.delete(key);
+      }
+    });
+    return turn;
+  }
+
   async function attempt(step: () => Promise<void>): Promise<void> {
     try {
       await step();
@@ -72,25 +91,16 @@ export const useRemoteHosts = create<RemoteHostsStore>((set, get) => {
   }
 
   return {
-    close: async () => {
-      const { opened } = get();
-      if (!opened) {
-        return;
-      }
-      set({ opened: null });
-      await attempt(() =>
-        remoteHostCloseSession(opened.hostId, opened.sessionId)
-      );
-    },
+    close: (hostId, sessionId) =>
+      inTurn(hostId, sessionId, () =>
+        attempt(() => remoteHostCloseSession(hostId, sessionId))
+      ),
     error: null,
     forget: (hostId) =>
       attempt(async () => {
         await remoteHostForget(hostId);
         const { [hostId]: _gone, ...links } = get().links;
         set({ hosts: await remoteHosts(), links });
-        if (get().opened?.hostId === hostId) {
-          set({ opened: null });
-        }
       }),
     hosts: [],
     linkChanged: (link) =>
@@ -101,11 +111,9 @@ export const useRemoteHosts = create<RemoteHostsStore>((set, get) => {
         set({ hosts: await remoteHosts() });
       }),
     open: (hostId, sessionId, onFrame) =>
-      attempt(async () => {
-        await remoteHostOpenSession(hostId, sessionId, onFrame);
-        set({ opened: { hostId, sessionId } });
-      }),
-    opened: null,
+      inTurn(hostId, sessionId, () =>
+        attempt(() => remoteHostOpenSession(hostId, sessionId, onFrame))
+      ),
     pair: async (invite) => {
       const text = invite.trim();
       if (text === "") {
@@ -218,6 +226,23 @@ export function decodeScreenFrame(frame: Uint8Array): ScreenFrame | null {
     default:
       return null;
   }
+}
+
+/**
+ * How many sessions on other computers need you: only on computers still
+ * paired and connected, since nothing else can be acted on from here.
+ */
+export function remoteNeedsYouCount(state: {
+  hosts: PairedHost[];
+  links: Record<string, HostLink>;
+}): number {
+  return state.hosts.reduce((count, host) => {
+    const link = state.links[host.hostId];
+    if (link?.state !== "connected") {
+      return count;
+    }
+    return count + link.sessions.filter((session) => session.needsYou).length;
+  }, 0);
 }
 
 /** Whether this computer may type into `session` now. */

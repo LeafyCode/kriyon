@@ -14,7 +14,7 @@ import type {
 } from "../types.ts";
 import { Segmented } from "../ui/Segmented.tsx";
 
-interface StateMeta {
+export interface StateMeta {
   color: string;
   label: string;
 }
@@ -24,7 +24,7 @@ interface StateMeta {
  * so the palette stays in one place; `unknown` is rendered distinctly with the
  * faint ink ramp and never collapsed into `idle`.
  */
-function standingMeta(state: StandingState): StateMeta {
+export function standingMeta(state: StandingState): StateMeta {
   switch (state) {
     case "running":
       return { color: statusMeta("running").color, label: "Running" };
