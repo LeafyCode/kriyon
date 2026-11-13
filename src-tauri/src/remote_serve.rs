@@ -37,6 +37,16 @@ use tokio::sync::Notify;
 
 use crate::daemon_client::DaemonEvent;
 
+/// The first 8 hex digits of a device's id: enough to tell devices apart in
+/// a log, and no more of it.
+fn short_id(device: &EndpointId) -> String {
+    use std::fmt::Write as _;
+    device[..4].iter().fold(String::new(), |mut out, byte| {
+        let _ = write!(out, "{byte:02x}");
+        out
+    })
+}
+
 /// How often the main loop's tick looks at the project list.
 const PROJECTS_EVERY: std::time::Duration = std::time::Duration::from_secs(10);
 
@@ -64,6 +74,11 @@ pub trait ServeHost: Send + Sync + 'static {
     /// Keep paired `device`'s push token, sealed to the sender's key
     /// `key_id` (spec §10), in place of any it gave before.
     fn set_push_token(&self, device: &EndpointId, key_id: u32, sealed: Vec<u8>);
+    /// A line for the host's log (stderr unless told otherwise). Never given
+    /// a message's payload.
+    fn log(&self, line: &str) {
+        eprintln!("{line}");
+    }
     /// The projects a session can be started in, for devices' pickers.
     fn projects(&self) -> Vec<ProjectInfo>;
     /// Saved project `project_id`'s folder, checked against the [Approved
@@ -195,6 +210,8 @@ struct Inner {
     /// When the tick last looked at the project list: it changes seldom, and
     /// looking checks every project's folder.
     projects_looked: Mutex<Option<Instant>>,
+    /// Refusals answered per device, rate-limited (spec §8).
+    refusals: Mutex<kriyon_remote::link_policy::RateLimit<EndpointId>>,
 }
 
 /// Serving every paired device's streams. Cheap to clone.
@@ -270,6 +287,10 @@ impl Serve {
             heard: Mutex::new(HashMap::new()),
             heard_projects: Mutex::new(None),
             projects_looked: Mutex::new(None),
+            refusals: Mutex::new(kriyon_remote::link_policy::RateLimit::new(
+                kriyon_remote::link_policy::REFUSALS_PER_WINDOW,
+                kriyon_remote::link_policy::REFUSAL_WINDOW,
+            )),
         }))
     }
 
@@ -486,6 +507,32 @@ impl Serve {
         for control in controls {
             control.send(message);
         }
+    }
+
+    /// Whether to answer refusing `device` for `reason` on `stream`: logged
+    /// (the reason, the stream and the device's short id, never the
+    /// payload), and at most `REFUSALS_PER_WINDOW` answered per
+    /// `REFUSAL_WINDOW` (spec §8). The log says once when a device goes
+    /// over, not for every refusal after.
+    fn refusal(&self, device: &EndpointId, reason: RefuseReason, stream: &str) -> bool {
+        let now = Instant::now();
+        let mut limit = self.0.refusals.lock();
+        if limit.over(device, now) {
+            return false;
+        }
+        limit.record(*device, now);
+        let now_over = limit.over(device, now);
+        drop(limit);
+        let who = short_id(device);
+        self.0.host.log(&format!(
+            "kriyon: remote: refused {reason:?} on the {stream} stream, device {who}"
+        ));
+        if now_over {
+            self.0.host.log(&format!(
+                "kriyon: remote: device {who} is refused too often; more refusals go unanswered for a while"
+            ));
+        }
+        true
     }
 
     /// Run `call` on the app, off the async runtime: any [`ServeHost`] call
@@ -708,7 +755,9 @@ impl Serve {
                 (Ok(()), _) => Ok(()),
             };
             if let Err(reason) = verdict {
-                out.send(&ToDevice::Refused { reason });
+                if self.refusal(&device, reason, "control") {
+                    out.send(&ToDevice::Refused { reason });
+                }
             }
         }
     }
@@ -891,13 +940,30 @@ impl Serve {
                 }),
             };
             if let Some(answer) = answer {
-                // Answers past a handful waiting are dropped, not queued.
-                let _ = answers.try_send(answer);
-                wake.notify_one();
+                self.answer_on_session(&device, answer, &answers, &wake);
             }
         }
         writing.abort();
         self.close_session(&served, &id, &device);
+    }
+
+    /// Send `answer` on a session stream: a refusal only within its rate
+    /// ([`Self::refusal`]); answers past a handful waiting are dropped, not
+    /// queued.
+    fn answer_on_session(
+        &self,
+        device: &EndpointId,
+        answer: ToDevice,
+        answers: &tokio::sync::mpsc::Sender<ToDevice>,
+        wake: &Notify,
+    ) {
+        if let ToDevice::Refused { reason } = &answer {
+            if !self.refusal(device, *reason, "session") {
+                return;
+            }
+        }
+        let _ = answers.try_send(answer);
+        wake.notify_one();
     }
 
     /// A device's typing, compose or resize, past `authorize`: through the
@@ -1668,6 +1734,52 @@ mod tests {
             sw.send(&typing(epoch, 0, b"late")).await.expect("input");
             assert!(matches!(next(&mut sr).await, ToDevice::Refused { .. }));
             assert_eq!(world.fake.typed.lock().as_slice(), b"", "nothing written");
+        });
+    }
+
+    #[test]
+    fn refusals_are_answered_at_a_limited_rate_and_logged_without_their_payload() {
+        run(async {
+            let world = world().await;
+            let (_phone, _link, mut cw, mut cr) = device(&world, 3, Role::Viewer).await;
+            // Unknown messages, each carrying something that must not be logged.
+            let secret = b"do-not-log-me";
+            let mut frame = vec![0, 0, 0, u8::try_from(secret.len() + 1).expect("short"), 120];
+            frame.extend_from_slice(secret);
+            for _ in 0..60 {
+                cw.send_encoded(&frame).await.expect("sent");
+            }
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while !world
+                .fake
+                .logged
+                .lock()
+                .iter()
+                .any(|line| line.contains("too often"))
+            {
+                assert!(Instant::now() < deadline, "never over the limit");
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            // The flood read through: then a heartbeat, behind every answer.
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            world.serve.heartbeat(77);
+            let mut refused = 0;
+            loop {
+                match next(&mut cr).await {
+                    ToDevice::Refused { .. } => refused += 1,
+                    ToDevice::Heartbeat { at: 77, .. } => break,
+                    _ => {}
+                }
+            }
+            assert_eq!(
+                refused,
+                kriyon_remote::link_policy::REFUSALS_PER_WINDOW,
+                "the rest went unanswered"
+            );
+            let logged = world.fake.logged.lock().join("\n");
+            assert!(logged.contains("UnknownMessage"), "{logged}");
+            assert!(!logged.contains("do-not-log-me"), "{logged}");
+            assert!(logged.contains("too often"), "{logged}");
         });
     }
 

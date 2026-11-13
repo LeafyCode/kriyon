@@ -164,6 +164,14 @@ impl<K: Hash + Eq> RateLimit<K> {
     }
 }
 
+/// Refusals answered to one device per [`REFUSAL_WINDOW`] (spec §8): past
+/// that, a device sending what it may not goes unanswered for a while, so a
+/// broken or hostile one can't keep the host busy answering.
+pub const REFUSALS_PER_WINDOW: u32 = 20;
+
+/// The window [`REFUSALS_PER_WINDOW`] counts in.
+pub const REFUSAL_WINDOW: Duration = Duration::from_secs(10);
+
 /// How long a pairing QR code stays good.
 pub const PAIRING_VALID_FOR: Duration = Duration::from_mins(5);
 

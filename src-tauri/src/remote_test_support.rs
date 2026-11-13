@@ -46,6 +46,8 @@ pub(crate) struct FakeHost {
     pub(crate) start_result: Mutex<Result<String, RefuseReason>>,
     /// The host's projects, as devices are told them.
     pub(crate) projects: Mutex<Vec<ProjectInfo>>,
+    /// What the serving layer logged, in order.
+    pub(crate) logged: Mutex<Vec<String>>,
     /// How many times the serving layer called the app.
     pub(crate) calls: std::sync::atomic::AtomicUsize,
     /// How long a start takes, so a test can drop the link mid-start.
@@ -82,6 +84,7 @@ impl Default for FakeHost {
             started: Mutex::default(),
             start_delay: Mutex::new(Duration::ZERO),
             calls: std::sync::atomic::AtomicUsize::new(0),
+            logged: Mutex::default(),
             projects: Mutex::new(vec![ProjectInfo {
                 id: "p".into(),
                 name: "app".into(),
@@ -99,6 +102,10 @@ impl PairedDevices for FakeHost {
 }
 
 impl ServeHost for FakeHost {
+    fn log(&self, line: &str) {
+        self.logged.lock().push(line.to_string());
+    }
+
     fn host_name(&self) -> String {
         self.calls
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
