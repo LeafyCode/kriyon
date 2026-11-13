@@ -28,6 +28,15 @@ pub enum Typing {
     Other,
 }
 
+/// A project on a host, where a session can be started.
+#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
+pub struct HostProject {
+    pub id: String,
+    pub name: String,
+    /// Every session in it is parked there.
+    pub parked: bool,
+}
+
 /// One session on a host.
 #[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
 pub struct HostSession {
@@ -57,6 +66,8 @@ pub struct HostState {
     pub sessions: Vec<HostSession>,
     /// The last refusal the host sent, by its name (`NotInControl`).
     pub refused: Option<String>,
+    /// Where a session can be started there (a Controller only may).
+    pub projects: Vec<HostProject>,
 }
 
 /// The name serde gives `value`: a unit variant's name, or a variant with
@@ -67,6 +78,12 @@ fn name_of(value: &impl serde::Serialize) -> String {
         Ok(serde_json::Value::Object(fields)) => fields.keys().next().cloned().unwrap_or_default(),
         _ => String::new(),
     }
+}
+
+/// A refusal's name (`FolderNotAllowed`), as the phone matches on it.
+#[must_use]
+pub fn refusal_name(reason: &kriyon_remote::message::RefuseReason) -> String {
+    name_of(reason)
 }
 
 /// The phone's record of `view` for host `host`, seen from device `me`.
@@ -112,6 +129,15 @@ pub fn host_state(
             })
             .collect(),
         refused: view.refused.as_ref().map(name_of),
+        projects: view
+            .projects
+            .iter()
+            .map(|project| HostProject {
+                id: project.id.clone(),
+                name: project.name.clone(),
+                parked: project.parked,
+            })
+            .collect(),
     }
 }
 
@@ -165,7 +191,11 @@ mod tests {
                 },
             )]),
             refused: Some(RefuseReason::NotInControl),
-            projects: Vec::new(),
+            projects: vec![kriyon_remote::message::ProjectInfo {
+                id: "/work/app".into(),
+                name: "app".into(),
+                parked: true,
+            }],
         };
         let state = host_state(&HOST, &ME, LinkState::Connected, &view);
         assert_eq!(state.host_id, "ab".repeat(32));
@@ -173,6 +203,14 @@ mod tests {
         assert_eq!(state.host_name.as_deref(), Some("Mac"));
         assert_eq!(state.role.as_deref(), Some("controller"));
         assert_eq!(state.refused.as_deref(), Some("NotInControl"));
+        assert_eq!(
+            state.projects,
+            vec![HostProject {
+                id: "/work/app".into(),
+                name: "app".into(),
+                parked: true
+            }]
+        );
         let session = &state.sessions[0];
         assert_eq!(
             (session.id.as_str(), session.title.as_str()),

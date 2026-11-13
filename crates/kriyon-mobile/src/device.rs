@@ -13,6 +13,7 @@ use kriyon_remote::pairing::PairingInvite;
 use kriyon_remote_link::device::DevicePairing;
 use kriyon_remote_link::device_runtime::{
     screen_frame, DeviceError, DeviceEvents, DeviceRuntime, HostEntry, LinkState, ScreenSink,
+    StartError,
 };
 use kriyon_remote_link::keys::{load_or_create, KeyVault};
 use kriyon_remote_link::LinkConfig;
@@ -98,6 +99,9 @@ pub enum MobileError {
     NoScreen,
     /// The link failed, or the computer refused.
     Link { reason: String },
+    /// The computer refused a start: its reason by name (`FolderNotAllowed`),
+    /// and in words to show.
+    Refused { reason: String, words: String },
 }
 
 impl std::fmt::Display for MobileError {
@@ -106,10 +110,26 @@ impl std::fmt::Display for MobileError {
             Self::Store { reason } | Self::Invalid { reason } | Self::Link { reason } => {
                 f.write_str(reason)
             }
+            Self::Refused { words, .. } => f.write_str(words),
             Self::NotConnected => f.write_str("not connected to that computer"),
             Self::NotOpen => f.write_str("that session isn't open"),
             Self::NoControl => f.write_str("this phone doesn't have control"),
             Self::NoScreen => f.write_str("the screen hasn't arrived yet"),
+        }
+    }
+}
+
+impl From<StartError> for MobileError {
+    fn from(error: StartError) -> Self {
+        match error {
+            StartError::Refused(reason) => Self::Refused {
+                reason: crate::view::refusal_name(&reason),
+                words: error.words().to_string(),
+            },
+            StartError::NotConnected => Self::NotConnected,
+            StartError::Gone => Self::Link {
+                reason: error.words().to_string(),
+            },
         }
     }
 }
@@ -662,6 +682,29 @@ impl MobileDevice {
             .await??)
     }
 
+    /// Start a session on a paired computer in its project `project_id`,
+    /// titled `title` or after the project: the new session's id, once the
+    /// computer answers (it is asked again across reconnects, as one start).
+    /// Open it with [`Self::open_session`].
+    ///
+    /// # Errors
+    /// An id that isn't one, a computer not paired here, or its refusal
+    /// ([`MobileError::Refused`], with words to show).
+    pub async fn start_session(
+        &self,
+        host_id: String,
+        project_id: String,
+        title: Option<String>,
+    ) -> Result<String, MobileError> {
+        let host = parse_host_id(&host_id)?;
+        let title = title.filter(|title| !title.trim().is_empty());
+        let device = Arc::clone(&self.shared.device);
+        Ok(self
+            .shared
+            .on_runtime(async move { device.start_session(&host, &project_id, title).await })
+            .await??)
+    }
+
     /// Type `bytes` into a session this phone has control of.
     ///
     /// # Errors
@@ -928,6 +971,51 @@ mod tests {
             "a cancelled pairing ends without a computer"
         );
         assert_eq!(device.hosts().expect("hosts"), Vec::<PairedHost>::new());
+    }
+
+    #[test]
+    fn a_refused_start_says_why_by_name_and_in_words() {
+        use kriyon_remote::message::RefuseReason;
+        assert_eq!(
+            MobileError::from(StartError::Refused(RefuseReason::FolderNotAllowed)),
+            MobileError::Refused {
+                reason: "FolderNotAllowed".into(),
+                words: "That project's folder isn't one sessions can start in on that computer."
+                    .into(),
+            }
+        );
+        assert_eq!(
+            MobileError::from(StartError::NotConnected),
+            MobileError::NotConnected
+        );
+        assert!(matches!(
+            MobileError::from(StartError::Gone),
+            MobileError::Link { .. }
+        ));
+    }
+
+    #[test]
+    fn a_start_on_a_computer_not_paired_here_is_not_connected() {
+        let store = Arc::new(Memory::default());
+        let device = phone(&store);
+        let started = run({
+            let device = Arc::clone(&device);
+            async move {
+                device
+                    .start_session("ab".repeat(32), "/work/app".into(), None)
+                    .await
+            }
+        });
+        assert_eq!(started, Err(MobileError::NotConnected));
+        let bad = run({
+            let device = Arc::clone(&device);
+            async move {
+                device
+                    .start_session("nope".into(), "/work/app".into(), None)
+                    .await
+            }
+        });
+        assert!(matches!(bad, Err(MobileError::Invalid { .. })));
     }
 
     #[test]

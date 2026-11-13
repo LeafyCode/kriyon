@@ -15,4 +15,4 @@ pub use device::{
     HostListener, MobileDevice, MobileError, Pairing, PhoneStore, ScreenListener, StoreError,
 };
 pub use hosts::PairedHost;
-pub use view::{HostLink, HostSession, HostState, Typing};
+pub use view::{HostLink, HostProject, HostSession, HostState, Typing};
