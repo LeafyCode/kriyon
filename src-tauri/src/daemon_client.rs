@@ -556,6 +556,8 @@ mod tests {
         wrote_all: Arc<StdMutex<bool>>,
         /// The client asked for a repaint after that.
         saw_repaint: Arc<StdMutex<bool>>,
+        /// The client left, and the daemon read everything it sent.
+        read_all: Arc<StdMutex<bool>>,
     }
 
     /// A fake daemon that writes `total` bytes of output in 64 KB frames as fast
@@ -566,8 +568,11 @@ mod tests {
         let flood = Flood {
             wrote_all: Arc::new(StdMutex::new(false)),
             saw_repaint: Arc::new(StdMutex::new(false)),
+            read_all: Arc::new(StdMutex::new(false)),
         };
-        let (wrote, repaint) = (Arc::clone(&flood.wrote_all), Arc::clone(&flood.saw_repaint));
+        let wrote = Arc::clone(&flood.wrote_all);
+        let repaint = Arc::clone(&flood.saw_repaint);
+        let read_all = Arc::clone(&flood.read_all);
         std::thread::spawn(move || {
             let Ok((mut stream, _)) = listener.accept() else {
                 return;
@@ -583,7 +588,7 @@ mod tests {
             let mut buf = [0u8; 4096];
             while let Ok(n) = stream.read(&mut buf) {
                 if n == 0 {
-                    return;
+                    break;
                 }
                 dec.push(&buf[..n]);
                 while let Ok(Some(frame)) = dec.next_frame() {
@@ -592,6 +597,7 @@ mod tests {
                     }
                 }
             }
+            *read_all.lock().expect("lock") = true;
         });
         flood
     }
@@ -661,15 +667,17 @@ mod tests {
             )
             .expect("connect"),
         );
-        // The write queue: report what arrived as soon as it is taken. Holds
-        // the client weakly, and ends when the client (and its sender) goes.
+        // The write queue: once a frame, report everything that arrived — a
+        // window that draws, but slower than the daemon can write. Holds the
+        // client weakly, and ends when the client goes.
         let drainer = Arc::downgrade(&client);
-        std::thread::spawn(move || {
-            while let Ok(first) = rx.recv() {
-                let n = first + rx.try_iter().sum::<usize>();
-                let Some(client) = drainer.upgrade() else {
-                    return;
-                };
+        std::thread::spawn(move || loop {
+            std::thread::sleep(Duration::from_millis(5));
+            let n: usize = rx.try_iter().sum();
+            let Some(client) = drainer.upgrade() else {
+                return;
+            };
+            if n > 0 {
                 client.report_drained(n);
             }
         });
@@ -688,11 +696,13 @@ mod tests {
             total,
             "nothing dropped, nothing added"
         );
+        // Hang up, and let the daemon read everything the client sent first.
+        drop(client);
+        wait_for(&flood.read_all, "the daemon never saw the client leave");
         assert!(
             !*flood.saw_repaint.lock().expect("lock"),
             "a webview that kept up never needs a repaint"
         );
-        drop(client);
     }
 
     /// While the webview is away, every byte still reaches `on_read` (status,

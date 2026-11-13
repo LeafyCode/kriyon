@@ -132,10 +132,9 @@ impl OutputGate {
     /// The webview reported `n` bytes drained. Safe to call with more than
     /// are in flight. A report of nothing is not progress.
     pub fn drained(&mut self, n: usize, now: Instant) -> CatchUp {
-        if n == 0 {
-            return CatchUp::Nothing;
+        if n > 0 {
+            self.progress_at = now;
         }
-        self.progress_at = now;
         self.in_flight = self.in_flight.saturating_sub(n);
         if self.in_flight > self.low {
             return CatchUp::Nothing;

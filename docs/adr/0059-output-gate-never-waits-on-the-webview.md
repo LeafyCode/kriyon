@@ -32,13 +32,15 @@ case: the desktop app is often hidden while someone uses their phone.
   dropped here. Only a burst past that queue is skipped, and the daemon's
   Output history still has it (ADR-0060).
 - **After 500 ms with no drain, the webview counts as stalled** and the reader
-  stops waiting. It paces again as soon as the webview drains again, held
-  output or not, so one slow frame on a visible window does not turn into
-  lost output. A report of nothing drained is not progress. Output is then held, up to 1 MB per session, and released in
-  order, 128 KB at a time, as the webview drains back to 16 KB. Past 1 MB,
-  the held bytes are dropped, and so is everything after them until the
-  webview catches up; the client then asks the daemon for a screen repaint.
-  The daemon's emulator sees every byte, so the current screen is never lost.
+  stops waiting. Output is then held, up to 1 MB per session, and released in
+  order, 128 KB at a time, as the webview drains back to 16 KB. Past 1 MB, the
+  held bytes are dropped, and so is everything after them until the webview
+  catches up; the client then asks the daemon for a screen repaint. The
+  daemon's emulator sees every byte, so the current screen is never lost.
+- **Pacing comes back with the drains.** The reader paces again as soon as the
+  webview drains again, held output or not, so one slow frame on a visible
+  window does not turn into lost output. A report of nothing drained is not
+  progress.
 - **The cut is sealed.** Where output is dropped, the webview gets a string
   terminator and an end of synchronized output, so a sequence cut in half
   cannot swallow the repaint.
