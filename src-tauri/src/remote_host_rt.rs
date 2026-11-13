@@ -252,6 +252,37 @@ impl ServeHost for AppServeHost {
         let _ = state.writers.release_device(device, &engines);
     }
 
+    fn projects(&self) -> Vec<kriyon_remote::message::ProjectInfo> {
+        let store = self.0.state::<StoreState>();
+        let (projects, sessions) = {
+            let store = store.0.lock();
+            (
+                store.list_projects().unwrap_or_default(),
+                store.list_sessions().unwrap_or_default(),
+            )
+        };
+        // Parked as the desktop's sidebar decides: every open session parked.
+        let parked = kriyon_core::orphan::fully_parked_projects(
+            sessions
+                .iter()
+                .filter(|session| session.archived_at.is_none())
+                .map(|session| (session.project_id.as_str(), session.parked_at.is_some())),
+        );
+        projects
+            .into_iter()
+            // Only where a remote start would be allowed.
+            .filter(|project| {
+                self.project_folder(&project.id)
+                    == kriyon_remote::authorize::ProjectFolder::Approved
+            })
+            .map(|project| kriyon_remote::message::ProjectInfo {
+                parked: parked.contains(&project.id),
+                id: project.id,
+                name: project.name,
+            })
+            .collect()
+    }
+
     fn project_folder(&self, project_id: &str) -> kriyon_remote::authorize::ProjectFolder {
         use kriyon_remote::authorize::ProjectFolder;
         match crate::folder_cmd::project_folder(&self.0.state::<StoreState>(), project_id) {

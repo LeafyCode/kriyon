@@ -13,7 +13,9 @@ use kriyon_remote::authorize::PendingWrite;
 use kriyon_remote::codec::Decoded;
 use kriyon_remote::control::{Change, HostIsTyping};
 use kriyon_remote::fanout::RequesterId;
-use kriyon_remote::message::{EndpointId, FromDevice, RefuseReason, Role, SessionInfo, ToDevice};
+use kriyon_remote::message::{
+    EndpointId, FromDevice, ProjectInfo, RefuseReason, Role, SessionInfo, ToDevice,
+};
 use kriyon_remote_link::device::{Device, DeviceLink};
 use kriyon_remote_link::endpoint::LinkConfig;
 use kriyon_remote_link::framed::{MessageReader, MessageWriter};
@@ -41,6 +43,8 @@ pub(crate) struct FakeHost {
     /// The starts asked for, and what each one comes to.
     pub(crate) starts: Mutex<Vec<(EndpointId, RemoteStart)>>,
     pub(crate) start_result: Mutex<Result<String, RefuseReason>>,
+    /// The host's projects, as devices are told them.
+    pub(crate) projects: Mutex<Vec<ProjectInfo>>,
     /// Sessions earlier starts made, by request id.
     pub(crate) started: Mutex<HashMap<[u8; 16], String>>,
     /// Told every change of control, as the app's writers tell it.
@@ -71,6 +75,11 @@ impl Default for FakeHost {
             starts: Mutex::default(),
             start_result: Mutex::new(Ok("started".into())),
             started: Mutex::default(),
+            projects: Mutex::new(vec![ProjectInfo {
+                id: "p".into(),
+                name: "app".into(),
+                parked: false,
+            }]),
             serve: Mutex::default(),
         }
     }
@@ -156,6 +165,10 @@ impl ServeHost for FakeHost {
             .get(project_id)
             .copied()
             .unwrap_or(ProjectFolder::NoSuchProject)
+    }
+
+    fn projects(&self) -> Vec<ProjectInfo> {
+        self.projects.lock().clone()
     }
 
     fn started(&self, _device: &EndpointId, request_id: &[u8; 16]) -> Option<String> {
@@ -278,6 +291,14 @@ pub(crate) async fn device(
     assert!(
         matches!(&welcome, ToDevice::Welcome { role: r, sessions, .. } if *r == role && sessions.len() == 1),
         "{welcome:?}"
+    );
+    let projects = next(&mut reader).await;
+    assert_eq!(
+        projects,
+        ToDevice::ProjectList {
+            projects: world.fake.projects.lock().clone()
+        },
+        "the project list follows Welcome"
     );
     (phone, link, writer, reader)
 }

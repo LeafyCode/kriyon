@@ -147,6 +147,15 @@ pub enum RefuseReason {
     StartFailed,
 }
 
+/// A project on the host, as a device's project picker shows it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectInfo {
+    pub id: String,
+    pub name: String,
+    /// Every session in it is parked: put away on the host for now.
+    pub parked: bool,
+}
+
 /// Device to host on `kriyon/remote/1`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FromDevice {
@@ -325,6 +334,11 @@ pub enum ToDevice {
     StartRefused {
         request_id: RequestId,
         reason: RefuseReason,
+    },
+    /// Control stream, after `Welcome` and whenever it changes: the host's
+    /// projects, where a Controller may start a session.
+    ProjectList {
+        projects: Vec<ProjectInfo>,
     },
 }
 
@@ -516,7 +530,7 @@ mod tests {
     #[test]
     fn host_to_device_tags_are_fixed() {
         let s = || "s".to_string();
-        let cases: [(ToDevice, u8); 12] = [
+        let cases: [(ToDevice, u8); 13] = [
             (
                 ToDevice::Welcome {
                     host_name: s(),
@@ -595,6 +609,16 @@ mod tests {
                     reason: RefuseReason::StartFailed,
                 },
                 11,
+            ),
+            (
+                ToDevice::ProjectList {
+                    projects: vec![ProjectInfo {
+                        id: "p".into(),
+                        name: "app".into(),
+                        parked: false,
+                    }],
+                },
+                12,
             ),
         ];
         for (message, expected) in cases {

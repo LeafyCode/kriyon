@@ -21,7 +21,9 @@ use kriyon_remote::codec::{encode, Decoded};
 use kriyon_remote::control::{Change, Control};
 use kriyon_remote::fanout::{Pop, RequesterId, SessionFanout};
 use kriyon_remote::link_policy::CloseCode;
-use kriyon_remote::message::{EndpointId, FromDevice, RefuseReason, Role, SessionInfo, ToDevice};
+use kriyon_remote::message::{
+    EndpointId, FromDevice, ProjectInfo, RefuseReason, Role, SessionInfo, ToDevice,
+};
 use kriyon_remote::queue::{ControlQueue, CONTROL_QUEUE_LIMIT, SESSION_QUEUE_LIMIT};
 use kriyon_remote_link::framed::{MessageReader, MessageWriter};
 use kriyon_remote_link::host::RemoteLink;
@@ -57,6 +59,8 @@ pub trait ServeHost: Send + Sync + 'static {
     /// Keep paired `device`'s push token, sealed to the sender's key
     /// `key_id` (spec §10), in place of any it gave before.
     fn set_push_token(&self, device: &EndpointId, key_id: u32, sealed: Vec<u8>);
+    /// The projects a session can be started in, for devices' pickers.
+    fn projects(&self) -> Vec<ProjectInfo>;
     /// Saved project `project_id`'s folder, checked against the [Approved
     /// root]s, for a remote start's check.
     fn project_folder(&self, project_id: &str) -> ProjectFolder;
@@ -172,6 +176,8 @@ struct Inner {
     heartbeat_seq: AtomicU64,
     /// The session list as devices last heard it.
     heard: Mutex<HashMap<String, SessionInfo>>,
+    /// The project list as devices last heard it.
+    heard_projects: Mutex<Option<Vec<ProjectInfo>>>,
 }
 
 /// Serving every paired device's streams. Cheap to clone.
@@ -245,6 +251,7 @@ impl Serve {
             controls: Mutex::new(HashMap::new()),
             heartbeat_seq: AtomicU64::new(0),
             heard: Mutex::new(HashMap::new()),
+            heard_projects: Mutex::new(None),
         }))
     }
 
@@ -382,8 +389,10 @@ impl Serve {
         // Nobody to tell: no list built. The next device starts from Welcome.
         if self.0.controls.lock().is_empty() {
             self.0.heard.lock().clear();
+            *self.0.heard_projects.lock() = None;
             return;
         }
+        self.projects_changed();
         let now = sessions_heard(self.0.host.sessions());
         let mut heard = self.0.heard.lock();
         let gone = heard.keys().any(|id| !now.contains_key(id));
@@ -402,6 +411,18 @@ impl Serve {
                 self.broadcast(&ToDevice::SessionStatus { session });
             }
         }
+    }
+
+    /// Tell every device the project list if it changed since they heard it.
+    fn projects_changed(&self) {
+        let now = self.0.host.projects();
+        let mut heard = self.0.heard_projects.lock();
+        if heard.as_ref() == Some(&now) {
+            return;
+        }
+        *heard = Some(now.clone());
+        drop(heard);
+        self.broadcast(&ToDevice::ProjectList { projects: now });
     }
 
     /// Every device hears who holds [Typing control] of session `id` now.
@@ -528,6 +549,15 @@ impl Serve {
             })
             .await
             .ok()?;
+        // Then where a session can be started: Viewers hear it too.
+        let projects = self.0.host.projects();
+        writer
+            .send(&ToDevice::ProjectList {
+                projects: projects.clone(),
+            })
+            .await
+            .ok()?;
+        self.0.heard_projects.lock().get_or_insert(projects);
         let out = Arc::new(ControlOut {
             queue: Mutex::new(ControlQueue::new(CONTROL_QUEUE_LIMIT)),
             wake: Notify::new(),
@@ -1029,6 +1059,36 @@ mod tests {
     }
 
     #[test]
+    fn every_device_hears_the_project_list_when_it_changes() {
+        run(async {
+            let world = world().await;
+            let (_v, _vl, _vw, mut viewer) = device(&world, 3, Role::Viewer).await;
+            let renamed = vec![kriyon_remote::message::ProjectInfo {
+                id: "p".into(),
+                name: "renamed".into(),
+                parked: true,
+            }];
+            *world.fake.projects.lock() = renamed.clone();
+            world.serve.sessions_changed();
+            let mut heard = None;
+            for _ in 0..3 {
+                if let ToDevice::ProjectList { projects } = next(&mut viewer).await {
+                    heard = Some(projects);
+                    break;
+                }
+            }
+            assert_eq!(heard, Some(renamed), "a Viewer hears it too");
+            // Unchanged: not sent again.
+            world.serve.sessions_changed();
+            world.serve.heartbeat(9);
+            assert!(matches!(
+                next(&mut viewer).await,
+                ToDevice::Heartbeat { at: 9, .. }
+            ));
+        });
+    }
+
+    #[test]
     fn heartbeats_and_session_changes_reach_every_device() {
         run(async {
             let world = world().await;
@@ -1160,6 +1220,7 @@ mod tests {
             .await
             .expect("hello");
             assert!(matches!(next(&mut cr).await, ToDevice::Welcome { .. }));
+            assert!(matches!(next(&mut cr).await, ToDevice::ProjectList { .. }));
             drop(old);
             // Let the old connection's end be noticed and cleaned up.
             tokio::time::sleep(Duration::from_millis(500)).await;
@@ -1347,6 +1408,7 @@ mod tests {
             .await
             .expect("hello");
             assert!(matches!(next(&mut cr).await, ToDevice::Welcome { .. }));
+            assert!(matches!(next(&mut cr).await, ToDevice::ProjectList { .. }));
             let deadline = Instant::now() + Duration::from_secs(10);
             while world.fake.gate.lock().control().holder() != Holder::Host {
                 assert!(
