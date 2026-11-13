@@ -140,3 +140,11 @@ test("home says where alerts stand", async () => {
     screen.getByText("Alerts: unavailable: no aps-environment")
   ).toBeOnTheScreen();
 });
+
+test("a computer can be forgotten from home", async () => {
+  usePhone.setState({ hosts: [paired], states: { [MAC]: connected } });
+  await render(<HomeScreen />);
+  await fireEvent.press(screen.getByRole("button", { name: "Forget Mac" }));
+  expect(native.forget).toHaveBeenCalledWith(MAC);
+  expect(usePhone.getState().hosts).toEqual([]);
+});

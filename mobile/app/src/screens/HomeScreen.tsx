@@ -50,7 +50,7 @@ export function HomeScreen() {
   const hosts = usePhone((state) => state.hosts);
   const states = usePhone((state) => state.states);
   const push = usePhone((state) => state.push);
-  const { show } = usePhone.getState();
+  const { forget, show } = usePhone.getState();
   const waiting = needsYou(hosts, states);
   return (
     <ScrollView contentContainerStyle={{ padding: 16 }} style={ui.screen}>
@@ -75,7 +75,18 @@ export function HomeScreen() {
         const state = states[host.hostId];
         return (
           <View key={host.hostId}>
-            <Text style={ui.sectionLabel}>{host.name}</Text>
+            <View style={{ alignItems: "flex-end", flexDirection: "row" }}>
+              <Text style={[ui.sectionLabel, { flex: 1 }]}>{host.name}</Text>
+              <Pressable
+                accessibilityLabel={`Forget ${host.name}`}
+                accessibilityRole="button"
+                onPress={() => {
+                  forget(host.hostId).catch(() => undefined);
+                }}
+              >
+                <Text style={ui.hint}>Forget</Text>
+              </Pressable>
+            </View>
             <Text style={ui.hint}>{linkLine(state?.link ?? "connecting")}</Text>
             {(state?.sessions ?? []).map((session) => (
               <SessionRow
