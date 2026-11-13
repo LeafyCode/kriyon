@@ -46,6 +46,9 @@ struct DeviceStream {
     /// Its snapshot came and is being packed elsewhere: updates made since
     /// wait here, to follow it in order.
     held: Option<Held>,
+    /// Its queue was dropped since [`SessionFanout::dropped`] last said so:
+    /// what else was queued for it (readable-view entries) is gone too.
+    dropped: bool,
 }
 
 /// Updates waiting for the snapshot of `requester` to be packed.
@@ -215,6 +218,7 @@ impl SessionFanout {
             .filter_map(|device| {
                 if let Some(stream) = self.devices.get_mut(device) {
                     stream.queue = SessionQueue::new(self.limit);
+                    stream.dropped = true;
                 }
                 self.ask(device, true)
             })
@@ -322,6 +326,7 @@ impl SessionFanout {
                 resync: ResyncGate::default(),
                 awaiting: None,
                 held: None,
+                dropped: false,
             },
         );
         self.ask(&device, false)
@@ -364,8 +369,33 @@ impl SessionFanout {
         match stream.queue.pop() {
             Next::Frame(bytes) => Pop::Frame(bytes),
             Next::Empty => Pop::Empty,
-            Next::SkipAhead => self.ask(device, true).map_or(Pop::Empty, Pop::Ask),
+            Next::SkipAhead => {
+                stream.dropped = true;
+                self.ask(device, true).map_or(Pop::Empty, Pop::Ask)
+            }
         }
+    }
+
+    /// Queue `frame`, an encoded message for `device` alone (readable-view
+    /// entries), behind what is queued for it. Too much for its queue, and
+    /// the device starts over from a fresh snapshot: the requester id to ask
+    /// for it, and [`Self::dropped`] says so.
+    pub fn send(&mut self, device: &EndpointId, frame: Vec<u8>) -> Option<RequesterId> {
+        let stream = self.devices.get_mut(device)?;
+        stream.queue.push(frame);
+        if !stream.queue.is_skipping() {
+            return None;
+        }
+        stream.queue = SessionQueue::new(self.limit);
+        stream.dropped = true;
+        self.ask(device, true)
+    }
+
+    /// Whether `device`'s queue was dropped since this last said so.
+    pub fn dropped(&mut self, device: &EndpointId) -> bool {
+        self.devices
+            .get_mut(device)
+            .is_some_and(|stream| std::mem::take(&mut stream.dropped))
     }
 }
 
@@ -503,6 +533,40 @@ mod tests {
             .map(|(_, t)| t)
             .collect();
         assert_eq!(updates, vec!["after".to_string()]);
+    }
+
+    #[test]
+    fn a_message_for_one_device_goes_in_its_queue_and_a_dropped_queue_is_told() {
+        let mut fanout = SessionFanout::new(1024).expect("fanout");
+        fanout.hello(7);
+        following(&mut fanout, A, b"x");
+        following(&mut fanout, B, b"x");
+        drain(&mut fanout, &A);
+        drain(&mut fanout, &B);
+        let note = encode(&ToDevice::Refused {
+            reason: crate::message::RefuseReason::Stale,
+        })
+        .expect("encodes");
+        assert_eq!(fanout.send(&A, note.clone()), None);
+        assert!(!fanout.dropped(&A));
+        let (messages, _) = drain(&mut fanout, &A);
+        assert_eq!(messages.len(), 1);
+        assert_eq!(drain(&mut fanout, &B).0, Vec::new(), "only A's");
+        // Too much for its queue: it starts over from a snapshot, and the
+        // caller hears that what it queued was dropped, once.
+        let big = vec![0; 4096];
+        assert!(
+            fanout.send(&A, big).is_some(),
+            "a fresh snapshot is asked for"
+        );
+        assert!(fanout.dropped(&A));
+        assert!(!fanout.dropped(&A));
+        // Output overflowing its queue drops what was queued too.
+        let noise: Vec<u8> = (0..16_384_u32)
+            .map(|n| (n.wrapping_mul(2_654_435_761) >> 24).to_le_bytes()[0])
+            .collect();
+        fanout.output(&noise);
+        assert!(fanout.dropped(&B));
     }
 
     #[test]
