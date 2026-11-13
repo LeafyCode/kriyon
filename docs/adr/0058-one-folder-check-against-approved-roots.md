@@ -83,15 +83,19 @@ Where it runs:
 
 **Worktrees, since a worktree git lists becomes an approved root:**
 
-- **`create_worktree`** makes a worktree only from exactly a saved project's folder, and only
-  at the default sibling folder (`<repo>-worktrees/<branch dir>`) or under a [Chosen folder]
-  with the branch's directory name, which is how the spawn dialog builds a chosen location
-  (`check_new_worktree_path`). The path does not exist yet, so its spelling and its chosen
-  parent are what is checked.
+- **`create_worktree`** makes a worktree only from a saved project's folder, spelled as saved
+  (the default location is built from that spelling, so a symlink to the project must not move
+  it), and only one level under the default worktrees folder (`<repo>-worktrees/`) or under a
+  [Chosen folder] (`check_new_worktree_path`). Any plain name will do there: a retry on a fresh
+  branch keeps the location the person chose. The path does not exist yet, so its spelling and
+  its parent are what is checked.
 - **`bootstrap_worktree`**, which copies `.env` files out of the repository and runs install
-  scripts and the setup command in the worktree, runs only for exactly a saved project's folder
-  and exactly one of its linked worktrees. The main checkout is not one: copying its `.env`
-  files onto themselves would empty them.
+  scripts and the setup command in the worktree, runs only for a saved project's folder and
+  exactly one of its linked worktrees, never the repository itself
+  (`check_worktree_to_set_up`). A project saved at a linked worktree lists itself among them,
+  and copying its `.env` files onto themselves would empty them. A refusal is reported as a
+  failed setup step, not an error: by then the worktree exists, and an error reads to the
+  caller as "nothing was made".
 
 The setup command itself still comes from the webview: the person types it in the spawn dialog,
 and the project row it is saved to is written on a debounce, so reading it back from the store
@@ -108,6 +112,8 @@ themselves.
 - The webview can still name the home folder as a new project, the Home project. A session can
   only ever start in the home folder itself, not under it.
 - `ChosenFolders` lives in memory, so a folder picked but never saved is forgotten on quit.
+- A [Chosen folder] does not record what it was picked for, so any folder picked this run can
+  hold a new worktree. The person picked it; that is the approval.
 - A session whose folder was deleted, or whose project was removed, no longer starts a fresh
   shell; it fails with the check's message instead. One whose daemon is still live reattaches.
 - The check and the spawn are not atomic: a symlink in the given spelling could be re-pointed

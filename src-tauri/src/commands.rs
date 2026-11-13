@@ -935,12 +935,12 @@ pub fn worktree_path(repo_path: String, branch: String) -> Result<String, String
 /// (not an `Err`) so the caller can offer "Open anyway". Runs on a blocking
 /// thread since installs (e.g. `pnpm install`) can take minutes and must not
 /// occupy a Tokio worker. Only for a linked worktree of a saved project's
-/// folder (ADR-0058), checked on that thread too since it runs git.
+/// folder (ADR-0058), checked on that thread too since it runs git; a refused
+/// pair is reported as a failed step that ran nothing.
 ///
 /// # Errors
-/// Returns `Err` if a path is refused, or if the blocking task itself fails to
-/// join (e.g. panics); the bootstrap steps are otherwise always reported via
-/// `BootstrapReport`.
+/// Returns `Err` only if the blocking task itself fails to join (e.g. panics);
+/// the bootstrap steps are otherwise always reported via `BootstrapReport`.
 #[tauri::command]
 pub async fn bootstrap_worktree(
     app: tauri::AppHandle,
@@ -950,20 +950,24 @@ pub async fn bootstrap_worktree(
 ) -> Result<BootstrapReport, String> {
     tauri::async_runtime::spawn_blocking(move || {
         use tauri::Manager as _;
-        crate::folder_cmd::check_worktree_setup(
+        // A refusal is a failed setup, not an `Err`: the worktree exists by
+        // now, and an `Err` reads as "nothing was made" to the caller.
+        if let Err(refusal) = crate::folder_cmd::check_worktree_setup(
             &app.state::<StoreState>(),
             &repo_path,
             &worktree_path,
-        )?;
-        Ok(run_bootstrap(
+        ) {
+            return BootstrapReport::refused(&refusal);
+        }
+        run_bootstrap(
             &repo_path,
             &worktree_path,
             setup_cmd.as_deref(),
             crate::shell_path::user_path(),
-        ))
+        )
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())
 }
 
 /// Resolve HOME via Tauri, mirroring `seed_prompt`.

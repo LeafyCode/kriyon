@@ -39,6 +39,9 @@ pub enum FolderRefusal {
     /// [Chosen folder] under the branch's own name.
     #[error("not a place a new worktree may go")]
     NotWorktreeLocation,
+    /// Not one of the repository's linked worktrees, or the repository itself.
+    #[error("folder is not one of the project's linked worktrees")]
+    NotLinkedWorktree,
 }
 
 /// A folder path that passed [`check_folder`]. Its only constructor is that
@@ -191,36 +194,56 @@ pub fn parse_linked_worktrees(porcelain: &str) -> Vec<PathBuf> {
         .collect()
 }
 
-/// Where a new worktree of `repo` (a saved project's folder) on `branch` may
-/// be made: the default sibling folder, `<repo>-worktrees/<branch dir>`, or a
-/// [Chosen folder] with the branch's directory name under it, which is how
-/// the spawn dialog builds a chosen location. The path does not exist yet, so
-/// only its spelling and its chosen parent are checked.
+/// Where a new worktree of `repo` (a saved project's folder, as saved) may be
+/// made: one level under the default worktrees folder,
+/// `<repo>-worktrees/` (see `bootstrap::worktree_path_for`), or one level
+/// under a [Chosen folder]. Any plain name will do there: a retry on a fresh
+/// branch keeps the location the person chose. The path does not exist yet,
+/// so only its spelling and its parent are checked.
 ///
 /// # Errors
 /// `NotAbsolute` or `NotNormal` for the spelling, else `NotWorktreeLocation`.
 pub fn check_new_worktree_path(
     repo: &str,
-    branch: &str,
     path: &str,
     chosen: &[PathBuf],
 ) -> Result<(), FolderRefusal> {
     check_spelling(path)?;
-    if path == crate::bootstrap::worktree_path_for(repo, branch) {
-        return Ok(());
-    }
-    let path = Path::new(path);
-    let named_for_branch = path
-        .file_name()
-        .is_some_and(|leaf| *leaf == *crate::bootstrap::sanitize_branch_dir(branch));
-    let parent_chosen = path
-        .parent()
-        .and_then(Path::to_str)
-        .is_some_and(|parent| check_chosen_folder(parent, chosen).is_ok());
-    if named_for_branch && parent_chosen {
+    let Some(parent) = Path::new(path).parent().and_then(Path::to_str) else {
+        return Err(FolderRefusal::NotWorktreeLocation);
+    };
+    let default_parent = format!("{}-worktrees", repo.trim_end_matches('/'));
+    if parent.trim_end_matches('/') == default_parent || check_chosen_folder(parent, chosen).is_ok()
+    {
         Ok(())
     } else {
         Err(FolderRefusal::NotWorktreeLocation)
+    }
+}
+
+/// The worktree a [Worktree bootstrap] may run in: exactly one of the
+/// repository's `linked` worktrees, and never `repo` itself. A project saved
+/// at a linked worktree lists itself among them, and setup copies `repo`'s
+/// `.env` files into the worktree: onto themselves, they would be emptied.
+///
+/// # Errors
+/// The [`FolderRefusal`] from [`check_folder`], or `NotLinkedWorktree`.
+pub fn check_worktree_to_set_up(
+    repo: &str,
+    worktree: &str,
+    linked: &[PathBuf],
+) -> Result<CheckedFolder, FolderRefusal> {
+    let folder = check_chosen_folder(worktree, linked).map_err(|refusal| match refusal {
+        FolderRefusal::NotChosen => FolderRefusal::NotLinkedWorktree,
+        other => other,
+    })?;
+    let is_repo = Path::new(repo)
+        .canonicalize()
+        .is_ok_and(|repo| repo == folder.canonical());
+    if is_repo {
+        Err(FolderRefusal::NotLinkedWorktree)
+    } else {
+        Ok(folder)
     }
 }
 
@@ -539,7 +562,7 @@ mod tests {
     #[test]
     fn a_new_worktree_may_go_in_the_default_sibling_folder() {
         assert_eq!(
-            check_new_worktree_path("/work/repo", "feat/x", "/work/repo-worktrees/feat-x", &[]),
+            check_new_worktree_path("/work/repo", "/work/repo-worktrees/feat-x", &[]),
             Ok(())
         );
     }
@@ -549,7 +572,21 @@ mod tests {
         let chosen = tempfile::tempdir().unwrap();
         let path = chosen.path().join("feat-x");
         assert_eq!(
-            check_new_worktree_path("/work/repo", "feat/x", s(&path), &approved(&chosen)),
+            check_new_worktree_path("/work/repo", s(&path), &approved(&chosen)),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn a_new_worktree_under_a_chosen_folder_may_take_any_plain_name() {
+        // A retry on a fresh branch keeps the location the person chose.
+        let chosen = tempfile::tempdir().unwrap();
+        assert_eq!(
+            check_new_worktree_path(
+                "/work/repo",
+                s(&chosen.path().join("feat-x")),
+                &approved(&chosen)
+            ),
             Ok(())
         );
     }
@@ -558,24 +595,22 @@ mod tests {
     fn a_new_worktree_anywhere_else_is_refused() {
         let chosen = tempfile::tempdir().unwrap();
         let elsewhere = tempfile::tempdir().unwrap();
-        // A folder nobody chose.
         assert_eq!(
             check_new_worktree_path(
                 "/work/repo",
-                "feat/x",
                 s(&elsewhere.path().join("feat-x")),
                 &approved(&chosen)
             ),
             Err(FolderRefusal::NotWorktreeLocation)
         );
-        // A chosen folder, but not under the branch's own name.
+        // Beside the repo, but not in its worktrees folder.
         assert_eq!(
-            check_new_worktree_path(
-                "/work/repo",
-                "feat/x",
-                s(&chosen.path().join("other")),
-                &approved(&chosen)
-            ),
+            check_new_worktree_path("/work/repo", "/work/x", &approved(&chosen)),
+            Err(FolderRefusal::NotWorktreeLocation)
+        );
+        // Deeper than one level under the worktrees folder.
+        assert_eq!(
+            check_new_worktree_path("/work/repo", "/work/repo-worktrees/a/x", &[]),
             Err(FolderRefusal::NotWorktreeLocation)
         );
     }
@@ -583,12 +618,44 @@ mod tests {
     #[test]
     fn a_new_worktree_path_must_be_spelled_plainly() {
         assert_eq!(
-            check_new_worktree_path("/work/repo", "x", "/work/repo-worktrees/../x", &[]),
+            check_new_worktree_path("/work/repo", "/work/repo-worktrees/../x", &[]),
             Err(FolderRefusal::NotNormal)
         );
         assert_eq!(
-            check_new_worktree_path("/work/repo", "x", "repo-worktrees/x", &[]),
+            check_new_worktree_path("/work/repo", "repo-worktrees/x", &[]),
             Err(FolderRefusal::NotAbsolute)
+        );
+    }
+
+    // --- Worktree setup ---
+
+    #[test]
+    fn setup_runs_in_a_linked_worktree() {
+        let repo = tempfile::tempdir().unwrap();
+        let wt = tempfile::tempdir().unwrap();
+        let linked = vec![wt.path().to_path_buf()];
+        assert!(check_worktree_to_set_up(s(repo.path()), s(wt.path()), &linked).is_ok());
+    }
+
+    #[test]
+    fn setup_never_runs_in_the_repo_itself_even_when_it_is_a_linked_worktree() {
+        // A project saved at a linked worktree lists itself; copying its
+        // `.env` files onto themselves would empty them.
+        let repo = tempfile::tempdir().unwrap();
+        let linked = vec![repo.path().to_path_buf()];
+        assert_eq!(
+            check_worktree_to_set_up(s(repo.path()), s(repo.path()), &linked).unwrap_err(),
+            FolderRefusal::NotLinkedWorktree
+        );
+    }
+
+    #[test]
+    fn setup_never_runs_outside_the_linked_worktrees() {
+        let repo = tempfile::tempdir().unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+        assert_eq!(
+            check_worktree_to_set_up(s(repo.path()), s(elsewhere.path()), &[]).unwrap_err(),
+            FolderRefusal::NotLinkedWorktree
         );
     }
 }
