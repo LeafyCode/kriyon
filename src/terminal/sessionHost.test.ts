@@ -12,6 +12,7 @@ import {
   disposeSession,
   ensureSession,
   launchClaudeOnce,
+  noteRowSave,
   noteSessionStarted,
   registerSizeSync,
   setResumeFailedHandler,
@@ -618,4 +619,33 @@ test("a failed launch write reports writeFailed and arms no resume watchdog", as
   } finally {
     vi.useRealTimers();
   }
+});
+
+test("a session whose rows are still saving starts its shell only after the save", async () => {
+  // `create_session` refuses a folder no saved row approves yet (ADR-0058).
+  let saved: () => void = () => undefined;
+  noteRowSave(
+    "s-new",
+    new Promise<void>((resolve) => {
+      saved = resolve;
+    })
+  );
+  const ready = ensureSession("s-new", "/work/new", noop);
+  await flush();
+  expect(mockedCreateSession).not.toHaveBeenCalled();
+  saved();
+  await ready;
+  expect(mockedCreateSession).toHaveBeenCalledWith(
+    "s-new",
+    "/work/new",
+    expect.any(Function),
+    expect.any(Function),
+    expect.any(Function)
+  );
+});
+
+test("a failed row save still starts the shell, so Rust's refusal is what the person sees", async () => {
+  noteRowSave("s-failed-save", Promise.reject(new Error("disk full")));
+  await ensureSession("s-failed-save", "/work/new", noop);
+  expect(mockedCreateSession).toHaveBeenCalledTimes(1);
 });

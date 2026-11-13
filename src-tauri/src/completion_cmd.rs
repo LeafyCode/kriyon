@@ -266,14 +266,14 @@ pub fn prompt_history(
 /// trust-boundary rule — never walk or spawn in a blindly-trusted path.
 ///
 /// # Errors
-/// `cwd is not absolute`; `cwd has a '.' or '..' part`; `cwd is not a
-/// directory` when the path does not resolve to a directory (or is not
-/// UTF-8); `cwd is not a known session or project root` when it resolves but
-/// falls outside every approved root.
+/// `cwd is not valid UTF-8`; `cwd is not absolute`; `cwd has a '.' or '..'
+/// part`; `cwd is not a directory` when the path does not resolve to a
+/// directory; `cwd is not a known session or project root` when it resolves
+/// but falls outside every approved root.
 pub(crate) fn validate_cwd(store: &StoreState, cwd: &Path) -> Result<PathBuf, String> {
     let raw = cwd
         .to_str()
-        .ok_or_else(|| "cwd is not a directory".to_string())?;
+        .ok_or_else(|| "cwd is not valid UTF-8".to_string())?;
     check_folder(raw, &known_roots(store))
         .map(CheckedFolder::into_canonical)
         .map_err(|refusal| cwd_refusal_message(&refusal).to_string())
@@ -545,6 +545,15 @@ mod tests {
         let state = store_with_project_root(&root.to_string_lossy());
         let err = validate_cwd(&state, &root.join("sub/..")).unwrap_err();
         assert_eq!(err, "cwd has a '.' or '..' part");
+    }
+
+    #[test]
+    fn validate_cwd_names_a_non_utf8_path_for_what_it_is() {
+        use std::os::unix::ffi::OsStrExt as _;
+        let state = store_with_project_root("/tmp");
+        let raw = std::ffi::OsStr::from_bytes(b"/tmp/\xff");
+        let err = validate_cwd(&state, Path::new(raw)).unwrap_err();
+        assert_eq!(err, "cwd is not valid UTF-8");
     }
 
     #[test]

@@ -14,6 +14,7 @@ import {
   disposeSession,
   ensureSession,
   launchClaudeOnce,
+  noteRowSave,
   noteSessionStarted,
   startFreshClaude,
 } from "../terminal/sessionHost.ts";
@@ -220,13 +221,6 @@ function ignore(promise: Promise<unknown>): void {
   });
 }
 
-/**
- * A new session's row writes, by session id, until they settle. Its launch
- * waits on them: `create_session` refuses a folder that is not an [Approved
- * root] yet, and these rows are what approve it (ADR-0058).
- */
-const pendingSaves = new Map<string, Promise<unknown>>();
-
 function persistThenWarm(project: ProjectRow, session: SessionRow): void {
   const warm = (): void => {
     ignore(useCompletions.getState().warmup(session.cwd));
@@ -238,10 +232,9 @@ function persistThenWarm(project: ProjectRow, session: SessionRow): void {
   const saved = Promise.allSettled([
     upsertProject(project),
     upsertSession(session),
-  ]).finally(() => {
-    pendingSaves.delete(session.id);
-  });
-  pendingSaves.set(session.id, saved);
+  ]);
+  // Its shell must not start before these rows approve its folder.
+  noteRowSave(session.id, saved);
   ignore(saved.then(warm));
 }
 
@@ -711,9 +704,6 @@ async function launchInPty(
   // (daemon spawn timeout, stale socket) heals on the next visit instead of
   // wedging the pane blank forever.
   try {
-    // Settles even when a save failed: the Rust check then refuses the
-    // folder, and the toast below says so.
-    await pendingSaves.get(sessionId);
     await ensureSession(sessionId, session.cwd, () =>
       showToast("Could not start the session", "error")
     );

@@ -21,6 +21,7 @@ vi.mock("../terminal/sessionHost.ts", () => ({
   disposeSession: vi.fn(() => Promise.resolve()),
   ensureSession: vi.fn(() => Promise.resolve()),
   launchClaudeOnce: vi.fn(() => Promise.resolve({ kind: "skipped" })),
+  noteRowSave: vi.fn(),
   noteSessionStarted: vi.fn(),
   startFreshClaude: vi.fn(() => Promise.resolve()),
 }));
@@ -38,6 +39,7 @@ import {
   ensureSession,
   type LaunchResult,
   launchClaudeOnce,
+  noteRowSave,
 } from "../terminal/sessionHost.ts";
 import { showToast } from "../ui/Toast.tsx";
 import {
@@ -204,38 +206,13 @@ describe("createSessionInFolder", () => {
     expect(Object.keys(state.sessions)).toHaveLength(2);
   });
 
-  it("starts the new session's shell only after its rows are saved", async () => {
-    // `create_session` refuses a folder that is not an approved root yet
-    // (ADR-0058), and the saved rows are what approves it.
-    let saved: () => void = () => undefined;
-    vi.mocked(upsertSession).mockReturnValueOnce(
-      new Promise<void>((resolve) => {
-        saved = resolve;
-      })
-    );
-    vi.mocked(ensureSession).mockClear();
+  it("hands the session host its rows' save, so the shell waits for it", () => {
+    // `create_session` refuses a folder that no saved row approves yet
+    // (ADR-0058); the session host holds the shell until this settles.
+    vi.mocked(noteRowSave).mockClear();
     createSessionInFolder("/work/proj");
     const id = useSessions.getState().activeSessionId as string;
-    const launch = launchActiveSession(id);
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(ensureSession).not.toHaveBeenCalled();
-    saved();
-    await launch;
-    expect(ensureSession).toHaveBeenCalledWith(
-      id,
-      "/work/proj",
-      expect.any(Function)
-    );
-  });
-
-  it("still starts the shell when saving the rows failed", async () => {
-    vi.mocked(upsertSession).mockRejectedValueOnce(new Error("disk full"));
-    vi.mocked(ensureSession).mockClear();
-    createSessionInFolder("/work/proj");
-    const id = useSessions.getState().activeSessionId as string;
-    await launchActiveSession(id);
-    expect(ensureSession).toHaveBeenCalledTimes(1);
+    expect(noteRowSave).toHaveBeenCalledWith(id, expect.any(Promise));
   });
 });
 

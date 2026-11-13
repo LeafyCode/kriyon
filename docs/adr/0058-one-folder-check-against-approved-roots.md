@@ -51,11 +51,15 @@ Where it runs:
   old messages are unchanged; the two new rules add `cwd is not absolute` and `cwd has a '.' or
   '..' part`.
 - **`create_session`** checks its `cwd` (empty means HOME, which is approved only as the Home
-  project's folder) before it reads the folder or starts a shell. The shell still starts in the
+  project's folder) before it reads the folder or starts a fresh shell. A daemon still live from
+  the last run reattaches whatever the check says: its shell already exists, and refusing would
+  only orphan it. The shell still starts in the
   spelling given, not the canonical one: Claude keys transcripts by the folder it starts in, so
   resume depends on it. Rule 2 makes that safe.
 - **Save before start.** A new session's project and session rows are what approve its folder,
-  so the frontend waits for those writes to settle before it calls `create_session`.
+  so the frontend's session host (`ensureSession`, which every start goes through: the launch
+  and a mounting terminal alike) waits for those writes to settle before it calls
+  `create_session`.
 
 Next, in their own pull requests: `upsert_project` / `upsert_session` will check the paths
 they save (a session's folders must sit inside its project's folder or be a worktree of it), so
@@ -68,8 +72,11 @@ add one themselves.
 - One function decides "is this folder one the person approved". Remote access reuses it as is.
 - Until the store commands are checked, the approved list is only as narrow as what the
   webview saved. This PR closes `create_session`; the store PR closes that gap.
-- A session whose folder was deleted, or whose project was removed, no longer starts; it fails
-  with the check's message instead of a shell in a missing folder.
+- A session whose folder was deleted, or whose project was removed, no longer starts a fresh
+  shell; it fails with the check's message instead. One whose daemon is still live reattaches.
+- The check and the spawn are not atomic: a symlink in the given spelling could be re-pointed
+  between them. Doing that takes write access to the person's own folders, which already means
+  full access as them, so it is outside what this check defends.
 
 ## Alternatives rejected
 

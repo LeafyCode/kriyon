@@ -187,6 +187,26 @@ export function setSessionExitedHandler(
 }
 
 /**
+ * A new session's row writes, by session id, until they settle. Its shell
+ * waits on them: `create_session` refuses a folder that no saved row approves
+ * yet (ADR-0058), and these rows are what approve it. Held here, where every
+ * start goes through {@link ensureSession}, so no caller can skip the wait.
+ */
+const pendingRowSaves = new Map<string, Promise<unknown>>();
+
+/** Make the session's next {@link ensureSession} wait for `save` to settle. */
+export function noteRowSave(sessionId: string, save: Promise<unknown>): void {
+  const settled = save
+    .catch(() => undefined)
+    .finally(() => {
+      if (pendingRowSaves.get(sessionId) === settled) {
+        pendingRowSaves.delete(sessionId);
+      }
+    });
+  pendingRowSaves.set(sessionId, settled);
+}
+
+/**
  * Ensure a pty session exists for `sessionId`, creating it exactly once. Output
  * is routed to the attached terminal's sink, or buffered until one attaches.
  * Idempotent: a second call for a live id is a no-op, so it is safe to call on
@@ -229,48 +249,54 @@ export function ensureSession(
   host.reattached = false;
   hosts.set(sessionId, host);
 
-  host.ready = createSession(
-    sessionId,
-    cwd,
-    (bytes) => {
-      if (host.sink) {
-        // Attached: the terminal's WriteQueue reports drained bytes on flush.
-        host.sink(bytes);
-      } else {
-        // Detached (no terminal mounted): nothing else will report these
-        // bytes, so the Rust output gate would hold, then drop, everything after
-        // its high-water mark.
-        // Report-and-drop — no buffering: a terminal that attaches later asks
-        // the daemon for a screen repaint instead of replaying a byte-capped
-        // buffer that could start mid-escape-sequence (see attachTerminal).
-        ignore(reportDrained(sessionId, bytes.length));
+  const start = () =>
+    createSession(
+      sessionId,
+      cwd,
+      (bytes) => {
+        if (host.sink) {
+          // Attached: the terminal's WriteQueue reports drained bytes on flush.
+          host.sink(bytes);
+        } else {
+          // Detached (no terminal mounted): nothing else will report these
+          // bytes, so the Rust output gate would hold, then drop, everything after
+          // its high-water mark.
+          // Report-and-drop — no buffering: a terminal that attaches later asks
+          // the daemon for a screen repaint instead of replaying a byte-capped
+          // buffer that could start mid-escape-sequence (see attachTerminal).
+          ignore(reportDrained(sessionId, bytes.length));
+        }
+      },
+      // Foreground-busy transitions flow straight to the registered handler,
+      // independent of whether a terminal component is mounted — so a backgrounded
+      // tab's running process is still tracked. The handler filters to real panes.
+      // The same transition also feeds the resume watchdog (a no-op unless this
+      // session is awaiting a resume), which detects Claude exiting on an expired
+      // conversation.
+      (busy) => {
+        noteResumeBusy(sessionId, busy);
+        paneBusyHandler?.(sessionId, busy);
+      },
+      // The session died underneath the app (shell exited / daemon crashed).
+      // Mark the host so the next ensureSession revives it, clear any stale
+      // busy flag (the poller died with the daemon, possibly mid-`true`), and
+      // let the UI surface it.
+      () => {
+        host.exited = true;
+        paneBusyHandler?.(sessionId, false);
+        sessionExitedHandler?.(sessionId);
       }
-    },
-    // Foreground-busy transitions flow straight to the registered handler,
-    // independent of whether a terminal component is mounted — so a backgrounded
-    // tab's running process is still tracked. The handler filters to real panes.
-    // The same transition also feeds the resume watchdog (a no-op unless this
-    // session is awaiting a resume), which detects Claude exiting on an expired
-    // conversation.
-    (busy) => {
-      noteResumeBusy(sessionId, busy);
-      paneBusyHandler?.(sessionId, busy);
-    },
-    // The session died underneath the app (shell exited / daemon crashed).
-    // Mark the host so the next ensureSession revives it, clear any stale
-    // busy flag (the poller died with the daemon, possibly mid-`true`), and
-    // let the UI surface it.
-    () => {
-      host.exited = true;
-      paneBusyHandler?.(sessionId, false);
-      sessionExitedHandler?.(sessionId);
+    );
+  const pendingSave = pendingRowSaves.get(sessionId);
+  // Only a pending save defers the call: a session at rest starts at once.
+  host.ready = (pendingSave ? pendingSave.then(start) : start()).then(
+    (reattached) => {
+      host.reattached = reattached;
+      // The pty is born at a default 80x24; push the terminal's real geometry
+      // now that it exists (and again after every revive — see registerSizeSync).
+      sizeSyncs.get(sessionId)?.();
     }
-  ).then((reattached) => {
-    host.reattached = reattached;
-    // The pty is born at a default 80x24; push the terminal's real geometry
-    // now that it exists (and again after every revive — see registerSizeSync).
-    sizeSyncs.get(sessionId)?.();
-  });
+  );
 
   host.ready.catch(() => {
     // Keep the failed host so the attached terminal survives and the next

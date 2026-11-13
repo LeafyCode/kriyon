@@ -29,6 +29,7 @@ vi.mock("../terminal/sessionHost.ts", () => ({
   disposeSession: vi.fn(() => Promise.resolve()),
   ensureSession: vi.fn(() => Promise.resolve()),
   launchClaudeOnce: vi.fn(() => Promise.resolve({ kind: "skipped" })),
+  noteRowSave: vi.fn(),
   noteSessionStarted: vi.fn(),
   startFreshClaude: vi.fn(() => Promise.resolve()),
 }));

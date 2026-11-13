@@ -302,10 +302,15 @@ pub async fn create_session(
     // and the UI must show "unavailable" rather than a confident idle
     // (ADR-0029). Only a scope name crosses back, never file contents. Read
     // from the folder the shell will really start in (an empty `cwd` means
-    // HOME), and only once the id is known to be valid.
-    let shell_cwd = {
+    // HOME), only once the id is known to be valid, and never from a folder
+    // that fails the check (ADR-0058).
+    //
+    // A failed check is held until a fresh shell would start: a daemon still
+    // live from the last run already has its shell, so it reattaches even
+    // when its folder has since gone or lost its project.
+    let checked_cwd = {
         use tauri::Manager as _;
-        session_cwd(&app.state::<StoreState>(), &cwd, &home)?
+        session_cwd(&app.state::<StoreState>(), &cwd, &home)
     };
     let kriyon_off = {
         let integration = state.integration.lock();
@@ -319,7 +324,10 @@ pub async fn create_session(
         if kriyon_off {
             Some(kriyon_core::hooks::HooksOff::Kriyon)
         } else {
-            crate::hooks::hooks_off_for(&home, Path::new(&shell_cwd))
+            checked_cwd
+                .as_deref()
+                .ok()
+                .and_then(|folder| crate::hooks::hooks_off_for(&home, Path::new(folder)))
         },
     );
 
@@ -382,6 +390,7 @@ pub async fn create_session(
     // Fresh session: the pure launch policy (cwd, shell, zsh-ness) lives in
     // kriyon-core::shellinit, unit-tested without a Tauri runtime; the IO
     // (private ZDOTDIR tempdir, daemon spawn, connect) stays here.
+    let shell_cwd = checked_cwd?;
     let plan = kriyon_core::shellinit::SpawnPlan::new(
         &shell_cwd,
         &home,
