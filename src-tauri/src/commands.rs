@@ -177,7 +177,7 @@ fn note_hooks_off(
 /// given spelling and the checked canonical form name the same directory.
 fn session_cwd(store: &StoreState, cwd: &str, home: &Path) -> Result<String, String> {
     let cwd = kriyon_core::shellinit::SpawnPlan::new(cwd, home, None).cwd;
-    crate::completion_cmd::validate_cwd(store, Path::new(&cwd))?;
+    crate::folder_cmd::validate_cwd(store, Path::new(&cwd))?;
     Ok(cwd)
 }
 

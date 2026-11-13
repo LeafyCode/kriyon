@@ -7,6 +7,8 @@ use std::path::{Path, PathBuf};
 
 use parking_lot::Mutex;
 
+use kriyon_core::folder::{check_folder, CheckedFolder, FolderRefusal};
+
 use crate::StoreState;
 
 /// The folders picked this run through [`pick_folder`]. In memory only: once a
@@ -116,9 +118,197 @@ pub(crate) fn check_worktree_setup(
         .map_err(|refusal| format!("worktree_path: {refusal}"))
 }
 
+/// Every directory the composer is allowed to touch: each persisted project
+/// root, session cwd, and session worktree path, canonicalized (entries whose
+/// path no longer resolves are dropped). The IPC trust-boundary allowlist that
+/// [`validate_cwd`] checks a frontend-supplied `cwd` against.
+pub(crate) fn known_roots(store: &StoreState) -> Vec<PathBuf> {
+    // The store lock is scoped to the queries alone. Canonicalizing is one
+    // `realpath` syscall per root, and this runs on every `@`-mention keystroke
+    // (via `list_files`) — holding the mutex across that loop parked every
+    // main-thread store command (`list_sessions`, `save_layout`,
+    // `session_snapshots`, the tray poll) behind a pile of filesystem calls.
+    let roots: Vec<PathBuf> = {
+        let store = store.0.lock();
+        let mut roots: Vec<PathBuf> = Vec::new();
+        if let Ok(projects) = store.list_projects() {
+            roots.extend(projects.into_iter().map(|p| PathBuf::from(p.path)));
+        }
+        if let Ok(sessions) = store.list_sessions() {
+            for s in sessions {
+                roots.push(PathBuf::from(s.cwd));
+                if let Some(w) = s.worktree_path {
+                    roots.push(PathBuf::from(w));
+                }
+            }
+        }
+        roots
+    };
+    roots
+        .into_iter()
+        .filter_map(|r| r.canonicalize().ok())
+        .collect()
+}
+
+/// Validate a frontend-supplied `cwd` before any filesystem walk or process
+/// spawn: it must be a [Checked folder] inside one of the [Approved root]s
+/// ([`known_roots`]). Returns the canonical path so callers act on the
+/// resolved directory, never the raw string. This enforces the AGENTS.md IPC
+/// trust-boundary rule — never walk or spawn in a blindly-trusted path.
+///
+/// # Errors
+/// `cwd is not valid UTF-8`; `cwd is not absolute`; `cwd has a '.' or '..'
+/// part`; `cwd is not a directory` when the path does not resolve to a
+/// directory; `cwd is not a known session or project root` when it resolves
+/// but falls outside every approved root.
+pub(crate) fn validate_cwd(store: &StoreState, cwd: &Path) -> Result<PathBuf, String> {
+    let raw = cwd
+        .to_str()
+        .ok_or_else(|| "cwd is not valid UTF-8".to_string())?;
+    check_folder(raw, &known_roots(store))
+        .map(CheckedFolder::into_canonical)
+        .map_err(|refusal| cwd_refusal_message(&refusal).to_string())
+}
+
+/// The `cwd`-worded message for each [`FolderRefusal`]. The last two are the
+/// strings these commands have always returned.
+fn cwd_refusal_message(refusal: &FolderRefusal) -> &'static str {
+    match refusal {
+        FolderRefusal::NotAbsolute => "cwd is not absolute",
+        FolderRefusal::NotNormal => "cwd has a '.' or '..' part",
+        FolderRefusal::NotADirectory => "cwd is not a directory",
+        // `OutsideApprovedRoots`, plus the other rules' refusals, which
+        // `check_folder` never returns.
+        _ => "cwd is not a known session or project root",
+    }
+}
+
+/// A project's folder, as [`project_folder`] finds it.
+#[derive(Debug)]
+pub enum ProjectFolderCheck {
+    /// The project is saved and its folder passes the check.
+    Approved(kriyon_core::folder::CheckedFolder),
+    /// The project is saved, but its folder fails the check.
+    NotAllowed(FolderRefusal),
+    NoSuchProject,
+}
+
+/// The folder of the saved project `project_id`, checked against the
+/// [Approved root]s: what a remote start asks before it starts anything.
+///
+/// # Errors
+/// When the store cannot be read.
+pub fn project_folder(store: &StoreState, project_id: &str) -> Result<ProjectFolderCheck, String> {
+    let project = store
+        .0
+        .lock()
+        .project_row(project_id)
+        .map_err(|e| e.to_string())?;
+    let Some(project) = project else {
+        return Ok(ProjectFolderCheck::NoSuchProject);
+    };
+    Ok(match check_folder(&project.path, &known_roots(store)) {
+        Ok(folder) => ProjectFolderCheck::Approved(folder),
+        Err(refusal) => ProjectFolderCheck::NotAllowed(refusal),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn store_with_project_root(path: &str) -> StoreState {
+        let store = crate::store::Store::open_in_memory().unwrap();
+        store
+            .upsert_project(&crate::store::ProjectRow {
+                id: "p1".into(),
+                name: "proj".into(),
+                path: path.to_string(),
+                color: None,
+                setup_command: None,
+                pinned_at: None,
+                folder_id: None,
+            })
+            .unwrap();
+        StoreState(Mutex::new(store))
+    }
+
+    #[test]
+    fn validate_cwd_accepts_a_known_root_and_its_descendants() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        std::fs::create_dir(root.join("sub")).unwrap();
+        let state = store_with_project_root(&root.to_string_lossy());
+
+        assert_eq!(validate_cwd(&state, &root).unwrap(), root);
+        assert_eq!(
+            validate_cwd(&state, &root.join("sub")).unwrap(),
+            root.join("sub").canonicalize().unwrap()
+        );
+    }
+
+    #[test]
+    fn validate_cwd_rejects_a_dir_outside_every_known_root() {
+        // A real, existing directory that was never registered as a root.
+        let outside = tempfile::tempdir().unwrap();
+        let registered = tempfile::tempdir().unwrap();
+        let state = store_with_project_root(&registered.path().to_string_lossy());
+        let err = validate_cwd(&state, outside.path()).unwrap_err();
+        assert_eq!(err, "cwd is not a known session or project root");
+    }
+
+    #[test]
+    fn validate_cwd_rejects_a_dot_dot_spelling_even_inside_a_known_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        std::fs::create_dir(root.join("sub")).unwrap();
+        let state = store_with_project_root(&root.to_string_lossy());
+        let err = validate_cwd(&state, &root.join("sub/..")).unwrap_err();
+        assert_eq!(err, "cwd has a '.' or '..' part");
+    }
+
+    #[test]
+    fn validate_cwd_names_a_non_utf8_path_for_what_it_is() {
+        use std::os::unix::ffi::OsStrExt as _;
+        let state = store_with_project_root("/tmp");
+        let raw = std::ffi::OsStr::from_bytes(b"/tmp/\xff");
+        let err = validate_cwd(&state, Path::new(raw)).unwrap_err();
+        assert_eq!(err, "cwd is not valid UTF-8");
+    }
+
+    #[test]
+    fn validate_cwd_rejects_a_relative_path() {
+        let state = store_with_project_root("/tmp");
+        let err = validate_cwd(&state, Path::new("tmp")).unwrap_err();
+        assert_eq!(err, "cwd is not absolute");
+    }
+
+    #[test]
+    fn validate_cwd_rejects_a_nonexistent_path() {
+        let state = store_with_project_root("/tmp");
+        let err = validate_cwd(&state, Path::new("/no/such/dir/anywhere")).unwrap_err();
+        assert_eq!(err, "cwd is not a directory");
+    }
+
+    #[test]
+    fn a_projects_folder_is_approved_missing_or_not_a_project() {
+        let project = tempfile::tempdir().unwrap();
+        let store = store_with_project(project.path());
+        assert!(matches!(
+            project_folder(&store, "p"),
+            Ok(ProjectFolderCheck::Approved(folder))
+                if folder.canonical() == project.path().canonicalize().unwrap()
+        ));
+        assert!(matches!(
+            project_folder(&store, "nope"),
+            Ok(ProjectFolderCheck::NoSuchProject)
+        ));
+        let gone = store_with_project(Path::new("/no/such/folder"));
+        assert!(matches!(
+            project_folder(&gone, "p"),
+            Ok(ProjectFolderCheck::NotAllowed(FolderRefusal::NotADirectory))
+        ));
+    }
 
     fn store_with_project(path: &Path) -> StoreState {
         let store = crate::store::Store::open_in_memory().unwrap();

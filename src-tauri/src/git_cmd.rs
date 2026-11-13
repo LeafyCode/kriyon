@@ -834,7 +834,7 @@ fn sizes_of(repo_path: &str, rel_paths: &[String]) -> Vec<(String, u64)> {
 /// sessions it passes nothing.
 ///
 /// `cwd` must be a known session/project root (or a descendant of one — see
-/// [`completion_cmd::validate_cwd`](crate::completion_cmd::validate_cwd)): this
+/// [`folder_cmd::validate_cwd`](crate::folder_cmd::validate_cwd)): this
 /// shells out to `git` in `cwd` AND reads arbitrary untracked files under it
 /// back to the frontend, so an unvalidated `cwd` would defeat the same IPC
 /// trust-boundary rule `read_file`/`list_dir` are hardened for.
@@ -1119,7 +1119,7 @@ fn capture_baseline_sync(cwd_str: &str, home: &Path) -> Result<String, String> {
 /// [`snapshot_tree`] for why this never touches the real index, HEAD, or refs.
 ///
 /// `cwd` must be a known session/project root (or a descendant of one) — see
-/// [`completion_cmd::validate_cwd`](crate::completion_cmd::validate_cwd) —
+/// [`folder_cmd::validate_cwd`](crate::folder_cmd::validate_cwd) —
 /// for the same reason [`diff_working_tree`] validates it: an unvalidated
 /// `cwd` would let the frontend run arbitrary git commands anywhere on disk.
 ///
@@ -1241,7 +1241,7 @@ fn is_object_id(oid: &str) -> bool {
 /// tree itself, so they never appear as session changes.
 ///
 /// `cwd` must be a known session/project root (or a descendant of one) — see
-/// [`completion_cmd::validate_cwd`](crate::completion_cmd::validate_cwd) — for
+/// [`folder_cmd::validate_cwd`](crate::folder_cmd::validate_cwd) — for
 /// the same reason [`diff_working_tree`] validates it.
 ///
 /// # Errors
@@ -1304,7 +1304,7 @@ fn repo_toplevel_sync(repo_path: &str) -> Result<String, String> {
 /// [`diff_session_changes`]/[`diff_working_tree`] already return.
 ///
 /// `cwd` must be a known session/project root (or a descendant of one) — see
-/// [`completion_cmd::validate_cwd`](crate::completion_cmd::validate_cwd) —
+/// [`folder_cmd::validate_cwd`](crate::folder_cmd::validate_cwd) —
 /// for the same reason [`diff_working_tree`] validates it.
 ///
 /// # Errors
