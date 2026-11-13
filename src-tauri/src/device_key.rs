@@ -24,6 +24,28 @@ pub trait KeyVault {
     fn write(&self, secret: &[u8; 32]) -> Result<(), String>;
 }
 
+/// Where any other secret of the app is kept, by itself: bytes that can be
+/// replaced or removed.
+pub trait SecretVault: Send + Sync {
+    /// The stored secret, or `None` when there is none.
+    ///
+    /// # Errors
+    /// Why the vault couldn't be read.
+    fn read(&self) -> Result<Option<Vec<u8>>, String>;
+
+    /// Keep `secret`, replacing what was there.
+    ///
+    /// # Errors
+    /// Why the vault couldn't be written.
+    fn write(&self, secret: &[u8]) -> Result<(), String>;
+
+    /// Remove the secret; nothing stored is fine.
+    ///
+    /// # Errors
+    /// Why the vault couldn't be written.
+    fn remove(&self) -> Result<(), String>;
+}
+
 /// Why the device key couldn't be had.
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
 pub enum DeviceKeyError {
@@ -53,28 +75,35 @@ pub fn load_or_create(
     Ok(secret)
 }
 
-/// The macOS keychain, under `<bundle identifier>.remote` / `device-key`.
+/// The macOS keychain, under `<bundle identifier>.remote` / an item name
+/// (`device-key` for the device key).
 #[cfg(target_os = "macos")]
 pub struct Keychain {
     service: String,
+    account: &'static str,
 }
 
 #[cfg(target_os = "macos")]
 impl Keychain {
-    const ACCOUNT: &'static str = "device-key";
-
-    /// The keychain item for the app with bundle identifier `identifier`.
+    /// The device key's item for the app with bundle identifier `identifier`.
     #[must_use]
     pub fn for_app(identifier: &str) -> Self {
+        Self::item(identifier, "device-key")
+    }
+
+    /// The item `account` for the app with bundle identifier `identifier`.
+    #[must_use]
+    pub fn item(identifier: &str, account: &'static str) -> Self {
         Self {
             service: format!("{identifier}.remote"),
+            account,
         }
     }
 
     fn protected(&self) -> security_framework::passwords::PasswordOptions {
         let mut options = security_framework::passwords::PasswordOptions::new_generic_password(
             &self.service,
-            Self::ACCOUNT,
+            self.account,
         );
         options.use_protected_keychain();
         options
@@ -93,13 +122,24 @@ const NOT_FOUND: i32 = -25300;
 #[cfg(target_os = "macos")]
 impl KeyVault for Keychain {
     fn read(&self) -> Result<Option<Vec<u8>>, String> {
+        SecretVault::read(self)
+    }
+
+    fn write(&self, secret: &[u8; 32]) -> Result<(), String> {
+        SecretVault::write(self, secret)
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl SecretVault for Keychain {
+    fn read(&self) -> Result<Option<Vec<u8>>, String> {
         use security_framework::passwords::{generic_password, get_generic_password};
         // Not entitled, or entitled but kept in the login keychain by an
         // earlier build: look there too, so a build that gains the
         // entitlement never makes a second key and unpairs every device.
         let found = match generic_password(self.protected()) {
             Err(e) if e.code() == MISSING_ENTITLEMENT || e.code() == NOT_FOUND => {
-                get_generic_password(&self.service, Self::ACCOUNT)
+                get_generic_password(&self.service, self.account)
             }
             other => other,
         };
@@ -110,7 +150,7 @@ impl KeyVault for Keychain {
         }
     }
 
-    fn write(&self, secret: &[u8; 32]) -> Result<(), String> {
+    fn write(&self, secret: &[u8]) -> Result<(), String> {
         use security_framework::access_control::{ProtectionMode, SecAccessControl};
         use security_framework::passwords::{set_generic_password, set_generic_password_options};
         let mut options = self.protected();
@@ -125,14 +165,29 @@ impl KeyVault for Keychain {
         match set_generic_password_options(secret, options) {
             Err(e) if e.code() == MISSING_ENTITLEMENT => {
                 eprintln!(
-                    "kriyon: no data-protection keychain for this build; the device key goes \
-                     in the login keychain, which is never synced"
+                    "kriyon: no data-protection keychain for this build; {} goes in the login \
+                     keychain, which is never synced",
+                    self.account
                 );
-                set_generic_password(&self.service, Self::ACCOUNT, secret)
-                    .map_err(|e| e.to_string())
+                set_generic_password(&self.service, self.account, secret).map_err(|e| e.to_string())
             }
             other => other.map_err(|e| e.to_string()),
         }
+    }
+
+    fn remove(&self) -> Result<(), String> {
+        use security_framework::passwords::{
+            delete_generic_password, delete_generic_password_options,
+        };
+        // Both places it may be kept (see `read`); missing from either is fine.
+        let gone = |result: security_framework::base::Result<()>| match result {
+            Err(e) if e.code() != NOT_FOUND && e.code() != MISSING_ENTITLEMENT => {
+                Err(e.to_string())
+            }
+            _ => Ok(()),
+        };
+        gone(delete_generic_password_options(self.protected()))?;
+        gone(delete_generic_password(&self.service, self.account))
     }
 }
 

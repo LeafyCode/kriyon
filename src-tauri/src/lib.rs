@@ -26,6 +26,7 @@ pub mod policy;
 pub mod prompt_cmd;
 pub mod quit;
 pub mod relay_api;
+pub mod relay_rt;
 pub mod remote_cmd;
 pub mod remote_device_cmd;
 pub mod remote_device_rt;

@@ -92,6 +92,20 @@ impl RelayAction {
             Some(_) => Self::CheckStatus,
         }
     }
+
+    /// What the relay's connection status calls for: its refusal `reason`,
+    /// else the text of its last `error`. A refusal before the handshake has
+    /// no reason, only an HTTP 401 in the error; any other error is the
+    /// network's, which iroh retries by itself, so it calls for nothing.
+    #[must_use]
+    pub fn from_status(reason: Option<&str>, error: Option<&str>) -> Option<Self> {
+        match (reason, error) {
+            (Some(reason), _) => Some(Self::from_reason(Some(reason))),
+            // iroh's error text isn't stable; this only picks the message.
+            (None, Some(error)) if error.contains("401") => Some(Self::Report),
+            _ => None,
+        }
+    }
 }
 
 /// What one poll of the device-code token endpoint said.
@@ -318,5 +332,22 @@ mod tests {
         );
         assert_eq!(parse_utc("2026-13-01T00:00:00Z"), None);
         assert_eq!(parse_utc(""), None);
+    }
+
+    #[test]
+    fn a_relay_status_calls_for_action_only_when_the_relay_refused() {
+        assert_eq!(
+            RelayAction::from_status(Some("pass-expired"), Some("denied: pass-expired")),
+            Some(RelayAction::Renew)
+        );
+        assert_eq!(
+            RelayAction::from_status(None, Some("unexpected status 401 Unauthorized")),
+            Some(RelayAction::Report)
+        );
+        assert_eq!(
+            RelayAction::from_status(None, Some("connection timed out")),
+            None
+        );
+        assert_eq!(RelayAction::from_status(None, None), None, "connected");
     }
 }

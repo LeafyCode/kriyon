@@ -281,28 +281,27 @@ impl RelayApi {
     }
 }
 
+/// A fake API on localhost for tests (no real network).
 #[cfg(test)]
-mod tests {
+pub(crate) mod test_api {
     use std::io::{BufRead as _, BufReader, Read as _, Write as _};
     use std::net::TcpListener;
     use std::sync::{Arc, Mutex};
 
-    use super::*;
-
     /// The valid pass of the contract's test vectors (fixed test keys).
-    const TEST_PASS: &str = "kp1.AQ8eLTxLWml4h5altMPS4fCgmqX0emdZgC_5VfjcLSoUpcmdI76X-GQSf_k4NFWk8AAAAABq96SAAAAAAGsfMYA.vg7dZ8vaIGxbWpMVoOvTHz28Lbk9B9LnD9v15n4spiy5_rxih0c_gDHWoz9M5OnDnn3vuuPcF_qIBrPzSEvMDA";
+    pub const TEST_PASS: &str = "kp1.AQ8eLTxLWml4h5altMPS4fCgmqX0emdZgC_5VfjcLSoUpcmdI76X-GQSf_k4NFWk8AAAAABq96SAAAAAAGsfMYA.vg7dZ8vaIGxbWpMVoOvTHz28Lbk9B9LnD9v15n4spiy5_rxih0c_gDHWoz9M5OnDnn3vuuPcF_qIBrPzSEvMDA";
 
     /// One request the fake API saw.
     #[derive(Clone, Debug)]
-    struct Seen {
-        line: String,
-        authorization: Option<String>,
-        body: String,
+    pub struct Seen {
+        pub line: String,
+        pub authorization: Option<String>,
+        pub body: String,
     }
 
     /// A fake API on localhost: `answer` gives the status and body for each
     /// request line (`POST /path`). Returns its base address and what it saw.
-    fn fake_api(
+    pub fn fake_api(
         answer: impl Fn(&str, &str) -> (u16, String) + Send + 'static,
     ) -> (String, Arc<Mutex<Vec<Seen>>>) {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
@@ -353,9 +352,17 @@ mod tests {
         (base, seen)
     }
 
-    fn run<F: std::future::Future>(f: F) -> F::Output {
+    pub fn run<F: std::future::Future>(f: F) -> F::Output {
         tauri::async_runtime::block_on(f)
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use super::test_api::{fake_api, run, TEST_PASS};
+    use super::*;
 
     const KEY: &str = "a09aa5f47a6759802ff955f8dc2d2a14a5c99d23be97f864127ff9383455a4f0";
 
