@@ -1,4 +1,7 @@
 import { beforeEach, expect, test } from "vitest";
+import sharedStandings from "../../crates/kriyon-core/scripts/standing-cases.json" with {
+  type: "json",
+};
 import type { ProjectRow } from "../types.ts";
 import {
   buildStandings,
@@ -251,4 +254,26 @@ test("buildStandings reads unknown for a session whose hooks are off", () => {
     s1: "user",
   });
   expect(standings[0]?.state).toBe("unknown");
+});
+
+/** Cases shared with Rust's `kriyon_core::standing`, so the two rules can't
+ *  drift apart. */
+const SHARED: {
+  hooksOff: boolean;
+  lastSeenMs: number | null;
+  name: string;
+  nowMs: number;
+  standing: string;
+  status: UiSession["status"];
+}[] = sharedStandings as typeof SHARED;
+
+test.each(SHARED)("$name", (c) => {
+  const [standing] = buildStandings(
+    { s: makeSession("s", "p", c.status) },
+    c.lastSeenMs === null ? {} : { s: c.lastSeenMs },
+    {},
+    c.nowMs,
+    c.hooksOff ? { s: "user" } : {}
+  );
+  expect(standing?.state).toBe(c.standing);
 });

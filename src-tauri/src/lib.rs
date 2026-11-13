@@ -25,6 +25,7 @@ pub mod policy;
 pub mod prompt_cmd;
 pub mod quit;
 pub mod sandbox;
+pub mod session_list_rt;
 pub mod session_registry;
 pub mod settings_cmd;
 pub mod shell_path;
