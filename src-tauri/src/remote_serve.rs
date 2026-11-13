@@ -32,6 +32,9 @@ use tokio::sync::Notify;
 
 use crate::daemon_client::DaemonEvent;
 
+/// How often the main loop's tick looks at the project list.
+const PROJECTS_EVERY: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// The protocol minor this host speaks, sent in `Welcome`.
 pub const PROTOCOL_MINOR: u16 = 0;
 /// The oldest protocol minor this host accepts in `Hello`.
@@ -187,6 +190,9 @@ struct Inner {
     heard: Mutex<HashMap<String, SessionInfo>>,
     /// The project list as devices last heard it.
     heard_projects: Mutex<Option<Vec<ProjectInfo>>>,
+    /// When the tick last looked at the project list: it changes seldom, and
+    /// looking checks every project's folder.
+    projects_looked: Mutex<Option<Instant>>,
 }
 
 /// Serving every paired device's streams. Cheap to clone.
@@ -261,6 +267,7 @@ impl Serve {
             heartbeat_seq: AtomicU64::new(0),
             heard: Mutex::new(HashMap::new()),
             heard_projects: Mutex::new(None),
+            projects_looked: Mutex::new(None),
         }))
     }
 
@@ -401,7 +408,17 @@ impl Serve {
             *self.0.heard_projects.lock() = None;
             return;
         }
-        self.projects_changed();
+        let due = {
+            let mut looked = self.0.projects_looked.lock();
+            let due = looked.is_none_or(|at| at.elapsed() >= PROJECTS_EVERY);
+            if due {
+                *looked = Some(Instant::now());
+            }
+            due
+        };
+        if due {
+            self.projects_changed();
+        }
         let now = sessions_heard(self.0.host.sessions());
         let mut heard = self.0.heard.lock();
         let gone = heard.keys().any(|id| !now.contains_key(id));
@@ -423,7 +440,9 @@ impl Serve {
     }
 
     /// Tell every device the project list if it changed since they heard it.
-    fn projects_changed(&self) {
+    /// The tick looks every [`PROJECTS_EVERY`]; call it at once when a
+    /// project, or the approved roots, changed. Blocking: not on the runtime.
+    pub fn projects_changed(&self) {
         let now = self.0.host.projects();
         let mut heard = self.0.heard_projects.lock();
         if heard.as_ref() == Some(&now) {
@@ -450,16 +469,47 @@ impl Serve {
         }
     }
 
+    /// Run `call` on the app, off the async runtime: any [`ServeHost`] call
+    /// may wait (the store, a session's gate, its daemon's socket), and a
+    /// connection's tasks must never hold a runtime thread while it does.
+    /// `None` only if the blocking pool failed.
+    async fn blocking<T: Send + 'static>(
+        &self,
+        call: impl FnOnce(&dyn ServeHost) -> T + Send + 'static,
+    ) -> Option<T> {
+        let host = Arc::clone(&self.0.host);
+        tokio::task::spawn_blocking(move || call(host.as_ref()))
+            .await
+            .ok()
+    }
+
     /// The facts a message from `device` is checked against. Its role is the
-    /// one it connected with; it counts as paired while its control stream
-    /// is served, which ends when removal closes its connection (`hello`: the
-    /// stream that is being opened).
-    fn facts(&self, device: EndpointId, role: Role, session: Option<&str>, hello: bool) -> Facts {
+    /// one it connected with, never more than the person has left it since;
+    /// it counts as paired while its control stream is served, which ends
+    /// when removal closes its connection (`hello`: the stream that is being
+    /// opened).
+    async fn facts(
+        &self,
+        device: EndpointId,
+        role: Role,
+        session: Option<&str>,
+        hello: bool,
+    ) -> Facts {
         let paired = hello || self.0.controls.lock().contains_key(&device);
-        let role = paired
-            .then_some(role)
-            .and_then(|role| self.0.host.role_now(&device, role));
-        let live = session.and_then(|id| Some((id.to_string(), self.0.host.session(id)?)));
+        let session = session.map(str::to_string);
+        let (role, live) = self
+            .blocking(move |host| {
+                let role = paired
+                    .then_some(role)
+                    .and_then(|role| host.role_now(&device, role));
+                let live = session.and_then(|id| {
+                    let live = host.session(&id)?;
+                    Some((id, live))
+                });
+                (role, live)
+            })
+            .await
+            .unwrap_or((None, None));
         Facts {
             device,
             role,
@@ -535,7 +585,7 @@ impl Serve {
             &device,
             Stream::Control,
             &first,
-            &self.facts(device, role, None, true),
+            &self.facts(device, role, None, true).await,
             Instant::now(),
         )
         .and(match first {
@@ -550,18 +600,19 @@ impl Serve {
             }
             return None;
         }
-        let sessions = self.0.host.sessions();
+        let (sessions, host_name, projects) = self
+            .blocking(|host| (host.sessions(), host.host_name(), host.projects()))
+            .await?;
         writer
             .send(&ToDevice::Welcome {
-                host_name: self.0.host.host_name(),
+                host_name,
                 protocol_minor: PROTOCOL_MINOR,
                 role,
-                sessions,
+                sessions: sessions.clone(),
             })
             .await
             .ok()?;
         // Then where a session can be started: Viewers hear it too.
-        let projects = self.0.host.projects();
         writer
             .send(&ToDevice::ProjectList {
                 projects: projects.clone(),
@@ -586,7 +637,7 @@ impl Serve {
         {
             let mut heard = self.0.heard.lock();
             if heard.is_empty() {
-                *heard = sessions_heard(self.0.host.sessions());
+                *heard = sessions_heard(sessions);
             }
         }
         let writing = tokio::spawn(write_control(writer, Arc::clone(&out)));
@@ -620,18 +671,23 @@ impl Serve {
                 ));
                 continue;
             }
-            let facts = self.facts(device, role, named_session(None, &message), false);
-            let verdict = authorize(&device, Stream::Control, &message, &facts, Instant::now())
-                .and_then(|()| match &message {
-                    Decoded::Message(FromDevice::TakeControl { session_id }) => {
-                        self.0.host.take(session_id, device, role)
-                    }
-                    Decoded::Message(FromDevice::PushToken { key_id, sealed }) => {
-                        self.0.host.set_push_token(&device, *key_id, sealed.clone());
-                        Ok(())
-                    }
-                    _ => Ok(()),
-                });
+            let facts = self
+                .facts(device, role, named_session(None, &message), false)
+                .await;
+            let checked = authorize(&device, Stream::Control, &message, &facts, Instant::now());
+            let verdict = match (checked, message) {
+                (Err(reason), _) => Err(reason),
+                (Ok(()), Decoded::Message(FromDevice::TakeControl { session_id })) => self
+                    .blocking(move |host| host.take(&session_id, device, role))
+                    .await
+                    .unwrap_or(Err(RefuseReason::NotAllowed)),
+                (Ok(()), Decoded::Message(FromDevice::PushToken { key_id, sealed })) => {
+                    self.blocking(move |host| host.set_push_token(&device, key_id, sealed))
+                        .await;
+                    Ok(())
+                }
+                (Ok(()), _) => Ok(()),
+            };
             if let Err(reason) = verdict {
                 out.send(&ToDevice::Refused { reason });
             }
@@ -658,22 +714,21 @@ impl Serve {
         else {
             return;
         };
-        let host = Arc::clone(&self.0.host);
         let asked = (project_id.clone(), *worktree);
-        // The store and the folder check touch the disk: off the runtime.
-        let looked = tokio::task::spawn_blocking(move || {
-            let (project_id, worktree) = asked;
-            // Asked only of a Controller: what it already started is its own.
-            let made = (role == Role::Controller)
-                .then(|| host.started(&device, &request_id))
-                .flatten();
-            // Looked up only where the check gets that far.
-            let folder = (made.is_none() && role == Role::Controller && !worktree)
-                .then(|| (project_id.clone(), host.project_folder(&project_id)));
-            (made, folder)
-        })
-        .await;
-        let Ok((made, folder)) = looked else {
+        let looked = self
+            .blocking(move |host| {
+                let (project_id, worktree) = asked;
+                // Asked only of a Controller: what it already started is its own.
+                let made = (role == Role::Controller)
+                    .then(|| host.started(&device, &request_id))
+                    .flatten();
+                // Looked up only where the check gets that far.
+                let folder = (made.is_none() && role == Role::Controller && !worktree)
+                    .then(|| (project_id.clone(), host.project_folder(&project_id)));
+                (made, folder)
+            })
+            .await;
+        let Some((made, folder)) = looked else {
             return;
         };
         let refused = |reason| ToDevice::StartRefused { request_id, reason };
@@ -688,7 +743,7 @@ impl Serve {
             });
             return;
         }
-        let mut facts = self.facts(device, role, None, false);
+        let mut facts = self.facts(device, role, None, false).await;
         facts.folder = folder;
         if let Err(reason) = authorize(&device, Stream::Control, &message, &facts, Instant::now()) {
             out.send(&refused(reason));
@@ -731,7 +786,9 @@ impl Serve {
             &device,
             Stream::Unopened,
             &first,
-            &self.facts(device, role, named_session(None, &first), false),
+            &self
+                .facts(device, role, named_session(None, &first), false)
+                .await,
             Instant::now(),
         )
         .and_then(|()| match &first {
@@ -764,7 +821,9 @@ impl Serve {
         };
         served.wakers.lock().insert(device, Arc::clone(&wake));
         if open == 1 {
-            self.0.host.set_onlooked(&id, true);
+            let looked_at = id.clone();
+            self.blocking(move |host| host.set_onlooked(&looked_at, true))
+                .await;
         }
         // An older daemon can't make a snapshot for one device: nothing to
         // show it but a refusal.
@@ -788,7 +847,7 @@ impl Serve {
             answered,
         ));
         while let Ok(Some(message)) = reader.next().await {
-            let facts = self.facts(device, role, Some(&id), false);
+            let facts = self.facts(device, role, Some(&id), false).await;
             let checked = authorize(
                 &device,
                 Stream::Session(&id),
@@ -840,10 +899,9 @@ impl Serve {
         };
         // The writer's lock and the PTY write can wait: off the async runtime.
         let call = |bytes: Vec<u8>, size: Option<(u16, u16)>| {
-            let host = Arc::clone(&self.0.host);
             let id = id.to_string();
             async move {
-                tokio::task::spawn_blocking(move || match size {
+                self.blocking(move |host| match size {
                     Some(size) => host.device_resize(&id, &device, role, &write, size),
                     None => host.device_input(&id, &device, role, &write, &bytes),
                 })
@@ -897,7 +955,11 @@ impl Serve {
         // Not if the session is served afresh and a device opened it there
         // (a stream of the old one ending late).
         if open == 0 && !self.is_onlooked(id) {
-            self.0.host.set_onlooked(id, false);
+            // Off the runtime (it tells the session's daemon); not awaited,
+            // as this ends a stream's task.
+            let host = Arc::clone(&self.0.host);
+            let id = id.to_string();
+            tokio::task::spawn_blocking(move || host.set_onlooked(&id, false));
         }
     }
 }
@@ -1093,6 +1155,25 @@ mod tests {
                 }
             }
             assert_eq!(heard, Some(renamed), "a Viewer hears it too");
+            // Looked at again only every so often by the tick, or at once
+            // when told a project changed.
+            let again = vec![kriyon_remote::message::ProjectInfo {
+                id: "p".into(),
+                name: "again".into(),
+                parked: false,
+            }];
+            *world.fake.projects.lock() = again.clone();
+            world.serve.sessions_changed();
+            world.serve.heartbeat(8);
+            assert!(matches!(
+                next(&mut viewer).await,
+                ToDevice::Heartbeat { at: 8, .. }
+            ));
+            world.serve.projects_changed();
+            assert_eq!(
+                next(&mut viewer).await,
+                ToDevice::ProjectList { projects: again }
+            );
             // Unchanged: not sent again.
             world.serve.sessions_changed();
             world.serve.heartbeat(9);

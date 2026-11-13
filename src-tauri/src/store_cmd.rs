@@ -141,7 +141,19 @@ pub fn upsert_project(
         .0
         .lock()
         .upsert_project(&project)
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    projects_changed(&app);
+    Ok(())
+}
+
+/// Tell remote devices the project list may have changed, off the main
+/// thread (it checks every project's folder).
+fn projects_changed(app: &tauri::AppHandle) {
+    use tauri::Manager as _;
+    if let Some(serve) = app.try_state::<crate::remote_serve::Serve>() {
+        let serve = serve.inner().clone();
+        tauri::async_runtime::spawn_blocking(move || serve.projects_changed());
+    }
 }
 
 /// Save a session's rows, its project's first when given, each through the
