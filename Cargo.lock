@@ -2948,6 +2948,8 @@ dependencies = [
  "block2",
  "ignore",
  "kriyon-core",
+ "kriyon-remote",
+ "kriyon-remote-link",
  "libc",
  "libproc",
  "notify",

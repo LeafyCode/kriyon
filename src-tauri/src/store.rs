@@ -18,6 +18,60 @@ pub enum StoreError {
     Sqlite(#[from] rusqlite::Error),
 }
 
+/// A [Paired device] as the host keeps it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PairedDeviceRow {
+    /// Its [Device key]'s public half: the iroh endpoint id.
+    pub endpoint_id: [u8; 32],
+    /// The name the device gave itself ("named by the device"), or the one
+    /// the person renamed it to.
+    pub name: String,
+    pub role: kriyon_remote::message::Role,
+    /// When it was paired, ms since epoch.
+    pub paired_at: i64,
+}
+
+/// How long a remote start's id is kept, so a resend returns the same session.
+pub const REMOTE_START_KEPT_MS: i64 = 24 * 60 * 60 * 1000;
+
+fn role_text(role: kriyon_remote::message::Role) -> &'static str {
+    match role {
+        kriyon_remote::message::Role::Viewer => "viewer",
+        kriyon_remote::message::Role::Controller => "controller",
+    }
+}
+
+/// A role read back from the store. Anything else reads as a Viewer: an
+/// unknown value must never grant more than seeing.
+fn role_from_text(text: &str) -> kriyon_remote::message::Role {
+    if text == "controller" {
+        kriyon_remote::message::Role::Controller
+    } else {
+        kriyon_remote::message::Role::Viewer
+    }
+}
+
+fn hex(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+    bytes
+        .iter()
+        .fold(String::with_capacity(bytes.len() * 2), |mut out, b| {
+            let _ = write!(out, "{b:02x}");
+            out
+        })
+}
+
+fn endpoint_from_hex(text: &str) -> Option<[u8; 32]> {
+    if text.len() != 64 || !text.is_ascii() {
+        return None;
+    }
+    let mut out = [0_u8; 32];
+    for (i, byte) in out.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&text[i * 2..i * 2 + 2], 16).ok()?;
+    }
+    Some(out)
+}
+
 /// A persisted project: a named workspace rooted at a filesystem path.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -269,7 +323,20 @@ impl Store {
                  FOREIGN KEY(project_id) REFERENCES projects(id)
              );
              CREATE INDEX IF NOT EXISTS project_notes_by_project
-                 ON project_notes(project_id);",
+                 ON project_notes(project_id);
+             CREATE TABLE IF NOT EXISTS paired_devices (
+                 endpoint_id TEXT PRIMARY KEY,
+                 name        TEXT NOT NULL,
+                 role        TEXT NOT NULL,
+                 paired_at   INTEGER NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS remote_starts (
+                 device_id  TEXT NOT NULL,
+                 request_id TEXT NOT NULL,
+                 session_id TEXT NOT NULL,
+                 at_ms      INTEGER NOT NULL,
+                 PRIMARY KEY(device_id, request_id)
+             );",
         )?;
         self.migrate_claude_session_id()?;
         self.migrate_column("projects", "setup_command", "TEXT")?;
@@ -310,6 +377,177 @@ impl Store {
             }
             Err(e) => Err(StoreError::Sqlite(e)),
         }
+    }
+
+    /// Keep a newly paired device, replacing an earlier pairing of the same
+    /// device.
+    ///
+    /// # Errors
+    /// Returns [`StoreError::Sqlite`] if the statement fails.
+    pub fn add_paired_device(&self, row: &PairedDeviceRow) -> Result<(), StoreError> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO paired_devices (endpoint_id, name, role, paired_at)
+             VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![
+                hex(&row.endpoint_id),
+                row.name,
+                role_text(row.role),
+                row.paired_at
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Every paired device, oldest pairing first. A row whose id doesn't read
+    /// back is skipped rather than failing the list.
+    ///
+    /// # Errors
+    /// Returns [`StoreError::Sqlite`] if the query fails.
+    pub fn paired_devices(&self) -> Result<Vec<PairedDeviceRow>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT endpoint_id, name, role, paired_at FROM paired_devices
+             ORDER BY paired_at, endpoint_id",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, i64>(3)?,
+            ))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (id, name, role, paired_at) = row?;
+            if let Some(endpoint_id) = endpoint_from_hex(&id) {
+                out.push(PairedDeviceRow {
+                    endpoint_id,
+                    name,
+                    role: role_from_text(&role),
+                    paired_at,
+                });
+            }
+        }
+        Ok(out)
+    }
+
+    /// The role of a paired device, or `None` if it isn't paired.
+    ///
+    /// # Errors
+    /// Returns [`StoreError::Sqlite`] if the query fails.
+    pub fn paired_device_role(
+        &self,
+        endpoint_id: &[u8; 32],
+    ) -> Result<Option<kriyon_remote::message::Role>, StoreError> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT role FROM paired_devices WHERE endpoint_id = ?1",
+                [hex(endpoint_id)],
+                |r| r.get::<_, String>(0),
+            )
+            .optional()?
+            .map(|role| role_from_text(&role)))
+    }
+
+    /// Rename a paired device. Returns whether it was there.
+    ///
+    /// # Errors
+    /// Returns [`StoreError::Sqlite`] if the statement fails.
+    pub fn rename_paired_device(
+        &self,
+        endpoint_id: &[u8; 32],
+        name: &str,
+    ) -> Result<bool, StoreError> {
+        let changed = self.conn.execute(
+            "UPDATE paired_devices SET name = ?2 WHERE endpoint_id = ?1",
+            rusqlite::params![hex(endpoint_id), name],
+        )?;
+        Ok(changed > 0)
+    }
+
+    /// Change a paired device's role. Returns whether it was there.
+    ///
+    /// # Errors
+    /// Returns [`StoreError::Sqlite`] if the statement fails.
+    pub fn set_paired_device_role(
+        &self,
+        endpoint_id: &[u8; 32],
+        role: kriyon_remote::message::Role,
+    ) -> Result<bool, StoreError> {
+        let changed = self.conn.execute(
+            "UPDATE paired_devices SET role = ?2 WHERE endpoint_id = ?1",
+            rusqlite::params![hex(endpoint_id), role_text(role)],
+        )?;
+        Ok(changed > 0)
+    }
+
+    /// Forget a paired device and the session starts it asked for. Returns
+    /// whether it was there.
+    ///
+    /// # Errors
+    /// Returns [`StoreError::Sqlite`] if a statement fails.
+    pub fn remove_paired_device(&self, endpoint_id: &[u8; 32]) -> Result<bool, StoreError> {
+        let id = hex(endpoint_id);
+        self.conn
+            .execute("DELETE FROM remote_starts WHERE device_id = ?1", [&id])?;
+        let removed = self
+            .conn
+            .execute("DELETE FROM paired_devices WHERE endpoint_id = ?1", [&id])?;
+        Ok(removed > 0)
+    }
+
+    /// Remember that `device`'s start `request_id` made `session_id`, so a
+    /// resend returns it instead of starting a second session.
+    ///
+    /// # Errors
+    /// Returns [`StoreError::Sqlite`] if the statement fails.
+    pub fn record_remote_start(
+        &self,
+        device: &[u8; 32],
+        request_id: &[u8; 16],
+        session_id: &str,
+        now_ms: i64,
+    ) -> Result<(), StoreError> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO remote_starts (device_id, request_id, session_id, at_ms)
+             VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![hex(device), hex(request_id), session_id, now_ms],
+        )?;
+        Ok(())
+    }
+
+    /// The session `device`'s start `request_id` made, if it was in the last
+    /// [`REMOTE_START_KEPT_MS`].
+    ///
+    /// # Errors
+    /// Returns [`StoreError::Sqlite`] if the query fails.
+    pub fn remote_start(
+        &self,
+        device: &[u8; 32],
+        request_id: &[u8; 16],
+        now_ms: i64,
+    ) -> Result<Option<String>, StoreError> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT session_id FROM remote_starts
+                 WHERE device_id = ?1 AND request_id = ?2 AND at_ms > ?3",
+                rusqlite::params![hex(device), hex(request_id), now_ms - REMOTE_START_KEPT_MS],
+                |r| r.get::<_, String>(0),
+            )
+            .optional()?)
+    }
+
+    /// Drop starts older than [`REMOTE_START_KEPT_MS`]. Returns how many went.
+    ///
+    /// # Errors
+    /// Returns [`StoreError::Sqlite`] if the statement fails.
+    pub fn prune_remote_starts(&self, now_ms: i64) -> Result<usize, StoreError> {
+        Ok(self.conn.execute(
+            "DELETE FROM remote_starts WHERE at_ms <= ?1",
+            [now_ms - REMOTE_START_KEPT_MS],
+        )?)
     }
 
     /// Insert a project, replacing the existing row on `id` conflict.
@@ -743,6 +981,119 @@ impl Store {
 
 #[cfg(test)]
 mod tests {
+    mod remote {
+        use super::super::*;
+        use kriyon_remote::message::Role;
+
+        const PHONE: [u8; 32] = [1; 32];
+        const LAPTOP: [u8; 32] = [2; 32];
+        const DAY_MS: i64 = 24 * 60 * 60 * 1000;
+
+        fn store() -> Store {
+            Store::open_in_memory().expect("open in-memory store")
+        }
+
+        fn phone() -> PairedDeviceRow {
+            PairedDeviceRow {
+                endpoint_id: PHONE,
+                name: "Test phone".into(),
+                role: Role::Controller,
+                paired_at: 1_000,
+            }
+        }
+
+        #[test]
+        fn a_paired_device_is_kept_with_its_name_role_and_time() {
+            let s = store();
+            assert_eq!(s.paired_device_role(&PHONE).expect("reads"), None);
+            s.add_paired_device(&phone()).expect("adds");
+            assert_eq!(s.paired_devices().expect("lists"), vec![phone()]);
+            assert_eq!(
+                s.paired_device_role(&PHONE).expect("reads"),
+                Some(Role::Controller)
+            );
+        }
+
+        #[test]
+        fn pairing_the_same_device_again_replaces_it() {
+            let s = store();
+            s.add_paired_device(&phone()).expect("adds");
+            let again = PairedDeviceRow {
+                name: "New name".into(),
+                role: Role::Viewer,
+                paired_at: 2_000,
+                ..phone()
+            };
+            s.add_paired_device(&again).expect("adds");
+            assert_eq!(s.paired_devices().expect("lists"), vec![again]);
+        }
+
+        #[test]
+        fn a_device_can_be_renamed_and_its_role_changed() {
+            let s = store();
+            s.add_paired_device(&phone()).expect("adds");
+            assert!(s
+                .rename_paired_device(&PHONE, "Work phone")
+                .expect("renames"));
+            assert!(s
+                .set_paired_device_role(&PHONE, Role::Viewer)
+                .expect("sets"));
+            let row = &s.paired_devices().expect("lists")[0];
+            assert_eq!((row.name.as_str(), row.role), ("Work phone", Role::Viewer));
+            assert!(!s
+                .rename_paired_device(&LAPTOP, "x")
+                .expect("no such device"));
+        }
+
+        #[test]
+        fn removing_a_device_forgets_its_starts_too() {
+            let s = store();
+            s.add_paired_device(&phone()).expect("adds");
+            s.record_remote_start(&PHONE, &[5; 16], "s1", 0)
+                .expect("records");
+            s.record_remote_start(&LAPTOP, &[5; 16], "s2", 0)
+                .expect("records");
+            assert!(s.remove_paired_device(&PHONE).expect("removes"));
+            assert_eq!(s.paired_devices().expect("lists"), vec![]);
+            assert_eq!(s.remote_start(&PHONE, &[5; 16], 1).expect("reads"), None);
+            assert_eq!(
+                s.remote_start(&LAPTOP, &[5; 16], 1).expect("reads"),
+                Some("s2".to_string())
+            );
+            assert!(!s.remove_paired_device(&PHONE).expect("already gone"));
+        }
+
+        #[test]
+        fn a_resent_start_finds_the_session_for_a_day() {
+            let s = store();
+            s.record_remote_start(&PHONE, &[5; 16], "s1", 0)
+                .expect("records");
+            assert_eq!(
+                s.remote_start(&PHONE, &[5; 16], DAY_MS - 1).expect("reads"),
+                Some("s1".to_string())
+            );
+            assert_eq!(s.remote_start(&PHONE, &[6; 16], 0).expect("reads"), None);
+            assert_eq!(
+                s.remote_start(&PHONE, &[5; 16], DAY_MS).expect("reads"),
+                None
+            );
+        }
+
+        #[test]
+        fn old_starts_are_pruned() {
+            let s = store();
+            s.record_remote_start(&PHONE, &[5; 16], "old", 0)
+                .expect("records");
+            s.record_remote_start(&PHONE, &[6; 16], "new", DAY_MS)
+                .expect("records");
+            assert_eq!(s.prune_remote_starts(DAY_MS + 1).expect("prunes"), 1);
+            assert_eq!(
+                s.remote_start(&PHONE, &[6; 16], DAY_MS + 1).expect("reads"),
+                Some("new".to_string())
+            );
+        }
+    }
+
     use super::*;
 
     fn sample_project() -> ProjectRow {
