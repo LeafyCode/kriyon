@@ -4,11 +4,13 @@ version.workspace = true
 edition = "2021"
 license = "Apache-2.0"
 publish = false
-description = "Remote access protocol for Kriyon: messages, codec, control, authorize. Pure: no network, no IO."
+description = "Remote access protocol for Kriyon: messages, codec, control, authorize, push sealing. Pure: no network, no IO."
 
 [dependencies]
 kriyon-core = { path = "../kriyon-core" }
+ed25519-dalek = { version = "3", default-features = false, features = ["fast", "zeroize"] }
 hmac = "0.12"
+hpke = { version = "0.15", default-features = false, features = ["alloc", "chacha", "getrandom", "x25519"] }
 postcard = { version = "1", default-features = false, features = ["alloc"] }
 serde = { version = "1", features = ["derive"] }
 sha2 = "0.10"

@@ -1,6 +1,6 @@
 //! The remote access protocol (ADR-0057, `docs/superpowers/specs/2026-11-13-remote-protocol.md`):
 //! messages, framing, typing control, the host's one check, screen numbering,
-//! per-device queues, pairing crypto and compression. Pure: no network, no IO,
+//! per-device queues, pairing and push crypto, and compression. Pure: no network, no IO,
 //! shared by the desktop host and the phone library.
 
 pub mod authorize;
@@ -12,6 +12,7 @@ pub mod fanout;
 pub mod link_policy;
 pub mod message;
 pub mod pairing;
+pub mod push;
 pub mod queue;
 pub mod relay;
 pub mod screen;
