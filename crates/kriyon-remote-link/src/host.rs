@@ -60,6 +60,9 @@ pub struct Host {
 
 struct Shared {
     endpoint: Endpoint,
+    /// Remote access is on: the host takes connections. Off, it offers no
+    /// protocol and admits nothing, and its links have been closed.
+    accepting: std::sync::atomic::AtomicBool,
     id: EndpointId,
     paired: Arc<dyn PairedDevices>,
     pairing: Mutex<Option<PendingPairing>>,
@@ -92,10 +95,24 @@ impl Host {
         paired: Arc<dyn PairedDevices>,
         unpaired_per_minute: u32,
     ) -> Result<Self, LinkError> {
-        let endpoint = crate::endpoint::bind(config, vec![ALPN_REMOTE.to_vec()]).await?;
+        let endpoint = crate::endpoint::bind(config, Vec::new()).await?;
+        Ok(Self::on_endpoint(endpoint, paired, unpaired_per_minute))
+    }
+
+    /// Host on an endpoint this computer already has, which also dials out
+    /// as a device: one endpoint, one id, per computer. The host takes every
+    /// incoming connection on it, and starts accepting.
+    #[must_use]
+    pub fn on_endpoint(
+        endpoint: Endpoint,
+        paired: Arc<dyn PairedDevices>,
+        unpaired_per_minute: u32,
+    ) -> Self {
+        endpoint.set_alpns(vec![ALPN_REMOTE.to_vec()]);
         let shared = Arc::new(Shared {
             id: crate::endpoint::id_bytes(&endpoint),
             endpoint,
+            accepting: std::sync::atomic::AtomicBool::new(true),
             paired,
             pairing: Mutex::new(None),
             unpaired: Mutex::new(RateLimit::new(unpaired_per_minute, UNPAIRED_WINDOW)),
@@ -103,11 +120,35 @@ impl Host {
         });
         let (sender, receiver) = mpsc::channel(ADMITTED_QUEUE);
         let driver = tokio::spawn(accept_loop(Arc::clone(&shared), sender));
-        Ok(Self {
+        Self {
             shared,
             admitted: tokio::sync::Mutex::new(receiver),
             driver,
-        })
+        }
+    }
+
+    /// Remote access off: offer no protocol, admit nothing, end any pairing,
+    /// and close every device's connection. The endpoint stays, for dialing.
+    pub fn stop_accepting(&self) {
+        self.shared
+            .accepting
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        *lock(&self.shared.pairing) = None;
+        self.shared.endpoint.set_alpns(Vec::new());
+        let live = std::mem::take(&mut *lock(&self.shared.live));
+        for (_, handle) in live {
+            if let Some(connection) = handle.upgrade() {
+                close(&connection, CloseCode::HostClosing);
+            }
+        }
+    }
+
+    /// Remote access on again.
+    pub fn start_accepting(&self) {
+        self.shared
+            .accepting
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        self.shared.endpoint.set_alpns(vec![ALPN_REMOTE.to_vec()]);
     }
 
     #[must_use]
@@ -125,6 +166,13 @@ impl Host {
     /// secret and role until it is used, burned, expired or stopped. A new
     /// pairing replaces one still pending.
     pub fn start_pairing(&self, secret: PairingSecret, role: Role) {
+        if !self
+            .shared
+            .accepting
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return;
+        }
         *lock(&self.shared.pairing) = Some(PendingPairing::new(secret, role, Instant::now()));
         self.shared
             .endpoint
@@ -187,8 +235,10 @@ impl Host {
 
 impl Drop for Host {
     fn drop(&mut self) {
-        // The loop holds the endpoint; stop it so the endpoint goes too.
+        // The loop holds the endpoint; stop it so the endpoint goes too. On a
+        // shared endpoint that lives on, offer no protocol any more.
         self.driver.abort();
+        self.shared.endpoint.set_alpns(Vec::new());
     }
 }
 
@@ -245,6 +295,11 @@ fn admit(shared: &Arc<Shared>, connection: Connection, source: Option<IpAddr>) -
         shared.note_refused(source);
         None
     };
+    if !shared.accepting.load(std::sync::atomic::Ordering::SeqCst) {
+        // Remote access is off; nothing gets in, whatever got this far.
+        close(&connection, CloseCode::HostClosing);
+        return None;
+    }
     match connection.alpn() {
         ALPN_REMOTE => {
             // The role check and the registration happen under one lock, so a
@@ -284,7 +339,9 @@ fn admit(shared: &Arc<Shared>, connection: Connection, source: Option<IpAddr>) -
 impl Shared {
     fn stop_pairing(&self) {
         *lock(&self.pairing) = None;
-        self.endpoint.set_alpns(vec![ALPN_REMOTE.to_vec()]);
+        if self.accepting.load(std::sync::atomic::Ordering::SeqCst) {
+            self.endpoint.set_alpns(vec![ALPN_REMOTE.to_vec()]);
+        }
     }
 
     /// A handshake or proof from `source` was refused: count it toward the

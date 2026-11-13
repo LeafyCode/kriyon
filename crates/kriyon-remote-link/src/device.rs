@@ -29,6 +29,13 @@ impl Device {
         Ok(Self { endpoint })
     }
 
+    /// Dial from an endpoint this computer already has, which may also host:
+    /// one endpoint, one id, per computer.
+    #[must_use]
+    pub fn from_endpoint(endpoint: Endpoint) -> Self {
+        Self { endpoint }
+    }
+
     async fn dial(&self, host: EndpointAddr, alpn: &[u8]) -> Result<Connection, LinkError> {
         self.endpoint
             .connect(host, alpn)

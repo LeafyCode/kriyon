@@ -823,3 +823,89 @@ async fn a_wake_skips_the_backoff_wait() {
     staying.abort();
     dropper.abort();
 }
+
+/// One endpoint per computer: it hosts and it dials, with one id.
+#[tokio::test]
+async fn one_endpoint_hosts_and_dials_at_once() {
+    use kriyon_remote_link::endpoint::bind;
+
+    // Computer A and computer B, each with one endpoint for both roles.
+    let a_endpoint = bind(&config(1), Vec::new()).await.expect("binds");
+    let b_endpoint = bind(&config(5), Vec::new()).await.expect("binds");
+    let a_store = Arc::new(Store::default());
+    let b_store = Arc::new(Store::default());
+    let a_host = Arc::new(Host::on_endpoint(
+        a_endpoint.clone(),
+        a_store.clone() as Arc<dyn PairedDevices>,
+        10,
+    ));
+    let b_host = Arc::new(Host::on_endpoint(
+        b_endpoint.clone(),
+        b_store.clone() as Arc<dyn PairedDevices>,
+        10,
+    ));
+    let a_device = Device::from_endpoint(a_endpoint.clone());
+    let b_device = Device::from_endpoint(b_endpoint.clone());
+    assert_eq!(a_device.id(), a_host.id(), "one id per computer");
+
+    // Each pairs with the other.
+    pair(Arc::clone(&b_host), &b_store, &a_device, Role::Viewer).await;
+    pair(Arc::clone(&a_host), &a_store, &b_device, Role::Controller).await;
+    assert_eq!(b_store.role(&a_host.id()), Some(Role::Viewer));
+    assert_eq!(a_store.role(&b_host.id()), Some(Role::Controller));
+}
+
+#[tokio::test]
+async fn a_host_that_stopped_accepting_refuses_and_drops_its_links() {
+    let store = Arc::new(Store::default());
+    let host = Arc::new(host(&store, 10).await);
+    let phone = device(2).await;
+    pair(Arc::clone(&host), &store, &phone, Role::Viewer).await;
+    let held = {
+        let host = Arc::clone(&host);
+        tokio::spawn(async move {
+            let Accepted::Remote(link) = next_accepted(&host).await else {
+                panic!("a remote connection");
+            };
+            link
+        })
+    };
+    let link = timeout(WAIT, phone.connect(reach(&host)))
+        .await
+        .expect("in time")
+        .expect("connects");
+    let (mut out, _incoming) = link.open_stream().await.expect("control");
+    out.send(&FromDevice::Resync).await.expect("sends");
+    let _held = held.await.expect("host task");
+
+    host.stop_accepting();
+    assert_eq!(
+        timeout(WAIT, link.closed()).await.expect("in time"),
+        Some(CloseCode::HostClosing),
+        "its links close"
+    );
+    let again = timeout(WAIT, phone.connect(reach(&host)))
+        .await
+        .expect("answered in time");
+    let refused = match again {
+        Err(_) => true,
+        Ok(link) => timeout(WAIT, link.closed()).await.is_ok(),
+    };
+    assert!(refused, "no new connection gets in");
+
+    host.start_accepting();
+    let accept = {
+        let host = Arc::clone(&host);
+        tokio::spawn(async move { next_accepted(&host).await })
+    };
+    let back = timeout(WAIT, phone.connect(reach(&host)))
+        .await
+        .expect("in time")
+        .expect("connects again");
+    let (mut out, _incoming) = back.open_stream().await.expect("control");
+    out.send(&FromDevice::Resync).await.expect("sends");
+    assert!(matches!(
+        accept.await.expect("host task"),
+        Accepted::Remote(_)
+    ));
+}
