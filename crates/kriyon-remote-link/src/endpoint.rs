@@ -133,6 +133,12 @@ pub fn generate_secret_key() -> [u8; 32] {
     SecretKey::generate().to_bytes()
 }
 
+/// The endpoint id (public half) of the [Device key] secret `secret_key`.
+#[must_use]
+pub fn public_id(secret_key: &[u8; 32]) -> EndpointId {
+    *SecretKey::from_bytes(secret_key).public().as_bytes()
+}
+
 /// The 32 bytes of an endpoint's id.
 #[must_use]
 pub fn id_bytes(endpoint: &Endpoint) -> EndpointId {
@@ -189,5 +195,19 @@ mod relay_tests {
         assert_eq!(map.len(), 1);
         let relay = map.get(&url).expect("our relay");
         assert_eq!(relay.auth_token.as_deref(), Some(pass));
+    }
+
+    #[test]
+    fn a_secret_keys_endpoint_id_is_its_ed25519_public_key() {
+        // The device key of the relay contract's test vector.
+        let id = public_id(&[0x22; 32]);
+        assert_eq!(
+            id,
+            [
+                0xa0, 0x9a, 0xa5, 0xf4, 0x7a, 0x67, 0x59, 0x80, 0x2f, 0xf9, 0x55, 0xf8, 0xdc, 0x2d,
+                0x2a, 0x14, 0xa5, 0xc9, 0x9d, 0x23, 0xbe, 0x97, 0xf8, 0x64, 0x12, 0x7f, 0xf9, 0x38,
+                0x34, 0x55, 0xa4, 0xf0
+            ]
+        );
     }
 }

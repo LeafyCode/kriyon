@@ -26,6 +26,7 @@ pub mod policy;
 pub mod prompt_cmd;
 pub mod quit;
 pub mod relay_api;
+pub mod relay_cmd;
 pub mod relay_rt;
 pub mod remote_cmd;
 pub mod remote_device_cmd;
@@ -390,6 +391,14 @@ pub fn run() {
                 .on_change(move |id, change| teller.broadcast_control(&id.0, change));
             app.state::<crate::remote_rt::RemoteRuntime>()
                 .serve_with(serve);
+            // Our relay, before remote access comes back up: its pass is
+            // set on the endpoint when it binds.
+            app.manage(crate::relay_rt::RelayRuntime::new(
+                crate::relay_rt::RelaySetup::from_build(),
+                crate::device_key::app_vault(&app.config().identifier, "relay"),
+            ));
+            app.manage(crate::relay_cmd::RelayGlue::default());
+            crate::relay_cmd::install(app.handle());
             // Remote access comes back up only if the person left it on.
             crate::remote_cmd::restore(app.handle());
             // Reconnect to the computers this one paired with as a device.
@@ -478,6 +487,15 @@ pub fn run() {
             commands::close_session,
             commands::sleep_idle_sessions,
             commands::report_drained,
+            relay_cmd::relay_view,
+            relay_cmd::relay_sign_in,
+            relay_cmd::relay_cancel_sign_in,
+            relay_cmd::relay_sign_out,
+            relay_cmd::relay_set_enabled,
+            relay_cmd::relay_account,
+            relay_cmd::relay_remove_device,
+            relay_cmd::relay_this_device,
+            relay_cmd::relay_open_subscriptions,
             remote_cmd::remote_status,
             remote_cmd::remote_set_enabled,
             remote_cmd::remote_start_pairing,

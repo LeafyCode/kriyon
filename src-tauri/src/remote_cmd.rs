@@ -131,9 +131,56 @@ pub fn remote_pairing_qr(text: String) -> Result<QrGrid, String> {
     qr_grid(&text)
 }
 
+/// `invite` naming `relay`, the relay the host's endpoint was bound with,
+/// when iroh hasn't reported it yet (it does once it has chosen its home
+/// relay). A device reaches the host through it when no direct path works.
+#[must_use]
+pub fn invite_with_relay(
+    invite: kriyon_remote::pairing::PairingInvite,
+    relay: Option<&kriyon_remote_link::RelayAccess>,
+) -> kriyon_remote::pairing::PairingInvite {
+    let mut invite = invite;
+    if invite.relay_url.is_none() {
+        invite.relay_url = relay.map(|relay| relay.url.to_string());
+    }
+    invite
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_invite_names_the_relay_the_host_uses() {
+        let invite = || kriyon_remote::pairing::PairingInvite {
+            host_id: [2; 32],
+            addrs: vec![],
+            relay_url: None,
+            secret: [7; 32],
+        };
+        let relay = kriyon_remote_link::RelayAccess {
+            url: "https://relay.example.test/".parse().expect("url"),
+            pass: "kp1.secret-to-the-relay".into(),
+        };
+        assert_eq!(invite_with_relay(invite(), None).relay_url, None);
+        let named = invite_with_relay(invite(), Some(&relay));
+        assert_eq!(
+            named.relay_url.as_deref(),
+            Some("https://relay.example.test/")
+        );
+        assert!(!named.to_qr_text().contains("kp1"), "never the pass");
+        let reported = kriyon_remote::pairing::PairingInvite {
+            relay_url: Some("https://other.example.test/".into()),
+            ..invite()
+        };
+        assert_eq!(
+            invite_with_relay(reported, Some(&relay))
+                .relay_url
+                .as_deref(),
+            Some("https://other.example.test/"),
+            "iroh's own report wins"
+        );
+    }
 
     fn invite_text() -> String {
         kriyon_remote::pairing::PairingInvite {
@@ -273,6 +320,12 @@ pub(crate) fn device_key(app: &tauri::AppHandle) -> Result<[u8; 32], String> {
 pub(crate) async fn bound(app: &tauri::AppHandle) -> Result<crate::remote_endpoint::Bound, String> {
     use tauri::Manager as _;
     let secret_key = device_key(app)?;
+    // The relay the person turned on, with this device's pass; used if the
+    // endpoint binds now.
+    let relay = app.state::<crate::relay_rt::RelayRuntime>().access().await;
+    app.state::<crate::remote_endpoint::RemoteEndpoint>()
+        .want_relay(relay)
+        .await;
     let devices = app.clone();
     let bound = app
         .state::<crate::remote_endpoint::RemoteEndpoint>()
@@ -300,7 +353,7 @@ pub(crate) async fn release_endpoint_if_unused(app: &tauri::AppHandle) {
         .await;
 }
 
-async fn turn_on(app: &tauri::AppHandle) -> Result<(), String> {
+pub(crate) async fn turn_on(app: &tauri::AppHandle) -> Result<(), String> {
     use tauri::{Emitter as _, Manager as _};
     let host = bound(app).await?.host;
     let emitter = app.clone();
@@ -448,9 +501,12 @@ pub async fn remote_set_enabled(
 #[tauri::command]
 pub async fn remote_start_pairing(
     rt: tauri::State<'_, crate::remote_rt::RemoteRuntime>,
+    endpoint: tauri::State<'_, crate::remote_endpoint::RemoteEndpoint>,
     role: RoleArg,
 ) -> Result<String, String> {
-    Ok(rt.start_pairing(role.into()).await?.to_qr_text())
+    let invite = rt.start_pairing(role.into()).await?;
+    let relay = endpoint.bound_relay().await;
+    Ok(invite_with_relay(invite, relay.as_ref()).to_qr_text())
 }
 
 /// Stop the pairing in progress.

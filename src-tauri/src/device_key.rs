@@ -46,6 +46,38 @@ pub trait SecretVault: Send + Sync {
     fn remove(&self) -> Result<(), String>;
 }
 
+/// The app's keychain item `account` (macOS); elsewhere, none yet: reads
+/// find nothing and writes fail.
+#[must_use]
+pub fn app_vault(identifier: &str, account: &'static str) -> Box<dyn SecretVault> {
+    #[cfg(target_os = "macos")]
+    {
+        Box::new(Keychain::item(identifier, account))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (identifier, account);
+        Box::new(NoVault)
+    }
+}
+
+/// No keychain on this platform yet.
+#[cfg(not(target_os = "macos"))]
+struct NoVault;
+
+#[cfg(not(target_os = "macos"))]
+impl SecretVault for NoVault {
+    fn read(&self) -> Result<Option<Vec<u8>>, String> {
+        Ok(None)
+    }
+    fn write(&self, _secret: &[u8]) -> Result<(), String> {
+        Err("no keychain on this platform yet".into())
+    }
+    fn remove(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
 /// Why the device key couldn't be had.
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
 pub enum DeviceKeyError {
