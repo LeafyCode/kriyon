@@ -46,8 +46,7 @@ fn check_session_row(
     made: &MadeWorktrees,
     session: &SessionRow,
 ) -> Result<(), String> {
-    // Read both rows, then let the lock go: the checks touch the disk, and
-    // may run git.
+    // Read the rows, then let the lock go: the checks touch the disk.
     let (project, saved, others) = {
         let store = store.0.lock();
         let project = store
@@ -59,10 +58,11 @@ fn check_session_row(
     };
     let project = project.ok_or_else(|| "session's project is not saved".to_string())?;
     let project_folder = Path::new(&project.path);
-    // The worktrees known without asking git: those Kriyon made from this
+    // The worktrees this session may be saved in: those Kriyon made from this
     // project this run, and those its other sessions saved (a nested session
-    // starts in its lead's). Git, which this command would run on the main
-    // thread, is asked only when neither knows the folder.
+    // starts in its lead's). Never git: this command runs on the main thread.
+    // Every worktree the app makes is one of these, or already saved for this
+    // row; a worktree made outside Kriyon becomes a project of its own.
     let mut known = made.of(&project.path);
     known.extend(
         others
@@ -70,18 +70,8 @@ fn check_session_row(
             .filter(|other| other.project_id == project.id && other.id != session.id)
             .filter_map(|other| other.worktree_path.map(std::path::PathBuf::from)),
     );
-    let check = |path: &str, saved: Option<&str>| match kriyon_core::folder::check_session_path(
-        path,
-        saved,
-        project_folder,
-        || known.clone(),
-    ) {
-        Err(kriyon_core::folder::FolderRefusal::NotProjectFolder) => {
-            kriyon_core::folder::check_session_path(path, saved, project_folder, || {
-                crate::folder_cmd::project_worktrees(&project.path)
-            })
-        }
-        other => other,
+    let check = |path: &str, saved: Option<&str>| {
+        kriyon_core::folder::check_session_path(path, saved, project_folder, || known.clone())
     };
     check(&session.cwd, saved.as_ref().map(|s| s.cwd.as_str()))
         .map_err(|refusal| format!("session folder: {refusal}"))?;
@@ -403,7 +393,9 @@ mod tests {
     }
 
     #[test]
-    fn a_session_in_a_git_worktree_of_its_project_is_saved() {
+    fn a_worktree_only_git_knows_is_not_approved_on_the_main_thread() {
+        // This command runs on the main thread, so it never asks git: a worktree
+        // made outside Kriyon becomes a project of its own instead.
         let repo_dir = tempfile::tempdir().unwrap();
         let repo = repo_dir.path().to_str().unwrap();
         let git = |args: &[&str]| {
@@ -437,12 +429,12 @@ mod tests {
         ]);
         let store = empty_store();
         saved(&store, &project("p", repo_dir.path()));
-        check_session_row(
+        assert!(check_session_row(
             &store,
             &MadeWorktrees::default(),
             &session("p", &wt, Some(&wt)),
         )
-        .unwrap();
+        .is_err());
     }
 
     #[test]
