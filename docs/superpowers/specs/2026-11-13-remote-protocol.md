@@ -264,7 +264,8 @@ for remote starts, because it runs scripts.
 2. The phone seals `{ token, platform, host_id, expires }` (expires about 60
    days, renewed on every connect) once per host with HPKE (RFC 9180, base
    mode, DHKEM X25519-HKDF-SHA256, HKDF-SHA256, ChaCha20-Poly1305, info
-   `"kriyon push token v1"`), and sends it to the host as `PushToken { sealed }`.
+   `"kriyon push token v1"`), and sends it to the host as `PushToken { key_id, sealed }`, naming the sender
+   key it sealed to.
 3. To wake the phone, the host makes an HTTPS POST to the sender with
    `{ sealed, at, request_id }` and an Ed25519 signature by its device key over
    the postcard bytes of `("kriyon push wake v1", sender_key_id, SHA-256(sealed), at, request_id)`.
@@ -274,13 +275,17 @@ for remote starts, because it runs scripts.
    token hash (1 a minute, 30 a day) and a cap on the sealed size, opens the
    token in memory, sends one visible alert "A session needs you" through APNs
    or FCM, and forgets it.
-5. Field types: `key_id` u32; `request_id` 16 random bytes; `at` and
+5. **Key rotation.** The sender keeps retired secrets by `key_id` and opens
+   tokens sealed to them until the longest token expiry (60 days); the host
+   sends the token's own `key_id` in the wake. Phones reseal to the newest key
+   on their next connect. Unknown ids are refused.
+6. Field types: `key_id` u32; `request_id` 16 random bytes; `at` and
    `expires` Unix seconds; `platform` APNs = 0, FCM = 1. `sealed` is
    `enc (32 bytes) ‖ ciphertext`, at most 1 KiB. Test vectors made
    independently of our code are in `crates/kriyon-remote/tests/push_vectors.json`.
-6. The sender could notice one phone's token arriving from several hosts. Not
+7. The sender could notice one phone's token arriving from several hosts. Not
    linking them is a policy promise; the crypto doesn't prevent it.
-7. Alerts are a hint. The app re-checks the host each time it opens.
+8. Alerts are a hint. The app re-checks the host each time it opens.
 
 ## 11. Fault tests (CI)
 
