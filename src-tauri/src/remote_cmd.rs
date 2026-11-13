@@ -459,10 +459,25 @@ pub async fn remote_remove_device(app: tauri::AppHandle, id: String) -> Result<(
     if !removed {
         return Err("no such device".to_string());
     }
+    release_everywhere(&app, &id);
     app.state::<crate::remote_rt::RemoteRuntime>()
         .cut_off(&id)
         .await;
     Ok(())
+}
+
+/// Give back typing control, and the host's size, on every session `device`
+/// held (spec section 4: removal or a change to Viewer).
+fn release_everywhere(app: &tauri::AppHandle, device: &[u8; 32]) {
+    use tauri::Manager as _;
+    let state = app.state::<crate::AppState>();
+    state.writers.release_device(device, |id| {
+        state
+            .sessions
+            .lock()
+            .get(id)
+            .map(|session| std::sync::Arc::clone(&session.engine))
+    });
 }
 
 /// Change a paired device's role. Its connections close so it comes back
@@ -486,6 +501,9 @@ pub async fn remote_set_device_role(
         .map_err(|e| e.to_string())?;
     if !changed {
         return Err("no such device".to_string());
+    }
+    if role == RoleArg::Viewer {
+        release_everywhere(&app, &id);
     }
     app.state::<crate::remote_rt::RemoteRuntime>()
         .reconnect(&id)

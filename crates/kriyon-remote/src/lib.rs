@@ -13,3 +13,4 @@ pub mod pairing;
 pub mod queue;
 pub mod screen;
 pub mod text;
+pub mod writer;

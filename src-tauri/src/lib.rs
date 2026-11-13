@@ -30,6 +30,7 @@ pub mod remote_rt;
 pub mod sandbox;
 pub mod session_list_rt;
 pub mod session_registry;
+pub mod session_writer;
 pub mod settings_cmd;
 pub mod shell_path;
 pub mod sleep_rt;
@@ -71,6 +72,9 @@ pub struct Session {
 #[derive(Default)]
 pub struct AppState {
     pub sessions: Mutex<HashMap<SessionId, Session>>,
+    /// One writer gate per session: every PTY write and resize passes it
+    /// (plan Step C, "one writer per session").
+    pub writers: crate::session_writer::Writers,
     /// Live transcript watches keyed by session id. Held here so each watch is
     /// not dropped immediately (dropping it stops the notify watch and the poll
     /// thread); removing an entry stops watching that session's transcript.
