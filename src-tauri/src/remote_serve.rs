@@ -19,7 +19,7 @@ use kriyon_remote::authorize::{
 };
 use kriyon_remote::codec::{encode, Decoded};
 use kriyon_remote::control::{Change, Control};
-use kriyon_remote::fanout::{Pop, RequesterId, SessionFanout};
+use kriyon_remote::fanout::{pack_snapshot, Pop, RequesterId, SessionFanout, SnapshotEnd};
 use kriyon_remote::link_policy::CloseCode;
 use kriyon_remote::message::{
     EndpointId, FromDevice, ProjectInfo, RefuseReason, Role, SessionInfo, ToDevice,
@@ -378,10 +378,27 @@ impl Serve {
                     fanout.snapshot_part(id, bytes);
                     Vec::new()
                 }
-                DaemonEvent::SnapshotEnd { id } => fanout
-                    .snapshot_end(id, size.unwrap_or(crate::session_writer::DEFAULT_SCREEN))
-                    .into_iter()
-                    .collect(),
+                DaemonEvent::SnapshotEnd { id } => {
+                    match fanout
+                        .snapshot_end(id, size.unwrap_or(crate::session_writer::DEFAULT_SCREEN))
+                    {
+                        SnapshotEnd::Pack(snapshot) => {
+                            // Compressing a big screen takes a while: never
+                            // on the daemon's reader, never under this lock.
+                            let packing = Arc::clone(&served);
+                            std::thread::spawn(move || {
+                                let frames = pack_snapshot(&snapshot);
+                                let again =
+                                    packing.fanout.lock().snapshot_packed(&snapshot, frames);
+                                packing.ask_all(again.into_iter().collect());
+                                packing.wake_all();
+                            });
+                            Vec::new()
+                        }
+                        SnapshotEnd::Ask(again) => vec![again],
+                        SnapshotEnd::Nothing => Vec::new(),
+                    }
+                }
                 DaemonEvent::Busy(_)
                 | DaemonEvent::History { .. }
                 | DaemonEvent::HistoryEnd { .. } => Vec::new(),

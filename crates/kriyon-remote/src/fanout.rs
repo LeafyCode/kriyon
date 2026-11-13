@@ -43,6 +43,43 @@ struct DeviceStream {
     /// Asked the daemon for a snapshot for this device and not had it yet:
     /// until then it gets no updates, which the snapshot will show.
     awaiting: Option<Awaiting>,
+    /// Its snapshot came and is being packed elsewhere: updates made since
+    /// wait here, to follow it in order, with their size.
+    held: Option<(Vec<Vec<u8>>, usize)>,
+}
+
+/// What the end of a snapshot calls for.
+#[derive(Debug)]
+pub enum SnapshotEnd {
+    /// Pack this (off the daemon's reader thread: compressing a big screen
+    /// takes a while), then hand it back with [`SessionFanout::snapshot_packed`].
+    Pack(SnapshotToPack),
+    /// It couldn't be used: ask the daemon for one again.
+    Ask(RequesterId),
+    /// Nobody waits for it any more.
+    Nothing,
+}
+
+/// A device's snapshot, to be compressed and framed.
+#[derive(Debug)]
+pub struct SnapshotToPack {
+    pub device: EndpointId,
+    pub head: SnapshotHead,
+    pub bytes: Vec<u8>,
+}
+
+/// Compress and frame a snapshot: what [`SessionFanout::snapshot_packed`]
+/// queues. `None` when it can't be.
+#[must_use]
+pub fn pack_snapshot(snapshot: &SnapshotToPack) -> Option<Vec<Vec<u8>>> {
+    let packed = Packer::new()
+        .ok()?
+        .pack(Kind::Snapshot, &snapshot.bytes)
+        .ok()?;
+    snapshot_messages(snapshot.head, &packed)
+        .iter()
+        .map(|message| encode(message).ok())
+        .collect()
 }
 
 /// A snapshot asked for, and the parts of it received so far.
@@ -94,6 +131,8 @@ impl SessionFanout {
     fn ask(&mut self, device: &EndpointId, skipped: bool) -> Option<RequesterId> {
         let requester = self.requester();
         let stream = self.devices.get_mut(device)?;
+        // A snapshot being packed for it is no longer wanted.
+        stream.held = None;
         stream.awaiting = Some(Awaiting {
             requester,
             skipped,
@@ -153,11 +192,22 @@ impl SessionFanout {
         };
         let mut overflowed = Vec::new();
         for (device, stream) in &mut self.devices {
-            if stream.awaiting.is_none() {
-                stream.queue.push(frame.clone());
-                if stream.queue.is_skipping() {
+            if stream.awaiting.is_some() {
+                continue;
+            }
+            if let Some((held, size)) = stream.held.as_mut() {
+                // Waits for its snapshot; too much of it, and the device
+                // starts over from a fresh one instead.
+                *size += frame.len();
+                held.push(frame.clone());
+                if *size > self.limit {
                     overflowed.push(*device);
                 }
+                continue;
+            }
+            stream.queue.push(frame.clone());
+            if stream.queue.is_skipping() {
+                overflowed.push(*device);
             }
         }
         // Asked for now, not when the device's writer pops the skip: a slow
@@ -208,39 +258,54 @@ impl SessionFanout {
     }
 
     /// The end of the snapshot for requester `id`, taken at the session's
-    /// `size` (columns, rows): queued for its device, which follows from now.
-    /// One that can't be made is asked for again.
-    pub fn snapshot_end(&mut self, id: RequesterId, size: (u16, u16)) -> Option<RequesterId> {
-        let seq = self.seq.as_ref()?;
+    /// `size` (columns, rows): to be packed, after which its device follows.
+    /// Updates made meanwhile wait for it ([`Self::snapshot_packed`]).
+    pub fn snapshot_end(&mut self, id: RequesterId, size: (u16, u16)) -> SnapshotEnd {
+        let Some(seq) = self.seq.as_ref() else {
+            return SnapshotEnd::Nothing;
+        };
         let (run, at) = (seq.run(), seq.snapshot_seq());
-        let (device, awaiting) = self.devices.iter_mut().find_map(|(device, stream)| {
-            stream
+        let Some((device, awaiting)) = self.devices.iter_mut().find_map(|(device, stream)| {
+            let awaiting = stream
                 .awaiting
-                .take_if(|awaiting| awaiting.requester == id)
-                .map(|awaiting| (*device, awaiting))
-        })?;
-        let head = SnapshotHead {
-            run,
-            seq: at,
-            cols: size.0,
-            rows: size.1,
-            skipped: awaiting.skipped,
+                .take_if(|awaiting| awaiting.requester == id)?;
+            stream.held = Some((Vec::new(), 0));
+            Some((*device, awaiting))
+        }) else {
+            return SnapshotEnd::Nothing;
         };
-        let frames: Option<Vec<Vec<u8>>> = self
-            .packer
-            .pack(Kind::Snapshot, &awaiting.bytes)
-            .ok()
-            .and_then(|packed| {
-                snapshot_messages(head, &packed)
-                    .iter()
-                    .map(|message| encode(message).ok())
-                    .collect()
-            });
+        SnapshotEnd::Pack(SnapshotToPack {
+            device,
+            head: SnapshotHead {
+                run,
+                seq: at,
+                cols: size.0,
+                rows: size.1,
+                skipped: awaiting.skipped,
+            },
+            bytes: awaiting.bytes,
+        })
+    }
+
+    /// `snapshot`, packed (`None`: it couldn't be): queued for its device,
+    /// then the updates made while it was packed. One for a run, or a wait,
+    /// that has since been replaced is dropped. An unusable one is asked for
+    /// again: the requester id.
+    pub fn snapshot_packed(
+        &mut self,
+        snapshot: &SnapshotToPack,
+        frames: Option<Vec<Vec<u8>>>,
+    ) -> Option<RequesterId> {
+        let current = self.seq.as_ref().map(ScreenSeq::run);
+        let stream = self.devices.get_mut(&snapshot.device)?;
+        if current != Some(snapshot.head.run) {
+            return None;
+        }
+        let (held, _) = stream.held.take()?;
         let Some(frames) = frames else {
-            return self.ask(&device, true);
+            return self.ask(&snapshot.device, true);
         };
-        let stream = self.devices.get_mut(&device)?;
-        for frame in frames {
+        for frame in frames.into_iter().chain(held) {
             stream.queue.push(frame);
         }
         None
@@ -256,6 +321,7 @@ impl SessionFanout {
                 queue: SessionQueue::new(self.limit),
                 resync: ResyncGate::default(),
                 awaiting: None,
+                held: None,
             },
         );
         self.ask(&device, false)
@@ -341,11 +407,92 @@ mod tests {
         }
     }
 
+    /// The end of snapshot `id`, packed and queued as the host does it.
+    fn finish(fanout: &mut SessionFanout, id: RequesterId) -> Option<RequesterId> {
+        match fanout.snapshot_end(id, SIZE) {
+            SnapshotEnd::Pack(to_pack) => {
+                let frames = pack_snapshot(&to_pack);
+                fanout.snapshot_packed(&to_pack, frames)
+            }
+            SnapshotEnd::Ask(again) => Some(again),
+            SnapshotEnd::Nothing => None,
+        }
+    }
+
     /// A device opened and given its snapshot showing `screen`.
     fn following(fanout: &mut SessionFanout, device: EndpointId, screen: &[u8]) {
         let id = fanout.open(device).expect("asks");
         fanout.snapshot_part(id, screen);
-        fanout.snapshot_end(id, SIZE);
+        finish(fanout, id);
+    }
+
+    #[test]
+    fn updates_made_while_a_snapshot_is_packed_follow_it_in_order() {
+        let mut fanout = SessionFanout::new(1 << 20).expect("fanout");
+        fanout.hello(7);
+        let id = fanout.open(A).expect("asks");
+        fanout.snapshot_part(id, b"screen");
+        let SnapshotEnd::Pack(to_pack) = fanout.snapshot_end(id, SIZE) else {
+            panic!("a snapshot to pack");
+        };
+        // Packed elsewhere, meanwhile output goes on.
+        fanout.output(b"during");
+        let frames = pack_snapshot(&to_pack);
+        assert_eq!(fanout.snapshot_packed(&to_pack, frames), None);
+        fanout.output(b"after");
+        let (messages, _) = drain(&mut fanout, &A);
+        assert!(
+            matches!(messages[0], ToDevice::Snapshot { .. }),
+            "{messages:?}"
+        );
+        let updates: Vec<String> = messages
+            .iter()
+            .filter_map(update_text)
+            .map(|(_, text)| text)
+            .collect();
+        assert_eq!(updates, vec!["during".to_string(), "after".to_string()]);
+    }
+
+    #[test]
+    fn a_snapshot_that_couldnt_be_packed_or_came_too_late_is_asked_again_or_dropped() {
+        let mut fanout = SessionFanout::new(1 << 20).expect("fanout");
+        fanout.hello(7);
+        let id = fanout.open(A).expect("asks");
+        let SnapshotEnd::Pack(to_pack) = fanout.snapshot_end(id, SIZE) else {
+            panic!("a snapshot to pack");
+        };
+        assert!(
+            fanout.snapshot_packed(&to_pack, None).is_some(),
+            "asked again"
+        );
+        // A new run meanwhile: a pack for the old one is dropped.
+        let id = fanout.open(B).expect("asks");
+        let SnapshotEnd::Pack(old) = fanout.snapshot_end(id, SIZE) else {
+            panic!("a snapshot to pack");
+        };
+        fanout.hello(8);
+        let frames = pack_snapshot(&old);
+        assert_eq!(fanout.snapshot_packed(&old, frames), None);
+        let (messages, _) = drain(&mut fanout, &B);
+        assert!(messages.is_empty(), "{messages:?}");
+    }
+
+    #[test]
+    fn too_much_output_while_a_snapshot_is_packed_starts_the_device_over() {
+        let mut fanout = SessionFanout::new(64).expect("fanout");
+        fanout.hello(7);
+        let id = fanout.open(A).expect("asks");
+        let SnapshotEnd::Pack(_) = fanout.snapshot_end(id, SIZE) else {
+            panic!("a snapshot to pack");
+        };
+        let noise: Vec<u8> = (0..4096_u32)
+            .map(|n| (n.wrapping_mul(2_654_435_761) >> 24).to_le_bytes()[0])
+            .collect();
+        assert_eq!(
+            fanout.output(&noise).len(),
+            1,
+            "a fresh snapshot is asked for"
+        );
     }
 
     #[test]
@@ -362,7 +509,7 @@ mod tests {
         fanout.output(b"while the snapshot is made");
         fanout.snapshot_part(id, b"the ");
         fanout.snapshot_part(id, b"screen");
-        fanout.snapshot_end(id, SIZE);
+        finish(&mut fanout, id);
         fanout.output(b"after");
         let (messages, asks) = drain(&mut fanout, &A);
         assert_eq!(asks, Vec::<RequesterId>::new());
@@ -413,7 +560,7 @@ mod tests {
         assert_eq!(fast_got, 200, "the fast device gets every update");
         assert_eq!(asks.len(), 1, "the slow one is asked a fresh snapshot for");
         fanout.snapshot_part(asks[0], b"now");
-        fanout.snapshot_end(asks[0], SIZE);
+        finish(&mut fanout, asks[0]);
         let (messages, _) = drain(&mut fanout, &B);
         assert!(
             matches!(
@@ -438,7 +585,7 @@ mod tests {
         assert_eq!(asks.len(), 1);
         fanout.output(b"dropped: the snapshot will show it");
         fanout.snapshot_part(asks[0], b"new");
-        fanout.snapshot_end(asks[0], SIZE);
+        finish(&mut fanout, asks[0]);
         fanout.output(b"first of run 2");
         let (messages, _) = drain(&mut fanout, &A);
         let last_snapshot = messages
@@ -464,7 +611,7 @@ mod tests {
         assert_eq!(asks.len(), 1);
         fanout.output(b"dropped");
         fanout.snapshot_part(asks[0], b"after the skip");
-        fanout.snapshot_end(asks[0], SIZE);
+        finish(&mut fanout, asks[0]);
         let (messages, _) = drain(&mut fanout, &A);
         assert!(matches!(
             messages.last(),
@@ -480,13 +627,13 @@ mod tests {
         let new = fanout.screen()[0];
         assert_ne!(old, new);
         fanout.snapshot_part(old, b"old");
-        fanout.snapshot_end(old, SIZE);
+        finish(&mut fanout, old);
         assert!(
             drain(&mut fanout, &A).0.is_empty(),
             "still waiting for the newer one"
         );
         fanout.snapshot_part(new, b"new");
-        fanout.snapshot_end(new, SIZE);
+        finish(&mut fanout, new);
         assert_eq!(drain(&mut fanout, &A).0.len(), 1);
     }
 
@@ -545,7 +692,7 @@ mod tests {
         }
         assert_eq!(asks.len(), 1, "asked once, as it skipped");
         fanout.snapshot_part(asks[0], b"now");
-        fanout.snapshot_end(asks[0], SIZE);
+        finish(&mut fanout, asks[0]);
         let (messages, more) = drain(&mut fanout, &A);
         assert_eq!(
             more,
