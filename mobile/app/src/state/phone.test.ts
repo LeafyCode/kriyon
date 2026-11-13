@@ -240,8 +240,11 @@ test("the readable view opens the session, then reads its entries", async () => 
   expect(native.readEntries).toHaveBeenCalledWith(MAC, "s1");
 });
 
-test("entries are kept whole as Rust last sent them, for their session only", () => {
-  const { entriesChanged } = usePhone.getState();
+test("entries are kept whole as Rust last sent them, for their session only", async () => {
+  native.openSession.mockResolvedValue();
+  native.readEntries.mockResolvedValue();
+  const { entriesChanged, openReadable } = usePhone.getState();
+  await openReadable(MAC, "s1");
   entriesChanged({ hostId: MAC, sessionId: "s1", summary: ENTRIES });
   const grown = {
     ...ENTRIES,
@@ -255,7 +258,7 @@ test("entries are kept whole as Rust last sent them, for their session only", ()
   expect(usePhone.getState().readable[readableKey(MAC, "s2")]).toBeUndefined();
 });
 
-test("a read that fails says why, as having no entries", async () => {
+test("a read that fails shows the terminal, saying why", async () => {
   native.openSession.mockResolvedValue();
   native.readEntries.mockRejectedValue(new Error("not connected"));
   await usePhone.getState().openReadable(MAC, "s1");
@@ -265,23 +268,56 @@ test("a read that fails says why, as having no entries", async () => {
   });
 });
 
-test("closing the readable view closes the session, and keeps why it had none", async () => {
-  native.closeSession.mockResolvedValue();
-  const off = { entries: [], unavailable: "The Kriyon Companion is off." };
+test("a session that can't be opened is said by the view, not as no entries", async () => {
+  native.openSession.mockRejectedValue(new Error("not connected"));
+  await expect(usePhone.getState().openReadable(MAC, "s1")).rejects.toThrow(
+    "not connected"
+  );
+  expect(native.readEntries).not.toHaveBeenCalled();
+  expect(usePhone.getState().readable[readableKey(MAC, "s1")]).toBeUndefined();
+});
+
+test("entries for a session not being read are dropped", () => {
   usePhone
     .getState()
-    .entriesChanged({ hostId: MAC, sessionId: "s1", summary: off });
-  await usePhone.getState().closeReadable(MAC, "s1");
+    .entriesChanged({ hostId: MAC, sessionId: "s1", summary: ENTRIES });
+  expect(usePhone.getState().readable[readableKey(MAC, "s1")]).toBeUndefined();
+});
+
+test("closing drops the entries, and keeps only why there were none", async () => {
+  native.openSession.mockResolvedValue();
+  native.readEntries.mockResolvedValue();
+  native.closeSession.mockResolvedValue();
+  const { closeReadable, entriesChanged, openReadable } = usePhone.getState();
+  await openReadable(MAC, "s1");
+  entriesChanged({ hostId: MAC, sessionId: "s1", summary: ENTRIES });
+  await closeReadable(MAC, "s1");
   expect(native.closeSession).toHaveBeenCalledWith(MAC, "s1");
+  expect(usePhone.getState().readable[readableKey(MAC, "s1")]).toBeUndefined();
+  await openReadable(MAC, "s1");
+  const off = { entries: [], unavailable: "The Kriyon Companion is off." };
+  entriesChanged({ hostId: MAC, sessionId: "s1", summary: off });
+  await closeReadable(MAC, "s1");
+  expect(usePhone.getState().readable[readableKey(MAC, "s1")]).toEqual(off);
+  // Late news from the closed read changes nothing.
+  entriesChanged({ hostId: MAC, sessionId: "s1", summary: ENTRIES });
   expect(usePhone.getState().readable[readableKey(MAC, "s1")]).toEqual(off);
 });
 
-test("showing the session again tries its readable view afresh", () => {
-  usePhone.getState().entriesChanged({
-    hostId: MAC,
-    sessionId: "s1",
-    summary: { entries: [], unavailable: "off" },
-  });
-  usePhone.getState().show({ hostId: MAC, kind: "session", sessionId: "s1" });
-  expect(usePhone.getState().readable[readableKey(MAC, "s1")]).toBeUndefined();
+test("trying again, or leaving the session, forgets why there were none", () => {
+  const off = { entries: [], unavailable: "off" };
+  const key = readableKey(MAC, "s1");
+  usePhone.setState({ readable: { [key]: off } });
+  usePhone.getState().retryReadable(MAC, "s1");
+  expect(usePhone.getState().readable[key]).toBeUndefined();
+  usePhone.setState({ readable: { [key]: off } });
+  usePhone.getState().forgetReadable(MAC, "s1");
+  expect(usePhone.getState().readable[key]).toBeUndefined();
+});
+
+test("trying again keeps entries being read", () => {
+  const key = readableKey(MAC, "s1");
+  usePhone.setState({ readable: { [key]: ENTRIES } });
+  usePhone.getState().retryReadable(MAC, "s1");
+  expect(usePhone.getState().readable[key]).toEqual(ENTRIES);
 });

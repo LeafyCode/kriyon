@@ -4,7 +4,7 @@
  * Claude's questions are answered in the terminal. It never touches the
  * terminal's size.
  */
-import { type ComponentRef, useEffect, useRef } from "react";
+import { type ComponentRef, useEffect, useRef, useState } from "react";
 import { Platform, Pressable, ScrollView, Text, View } from "react-native";
 import type {
   ShownEntry,
@@ -12,6 +12,9 @@ import type {
 } from "../../../../src/remote/readableSummary.ts";
 import { readableKey, standingMeta, usePhone } from "../state/phone.ts";
 import { colors, ui } from "../ui.ts";
+
+/** How near the bottom still counts as following the newest entry. */
+const FOLLOW_SLACK = 48;
 
 type StepState = Extract<ShownKind, { kind: "step" }>["state"];
 
@@ -163,9 +166,11 @@ function Entry({
           >
             {entry.question}
           </Text>
-          {entry.options.map((option) => (
+          {entry.options.map((option, index) => (
             <Text
-              key={option}
+              // Two options can read the same: their place tells them apart.
+              // biome-ignore lint/suspicious/noArrayIndexKey: options never move
+              key={index}
               style={{ color: colors.inkSecondary, fontSize: 14 }}
             >
               · {option}
@@ -216,10 +221,15 @@ export function ReadableView({
     state.states[hostId]?.sessions.find((one) => one.id === sessionId)
   );
   const scroll = useRef<ComponentRef<typeof ScrollView>>(null);
+  // Following the newest entry, until the person scrolls up to read.
+  const following = useRef(true);
+  const [note, setNote] = useState<string | null>(null);
 
   useEffect(() => {
     const { closeReadable, openReadable } = usePhone.getState();
-    openReadable(hostId, sessionId).catch(() => undefined);
+    openReadable(hostId, sessionId).catch((error: unknown) =>
+      setNote(error instanceof Error ? error.message : String(error))
+    );
     return () => {
       closeReadable(hostId, sessionId).catch(() => undefined);
     };
@@ -245,15 +255,28 @@ export function ReadableView({
           </Text>
         </View>
       ) : null}
-      {summary ? null : <Text style={ui.hint}>Reading…</Text>}
+      {note ? <Text style={ui.hint}>{note}</Text> : null}
+      {summary || note ? null : <Text style={ui.hint}>Reading…</Text>}
       {summary && summary.entries.length === 0 ? (
         <Text style={ui.hint}>Nothing to read yet.</Text>
       ) : null}
       <ScrollView
         contentContainerStyle={{ gap: 14, paddingBottom: 16 }}
-        // The newest entry stays in view as entries come, as on the desktop.
-        onContentSizeChange={() => scroll.current?.scrollToEnd()}
+        // The newest entry stays in view as entries come, as on the desktop,
+        // unless the person scrolled up to read.
+        onContentSizeChange={() => {
+          if (following.current) {
+            scroll.current?.scrollToEnd();
+          }
+        }}
+        onScroll={({ nativeEvent }) => {
+          const { contentOffset, contentSize, layoutMeasurement } = nativeEvent;
+          following.current =
+            contentOffset.y + layoutMeasurement.height >=
+            contentSize.height - FOLLOW_SLACK;
+        }}
         ref={scroll}
+        scrollEventThrottle={100}
       >
         {summary?.entries.map((entry) => (
           <Entry entry={entry} key={entry.seq} onAnswer={onAnswer} />

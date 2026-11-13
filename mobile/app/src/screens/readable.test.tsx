@@ -30,6 +30,7 @@ const STILL_WRITING = /^The form sends too early/;
 const ENTRY = /^entry-/;
 const FIX_IT = /Yes, fix it/;
 const NEEDS_YOU = /Needs you/;
+const YES = /Yes$/;
 
 const host = (needsYou: boolean): HostSummary => ({
   hostId: MAC,
@@ -183,4 +184,48 @@ test("what the session needs from you shows on top", async () => {
   expect(screen.getByText("Needs you · Awaiting input")).toBeOnTheScreen();
   await act(() => usePhone.getState().hostChanged(host(false)));
   expect(screen.queryByText(NEEDS_YOU)).toBeNull();
+});
+
+test("a session that can't be opened says so on its readable view", async () => {
+  native.openSession.mockRejectedValueOnce(new Error("not connected"));
+  await render(<SessionScreen hostId={MAC} sessionId="s1" />);
+  expect(await screen.findByText("not connected")).toBeOnTheScreen();
+  expect(screen.queryByTestId("terminal-page")).toBeNull();
+});
+
+test("showing the session again keeps what it reads", async () => {
+  await render(<SessionScreen hostId={MAC} sessionId="s1" />);
+  await act(() => send(CONVERSATION));
+  await act(() =>
+    usePhone.getState().show({ hostId: MAC, kind: "session", sessionId: "s1" })
+  );
+  expect(screen.getByText("Fix the login bug")).toBeOnTheScreen();
+});
+
+test("leaving a session with no entries, then coming back, reads afresh", async () => {
+  const first = await render(<SessionScreen hostId={MAC} sessionId="s1" />);
+  await act(() => send({ entries: [], unavailable: "off" }));
+  expect(screen.getByTestId("terminal-page")).toBeOnTheScreen();
+  await first.unmount();
+  await render(<SessionScreen hostId={MAC} sessionId="s1" />);
+  expect(screen.queryByTestId("terminal-page")).toBeNull();
+});
+
+test("two options with the same words both show", async () => {
+  await render(<SessionScreen hostId={MAC} sessionId="s1" />);
+  await act(() =>
+    send({
+      entries: [
+        {
+          header: "",
+          kind: "asking",
+          options: ["Yes", "Yes"],
+          question: "Sure?",
+          seq: 1,
+        },
+      ],
+      unavailable: null,
+    })
+  );
+  expect(screen.getAllByText(YES)).toHaveLength(2);
 });

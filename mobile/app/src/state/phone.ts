@@ -37,14 +37,19 @@ interface PhoneStore {
    */
   back: () => boolean;
   cancelPairing: () => Promise<void>;
-  /** Close a session's readable view (and its stream); why it had none stays. */
+  /**
+   * Close a session's readable view (and its stream): its entries go; why
+   * it had none stays, so the terminal keeps saying it.
+   */
   closeReadable: (hostId: string, sessionId: string) => Promise<void>;
   /** Close a session's stream, after any open asked before it. */
   closeSession: (hostId: string, sessionId: string) => Promise<void>;
   deviceId: string | null;
-  /** A session's readable view changed in Rust: kept whole. */
+  /** A session's readable view changed in Rust: kept whole while it is read. */
   entriesChanged: (event: EntriesChangedEvent) => void;
   forget: (hostId: string) => Promise<void>;
+  /** Forget a session's readable view (the person left the session). */
+  forgetReadable: (hostId: string, sessionId: string) => void;
   hostChanged: (state: HostSummary) => void;
   hosts: PairedHost[];
   /**
@@ -60,7 +65,11 @@ interface PhoneStore {
   newSessionError: string | null;
   /** A new session is being started. */
   newSessionStarting: boolean;
-  /** Open a session's stream, then read it as readable-view entries. */
+  /**
+   * Open a session's stream, then read it as readable-view entries. Rejects
+   * when the session can't be opened; a read that fails is shown as no
+   * entries, with why.
+   */
   openReadable: (hostId: string, sessionId: string) => Promise<void>;
   /** Open a session's stream, after any open or close asked before it. */
   openSession: (hostId: string, sessionId: string) => Promise<void>;
@@ -71,9 +80,13 @@ interface PhoneStore {
   /**
    * Each session's readable view as Rust last sent it, by [`readableKey`];
    * none until its first entries come. `unavailable` words mean show the
-   * terminal; they stay until the session is shown again, which reads afresh.
+   * terminal; they stay until the person tries again or leaves the session.
    */
   readable: Record<string, ReadableSummary>;
+  /** The sessions being read now, by [`readableKey`]. */
+  reading: Record<string, true>;
+  /** Read a session's entries again, after it had none. */
+  retryReadable: (hostId: string, sessionId: string) => void;
   screen: Screen;
   show: (screen: Screen) => void;
   start: (deviceName: string) => Promise<void>;
@@ -92,6 +105,15 @@ function without(
   key: string
 ): Record<string, ReadableSummary> {
   const { [key]: _gone, ...rest } = readable;
+  return rest;
+}
+
+/** `keys` without `key`. */
+function withoutKey(
+  keys: Record<string, true>,
+  key: string
+): Record<string, true> {
+  const { [key]: _gone, ...rest } = keys;
   return rest;
 }
 
@@ -134,19 +156,28 @@ export const usePhone = create<PhoneStore>((set, get) => ({
     set({ pairing: { phase: "idle" } });
     await KriyonNative.cancelPairing().catch(() => undefined);
   },
-  closeReadable: (hostId, sessionId) =>
+  closeReadable: (hostId, sessionId) => {
+    const key = readableKey(hostId, sessionId);
+    set((state) => ({
+      readable: state.readable[key]?.unavailable
+        ? state.readable
+        : without(state.readable, key),
+      reading: withoutKey(state.reading, key),
+    }));
     // Closing the stream stops its entries too.
-    inTurn(() => KriyonNative.closeSession(hostId, sessionId)),
+    return inTurn(() => KriyonNative.closeSession(hostId, sessionId));
+  },
   closeSession: (hostId, sessionId) =>
     inTurn(() => KriyonNative.closeSession(hostId, sessionId)),
   deviceId: null,
   entriesChanged: ({ hostId, sessionId, summary }) =>
-    set((state) => ({
-      readable: {
-        ...state.readable,
-        [readableKey(hostId, sessionId)]: summary,
-      },
-    })),
+    set((state) => {
+      const key = readableKey(hostId, sessionId);
+      // Late news from a read that was closed changes nothing.
+      return state.reading[key]
+        ? { readable: { ...state.readable, [key]: summary } }
+        : {};
+    }),
   forget: async (hostId) => {
     await KriyonNative.forget(hostId);
     set((state) => {
@@ -191,10 +222,16 @@ export const usePhone = create<PhoneStore>((set, get) => ({
   },
   newSessionError: null,
   newSessionStarting: false,
+  forgetReadable: (hostId, sessionId) =>
+    set((state) => ({
+      readable: without(state.readable, readableKey(hostId, sessionId)),
+    })),
   openReadable: (hostId, sessionId) =>
     inTurn(async () => {
+      const key = readableKey(hostId, sessionId);
+      await KriyonNative.openSession(hostId, sessionId);
+      set((state) => ({ reading: { ...state.reading, [key]: true } }));
       try {
-        await KriyonNative.openSession(hostId, sessionId);
         await KriyonNative.readEntries(hostId, sessionId);
       } catch (error) {
         // No entries to show: the terminal, with why.
@@ -244,20 +281,16 @@ export const usePhone = create<PhoneStore>((set, get) => ({
   pairing: { phase: "idle" },
   push: null,
   readable: {},
+  reading: {},
+  retryReadable: (hostId, sessionId) =>
+    set((state) => {
+      const key = readableKey(hostId, sessionId);
+      return state.readable[key]?.unavailable
+        ? { readable: without(state.readable, key) }
+        : {};
+    }),
   screen: { kind: "home" },
-  show: (screen) =>
-    set((state) => ({
-      newSessionError: null,
-      // A session shown again reads its entries afresh.
-      readable:
-        screen.kind === "session"
-          ? without(
-              state.readable,
-              readableKey(screen.hostId, screen.sessionId)
-            )
-          : state.readable,
-      screen,
-    })),
+  show: (screen) => set({ newSessionError: null, screen }),
   start: async (deviceName) => {
     try {
       const deviceId = await KriyonNative.start(deviceName);

@@ -74,6 +74,8 @@ test("a session's entries from Rust reach the store", async () => {
     ([name]) => name === "onEntriesChanged"
   ) as unknown as [string, (event: unknown) => void] | undefined;
   const summary = { entries: [], unavailable: "off" };
+  // A session the phone is reading.
+  usePhone.setState({ reading: { [`${"ab".repeat(32)}/s1`]: true } });
   call?.[1]({ hostId: "ab".repeat(32), sessionId: "s1", summary });
   expect(usePhone.getState().readable[`${"ab".repeat(32)}/s1`]).toEqual(
     summary

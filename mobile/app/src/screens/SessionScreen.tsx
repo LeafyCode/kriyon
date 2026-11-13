@@ -4,7 +4,7 @@
  * terminal's size), shown first, and the real terminal. A session with no
  * entries to read shows its terminal, saying why; Readable tries again.
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Pressable, Text, View } from "react-native";
 import { readableKey, usePhone } from "../state/phone.ts";
 import { colors, ui } from "../ui.ts";
@@ -54,7 +54,12 @@ export function SessionScreen({
     (state) => state.readable[readableKey(hostId, sessionId)]?.unavailable
   );
   const readable = view === "readable" && !unavailable;
-  const { show } = usePhone.getState();
+  const { retryReadable, show } = usePhone.getState();
+  // Leaving the session forgets why it had no entries: back, it reads afresh.
+  useEffect(
+    () => () => usePhone.getState().forgetReadable(hostId, sessionId),
+    [hostId, sessionId]
+  );
   return (
     <View style={[ui.screen, { gap: 12, padding: 16 }]}>
       <Pressable
@@ -71,10 +76,7 @@ export function SessionScreen({
           label="Readable"
           on={readable}
           onPress={() => {
-            if (unavailable) {
-              // Shown again, the session reads its entries afresh.
-              show({ hostId, kind: "session", sessionId });
-            }
+            retryReadable(hostId, sessionId);
             setView("readable");
           }}
         />

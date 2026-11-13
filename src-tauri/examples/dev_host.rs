@@ -50,6 +50,8 @@ struct DevApp {
     /// When the readable view was first read since nobody read it: its
     /// conversation follows the clock from there.
     reading_since: Mutex<Instant>,
+    /// When its entries were last built: a reader looks every second or so.
+    last_read: Mutex<Option<Instant>>,
 }
 
 impl DevApp {
@@ -235,9 +237,14 @@ impl ServeHost for DevApp {
                 kriyon_remote::message::EntriesUnavailable::NoTranscript,
             );
         }
-        // A first build (no stamp yet): someone opened the readable view,
-        // so the conversation starts from the beginning for them.
-        if stamp.is_none() {
+        // Opened while nobody was reading: the conversation starts from the
+        // beginning. A second reader joins it where it is.
+        let idle = self
+            .last_read
+            .lock()
+            .replace(Instant::now())
+            .is_none_or(|last| last.elapsed() > Duration::from_secs(5));
+        if stamp.is_none() && idle {
             *self.reading_since.lock() = Instant::now();
         }
         let beat = self.reading_since.lock().elapsed().as_secs() / 2;
@@ -342,6 +349,7 @@ async fn run(invite_file: Option<String>) {
         lines: Mutex::default(),
         serve: Mutex::default(),
         reading_since: Mutex::new(Instant::now()),
+        last_read: Mutex::default(),
     });
     let serve = Serve::new(Arc::clone(&app) as Arc<dyn ServeHost>);
     *app.serve.lock() = Some(serve.clone());
