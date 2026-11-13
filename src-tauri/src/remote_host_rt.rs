@@ -253,6 +253,28 @@ impl ServeHost for AppServeHost {
     }
 
     fn set_onlooked(&self, id: &str, onlooked: bool) {
+        let session = SessionId(id.to_string());
+        {
+            let state = self.0.state::<AppState>();
+            let mut remote = state.remote_onlooked.lock();
+            if onlooked {
+                remote.insert(session.clone());
+            } else {
+                remote.remove(&session);
+            }
+        }
+        // Opened while asleep: woken, as desktop focus wakes it. Off the
+        // async runtime: a wake types into the session.
+        if onlooked {
+            let app = self.0.clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                let asleep = app.state::<AppState>().sleep.lock().state(&session.0)
+                    == kriyon_core::sleep::SleepState::Asleep;
+                if asleep {
+                    crate::sleep_rt::attempt_wake(&app, &session.0);
+                }
+            });
+        }
         let engine = self
             .0
             .state::<AppState>()

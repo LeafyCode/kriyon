@@ -115,13 +115,21 @@ pub fn sleep_pass<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
             attempt_wake(app, &session_id.0);
         }
     }
+    // The same for every session a remote device has open: it wakes the
+    // session as desktop focus does (plan Step C item 7).
+    let remote: Vec<SessionId> = state.remote_onlooked.lock().iter().cloned().collect();
+    for session_id in remote {
+        if state.sleep.lock().state(&session_id.0) == SleepState::Asleep {
+            attempt_wake(app, &session_id.0);
+        }
+    }
 
     stop_candidates(
         app,
         &state,
         &ids,
         &tree,
-        &onlookers(focused.as_ref()),
+        &onlookers(focused.as_ref(), &state.remote_onlooked.lock().clone()),
         &policy,
     );
 }
@@ -142,22 +150,29 @@ pub fn sleep_idle_now<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> usize {
     };
     let tree = survey.tree();
     let focused = state.focused.lock().clone();
+    let looking = onlookers(focused.as_ref(), &state.remote_onlooked.lock());
     stop_candidates(
         app,
         &state,
         &ids,
         &tree,
-        &onlookers(focused.as_ref()),
+        &looking,
         &kriyon_core::sleep::AutoSleep::NOW,
     )
 }
 
 /// Everyone looking at a session right now, for the "never sleep a session
-/// someone is looking at" gate. Only the desktop's focused pane today; a remote device
-/// becomes another [`Onlooker`] here and is counted without touching the gate.
-fn onlookers(desktop_focus: Option<&SessionId>) -> Onlookers {
+/// someone is looking at" gate: the desktop's focused pane, and every session
+/// a remote device has open.
+fn onlookers(
+    desktop_focus: Option<&SessionId>,
+    remote: &std::collections::HashSet<SessionId>,
+) -> Onlookers {
     let mut onlookers = Onlookers::default();
     onlookers.look(Onlooker::Desktop, desktop_focus.map(|id| id.0.as_str()));
+    for id in remote {
+        onlookers.open(Onlooker::Remote, &id.0);
+    }
     onlookers
 }
 
@@ -610,6 +625,16 @@ fn type_resume<R: tauri::Runtime>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_session_a_remote_device_has_open_is_looked_at() {
+        let remote: std::collections::HashSet<SessionId> =
+            [SessionId("phone's".into())].into_iter().collect();
+        let onlookers = onlookers(Some(&SessionId("desk's".into())), &remote);
+        assert!(onlookers.has_onlooker("phone's"));
+        assert!(onlookers.has_onlooker("desk's"));
+        assert!(!onlookers.has_onlooker("nobody's"));
+    }
     use kriyon_core::proc::ProcRow;
 
     /// A daemon for `session` hosting a shell whose terminal foreground is

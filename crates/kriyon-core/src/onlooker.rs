@@ -6,20 +6,23 @@
 //! [`Onlooker`] here, so every rule that asks "is anyone looking?" counts it
 //! without changing.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Something that can be looking at a session.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Onlooker {
     /// The desktop app, looking at its focused session.
     Desktop,
+    /// Remote devices, looking at the sessions they have open.
+    Remote,
 }
 
-/// Which session each [`Onlooker`] is looking at. A onlooker looks at one
-/// session at most; a session may have several onlookers.
+/// Which sessions each [`Onlooker`] is looking at. The desktop looks at one
+/// at most ([`Onlookers::look`]); remote devices at every session they have
+/// open ([`Onlookers::open`]). A session may have several onlookers.
 #[derive(Clone, Debug, Default)]
 pub struct Onlookers {
-    looking_at: HashMap<Onlooker, String>,
+    looking_at: HashMap<Onlooker, HashSet<String>>,
 }
 
 impl Onlookers {
@@ -28,7 +31,8 @@ impl Onlookers {
     pub fn look(&mut self, onlooker: Onlooker, session_id: Option<&str>) {
         match session_id {
             Some(id) => {
-                self.looking_at.insert(onlooker, id.to_owned());
+                self.looking_at
+                    .insert(onlooker, HashSet::from([id.to_owned()]));
             }
             None => {
                 self.looking_at.remove(&onlooker);
@@ -36,10 +40,27 @@ impl Onlookers {
         }
     }
 
+    /// `onlooker` looks at `session_id` too, besides what it already does.
+    pub fn open(&mut self, onlooker: Onlooker, session_id: &str) {
+        self.looking_at
+            .entry(onlooker)
+            .or_default()
+            .insert(session_id.to_owned());
+    }
+
+    /// `onlooker` stops looking at `session_id`.
+    pub fn close(&mut self, onlooker: Onlooker, session_id: &str) {
+        if let Some(sessions) = self.looking_at.get_mut(&onlooker) {
+            sessions.remove(session_id);
+        }
+    }
+
     /// Whether any onlooker is looking at `session_id`.
     #[must_use]
     pub fn has_onlooker(&self, session_id: &str) -> bool {
-        self.looking_at.values().any(|id| id == session_id)
+        self.looking_at
+            .values()
+            .any(|sessions| sessions.contains(session_id))
     }
 }
 
@@ -65,5 +86,17 @@ mod tests {
         assert!(onlookers.has_onlooker("b"));
         onlookers.look(Onlooker::Desktop, None);
         assert!(!onlookers.has_onlooker("b"));
+    }
+
+    #[test]
+    fn a_remote_device_can_look_at_several_sessions_at_once() {
+        let mut onlookers = Onlookers::default();
+        onlookers.open(Onlooker::Remote, "a");
+        onlookers.open(Onlooker::Remote, "b");
+        onlookers.look(Onlooker::Desktop, Some("c"));
+        assert!(onlookers.has_onlooker("a") && onlookers.has_onlooker("b"));
+        onlookers.close(Onlooker::Remote, "a");
+        assert!(!onlookers.has_onlooker("a"));
+        assert!(onlookers.has_onlooker("b") && onlookers.has_onlooker("c"));
     }
 }
