@@ -2060,7 +2060,7 @@ export function remoteHostForget(hostId: string): Promise<void> {
 
 /**
  * Open a session on a paired computer; its screen arrives as raw frames
- * (see `decodeScreenFrame` in `state/remoteHosts.ts`).
+ * (see `decodeScreenFrame` in `remote/remoteScreen.ts`).
  */
 export function remoteHostOpenSession(
   hostId: string,

@@ -2,18 +2,15 @@ import { Terminal as XTerm } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { type CSSProperties, useEffect, useRef, useState } from "react";
 import { useLayout } from "../state/layout.ts";
-import {
-  canType,
-  decodeScreenFrame,
-  linkLine,
-  useRemoteHosts,
-} from "../state/remoteHosts.ts";
+import { canType, useRemoteHosts } from "../state/remoteHosts.ts";
 import { button } from "../theme/recipes.ts";
 import { terminalTheme } from "../theme/terminalTheme.ts";
 import { themeById } from "../theme/themes/index.ts";
 import { tokens } from "../theme/tokens.ts";
 import {
   applyScreenFrame,
+  decodeScreenFrame,
+  linkLine,
   receiptLine,
   refusalLine,
   type ScreenNote,

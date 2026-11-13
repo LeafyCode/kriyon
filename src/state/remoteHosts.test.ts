@@ -13,9 +13,7 @@ import {
 } from "../ipc/bridge.ts";
 import {
   canType,
-  decodeScreenFrame,
   installRemoteHostListeners,
-  linkLine,
   remoteNeedsYouCount,
   useRemoteHosts,
 } from "./remoteHosts.ts";
@@ -64,31 +62,6 @@ beforeEach(() => {
   vi.resetAllMocks();
   useRemoteHosts.setState(useRemoteHosts.getInitialState());
   vi.mocked(remoteHosts).mockResolvedValue([]);
-});
-
-test("a screen frame says what to draw", () => {
-  expect(decodeScreenFrame(new Uint8Array([0, 104, 105]))).toEqual({
-    bytes: new Uint8Array([104, 105]),
-    kind: "output",
-  });
-  expect(decodeScreenFrame(new Uint8Array([1, 1, 44, 0, 2, 1, 120]))).toEqual({
-    bytes: new Uint8Array([120]),
-    cols: 300,
-    kind: "screen",
-    rows: 2,
-    skipped: true,
-  });
-  expect(decodeScreenFrame(new Uint8Array([2, 1]))).toEqual({
-    kind: "receipt",
-    written: true,
-  });
-  expect(decodeScreenFrame(new Uint8Array([3, 4]))).toEqual({
-    kind: "refused",
-    reason: 4,
-  });
-  for (const bad of [[], [1, 0, 80], [9, 1]]) {
-    expect(decodeScreenFrame(new Uint8Array(bad))).toBeNull();
-  }
 });
 
 test("loading lists the paired computers", async () => {
@@ -239,15 +212,6 @@ test("typing is on only while connected, as a Controller, with control", () => {
   expect(canType(link({ sessions: [mine], state: "lost" }), mine)).toBe(false);
   expect(canType(link({ role: "viewer", sessions: [mine] }), mine)).toBe(false);
   expect(canType(link(), session())).toBe(false);
-});
-
-test("each link state has its line", () => {
-  expect(linkLine("lost")).toBe("Disconnected, reconnecting. Typing is off.");
-  expect(linkLine("removed")).toBe(
-    "Removed from that computer. Pair again to use it."
-  );
-  expect(linkLine("connecting")).toBe("Connecting…");
-  expect(linkLine("connected")).toBe("Connected");
 });
 
 test("the app wakes reconnects when its window comes back to the front", () => {

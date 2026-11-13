@@ -1,10 +1,11 @@
 import { type CSSProperties, useState } from "react";
 import { standingMeta } from "../commandCenter/CommandCenter.tsx";
 import type { HostLink, HostSession, PairedHost } from "../ipc/bridge.ts";
-import { linkLine, useRemoteHosts } from "../state/remoteHosts.ts";
+import { useRemoteHosts } from "../state/remoteHosts.ts";
 import { card, sectionLabel } from "../theme/recipes.ts";
 import { tokens } from "../theme/tokens.ts";
 import { RemoteTerminal } from "./RemoteTerminal.tsx";
+import { linkLine } from "./remoteScreen.ts";
 
 /**
  * Other computers: each paired computer, how its link stands, and its
