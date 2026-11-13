@@ -41,6 +41,12 @@ impl<M: Wire> MessageReader<M> {
             }
             match self.recv.read(&mut self.buf).await {
                 Ok(Some(n)) => self.decoder.push(&self.buf[..n]),
+                // A stream that ends mid-message lost part of it.
+                Ok(None) if self.decoder.buffered() > 0 => {
+                    return Err(LinkError::Protocol(
+                        kriyon_remote::codec::CodecError::Malformed,
+                    ))
+                }
                 Ok(None) => return Ok(None),
                 Err(iroh::endpoint::ReadError::ConnectionLost(lost)) => {
                     return Err(crate::endpoint::gone(&lost))

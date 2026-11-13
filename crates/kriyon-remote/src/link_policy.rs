@@ -104,10 +104,13 @@ impl Backoff {
     }
 }
 
-/// Counts events per key over a sliding minute, and says when a key has had
-/// too many. The host feeds it the source address of each handshake it
+/// Counts events per key in a fixed window that starts at the key's first
+/// event, and says when a key has had too many. The host feeds it the source address of each handshake it
 /// refused as unpaired, and ignores new handshakes from an address over the
 /// limit, so a stranger can't make it do handshakes nonstop.
+/// How many keys a [`RateLimit`] holds before it drops expired ones.
+const PRUNE_AT: usize = 1024;
+
 #[derive(Debug)]
 pub struct RateLimit<K> {
     per_window: u32,
@@ -128,10 +131,16 @@ impl<K: Hash + Eq> RateLimit<K> {
     /// Record one event for `key` at `now`.
     pub fn record(&mut self, key: K, now: Instant) {
         let window = self.window;
-        // Forget sources whose minute is over, so the map stays small.
-        self.seen
-            .retain(|_, (start, _)| now.saturating_duration_since(*start) < window);
+        // Forget sources whose window is over now and then, so the map stays
+        // small without a scan on every event.
+        if self.seen.len() >= PRUNE_AT {
+            self.seen
+                .retain(|_, (start, _)| now.saturating_duration_since(*start) < window);
+        }
         let entry = self.seen.entry(key).or_insert((now, 0));
+        if now.saturating_duration_since(entry.0) >= window {
+            *entry = (now, 0);
+        }
         entry.1 = entry.1.saturating_add(1);
     }
 
@@ -187,6 +196,12 @@ impl PendingPairing {
     #[must_use]
     pub fn secret(&self) -> &PairingSecret {
         &self.secret
+    }
+
+    /// The device whose proof took this pairing, if one has.
+    #[must_use]
+    pub fn taken_by(&self) -> Option<EndpointId> {
+        self.taken_by
     }
 
     /// Whether the pairing still takes connections.
@@ -312,6 +327,13 @@ mod tests {
         assert!(limit.over(&"10.0.0.9", t + secs(59)));
         assert!(!limit.over(&"10.0.0.8", t), "another source is not limited");
         assert!(!limit.over(&"10.0.0.9", t + secs(60)));
+        // A new window counts from zero, and the limit applies in it again.
+        let later = t + secs(61);
+        limit.record("10.0.0.9", later);
+        assert!(!limit.over(&"10.0.0.9", later));
+        limit.record("10.0.0.9", later);
+        limit.record("10.0.0.9", later);
+        assert!(limit.over(&"10.0.0.9", later));
     }
 
     fn proof(device: &EndpointId) -> [u8; 32] {
@@ -323,7 +345,9 @@ mod tests {
         let t = Instant::now();
         let mut p = PendingPairing::new(SECRET, Role::Controller, t);
         assert!(p.open(t));
+        assert_eq!(p.taken_by(), None);
         assert_eq!(p.take(&PHONE, &HOST, &proof(&PHONE), t), Ok(()));
+        assert_eq!(p.taken_by(), Some(PHONE));
         // A leaked QR used second gets nothing.
         assert_eq!(
             p.take(&THIEF, &HOST, &proof(&THIEF), t),

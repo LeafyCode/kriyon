@@ -9,7 +9,7 @@ description = "The network link of Kriyon's remote access, over iroh: endpoints,
 [dependencies]
 iroh = { version = "1.4.1", default-features = false, features = ["tls-ring"] }
 kriyon-remote = { path = "../kriyon-remote" }
-tokio = { version = "1", default-features = false, features = ["sync", "time"] }
+tokio = { version = "1", default-features = false, features = ["rt", "sync", "time"] }
 
 [dev-dependencies]
 tokio = { version = "1", default-features = false, features = ["macros", "rt-multi-thread", "sync", "time"] }
