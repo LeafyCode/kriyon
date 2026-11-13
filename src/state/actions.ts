@@ -10,6 +10,7 @@ import {
   upsertSession,
   worktreePathFor,
 } from "../ipc/bridge.ts";
+import { failureMessage } from "../ipc/failures.ts";
 import {
   disposeSession,
   ensureSession,
@@ -234,11 +235,14 @@ function persistThenWarm(
   }
   // The project first: the core saves a session only once its project is
   // saved, and checks the session's folders against it (ADR-0058). Settles
-  // either way; a refused write surfaces where the session fails to start.
+  // either way, so the start still runs and reports its own failure.
   const saved = upsertProject(project)
-    .catch(() => undefined)
     .then(() => upsertSession(session))
-    .catch(() => undefined);
+    .catch((err: unknown) => {
+      // Usually the core refusing the folder: say why here, where the reason
+      // is known, rather than leave the start to fail without one.
+      showToast(`Could not save the session: ${failureMessage(err)}`, "error");
+    });
   // Its shell must not start before these rows approve its folder.
   noteRowSave(session.id, saved);
   ignore(saved.then(warm));

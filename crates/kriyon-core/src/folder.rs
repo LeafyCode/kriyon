@@ -32,6 +32,9 @@ pub enum FolderRefusal {
     /// Not exactly one of the [Chosen folder]s (inside one is not enough).
     #[error("folder was not chosen on this computer")]
     NotChosen,
+    /// Not exactly its project's folder or one of the project's worktrees.
+    #[error("folder is not the project's folder or one of its worktrees")]
+    NotProjectFolder,
 }
 
 /// A folder path that passed [`check_folder`]. Its only constructor is that
@@ -134,13 +137,15 @@ pub fn check_project_path(
 }
 
 /// A folder a session row may be saved with (its `cwd`, or its worktree): the
-/// one it was saved with before, unchecked, or a [Checked folder] inside its
-/// project's folder or one of the project repository's worktrees. `worktrees`
-/// is asked only when the project folder does not settle it, because listing
-/// them runs git, and rows are saved on every title or pin change.
+/// one it was saved with before, unchecked, or exactly its project's folder or
+/// one of the project repository's linked worktrees. Exactly, not inside:
+/// sessions start in one of those, and "inside" would let a session under the
+/// Home project approve all of HOME. `worktrees` is asked only when the
+/// project folder does not settle it, because listing them runs git.
 ///
 /// # Errors
-/// The [`FolderRefusal`] from [`check_folder`] for a new or changed path.
+/// The [`FolderRefusal`] from [`check_folder`] for a new or changed path, or
+/// `NotProjectFolder` when it is none of those folders.
 pub fn check_session_path(
     path: &str,
     saved: Option<&str>,
@@ -150,22 +155,27 @@ pub fn check_session_path(
     if saved == Some(path) {
         return Ok(());
     }
-    let mut roots = vec![project_folder.to_path_buf()];
-    match check_folder(path, &roots) {
-        Err(FolderRefusal::OutsideApprovedRoots) => {
-            roots.extend(worktrees());
-            check_folder(path, &roots).map(|_| ())
-        }
-        other => other.map(|_| ()),
+    let not_project = |refusal| match refusal {
+        FolderRefusal::NotChosen => FolderRefusal::NotProjectFolder,
+        other => other,
+    };
+    match check_chosen_folder(path, &[project_folder.to_path_buf()]) {
+        Err(FolderRefusal::NotChosen) => check_chosen_folder(path, &worktrees())
+            .map(|_| ())
+            .map_err(not_project),
+        other => other.map(|_| ()).map_err(not_project),
     }
 }
 
-/// The folders `git worktree list --porcelain` names, the main checkout first.
+/// The linked worktrees `git worktree list --porcelain` names: every one but
+/// the first, the main checkout, which can sit above a project kept in a
+/// subfolder of its repository.
 #[must_use]
-pub fn parse_worktree_list(porcelain: &str) -> Vec<PathBuf> {
+pub fn parse_linked_worktrees(porcelain: &str) -> Vec<PathBuf> {
     porcelain
         .lines()
         .filter_map(|line| line.strip_prefix("worktree "))
+        .skip(1)
         .map(PathBuf::from)
         .collect()
 }
@@ -403,7 +413,19 @@ mod tests {
     }
 
     #[test]
-    fn a_session_inside_its_project_folder_passes_without_asking_git() {
+    fn a_session_in_its_project_folder_passes_without_asking_git() {
+        let project = tempfile::tempdir().unwrap();
+        assert_eq!(
+            check_session_path(s(project.path()), None, project.path(), no_worktrees),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn a_session_below_its_project_folder_is_refused() {
+        // Sessions start in the project folder or a worktree, never below:
+        // "inside" would let a session under the Home project approve all
+        // of HOME.
         let project = tempfile::tempdir().unwrap();
         std::fs::create_dir(project.path().join("sub")).unwrap();
         assert_eq!(
@@ -411,9 +433,9 @@ mod tests {
                 s(&project.path().join("sub")),
                 None,
                 project.path(),
-                no_worktrees
+                Vec::new
             ),
-            Ok(())
+            Err(FolderRefusal::NotProjectFolder)
         );
     }
 
@@ -434,7 +456,7 @@ mod tests {
         let elsewhere = tempfile::tempdir().unwrap();
         assert_eq!(
             check_session_path(s(elsewhere.path()), None, project.path(), Vec::new),
-            Err(FolderRefusal::OutsideApprovedRoots)
+            Err(FolderRefusal::NotProjectFolder)
         );
     }
 
@@ -453,14 +475,15 @@ mod tests {
     }
 
     #[test]
-    fn worktree_list_names_every_worktree_path() {
+    fn linked_worktrees_leave_out_the_main_checkout() {
+        // The main checkout can sit above a project kept in a monorepo's
+        // subfolder; it is approved only as the project folder itself.
         let porcelain = "worktree /repo\nHEAD abc\nbranch refs/heads/main\n\n\
                          worktree /repo-worktrees/feat x\nHEAD def\nbranch refs/heads/feat\n\n\
                          worktree /tmp/detached\nHEAD 123\ndetached\n";
         assert_eq!(
-            parse_worktree_list(porcelain),
+            parse_linked_worktrees(porcelain),
             vec![
-                PathBuf::from("/repo"),
                 PathBuf::from("/repo-worktrees/feat x"),
                 PathBuf::from("/tmp/detached"),
             ]

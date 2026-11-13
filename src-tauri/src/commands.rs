@@ -169,14 +169,6 @@ fn note_hooks_off(
     );
 }
 
-/// Create a new pty-backed session in `cwd`, streaming its output to
-/// `on_output`.
-///
-/// The `id` is supplied by the frontend (the store's session UUID) and is used
-/// verbatim as the `SessionId`, so the pty, the transcript watcher, the status
-/// tracker, and the pending-ask cache all key on the same id and
-/// `close_session(id)` tears them all down together.
-///
 /// The folder a session's shell starts in: `cwd` from the webview (empty means
 /// HOME), refused unless it is a [Checked folder] inside an [Approved root]
 /// (ADR-0058). Returns the spelling as given, not the canonical form: Claude
@@ -189,8 +181,14 @@ fn session_cwd(store: &StoreState, cwd: &str, home: &Path) -> Result<String, Str
     Ok(cwd)
 }
 
-/// Start (or reattach to) a session's shell in `cwd`, which must be a
-/// [Checked folder] inside an [Approved root] (see [`session_cwd`]).
+/// Create a new pty-backed session in `cwd`, streaming its output to
+/// `on_output`. A fresh shell starts only in a [Checked folder] inside an
+/// [Approved root] (see [`session_cwd`]).
+///
+/// The `id` is supplied by the frontend (the store's session UUID) and is used
+/// verbatim as the `SessionId`, so the pty, the transcript watcher, the status
+/// tracker, and the pending-ask cache all key on the same id and
+/// `close_session(id)` tears them all down together.
 ///
 /// Returns `true` if it reattached to a daemon that survived a previous app run
 /// (its shell — and the `claude` already launched into it — are still live), and

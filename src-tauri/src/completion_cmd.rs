@@ -286,10 +286,10 @@ fn cwd_refusal_message(refusal: &FolderRefusal) -> &'static str {
         FolderRefusal::NotAbsolute => "cwd is not absolute",
         FolderRefusal::NotNormal => "cwd has a '.' or '..' part",
         FolderRefusal::NotADirectory => "cwd is not a directory",
-        // `check_folder` never says `NotChosen`; it is the exact-match rule's.
-        FolderRefusal::OutsideApprovedRoots | FolderRefusal::NotChosen => {
-            "cwd is not a known session or project root"
-        }
+        // `check_folder` never says the last two; they are the store rules'.
+        FolderRefusal::OutsideApprovedRoots
+        | FolderRefusal::NotChosen
+        | FolderRefusal::NotProjectFolder => "cwd is not a known session or project root",
     }
 }
 

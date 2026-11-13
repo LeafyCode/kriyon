@@ -67,13 +67,17 @@ Where it runs:
   re-checked: a parked or removed project's row must still save once its folder is gone), or
   is exactly a [Chosen folder]: one the person picked in a native folder dialog that the Rust
   core ran (`pick_folder`, recorded in memory as `ChosenFolders`, the same shape as the
-  attachment registry of ADR-0037), the home folder (the Home project), or a folder Claude Code
-  already keeps history for under `~/.claude/projects` (resuming a past session). Exactly, not
-  inside: the home folder is chosen, and "inside it" would be nearly everything.
+  attachment registry of ADR-0037), or the home folder (the Home project). Exactly, not
+  inside: the home folder is chosen, and "inside it" would be nearly everything. Resuming a
+  past session needs no rule of its own: Kriyon lists past sessions only for a saved project's
+  folder, so the resumed folder is that project's.
 - **`upsert_session`** saves a session only once its project is saved, and only when its `cwd`
-  and `worktree_path` are each the value saved before, or a [Checked folder] inside the
-  project's folder or one of the project repository's worktrees (`git worktree list`, asked only
-  when the project folder does not settle it, since rows are re-saved on every title change).
+  and `worktree_path` are each the value saved before, or exactly the project's folder or one of
+  the project repository's linked worktrees (`git worktree list`, without the main checkout,
+  asked only when the project folder does not settle it, since rows are re-saved on every title
+  change). Exactly again: every session starts in one of those, and "inside" would let a session
+  of the Home project approve any folder under HOME. The main checkout is left out because it
+  can sit above a project kept in a subfolder of a monorepo.
 - The frontend saves a new session's project before the session, and records the baseline only
   after both, so neither write races the check.
 
@@ -84,8 +88,10 @@ person's approved roots and never add one themselves.
 
 - One function decides "is this folder one the person approved". Remote access reuses it as is.
 - Rows saved before this rule are not re-checked; they stay approved as they were.
-- The webview can still name a folder Claude Code has history for, or its own home folder, as a
-  new project. Both are folders the person already works in on this computer.
+- The webview can still name the home folder as a new project, the Home project. A session can
+  only ever start in the home folder itself, not under it.
+- A linked worktree counts once git lists it, so `create_worktree` must check where it puts one;
+  the worktree-setup change does that.
 - `ChosenFolders` lives in memory, so a folder picked but never saved is forgotten on quit.
 - A session whose folder was deleted, or whose project was removed, no longer starts a fresh
   shell; it fails with the check's message instead. One whose daemon is still live reattaches.

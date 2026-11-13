@@ -266,15 +266,14 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
 - **Approved root** (`approved_roots`, `known_roots`) — a folder the person chose on this
   computer, so Kriyon may start a session in it or under it: a [Project (Workspace)]'s folder or
   one of its [Worktree]s. The store's project and session rows are the record of them, and a row
-  is saved only when its folder is a [Chosen folder] (a project) or sits inside its project's
-  folder or worktrees (a session). A folder path from the webview is trusted only once it is a
+  is saved only when its folder is a [Chosen folder] (a project) or is exactly its project's
+  folder or one of its linked worktrees (a session). A folder path from the webview is trusted only once it is a
   [Checked folder] inside one (ADR-0058).
   _Avoid_: allowed root, whitelist, known root (the old name in comments).
 - **Chosen folder** (`ChosenFolders`, `pick_folder`, `check_chosen_folder`) — a folder that
   may become a new [Project (Workspace)]: one the person picked in a native folder dialog the
-  Rust core ran this run, the home folder (the Home project's), or a folder Claude Code already
-  keeps history for (a resumed [Past session]'s). A project's folder must be exactly one, not
-  merely inside one (ADR-0058). _Avoid_: picked path, allowed folder.
+  Rust core ran this run, or the home folder (the Home project's). A project's folder must be
+  exactly one, not merely inside one (ADR-0058). _Avoid_: picked path, allowed folder.
 - **Checked folder** (`kriyon_core::folder::check_folder`, `CheckedFolder`, `FolderRefusal`) —
   a folder path that passed the one shared check: absolute, no `.` or `..` parts, exists, is a
   directory, and its canonical form (symlinks resolved) sits inside an [Approved root]'s

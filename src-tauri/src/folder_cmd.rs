@@ -1,7 +1,7 @@
 //! [Chosen folder]s: the folders the person picked in a native folder dialog
 //! that the Rust core ran itself, so the webview cannot add one (ADR-0058).
-//! The store commands accept a new project folder only when it is one of them,
-//! the home folder, or a folder Claude Code already has history for.
+//! The store commands accept a new project folder only when it is one of them
+//! or the home folder.
 
 use std::path::{Path, PathBuf};
 
@@ -21,18 +21,12 @@ impl ChosenFolders {
         }
     }
 
-    /// Every [Chosen folder] for `path`: the ones picked this run, the home
-    /// folder (the Home project's), and `path` itself when Claude Code keeps
-    /// history for it under `~/.claude/projects` (a resumed past session's).
+    /// Every [Chosen folder]: the ones picked this run, and the home folder
+    /// (the Home project's).
     #[must_use]
-    pub fn for_path(&self, home: &Path, path: &str) -> Vec<PathBuf> {
+    pub fn with_home(&self, home: &Path) -> Vec<PathBuf> {
         let mut chosen = self.0.lock().clone();
         chosen.push(home.to_path_buf());
-        let history =
-            crate::hooks::projects_dir(home).join(kriyon_core::history::encode_project_dir(path));
-        if history.is_dir() {
-            chosen.push(PathBuf::from(path));
-        }
         chosen
     }
 }

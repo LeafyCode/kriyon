@@ -26,22 +26,20 @@ fn check_project_row(
     let saved = store
         .0
         .lock()
-        .list_projects()
+        .project_row(&project.id)
         .map_err(|e| e.to_string())?
-        .into_iter()
-        .find(|p| p.id == project.id)
         .map(|p| p.path);
     kriyon_core::folder::check_project_path(
         &project.path,
         saved.as_deref(),
-        &chosen.for_path(home, &project.path),
+        &chosen.with_home(home),
     )
     .map_err(|refusal| format!("project folder: {refusal}"))
 }
 
 /// Refuse `session` unless its project is saved and each of its folders is
-/// the one it was saved with or sits inside the project's folder or one of
-/// the project repository's worktrees (see
+/// the one it was saved with, or exactly the project's folder or one of the
+/// project repository's linked worktrees (see
 /// `kriyon_core::folder::check_session_path`).
 fn check_session_row(store: &StoreState, session: &SessionRow) -> Result<(), String> {
     // Read both rows, then let the lock go: the checks touch the disk, and
@@ -49,10 +47,8 @@ fn check_session_row(store: &StoreState, session: &SessionRow) -> Result<(), Str
     let (project, saved) = {
         let store = store.0.lock();
         let project = store
-            .list_projects()
-            .map_err(|e| e.to_string())?
-            .into_iter()
-            .find(|p| p.id == session.project_id);
+            .project_row(&session.project_id)
+            .map_err(|e| e.to_string())?;
         let saved = store.session_row(&session.id).map_err(|e| e.to_string())?;
         (project, saved)
     };
@@ -66,7 +62,12 @@ fn check_session_row(store: &StoreState, session: &SessionRow) -> Result<(), Str
         worktrees,
     )
     .map_err(|refusal| format!("session folder: {refusal}"))?;
-    if let Some(worktree) = &session.worktree_path {
+    // A worktree session's `cwd` is its worktree: checked once, git run once.
+    if let Some(worktree) = session
+        .worktree_path
+        .as_ref()
+        .filter(|w| **w != session.cwd)
+    {
         kriyon_core::folder::check_session_path(
             worktree,
             saved.as_ref().and_then(|s| s.worktree_path.as_deref()),
@@ -78,13 +79,13 @@ fn check_session_row(store: &StoreState, session: &SessionRow) -> Result<(), Str
     Ok(())
 }
 
-/// The worktrees of the repository at `project_folder`, as git lists them;
-/// none when it is not a repository or git fails.
+/// The linked worktrees of the repository at `project_folder`, as git lists
+/// them; none when it is not a repository or git fails.
 fn project_worktrees(project_folder: &str) -> Vec<PathBuf> {
     crate::git_run::GitRun::new(project_folder)
         .args(["worktree", "list", "--porcelain"])
         .text()
-        .map(|out| kriyon_core::folder::parse_worktree_list(&out))
+        .map(|out| kriyon_core::folder::parse_linked_worktrees(&out))
         .unwrap_or_default()
 }
 
@@ -153,7 +154,7 @@ pub fn list_projects(store: tauri::State<'_, StoreState>) -> Result<Vec<ProjectR
 }
 
 /// Insert or update a session. Its project must be saved, and its folders
-/// must sit inside the project's folder or one of its worktrees (ADR-0058).
+/// must be the project's folder or one of its worktrees (ADR-0058).
 ///
 /// # Errors
 /// Returns an error string if a folder is refused or the database write
@@ -309,22 +310,6 @@ mod tests {
     }
 
     #[test]
-    fn a_folder_claude_code_has_history_for_can_become_a_project() {
-        // Resuming a past session makes its folder a project.
-        let home = tempfile::tempdir().unwrap();
-        let folder = tempfile::tempdir().unwrap();
-        let encoded = kriyon_core::history::encode_project_dir(&folder.path().to_string_lossy());
-        std::fs::create_dir_all(crate::hooks::projects_dir(home.path()).join(encoded)).unwrap();
-        check_project_row(
-            &empty_store(),
-            &ChosenFolders::default(),
-            home.path(),
-            &project("p", folder.path()),
-        )
-        .unwrap();
-    }
-
-    #[test]
     fn a_saved_project_saves_again_once_its_folder_is_gone() {
         let home = tempfile::tempdir().unwrap();
         let gone = home.path().join("gone");
@@ -348,16 +333,27 @@ mod tests {
     }
 
     #[test]
-    fn a_session_inside_its_project_is_saved_and_one_outside_is_not() {
+    fn a_session_in_its_project_folder_is_saved_and_one_elsewhere_is_not() {
         let folder = tempfile::tempdir().unwrap();
-        std::fs::create_dir(folder.path().join("sub")).unwrap();
         let elsewhere = tempfile::tempdir().unwrap();
         let store = empty_store();
         saved(&store, &project("p", folder.path()));
-        check_session_row(&store, &session("p", &folder.path().join("sub"), None)).unwrap();
+        check_session_row(&store, &session("p", folder.path(), None)).unwrap();
         assert_eq!(
             check_session_row(&store, &session("p", elsewhere.path(), None)).unwrap_err(),
-            "session folder: folder is outside every approved folder"
+            "session folder: folder is not the project's folder or one of its worktrees"
+        );
+    }
+
+    #[test]
+    fn a_home_session_cannot_approve_a_folder_under_home() {
+        let home = tempfile::tempdir().unwrap();
+        std::fs::create_dir(home.path().join(".ssh")).unwrap();
+        let store = empty_store();
+        saved(&store, &project("default", home.path()));
+        assert!(
+            check_session_row(&store, &session("default", &home.path().join(".ssh"), None))
+                .is_err()
         );
     }
 
@@ -370,7 +366,7 @@ mod tests {
         assert_eq!(
             check_session_row(&store, &session("p", folder.path(), Some(elsewhere.path())))
                 .unwrap_err(),
-            "session worktree: folder is outside every approved folder"
+            "session worktree: folder is not the project's folder or one of its worktrees"
         );
     }
 

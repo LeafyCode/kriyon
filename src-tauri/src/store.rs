@@ -697,7 +697,7 @@ impl Store {
     }
 
     /// Fetch a single project row by primary key, or `None` if absent.
-    fn project_row(&self, id: &str) -> Result<Option<ProjectRow>, StoreError> {
+    pub(crate) fn project_row(&self, id: &str) -> Result<Option<ProjectRow>, StoreError> {
         let row = self
             .conn
             .query_row(

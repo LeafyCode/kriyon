@@ -223,6 +223,20 @@ describe("createSessionInFolder", () => {
     await vi.waitFor(() => expect(upsertSession).toHaveBeenCalled());
   });
 
+  it("says why the core refused to save a new session's folder", async () => {
+    vi.mocked(upsertProject).mockRejectedValueOnce(
+      "project folder: folder was not chosen on this computer"
+    );
+    vi.mocked(showToast).mockClear();
+    createSessionInFolder("/work/proj");
+    await vi.waitFor(() =>
+      expect(showToast).toHaveBeenCalledWith(
+        "Could not save the session: project folder: folder was not chosen on this computer",
+        "error"
+      )
+    );
+  });
+
   it("hands the session host its rows' save, so the shell waits for it", () => {
     // `create_session` refuses a folder that no saved row approves yet
     // (ADR-0058); the session host holds the shell until this settles.
