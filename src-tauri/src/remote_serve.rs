@@ -54,9 +54,9 @@ pub trait ServeHost: Send + Sync + 'static {
     fn session(&self, id: &str) -> Option<LiveSession>;
     /// Whether any remote device has session `id` open (an [Onlooker]).
     fn set_onlooked(&self, id: &str, onlooked: bool);
-    /// Keep paired `device`'s sealed push token (spec §10), in place of any
-    /// it gave before.
-    fn set_push_token(&self, device: &EndpointId, sealed: Vec<u8>);
+    /// Keep paired `device`'s push token, sealed to the sender's key
+    /// `key_id` (spec §10), in place of any it gave before.
+    fn set_push_token(&self, device: &EndpointId, key_id: u32, sealed: Vec<u8>);
     /// A device's typing into session `id`, checked again atomically with
     /// the write: whether it reached the PTY.
     ///
@@ -545,8 +545,8 @@ impl Serve {
                     Decoded::Message(FromDevice::StartSession { .. }) => {
                         Err(RefuseReason::NotAllowed)
                     }
-                    Decoded::Message(FromDevice::PushToken { sealed }) => {
-                        self.0.host.set_push_token(&device, sealed.clone());
+                    Decoded::Message(FromDevice::PushToken { key_id, sealed }) => {
+                        self.0.host.set_push_token(&device, *key_id, sealed.clone());
                         Ok(())
                     }
                     _ => Ok(()),
@@ -1065,6 +1065,7 @@ mod tests {
             let (phone, _link, mut cw, mut cr) = device(&world, 3, Role::Viewer).await;
             assert!(world.serve.has_devices());
             cw.send(&FromDevice::PushToken {
+                key_id: 4,
                 sealed: b"sealed".to_vec(),
             })
             .await
@@ -1076,7 +1077,7 @@ mod tests {
             }
             assert_eq!(
                 world.fake.push_tokens.lock().clone(),
-                vec![(phone.id(), b"sealed".to_vec())]
+                vec![(phone.id(), 4, b"sealed".to_vec())]
             );
             world.serve.heartbeat(5);
             assert!(

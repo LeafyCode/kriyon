@@ -16,7 +16,7 @@ use http_body_util::{BodyExt as _, Full, Limited};
 use hyper::body::{Bytes, Incoming};
 use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::{TokioIo, TokioTimer};
-use kriyon_remote::push::{push_public_key, Platform, SenderKey, WakeRequest};
+use kriyon_remote::push::{Platform, SenderKey, WakeRequest};
 use tokio::net::TcpListener;
 
 use crate::deliver::{Deliver, DeliverError};
@@ -70,15 +70,16 @@ pub struct App<D> {
 }
 
 impl<D: Deliver> App<D> {
-    /// A sender with key `key_id` and X25519 `secret`, sending through
+    /// A sender checking with `gate` (its keys), sending through
     /// `deliver`, logging to `log`, on clock `now` (Unix seconds).
     #[must_use]
-    pub fn new(key_id: u32, secret: [u8; 32], deliver: D, log: LogSink, now: fn() -> u64) -> Self {
+    pub fn new(gate: Gate, deliver: D, log: LogSink, now: fn() -> u64) -> Self {
+        let (key_id, public) = gate.current_key();
         Self {
-            gate: Mutex::new(Gate::new(key_id, secret)),
+            gate: Mutex::new(gate),
             key: SenderKey {
                 key_id,
-                public_key: hex(&push_public_key(&secret)),
+                public_key: hex(&public),
             },
             deliver,
             log,
@@ -200,6 +201,8 @@ mod tests {
     use crate::gate::tests::{host_id, sealed_for, to_hex, wake, HOST_SECRET, KEY_ID, NOW, SECRET};
     use crate::gate::Alert;
 
+    use kriyon_remote::push::push_public_key;
+
     use super::*;
 
     /// Records alerts instead of sending them.
@@ -240,8 +243,7 @@ mod tests {
         let logged = Arc::new(Mutex::new(Vec::new()));
         let lines = Arc::clone(&logged);
         let app = Arc::new(App::new(
-            KEY_ID,
-            SECRET,
+            Gate::new(KEY_ID, SECRET),
             Arc::clone(&fake),
             Arc::new(move |line: &str| lines.lock().expect("lock").push(line.to_string())),
             now,

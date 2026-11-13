@@ -40,6 +40,15 @@ when the app opens.
   `404` (the push service dropped the token), `409` (seen before), `410`
   (expired), `422`, `429` (limit), `501` or `502`.
 
+## Changing the key
+
+Each phone's token says which key it was sealed to. To change keys, make a
+new one with `kriyon-push new-key`, give it the next `KRIYON_PUSH_KEY_ID`,
+and move the old one to `KRIYON_PUSH_RETIRED_KEYS_FILE` with the time you
+retired it. The sender keeps opening tokens sealed to the old key for 60
+days, the longest a token lasts, while phones reseal to the new one on
+their next connect. No flag day.
+
 ## Running it
 
 ```sh

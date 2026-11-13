@@ -252,14 +252,14 @@ impl ServeHost for AppServeHost {
         let _ = state.writers.release_device(device, &engines);
     }
 
-    fn set_push_token(&self, device: &EndpointId, sealed: Vec<u8>) {
+    fn set_push_token(&self, device: &EndpointId, key_id: u32, sealed: Vec<u8>) {
         // A token that couldn't be kept is given again on the next connect.
         let _ = self
             .0
             .state::<StoreState>()
             .0
             .lock()
-            .set_push_token(device, &sealed);
+            .set_push_token(device, key_id, &sealed);
     }
 
     fn set_onlooked(&self, id: &str, onlooked: bool) {

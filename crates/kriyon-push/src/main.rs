@@ -7,6 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use kriyon_push::config::Config;
 use kriyon_push::deliver::PushServices;
+use kriyon_push::gate::Gate;
 use kriyon_push::server::{serve, App};
 use ring::rand::SecureRandom as _;
 
@@ -34,6 +35,7 @@ fn main() -> std::process::ExitCode {
     let config = match Config::read(
         |name| std::env::var(name).ok(),
         |path| std::fs::read_to_string(path).ok(),
+        now(),
     ) {
         Ok(config) => config,
         Err(why) => {
@@ -56,9 +58,12 @@ fn main() -> std::process::ExitCode {
                 return std::process::ExitCode::FAILURE;
             }
         };
+        let gate = config.retired.iter().fold(
+            Gate::new(config.key_id, config.secret),
+            |gate, &(key_id, secret, retired_at)| gate.with_retired(key_id, secret, retired_at),
+        );
         let app = Arc::new(App::new(
-            config.key_id,
-            config.secret,
+            gate,
             services,
             Arc::new(|line: &str| eprintln!("{line}")),
             now,

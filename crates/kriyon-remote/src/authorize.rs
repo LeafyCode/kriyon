@@ -244,7 +244,7 @@ pub fn authorize(
         }
         // The codec already refuses a PushToken message over 2 KiB; this is
         // the same bound on the token itself, so the check doesn't rely on it.
-        (FromDevice::PushToken { sealed }, Stream::Control) => {
+        (FromDevice::PushToken { sealed, .. }, Stream::Control) => {
             if sealed.len() > MAX_SEALED_PUSH_TOKEN {
                 return Err(RefuseReason::OutOfRange);
             }
@@ -431,7 +431,13 @@ mod tests {
             ),
             (SESSION, FromDevice::Resync),
             (SESSION, input(&h, 0)),
-            (Stream::Control, FromDevice::PushToken { sealed: vec![] }),
+            (
+                Stream::Control,
+                FromDevice::PushToken {
+                    key_id: 1,
+                    sealed: vec![],
+                },
+            ),
         ] {
             assert_eq!(
                 check(&h, STRANGER, stream, message),
@@ -533,7 +539,13 @@ mod tests {
             (Stream::Control, input(&h, 0)),
             (SESSION, take()),
             (SESSION, start(false)),
-            (SESSION, FromDevice::PushToken { sealed: vec![] }),
+            (
+                SESSION,
+                FromDevice::PushToken {
+                    key_id: 1,
+                    sealed: vec![],
+                },
+            ),
         ] {
             assert_eq!(
                 check(&h, PHONE, stream, message.clone()),
@@ -746,6 +758,7 @@ mod tests {
     fn any_paired_device_may_send_a_push_token_of_a_sane_size() {
         let (h, _) = host();
         let token = |len| FromDevice::PushToken {
+            key_id: 1,
             sealed: vec![0; len],
         };
         assert_eq!(

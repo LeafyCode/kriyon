@@ -34,7 +34,7 @@ pub(crate) struct FakeHost {
     pub(crate) onlooked: Mutex<HashSet<String>>,
     pub(crate) title: Mutex<String>,
     /// The push tokens devices gave, in order.
-    pub(crate) push_tokens: Mutex<Vec<(EndpointId, Vec<u8>)>>,
+    pub(crate) push_tokens: Mutex<Vec<(EndpointId, u32, Vec<u8>)>>,
     /// Told every change of control, as the app's writers tell it.
     pub(crate) serve: Mutex<Option<Serve>>,
 }
@@ -138,8 +138,8 @@ impl ServeHost for FakeHost {
         let change = self.gate.lock().release(*device).change;
         self.tell(change);
     }
-    fn set_push_token(&self, device: &EndpointId, sealed: Vec<u8>) {
-        self.push_tokens.lock().push((*device, sealed));
+    fn set_push_token(&self, device: &EndpointId, key_id: u32, sealed: Vec<u8>) {
+        self.push_tokens.lock().push((*device, key_id, sealed));
     }
     fn set_onlooked(&self, id: &str, onlooked: bool) {
         let mut set = self.onlooked.lock();
@@ -172,18 +172,23 @@ pub(crate) async fn world() -> World {
 pub(crate) async fn world_on(bind: SocketAddr) -> World {
     let fake = Arc::new(FakeHost::default());
     *fake.title.lock() = "first".into();
-    let host = Arc::new(
-        Host::bind(
-            &LinkConfig {
-                bind,
-                ..LinkConfig::new([9; 32])
-            },
-            Arc::clone(&fake) as Arc<dyn PairedDevices>,
-            60,
-        )
-        .await
-        .expect("host"),
-    );
+    // A fixed port may still be held for a moment by the endpoint that had
+    // it, or briefly by another test's: tried again for up to two seconds.
+    let config = LinkConfig {
+        bind,
+        ..LinkConfig::new([9; 32])
+    };
+    let mut tries = 0;
+    let host = loop {
+        match Host::bind(&config, Arc::clone(&fake) as Arc<dyn PairedDevices>, 60).await {
+            Ok(host) => break Arc::new(host),
+            Err(why) => {
+                tries += 1;
+                assert!(tries < 40, "host: {why:?}");
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        }
+    };
     let serve = Serve::new(Arc::clone(&fake) as Arc<dyn ServeHost>);
     *fake.serve.lock() = Some(serve.clone());
     let asks = Arc::new(Mutex::new(Vec::new()));

@@ -188,8 +188,9 @@ pub enum FromDevice {
         title: Option<String>,
         worktree: bool,
     },
-    /// Control stream.
-    PushToken { sealed: Vec<u8> },
+    /// Control stream. `key_id` names the push sender's key `sealed` was
+    /// sealed to (spec §10), so the sender can rotate keys.
+    PushToken { key_id: u32, sealed: Vec<u8> },
 }
 
 /// The kind of a [`FromDevice`] message; its number is the message's tag on
@@ -493,7 +494,13 @@ mod tests {
                 },
                 8,
             ),
-            (FromDevice::PushToken { sealed: vec![] }, 9),
+            (
+                FromDevice::PushToken {
+                    key_id: 1,
+                    sealed: vec![],
+                },
+                9,
+            ),
         ]
     }
 

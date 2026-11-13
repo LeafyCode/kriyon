@@ -20,6 +20,10 @@ pub const PER_MINUTE: usize = 1;
 /// Alerts a host, or a token, may cause a day.
 pub const PER_DAY: usize = 30;
 
+/// How long a retired key still opens tokens sealed to it: the longest a
+/// token lasts. Phones reseal to the new key on their next connect.
+pub const RETIRED_KEY_DAYS: u64 = 60;
+
 const MINUTE: u64 = 60;
 const DAY: u64 = 24 * 60 * 60;
 
@@ -85,6 +89,8 @@ impl Refusal {
 pub struct Gate {
     key_id: u32,
     secret: [u8; 32],
+    /// Retired keys by id: their secret and when they were retired.
+    retired: HashMap<u32, ([u8; 32], u64)>,
     /// Request ids seen, with when, oldest first.
     seen: VecDeque<([u8; 16], u64)>,
     seen_ids: HashMap<[u8; 16], u64>,
@@ -100,11 +106,40 @@ impl Gate {
         Self {
             key_id,
             secret,
+            retired: HashMap::new(),
             seen: VecDeque::new(),
             seen_ids: HashMap::new(),
             by_host: HashMap::new(),
             by_token: HashMap::new(),
         }
+    }
+
+    /// Also open tokens sealed to retired key `key_id`, retired at
+    /// `retired_at` (Unix seconds), for [`RETIRED_KEY_DAYS`] after.
+    #[must_use]
+    pub fn with_retired(mut self, key_id: u32, secret: [u8; 32], retired_at: u64) -> Self {
+        if key_id != self.key_id {
+            self.retired.insert(key_id, (secret, retired_at));
+        }
+        self
+    }
+
+    /// The current key: its id and public key, as `GET /v1/key` gives it.
+    #[must_use]
+    pub fn current_key(&self) -> (u32, [u8; 32]) {
+        (
+            self.key_id,
+            kriyon_remote::push::push_public_key(&self.secret),
+        )
+    }
+
+    /// The secret for key `key_id` at `now`, if this sender still holds it.
+    fn secret_for(&self, key_id: u32, now: u64) -> Option<[u8; 32]> {
+        if key_id == self.key_id {
+            return Some(self.secret);
+        }
+        let (secret, retired_at) = self.retired.get(&key_id)?;
+        (now < retired_at.saturating_add(RETIRED_KEY_DAYS * DAY)).then_some(*secret)
     }
 
     /// Check `request` at `now` (Unix seconds). An alert to send, counted
@@ -120,9 +155,9 @@ impl Gate {
         if sealed.is_empty() || sealed.len() > MAX_SEALED {
             return Err(Refusal::Malformed);
         }
-        if request.key_id != self.key_id {
-            return Err(Refusal::UnknownKey);
-        }
+        let secret = self
+            .secret_for(request.key_id, now)
+            .ok_or(Refusal::UnknownKey)?;
         if !verify_wake(
             &host_id,
             request.key_id,
@@ -143,7 +178,7 @@ impl Gate {
         self.seen_ids.insert(request_id, now);
         self.seen.push_back((request_id, now));
 
-        let plain = open_push_token(&self.secret, &sealed).map_err(|_| Refusal::BadToken)?;
+        let plain = open_push_token(&secret, &sealed).map_err(|_| Refusal::BadToken)?;
         if plain.host_id != host_id {
             return Err(Refusal::BadToken);
         }
@@ -398,6 +433,49 @@ pub(crate) mod tests {
         let mut short = good(3);
         short.request_id = "00".into();
         assert_eq!(gate.check(&short, NOW), Err(Refusal::Malformed));
+    }
+
+    #[test]
+    fn a_token_sealed_to_a_retired_key_opens_for_sixty_days_after() {
+        use kriyon_remote::push::{push_public_key, seal_push_token, sign_wake, PushTokenPlain};
+        const OLD: [u8; 32] = [3; 32];
+        let retired_at = NOW - 10 * DAY;
+        let mut gate = Gate::new(KEY_ID + 1, SECRET).with_retired(KEY_ID, OLD, retired_at);
+        let sealed = seal_push_token(
+            &push_public_key(&OLD),
+            &PushTokenPlain {
+                token: "old".into(),
+                platform: Platform::Fcm,
+                host_id: host_id(&HOST_SECRET),
+                expires: NOW + 100 * DAY,
+            },
+        )
+        .expect("seals");
+        let signed = |at: u64, id: u8| {
+            let request_id = [id; 16];
+            WakeRequest {
+                key_id: KEY_ID,
+                sealed: to_hex(&sealed),
+                at,
+                request_id: to_hex(&request_id),
+                host_id: to_hex(&host_id(&HOST_SECRET)),
+                signature: to_hex(&sign_wake(&HOST_SECRET, KEY_ID, &sealed, at, &request_id)),
+            }
+        };
+        assert_eq!(
+            gate.check(&signed(NOW, 1), NOW).map(|alert| alert.token),
+            Ok("old".to_string())
+        );
+        let gone = retired_at + RETIRED_KEY_DAYS * DAY;
+        assert_eq!(gate.check(&signed(gone, 2), gone), Err(Refusal::UnknownKey));
+    }
+
+    #[test]
+    fn a_token_opens_only_with_the_key_it_names() {
+        // SECRET is retired as key KEY_ID + 5; the current key is another.
+        let mut gate = Gate::new(KEY_ID, [9; 32]).with_retired(KEY_ID + 5, SECRET, NOW);
+        // Sealed to SECRET, but named as the current key: it doesn't open.
+        assert_eq!(gate.check(&good(1), NOW), Err(Refusal::BadToken));
     }
 
     #[test]

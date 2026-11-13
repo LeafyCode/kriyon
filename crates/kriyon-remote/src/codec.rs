@@ -349,6 +349,7 @@ mod tests {
         assert!(matches!(d.next_message(), Ok(Some(Decoded::Message(_)))));
         assert!(encode(&input(64 * KIB)).is_err(), "over 64 KiB with fields");
         let token = |len| FromDevice::PushToken {
+            key_id: 1,
             sealed: vec![0; len],
         };
         assert!(encode(&token(KIB)).is_ok());

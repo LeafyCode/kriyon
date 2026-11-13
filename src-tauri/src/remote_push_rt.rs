@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use kriyon_remote::message::hex;
-use kriyon_remote::push::{sign_wake, SenderKey, WakePlanner, WakeRequest};
+use kriyon_remote::push::{sign_wake, WakePlanner, WakeRequest};
 use parking_lot::Mutex;
 use tauri::Manager as _;
 
@@ -31,7 +31,6 @@ const SENDER_TIMEOUT: Duration = Duration::from_secs(5);
 pub struct PushSender {
     base: String,
     http: reqwest::Client,
-    key: tokio::sync::Mutex<Option<SenderKey>>,
 }
 
 impl PushSender {
@@ -50,59 +49,23 @@ impl PushSender {
         Ok(Self {
             base: base.trim_end_matches('/').to_string(),
             http,
-            key: tokio::sync::Mutex::new(None),
         })
     }
 
-    /// The sender's key id, asked for once and kept.
-    async fn key_id(&self) -> Result<u32, String> {
-        let mut key = self.key.lock().await;
-        if let Some(key) = key.as_ref() {
-            return Ok(key.key_id);
-        }
-        let fetched: SenderKey = self
-            .http
-            .get(format!("{}/v1/key", self.base))
-            .send()
-            .await
-            .map_err(|_| "the push sender didn't answer".to_string())?
-            .json()
-            .await
-            .map_err(|_| "the push sender's key isn't readable".to_string())?;
-        let id = fetched.key_id;
-        *key = Some(fetched);
-        Ok(id)
-    }
-
-    /// Ask the sender to wake the phone whose sealed token is `sealed`,
-    /// signed with `host_secret` at `now` (Unix seconds). A sender that
-    /// changed its key is asked for the new one and tried once more.
-    /// Returns the sender's HTTP status (202: sent).
+    /// Ask the sender to wake the phone whose token is `sealed` to the
+    /// sender's key `key_id` (the phone said which), signed with
+    /// `host_secret` at `now` (Unix seconds). Returns the sender's HTTP
+    /// status (202: sent).
     ///
     /// # Errors
     /// When the sender can't be reached.
     pub async fn wake(
         &self,
         host_secret: &[u8; 32],
+        key_id: u32,
         sealed: &[u8],
         now: u64,
     ) -> Result<u16, String> {
-        let (status, word) = self.wake_once(host_secret, sealed, now).await?;
-        if word.as_deref() != Some("unknown_key") {
-            return Ok(status);
-        }
-        *self.key.lock().await = None;
-        Ok(self.wake_once(host_secret, sealed, now).await?.0)
-    }
-
-    /// One request, with a fresh request id: its status and error word.
-    async fn wake_once(
-        &self,
-        host_secret: &[u8; 32],
-        sealed: &[u8],
-        now: u64,
-    ) -> Result<(u16, Option<String>), String> {
-        let key_id = self.key_id().await?;
         let request_id = uuid::Uuid::new_v4().into_bytes();
         let host_id = iroh::SecretKey::from_bytes(host_secret).public();
         let request = WakeRequest {
@@ -113,20 +76,13 @@ impl PushSender {
             host_id: hex(host_id.as_bytes()),
             signature: hex(&sign_wake(host_secret, key_id, sealed, now, &request_id)),
         };
-        let response = self
-            .http
+        self.http
             .post(format!("{}/v1/wake", self.base))
             .json(&request)
             .send()
             .await
-            .map_err(|_| "the push sender didn't answer".to_string())?;
-        let status = response.status().as_u16();
-        let word = response
-            .json::<serde_json::Value>()
-            .await
-            .ok()
-            .and_then(|body| body["error"].as_str().map(str::to_string));
-        Ok((status, word))
+            .map(|response| response.status().as_u16())
+            .map_err(|_| "the push sender didn't answer".to_string())
     }
 }
 
@@ -223,7 +179,7 @@ async fn look(app: &tauri::AppHandle, sender: &Arc<PushSender>) {
     let connected = app
         .try_state::<crate::remote_serve::Serve>()
         .is_some_and(|serve| serve.has_devices());
-    let phones: Vec<[u8; 32]> = tokens.iter().map(|(device, _)| *device).collect();
+    let phones: Vec<[u8; 32]> = tokens.iter().map(|token| token.device).collect();
     let due = rt
         .planner
         .lock()
@@ -231,14 +187,27 @@ async fn look(app: &tauri::AppHandle, sender: &Arc<PushSender>) {
     // Each phone at once. An alert is a hint (spec §10): one that fails
     // isn't retried.
     let mut sending = tokio::task::JoinSet::new();
-    for (_, sealed) in tokens
+    for token in tokens
         .into_iter()
-        .filter(|(device, _)| due.contains(device))
+        .filter(|token| due.contains(&token.device))
     {
         let sender = Arc::clone(sender);
-        sending.spawn(async move { sender.wake(&host_secret, &sealed, now_secs()).await });
+        sending.spawn(async move {
+            sender
+                .wake(&host_secret, token.key_id, &token.sealed, now_secs())
+                .await
+        });
     }
-    while sending.join_next().await.is_some() {}
+    while let Some(sent) = sending.join_next().await {
+        // Said, so a key that's gone or a token gone bad shows up; only the
+        // status, never the token. The phone gives a new token on its next
+        // connect.
+        match sent {
+            Ok(Ok(202)) | Err(_) => {}
+            Ok(Ok(status)) => eprintln!("kriyon: the push sender refused a wake ({status})"),
+            Ok(Err(why)) => eprintln!("kriyon: no push sent: {why}"),
+        }
+    }
 }
 
 /// The [Device key], read once: remote access is on, so it exists.
@@ -279,8 +248,7 @@ mod tests {
     async fn sender() -> (String, Arc<parking_lot::Mutex<Vec<String>>>) {
         let sent = Arc::new(parking_lot::Mutex::new(Vec::new()));
         let app = Arc::new(App::new(
-            9,
-            SENDER_SECRET,
+            kriyon_push::gate::Gate::new(9, SENDER_SECRET),
             Fake(Arc::clone(&sent)),
             Arc::new(|_: &str| {}),
             now_secs,
@@ -321,7 +289,7 @@ mod tests {
             let push = PushSender::new(&url).expect("client");
             let sealed = sealed_for_this_host("phone");
             let status = push
-                .wake(&HOST_SECRET, &sealed, now_secs())
+                .wake(&HOST_SECRET, 9, &sealed, now_secs())
                 .await
                 .expect("answered");
             assert_eq!(status, 202);
@@ -336,7 +304,7 @@ mod tests {
             let push = PushSender::new(&url).expect("client");
             let sealed = sealed_for_this_host("phone");
             let status = push
-                .wake(&[7; 32], &sealed, now_secs())
+                .wake(&[7; 32], 9, &sealed, now_secs())
                 .await
                 .expect("answered");
             assert_eq!(status, 422);
@@ -345,34 +313,11 @@ mod tests {
     }
 
     #[test]
-    fn a_sender_that_changed_its_key_is_asked_for_it_and_tried_again() {
-        run(async {
-            let (url, fake) = sender().await;
-            let push = PushSender::new(&url).expect("client");
-            *push.key.lock().await = Some(SenderKey {
-                key_id: 8,
-                public_key: String::new(),
-            });
-            let sealed = sealed_for_this_host("phone");
-            let status = push
-                .wake(&HOST_SECRET, &sealed, now_secs())
-                .await
-                .expect("answered");
-            assert_eq!(status, 202);
-            assert_eq!(fake.lock().len(), 1);
-            assert_eq!(
-                push.key.lock().await.as_ref().map(|key| key.key_id),
-                Some(9)
-            );
-        });
-    }
-
-    #[test]
     fn a_sender_that_is_not_there_is_an_error_not_a_hang() {
         run(async {
             let push = PushSender::new("http://127.0.0.1:1").expect("client");
             assert!(push
-                .wake(&HOST_SECRET, b"sealed", now_secs())
+                .wake(&HOST_SECRET, 9, b"sealed", now_secs())
                 .await
                 .is_err());
         });
