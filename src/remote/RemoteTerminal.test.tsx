@@ -1,7 +1,6 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, expect, test, vi } from "vitest";
 import {
-  type HostLink,
   remoteHostCloseSession,
   remoteHostInput,
   remoteHostOpenSession,
@@ -9,6 +8,7 @@ import {
 } from "../ipc/bridge.ts";
 import { useLayout } from "../state/layout.ts";
 import { useRemoteHosts } from "../state/remoteHosts.ts";
+import type { HostSummary } from "./hostSummary.ts";
 import { RemoteTerminal } from "./RemoteTerminal.tsx";
 
 vi.mock("@xterm/xterm/css/xterm.css", () => ({}));
@@ -60,26 +60,42 @@ const SKIPPED_AHEAD = /Skipped ahead/;
 const ONLY_WATCH = /only watch/;
 const HOST = "ab".repeat(32);
 
-function link(over: Partial<HostLink> = {}, mine = false): HostLink {
-  return {
+/**
+ * A summary as Rust would send it: `mine` is this computer holding control,
+ * `mayType` what Rust says of it (cases off the link set it themselves).
+ */
+function link(
+  over: Partial<HostSummary> = {},
+  mine = false,
+  mayType = mine
+): HostSummary {
+  const summary: HostSummary = {
     hostId: HOST,
-    name: "Studio",
+    hostName: "Studio",
+    link: "connected",
+    mayStart: false,
+    refused: null,
     role: "controller",
     projects: [],
+    sessions: [],
+    ...over,
+  };
+  return {
+    ...summary,
     sessions: [
       {
         dialogOpen: false,
         id: "s1",
         lastChangeMs: 0,
-        mine,
+        mayType,
         needsYou: false,
+        projectId: "p",
         standing: "running",
         status: "running",
         title: "Fix login",
+        typing: mine ? "you" : "host",
       },
     ],
-    state: "connected",
-    ...over,
   };
 }
 
@@ -146,6 +162,16 @@ test("a Viewer is never offered control", async () => {
   expect(screen.getByText(ONLY_WATCH)).toBeTruthy();
 });
 
+test.each(["connecting", "lost", "removed"] as const)(
+  "control isn't offered while the link is %s",
+  async (state) => {
+    useRemoteHosts.getState().linkChanged(link({ link: state }));
+    render(<RemoteTerminal hostId={HOST} sessionId="s1" />);
+    await act(() => Promise.resolve());
+    expect(screen.queryByRole("button", { name: "Take control" })).toBeNull();
+  }
+);
+
 test("with control, typing goes to the other computer", async () => {
   useRemoteHosts.getState().linkChanged(link({}, true));
   render(<RemoteTerminal hostId={HOST} sessionId="s1" />);
@@ -163,7 +189,7 @@ test("a lost link dims the screen and turns typing off", async () => {
   render(<RemoteTerminal hostId={HOST} sessionId="s1" />);
   await act(() => Promise.resolve());
   act(() =>
-    useRemoteHosts.getState().linkChanged(link({ state: "lost" }, true))
+    useRemoteHosts.getState().linkChanged(link({ link: "lost" }, true, false))
   );
   expect(
     screen.getByText("Disconnected, reconnecting. Typing is off.")

@@ -1,18 +1,9 @@
 import { beforeEach, expect, jest, test } from "@jest/globals";
+import type { HostSummary } from "../../../../src/remote/hostSummary.ts";
 import { steel } from "../../../../src/theme/themes/steel.ts";
-import type {
-  HostSession,
-  HostState,
-  PairedHost,
-} from "../../modules/kriyon-native/index.ts";
+import type { PairedHost } from "../../modules/kriyon-native/index.ts";
 import { KriyonNative } from "../../modules/kriyon-native/index.ts";
-import {
-  canType,
-  needsYou,
-  standingMeta,
-  toBase64,
-  usePhone,
-} from "./phone.ts";
+import { standingMeta, toBase64, usePhone } from "./phone.ts";
 
 jest.mock("../../modules/kriyon-native/index.ts", () => ({
   KriyonNative: {
@@ -46,23 +37,11 @@ const paired = (hostId: string, name: string): PairedHost => ({
   relayUrl: null,
 });
 
-const session = (over: Partial<HostSession>): HostSession => ({
-  dialogOpen: false,
-  id: "s",
-  lastChangeMs: 0,
-  needsYou: false,
-  projectId: "p",
-  standing: "idle",
-  status: "idle",
-  title: "A session",
-  typing: null,
-  ...over,
-});
-
-const host = (over: Partial<HostState>): HostState => ({
+const host = (over: Partial<HostSummary>): HostSummary => ({
   hostId: MAC,
   hostName: "Mac",
   link: "connected",
+  mayStart: false,
   projects: [],
   refused: null,
   role: "controller",
@@ -151,37 +130,6 @@ test("forgetting a computer drops it and its state, and leaves its screen", asyn
   expect(state.screen).toEqual({ kind: "home" });
 });
 
-test("needs you lists waiting sessions on connected computers, newest first", () => {
-  const states = {
-    [MAC]: host({
-      sessions: [
-        session({ id: "old", lastChangeMs: 1, needsYou: true }),
-        session({ id: "busy", standing: "running" }),
-        session({ id: "new", lastChangeMs: 9, needsYou: true }),
-      ],
-    }),
-    [STUDIO]: host({
-      hostId: STUDIO,
-      link: "lost",
-      sessions: [session({ id: "away", needsYou: true })],
-    }),
-  };
-  const hosts = [paired(MAC, "Mac"), paired(STUDIO, "Studio")];
-  expect(
-    needsYou(hosts, states).map((one) => [one.host.name, one.session.id])
-  ).toEqual([
-    ["Mac", "new"],
-    ["Mac", "old"],
-  ]);
-});
-
-test("a computer that was forgotten is never listed, whatever Rust last said", () => {
-  const states = {
-    [STUDIO]: host({ hostId: STUDIO, sessions: [session({ needsYou: true })] }),
-  };
-  expect(needsYou([paired(MAC, "Mac")], states)).toEqual([]);
-});
-
 test("each standing reads as the desktop says it, in the theme's colour", () => {
   const { colors } = steel;
   expect(standingMeta("running", colors)).toEqual({
@@ -198,18 +146,6 @@ test("each standing reads as the desktop says it, in the theme's colour", () => 
     color: colors.inkFaint,
     label: "Unknown",
   });
-  expect(standingMeta("something-new", colors).label).toBe("Unknown");
-});
-
-test("typing is on only while connected, as a Controller, holding control", () => {
-  const typing = session({ typing: "you" });
-  expect(canType(host({}), typing)).toBe(true);
-  expect(canType(host({ link: "lost" }), typing)).toBe(false);
-  expect(canType(host({ role: "viewer" }), typing)).toBe(false);
-  expect(canType(host({}), session({ typing: "host" }))).toBe(false);
-  expect(canType(host({}), session({ typing: null }))).toBe(false);
-  expect(canType(undefined, typing)).toBe(false);
-  expect(canType(host({}), undefined)).toBe(false);
 });
 
 test("bytes travel to the terminal page as base64", () => {

@@ -1,7 +1,5 @@
 import { beforeEach, expect, test, vi } from "vitest";
 import {
-  type HostLink,
-  type HostSession,
   remoteHostCloseSession,
   remoteHostForget,
   remoteHostInput,
@@ -12,9 +10,8 @@ import {
   remoteHostsWake,
   remoteHostTakeControl,
 } from "../ipc/bridge.ts";
+import type { HostSummary, SessionSummary } from "../remote/hostSummary.ts";
 import {
-  canStart,
-  canType,
   installRemoteHostListeners,
   remoteNeedsYouCount,
   useRemoteHosts,
@@ -36,28 +33,32 @@ vi.mock("../ipc/bridge.ts", async (importOriginal) => ({
 const HOST = "ab".repeat(32);
 const studio = { hostId: HOST, name: "Studio", pairedAt: 1 };
 
-function session(over: Partial<HostSession> = {}): HostSession {
+function session(over: Partial<SessionSummary> = {}): SessionSummary {
   return {
     dialogOpen: false,
     id: "s1",
     lastChangeMs: 0,
-    mine: false,
+    mayType: false,
     needsYou: true,
+    projectId: "/work/app",
     standing: "awaiting_input",
     status: "waiting",
     title: "Fix login",
+    typing: null,
     ...over,
   };
 }
 
-function link(over: Partial<HostLink> = {}): HostLink {
+function link(over: Partial<HostSummary> = {}): HostSummary {
   return {
     hostId: HOST,
-    name: "Studio",
-    role: "controller",
+    hostName: "Studio",
+    link: "connected",
+    mayStart: true,
     projects: [{ id: "/work/app", name: "app", parked: false }],
+    refused: null,
+    role: "controller",
     sessions: [session()],
-    state: "connected",
     ...over,
   };
 }
@@ -127,8 +128,8 @@ test("a pairing Rust refuses at once says why", async () => {
 test("each computer's link is kept as Rust last said", () => {
   useRemoteHosts.getState().linkChanged(link());
   expect(useRemoteHosts.getState().links[HOST]).toEqual(link());
-  useRemoteHosts.getState().linkChanged(link({ state: "lost" }));
-  expect(useRemoteHosts.getState().links[HOST]?.state).toBe("lost");
+  useRemoteHosts.getState().linkChanged(link({ link: "lost" }));
+  expect(useRemoteHosts.getState().links[HOST]?.link).toBe("lost");
 });
 
 test("forgetting a computer drops it and its link", async () => {
@@ -185,7 +186,7 @@ test("only sessions on a connected, still-paired computer count as needing you",
   useRemoteHosts.setState({ hosts: [studio] });
   useRemoteHosts.getState().linkChanged(link());
   expect(remoteNeedsYouCount(useRemoteHosts.getState())).toBe(1);
-  useRemoteHosts.getState().linkChanged(link({ state: "removed" }));
+  useRemoteHosts.getState().linkChanged(link({ link: "removed" }));
   expect(remoteNeedsYouCount(useRemoteHosts.getState())).toBe(0);
   useRemoteHosts.getState().linkChanged(link());
   useRemoteHosts.getState().linkChanged(link({ hostId: other }));
@@ -199,7 +200,9 @@ test("typing goes only where this computer holds control", async () => {
   expect(remoteHostInput).not.toHaveBeenCalled();
   useRemoteHosts
     .getState()
-    .linkChanged(link({ sessions: [session({ mine: true })] }));
+    .linkChanged(
+      link({ sessions: [session({ mayType: true, typing: "you" })] })
+    );
   await useRemoteHosts.getState().type(HOST, "s1", "y");
   expect(remoteHostInput).toHaveBeenCalledWith(HOST, "s1", "y");
 });
@@ -208,14 +211,6 @@ test("taking control asks Rust", async () => {
   vi.mocked(remoteHostTakeControl).mockResolvedValue();
   await useRemoteHosts.getState().takeControl(HOST, "s1");
   expect(remoteHostTakeControl).toHaveBeenCalledWith(HOST, "s1");
-});
-
-test("typing is on only while connected, as a Controller, with control", () => {
-  const mine = session({ mine: true });
-  expect(canType(link({ sessions: [mine] }), mine)).toBe(true);
-  expect(canType(link({ sessions: [mine], state: "lost" }), mine)).toBe(false);
-  expect(canType(link({ role: "viewer", sessions: [mine] }), mine)).toBe(false);
-  expect(canType(link(), session())).toBe(false);
 });
 
 test("the app wakes reconnects when its window comes back to the front", () => {
@@ -271,11 +266,4 @@ test("a refused start says why for that computer only", async () => {
   ).toBeUndefined();
   useRemoteHosts.getState().clearStartError(HOST);
   expect(useRemoteHosts.getState().startErrors[HOST]).toBeUndefined();
-});
-
-test("a session can be started only as a connected Controller with a project to start in", () => {
-  expect(canStart(link())).toBe(true);
-  expect(canStart(link({ role: "viewer" }))).toBe(false);
-  expect(canStart(link({ state: "lost" }))).toBe(false);
-  expect(canStart(link({ projects: [] }))).toBe(false);
 });

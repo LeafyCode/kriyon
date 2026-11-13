@@ -5,7 +5,7 @@
  */
 import { useState } from "react";
 import { Pressable, ScrollView, Text, TextInput } from "react-native";
-import { canStartSession, usePhone } from "../state/phone.ts";
+import { usePhone } from "../state/phone.ts";
 import { colors, ui } from "../ui.ts";
 
 export function NewSessionScreen({ hostId }: { hostId: string }) {
@@ -17,7 +17,7 @@ export function NewSessionScreen({ hostId }: { hostId: string }) {
     (state) => state.hosts.find((one) => one.hostId === hostId)?.name
   );
   const { newSession, show } = usePhone.getState();
-  const startable = canStartSession(host);
+  const startable = Boolean(host?.mayStart);
   return (
     <ScrollView
       contentContainerStyle={{ gap: 12, padding: 16 }}

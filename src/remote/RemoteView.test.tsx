@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, expect, test, vi } from "vitest";
-import type { HostLink, HostSession } from "../ipc/bridge.ts";
 import { useRemoteHosts } from "../state/remoteHosts.ts";
+import type { HostSummary, SessionSummary } from "./hostSummary.ts";
 import { RemoteView } from "./RemoteView.tsx";
 
 vi.mock("./RemoteTerminal.tsx", () => ({
@@ -15,24 +15,30 @@ const FIX_LOGIN = /Fix login/;
 const DOCS = /Docs/;
 const HOST = "ab".repeat(32);
 
-function session(over: Partial<HostSession> = {}): HostSession {
+function session(over: Partial<SessionSummary> = {}): SessionSummary {
   return {
     dialogOpen: false,
     id: "s1",
     lastChangeMs: 0,
-    mine: false,
+    mayType: false,
     needsYou: true,
+    projectId: "/work/app",
     standing: "awaiting_input",
     status: "waiting",
     title: "Fix login",
+    typing: null,
     ...over,
   };
 }
 
-function link(over: Partial<HostLink> = {}): HostLink {
+/** A summary as Rust would send it; cases set mayStart as Rust would. */
+function link(over: Partial<HostSummary> = {}): HostSummary {
   return {
     hostId: HOST,
-    name: "Studio",
+    hostName: "Studio",
+    link: "connected",
+    mayStart: true,
+    refused: null,
     role: "controller",
     projects: [{ id: "/work/app", name: "app", parked: false }],
     sessions: [
@@ -45,7 +51,6 @@ function link(over: Partial<HostLink> = {}): HostLink {
         title: "Docs",
       }),
     ],
-    state: "connected",
     ...over,
   };
 }
@@ -89,7 +94,7 @@ test("a paired computer not heard from yet says it is connecting", () => {
 test("a lost link says typing is off", () => {
   useRemoteHosts.setState({
     hosts: [{ hostId: HOST, name: "Studio", pairedAt: 0 }],
-    links: { [HOST]: link({ state: "lost" }) },
+    links: { [HOST]: link({ link: "lost", mayStart: false }) },
   });
   render(<RemoteView />);
   expect(
@@ -176,7 +181,7 @@ test("a start under way stays shown through a lost link, and can't be cancelled"
   fireEvent.click(screen.getByRole("button", { name: "Start" }));
   act(() =>
     useRemoteHosts.setState({
-      links: { [HOST]: link({ state: "lost" }) },
+      links: { [HOST]: link({ link: "lost", mayStart: false }) },
       starting: { [HOST]: true },
     })
   );
@@ -232,7 +237,7 @@ test("a refused start says why", async () => {
 test("a Viewer is not offered a new session", () => {
   useRemoteHosts.setState({
     hosts: [{ hostId: HOST, name: "Studio", pairedAt: 0 }],
-    links: { [HOST]: link({ role: "viewer" }) },
+    links: { [HOST]: link({ mayStart: false, role: "viewer" }) },
   });
   render(<RemoteView />);
   expect(screen.queryByRole("button", { name: "New session" })).toBeNull();

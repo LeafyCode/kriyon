@@ -4,48 +4,7 @@
  * field; the module adds nothing of its own.
  */
 import { type EventSubscription, requireNativeModule } from "expo";
-
-/** Where a computer's link stands (Rust `HostLink`). */
-export type HostLink = "connecting" | "connected" | "lost" | "removed";
-
-/** Who types into a session now (Rust `Typing`). */
-export type Typing = "host" | "you" | "other";
-
-/** One session on a computer (Rust `HostSession`). */
-export interface HostSession {
-  dialogOpen: boolean;
-  id: string;
-  lastChangeMs: number;
-  needsYou: boolean;
-  projectId: string;
-  /** Named as the desktop's JSON names it (`awaiting_input`). */
-  standing: string;
-  /** Named as the desktop's JSON names it (`waiting`). */
-  status: string;
-  title: string;
-  typing: Typing | null;
-}
-
-/** A project on a computer, where a new session can start (Rust `HostProject`). */
-export interface HostProject {
-  id: string;
-  name: string;
-  /** Every session in it is parked there. */
-  parked: boolean;
-}
-
-/** A computer as the phone shows it (Rust `HostState`). */
-export interface HostState {
-  hostId: string;
-  hostName: string | null;
-  link: HostLink;
-  /** Its projects, where a new session can start. */
-  projects: HostProject[];
-  /** The last refusal the computer sent, by name (`NotInControl`). */
-  refused: string | null;
-  role: "viewer" | "controller" | null;
-  sessions: HostSession[];
-}
+import type { HostSummary } from "../../../../src/remote/hostSummary.ts";
 
 /** A paired computer as kept (Rust `PairedHost`). */
 export interface PairedHost {
@@ -115,7 +74,7 @@ export type KriyonErrorCode =
 
 /** The module's events, by name. */
 interface KriyonNativeEvents {
-  onHostChanged: (state: HostState) => void;
+  onHostChanged: (summary: HostSummary) => void;
   onScreenFrame: (frame: ScreenFrameEvent) => void;
 }
 

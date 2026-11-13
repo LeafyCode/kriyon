@@ -6,8 +6,8 @@
 import { CameraView, useCameraPermissions } from "expo-camera";
 import { useEffect, useState } from "react";
 import { Linking, Pressable, Text, View } from "react-native";
+import { pairingCodeFrom } from "../../../../src/remote/hostSummary.ts";
 import appJson from "../../app.json" with { type: "json" };
-import { pairingCodeFrom } from "../state/phone.ts";
 import { ui } from "../ui.ts";
 
 /**

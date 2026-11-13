@@ -1,9 +1,10 @@
 import { type CSSProperties, useEffect, useState } from "react";
 import { standingMeta } from "../commandCenter/CommandCenter.tsx";
-import type { HostLink, HostSession, PairedHost } from "../ipc/bridge.ts";
-import { canStart, useRemoteHosts } from "../state/remoteHosts.ts";
+import type { PairedHost } from "../ipc/bridge.ts";
+import { useRemoteHosts } from "../state/remoteHosts.ts";
 import { button, card, inputBox, sectionLabel } from "../theme/recipes.ts";
 import { tokens } from "../theme/tokens.ts";
+import type { HostSummary, SessionSummary } from "./hostSummary.ts";
 import { RemoteTerminal } from "./RemoteTerminal.tsx";
 import { linkLine } from "./remoteScreen.ts";
 
@@ -85,24 +86,24 @@ function HostCard({
 }: {
   chosen: { hostId: string; sessionId: string } | null;
   host: PairedHost;
-  link: HostLink | undefined;
+  link: HostSummary | undefined;
   onChoose: (sessionId: string) => void;
 }) {
-  const state = link?.state ?? "connecting";
+  const state = link?.link ?? "connecting";
   const starting = useRemoteHosts((store) =>
     Boolean(store.starting[host.hostId])
   );
   return (
     <section aria-label={host.name} style={hostCardStyle}>
       <div style={hostHeadStyle}>
-        <span style={hostNameStyle}>{link?.name || host.name}</span>
+        <span style={hostNameStyle}>{link?.hostName || host.name}</span>
         <span style={state === "connected" ? hintStyle : warnStyle}>
           {linkLine(state)}
         </span>
       </div>
       {/* Kept while a start is under way, even through a lost link: it is
           sent again when the link is back, and its answer still comes. */}
-      {link && (canStart(link) || starting) ? <NewSession link={link} /> : null}
+      {link && (link.mayStart || starting) ? <NewSession link={link} /> : null}
       {(link?.sessions ?? []).map((session) => (
         <SessionRow
           key={session.id}
@@ -122,7 +123,7 @@ function HostCard({
  * sessions are all parked, said so), titled as typed or after the project.
  * Once started it is chosen, and shows when that computer lists it.
  */
-function NewSession({ link }: { link: HostLink }) {
+function NewSession({ link }: { link: HostSummary }) {
   const [open, setOpen] = useState(false);
   const [projectId, setProjectId] = useState("");
   const [title, setTitle] = useState("");
@@ -232,7 +233,7 @@ function SessionRow({
 }: {
   onChoose: () => void;
   selected: boolean;
-  session: HostSession;
+  session: SessionSummary;
 }) {
   const meta = standingMeta(session.standing);
   return (

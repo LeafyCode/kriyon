@@ -3,17 +3,13 @@
  * with its sessions and how its link stands.
  */
 import { Pressable, ScrollView, Text, View } from "react-native";
-import { linkLine } from "../../../../src/remote/remoteScreen.ts";
-import type {
-  HostSession,
-  PairedHost,
-} from "../../modules/kriyon-native/index.ts";
 import {
-  canStartSession,
   needsYou,
-  standingMeta,
-  usePhone,
-} from "../state/phone.ts";
+  type SessionSummary,
+} from "../../../../src/remote/hostSummary.ts";
+import { linkLine } from "../../../../src/remote/remoteScreen.ts";
+import type { PairedHost } from "../../modules/kriyon-native/index.ts";
+import { standingMeta, usePhone } from "../state/phone.ts";
 import { colors, ui } from "../ui.ts";
 import { RelaySection } from "./RelaySection.tsx";
 
@@ -23,7 +19,7 @@ function SessionRow({
   showHost,
 }: {
   host: PairedHost;
-  session: HostSession;
+  session: SessionSummary;
   showHost: boolean;
 }) {
   const { show } = usePhone.getState();
@@ -94,7 +90,7 @@ export function HomeScreen() {
               </Pressable>
             </View>
             <Text style={ui.hint}>{linkLine(state?.link ?? "connecting")}</Text>
-            {canStartSession(state) ? (
+            {state?.mayStart ? (
               <Pressable
                 accessibilityLabel={`New session on ${host.name}`}
                 accessibilityRole="button"

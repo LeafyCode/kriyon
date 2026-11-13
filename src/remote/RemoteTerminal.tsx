@@ -2,7 +2,7 @@ import { Terminal as XTerm } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { type CSSProperties, useEffect, useRef, useState } from "react";
 import { useLayout } from "../state/layout.ts";
-import { canType, useRemoteHosts } from "../state/remoteHosts.ts";
+import { useRemoteHosts } from "../state/remoteHosts.ts";
 import { button } from "../theme/recipes.ts";
 import { terminalTheme } from "../theme/terminalTheme.ts";
 import { themeById } from "../theme/themes/index.ts";
@@ -31,8 +31,8 @@ export function RemoteTerminal({
   const [note, setNote] = useState<string | null>(null);
   const link = useRemoteHosts((state) => state.links[hostId]);
   const session = link?.sessions.find((one) => one.id === sessionId);
-  const typing = Boolean(link && session && canType(link, session));
-  const lost = link?.state === "lost";
+  const typing = Boolean(session?.mayType);
+  const lost = link?.link === "lost";
   const error = useRemoteHosts((state) => state.error);
 
   useEffect(() => {
@@ -102,16 +102,18 @@ export function RemoteTerminal({
     <div style={wrapStyle}>
       <div style={barStyle}>
         <span style={titleStyle}>{session?.title ?? ""}</span>
-        {link && link.state !== "connected" ? (
-          <span style={warnStyle}>{linkLine(link.state)}</span>
+        {link && link.link !== "connected" ? (
+          <span style={warnStyle}>{linkLine(link.link)}</span>
         ) : null}
         {link && !controller ? (
           <span style={hintStyle}>This computer may only watch there.</span>
         ) : null}
-        {controller && session && !session.mine ? (
+        {link?.link === "connected" &&
+        controller &&
+        session &&
+        session.typing !== "you" ? (
           <button
             className="kr-hover-surface"
-            disabled={lost}
             onClick={() => {
               useRemoteHosts
                 .getState()

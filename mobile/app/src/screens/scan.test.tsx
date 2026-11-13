@@ -3,7 +3,7 @@ import { act, fireEvent, render, screen } from "@testing-library/react-native";
 import { useCameraPermissions } from "expo-camera";
 import { Linking } from "react-native";
 import { KriyonNative } from "../../modules/kriyon-native/index.ts";
-import { pairingCodeFrom, usePhone } from "../state/phone.ts";
+import { usePhone } from "../state/phone.ts";
 import { PairScreen } from "./PairScreen.tsx";
 
 let scanned: ((result: { data: string; type: string }) => void) | undefined;
@@ -42,14 +42,6 @@ const CODE = `kriyon-pair:1:${"ab".repeat(40)}`;
 beforeEach(() => {
   jest.clearAllMocks();
   usePhone.setState(usePhone.getInitialState());
-});
-
-test("only a Kriyon pairing code is taken from a scan", () => {
-  expect(pairingCodeFrom(CODE)).toBe(CODE);
-  expect(pairingCodeFrom(`  ${CODE}\n`)).toBe(CODE);
-  expect(pairingCodeFrom("https://example.com")).toBeNull();
-  expect(pairingCodeFrom("kriyon-pair:2:abcd")).toBeNull();
-  expect(pairingCodeFrom("")).toBeNull();
 });
 
 test("scanning asks for the camera in plain words first", async () => {

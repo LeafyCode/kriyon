@@ -5,8 +5,8 @@
 
 use std::sync::Arc;
 
-use kriyon_remote::device_view::{HostView, LinkState, ScreenEvent};
-use kriyon_remote::message::{hex, EndpointId, Holder, Role, SessionInfo};
+use kriyon_remote::device_view::{host_summary, HostView, LinkState, ScreenEvent};
+use kriyon_remote::message::{hex, EndpointId};
 use serde::Serialize;
 use tauri::{Emitter as _, Manager as _};
 
@@ -66,57 +66,6 @@ pub fn check_input(text: &str) -> Result<(), String> {
     }
 }
 
-/// A session of a host, for the UI: the host's entry, and whether this
-/// device holds its typing control.
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct HostSessionView {
-    pub id: String,
-    pub title: String,
-    pub status: kriyon_core::session::SessionStatus,
-    pub standing: kriyon_core::standing::StandingState,
-    pub needs_you: bool,
-    pub dialog_open: bool,
-    pub last_change_ms: i64,
-    pub mine: bool,
-}
-
-/// A paired host, for the UI.
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct HostLinkView {
-    pub host_id: String,
-    /// What the host said its name is; the stored name until it does.
-    pub name: String,
-    pub state: LinkState,
-    pub role: Option<crate::remote_cmd::RoleArg>,
-    pub sessions: Vec<HostSessionView>,
-    /// Where a session can be started there.
-    pub projects: Vec<HostProjectView>,
-}
-
-/// A project on a paired host, for the new-session picker.
-#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct HostProjectView {
-    pub id: String,
-    pub name: String,
-    pub parked: bool,
-}
-
-fn session_view(info: &SessionInfo, mine: bool) -> HostSessionView {
-    HostSessionView {
-        id: info.id.clone(),
-        title: info.title.clone(),
-        status: info.status,
-        standing: info.standing,
-        needs_you: info.needs_you,
-        dialog_open: info.dialog_open,
-        last_change_ms: info.last_change_ms,
-        mine,
-    }
-}
-
 /// Tells the webview about each host's link.
 struct Emitter {
     app: tauri::AppHandle,
@@ -125,34 +74,11 @@ struct Emitter {
 
 impl DeviceEvents for Emitter {
     fn host_changed(&self, host: EndpointId, state: LinkState, view: &HostView) {
-        let sessions = view
-            .sessions
-            .iter()
-            .map(|info| {
-                let mine = view
-                    .control
-                    .get(&info.id)
-                    .is_some_and(|control| control.holder == Holder::Device(self.me));
-                session_view(info, mine)
-            })
-            .collect();
-        let payload = HostLinkView {
-            host_id: hex(&host),
-            name: view.host_name.clone().unwrap_or_default(),
-            state,
-            role: view.role.map(Role::into),
-            sessions,
-            projects: view
-                .projects
-                .iter()
-                .map(|project| HostProjectView {
-                    id: project.id.clone(),
-                    name: project.name.clone(),
-                    parked: project.parked,
-                })
-                .collect(),
-        };
-        let _ = self.app.emit(HOST_CHANGED_EVENT, payload);
+        // The summary the phone reads too (kriyon_remote::device_view).
+        let _ = self.app.emit(
+            HOST_CHANGED_EVENT,
+            host_summary(&host, &self.me, state, view),
+        );
     }
 }
 

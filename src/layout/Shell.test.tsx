@@ -394,7 +394,9 @@ test("Other computers shows in the nav only once a computer is paired, with what
       links: {
         [host]: {
           hostId: host,
-          name: "Studio",
+          hostName: "Studio",
+          mayStart: false,
+          refused: null,
           role: "controller",
           projects: [],
           sessions: [
@@ -402,14 +404,16 @@ test("Other computers shows in the nav only once a computer is paired, with what
               dialogOpen: false,
               id: "s1",
               lastChangeMs: 0,
-              mine: false,
+              mayType: false,
               needsYou: true,
+              projectId: "p",
+              typing: null,
               standing: "awaiting_input",
               status: "waiting",
               title: "Fix login",
             },
           ],
-          state: "connected",
+          link: "connected",
         },
       },
     });

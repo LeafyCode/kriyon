@@ -1,6 +1,7 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import type { HostSummary } from "../remote/hostSummary.ts";
 import type {
   DirEntry,
   FileBlame,
@@ -26,7 +27,6 @@ import type {
   SessionDiff,
   SessionRow,
   SessionStatus,
-  StandingState,
   StudioEvent,
   UsageSnapshot,
 } from "../types.ts";
@@ -1999,44 +1999,10 @@ export function relayOpenSubscriptions(): Promise<void> {
 /** Subscribe to `relay-changed`: the relay's state changed in Rust. */
 export const onRelayChanged = subscribe<null>("relay-changed");
 
-// This computer as a remote device of another. Mirrors
-// `src-tauri/src/remote_device_cmd.rs`.
-
-/** Where the link to a paired computer stands. */
-export type HostLinkState = "connecting" | "connected" | "lost" | "removed";
-
-/** A session on a paired computer. */
-export interface HostSession {
-  dialogOpen: boolean;
-  id: string;
-  lastChangeMs: number;
-  /** This computer holds its typing control. */
-  mine: boolean;
-  needsYou: boolean;
-  standing: StandingState;
-  status: SessionStatus;
-  title: string;
-}
-
-/** A paired computer's link, as `remote-host-changed` reports it. */
-export interface HostLink {
-  hostId: string;
-  /** The name it said; empty until it has. */
-  name: string;
-  /** Where a session can be started there. */
-  projects: HostProject[];
-  role: RemoteRole | null;
-  sessions: HostSession[];
-  state: HostLinkState;
-}
-
-/** A project on a paired computer, for the new-session picker. */
-export interface HostProject {
-  id: string;
-  name: string;
-  /** Every session in it is parked there. */
-  parked: boolean;
-}
+// This computer as a remote device of another: the commands in
+// `src-tauri/src/remote_device_cmd.rs`. A paired computer's link and
+// sessions come as Rust's HostSummary, typed in remote/hostSummary.ts
+// (shared with the phone app).
 
 /**
  * Start a session on a paired computer in project `projectId`, titled
@@ -2137,7 +2103,9 @@ export function remoteHostsWake(): Promise<void> {
 }
 
 /** Subscribe to `remote-host-changed`: a paired computer's link or sessions. */
-export const onRemoteHostChanged = subscribe<HostLink>("remote-host-changed");
+export const onRemoteHostChanged = subscribe<HostSummary>(
+  "remote-host-changed"
+);
 
 /** Subscribe to `remote-host-pairing-ended`. */
 export const onRemoteHostPairingEnded = subscribe<HostPairingEnded>(

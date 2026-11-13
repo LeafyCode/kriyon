@@ -125,15 +125,3 @@ export function noteLine(note: ScreenNote): string {
       return note.words || "The other computer refused that.";
   }
 }
-
-/**
- * Whether a device may type into a session now: connected, as a Controller,
- * holding typing control. The computer checks again at the write.
- */
-export function mayType(
-  link: LinkState,
-  role: "viewer" | "controller" | null,
-  holdsControl: boolean
-): boolean {
-  return link === "connected" && role === "controller" && holdsControl;
-}

@@ -1,11 +1,11 @@
 import { beforeEach, expect, jest, test } from "@jest/globals";
 import { fireEvent, render, screen } from "@testing-library/react-native";
+import type { HostSummary } from "../../../../src/remote/hostSummary.ts";
 import {
-  type HostState,
   KriyonNative,
   type PairedHost,
 } from "../../modules/kriyon-native/index.ts";
-import { canStartSession, usePhone } from "../state/phone.ts";
+import { usePhone } from "../state/phone.ts";
 import { HomeScreen } from "./HomeScreen.tsx";
 import { NewSessionScreen } from "./NewSessionScreen.tsx";
 
@@ -29,10 +29,12 @@ const paired: PairedHost = {
   relayUrl: null,
 };
 
-const host = (over: Partial<HostState> = {}): HostState => ({
+/** A summary as Rust would send it; cases set mayStart as Rust would. */
+const host = (over: Partial<HostSummary> = {}): HostSummary => ({
   hostId: MAC,
   hostName: "Mac",
   link: "connected",
+  mayStart: true,
   projects: [
     { id: "p1", name: "app", parked: false },
     { id: "p2", name: "old-site", parked: true },
@@ -48,18 +50,10 @@ beforeEach(() => {
   usePhone.setState(usePhone.getInitialState());
 });
 
-test("a new session is offered only as a connected Controller with projects", () => {
-  expect(canStartSession(host())).toBe(true);
-  expect(canStartSession(host({ role: "viewer" }))).toBe(false);
-  expect(canStartSession(host({ link: "lost" }))).toBe(false);
-  expect(canStartSession(host({ projects: [] }))).toBe(false);
-  expect(canStartSession(undefined)).toBe(false);
-});
-
 test("home offers a new session only where one can start", async () => {
   usePhone.setState({
     hosts: [paired],
-    states: { [MAC]: host({ role: "viewer" }) },
+    states: { [MAC]: host({ mayStart: false, role: "viewer" }) },
   });
   const view = await render(<HomeScreen />);
   expect(
@@ -164,7 +158,7 @@ test("an old refusal is gone once the screen changes", () => {
 test("where a session can't start now, the screen says why and offers nothing", async () => {
   usePhone.setState({
     hosts: [paired],
-    states: { [MAC]: host({ link: "lost" }) },
+    states: { [MAC]: host({ link: "lost", mayStart: false }) },
   });
   await render(<NewSessionScreen hostId={MAC} />);
   expect(screen.queryByRole("button", { name: "Start in app" })).toBeNull();

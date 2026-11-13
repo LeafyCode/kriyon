@@ -1,8 +1,6 @@
 import { create } from "zustand";
 import {
-  type HostLink,
   type HostPairingEnded,
-  type HostSession,
   onRemoteHostChanged,
   onRemoteHostPairingEnded,
   type PairedHost,
@@ -18,7 +16,7 @@ import {
 } from "../ipc/bridge.ts";
 import { failureMessage } from "../ipc/failures.ts";
 import { onEvent, stopAll } from "../ipc/onEvent.ts";
-import { mayType } from "../remote/remoteScreen.ts";
+import { type HostSummary, needsYouCount } from "../remote/hostSummary.ts";
 
 /**
  * This computer as a [Remote device] of other computers (plan Step D). Rust
@@ -46,8 +44,8 @@ interface RemoteHostsStore {
   forget: (hostId: string) => Promise<void>;
   hosts: PairedHost[];
   /** A paired computer's link changed (`remote-host-changed`). */
-  linkChanged: (link: HostLink) => void;
-  links: Record<string, HostLink>;
+  linkChanged: (link: HostSummary) => void;
+  links: Record<string, HostSummary>;
   load: () => Promise<void>;
   open: (
     hostId: string,
@@ -203,7 +201,7 @@ export const useRemoteHosts = create<RemoteHostsStore>((set, get) => {
       const link = get().links[hostId];
       const session = link?.sessions.find((one) => one.id === sessionId);
       // Typing reaches the other computer only with control; Rust checks too.
-      if (!(link && session && canType(link, session))) {
+      if (!session?.mayType) {
         return;
       }
       await attempt(() => remoteHostInput(hostId, sessionId, text));
@@ -245,27 +243,7 @@ export function installRemoteHostListeners(): () => void {
  */
 export function remoteNeedsYouCount(state: {
   hosts: PairedHost[];
-  links: Record<string, HostLink>;
+  links: Record<string, HostSummary>;
 }): number {
-  return state.hosts.reduce((count, host) => {
-    const link = state.links[host.hostId];
-    if (link?.state !== "connected") {
-      return count;
-    }
-    return count + link.sessions.filter((session) => session.needsYou).length;
-  }, 0);
-}
-
-/** Whether a session can be started there from here now. */
-export function canStart(link: HostLink): boolean {
-  return (
-    link.state === "connected" &&
-    link.role === "controller" &&
-    link.projects.length > 0
-  );
-}
-
-/** Whether this computer may type into `session` now. */
-export function canType(link: HostLink, session: HostSession): boolean {
-  return mayType(link.state, link.role, session.mine);
+  return needsYouCount(state.hosts, state.links);
 }

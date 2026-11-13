@@ -1,7 +1,7 @@
 import { beforeEach, expect, jest, test } from "@jest/globals";
 import { act, fireEvent, render, screen } from "@testing-library/react-native";
+import type { HostSummary } from "../../../../src/remote/hostSummary.ts";
 import {
-  type HostState,
   KriyonNative,
   type ScreenFrameEvent,
 } from "../../modules/kriyon-native/index.ts";
@@ -51,31 +51,44 @@ const native = jest.mocked(KriyonNative);
 const MAC = "ab".repeat(32);
 const READABLE = /readable view/i;
 
+/**
+ * A summary as Rust would send it: `typing` is who holds control, `mayType`
+ * what Rust says of it (cases off the link set it themselves).
+ */
 const state = (
-  over: Partial<HostState>,
-  typing: "you" | "host"
-): HostState => ({
-  hostId: MAC,
-  hostName: "Mac",
-  link: "connected",
-  projects: [],
-  refused: null,
-  role: "controller",
-  sessions: [
-    {
-      dialogOpen: false,
-      id: "s1",
-      lastChangeMs: 0,
-      needsYou: false,
-      projectId: "p",
-      standing: "running",
-      status: "running",
-      title: "Fix the build",
-      typing,
-    },
-  ],
-  ...over,
-});
+  over: Partial<HostSummary>,
+  typing: "you" | "host",
+  mayType = typing === "you"
+): HostSummary => {
+  const summary: HostSummary = {
+    hostId: MAC,
+    hostName: "Mac",
+    link: "connected",
+    mayStart: false,
+    projects: [],
+    refused: null,
+    role: "controller",
+    sessions: [],
+    ...over,
+  };
+  return {
+    ...summary,
+    sessions: over.sessions ?? [
+      {
+        dialogOpen: false,
+        id: "s1",
+        lastChangeMs: 0,
+        mayType,
+        needsYou: false,
+        projectId: "p",
+        standing: "running",
+        status: "running",
+        title: "Fix the build",
+        typing,
+      },
+    ],
+  };
+};
 
 /** The page says it is ready, as the real one does once loaded. */
 async function pageReady() {
@@ -144,7 +157,9 @@ test("what is typed goes to Rust as UTF-8", async () => {
 });
 
 test("a lost link says so and typing is off", async () => {
-  usePhone.setState({ states: { [MAC]: state({ link: "lost" }, "you") } });
+  usePhone.setState({
+    states: { [MAC]: state({ link: "lost" }, "you", false) },
+  });
   await render(<TerminalView hostId={MAC} sessionId="s1" />);
   await pageReady();
   expect(

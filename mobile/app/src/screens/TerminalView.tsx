@@ -15,7 +15,7 @@ import { Pressable, Text, View } from "react-native";
 import { WebView, type WebViewProps } from "react-native-webview";
 import { linkLine, noteLine } from "../../../../src/remote/remoteScreen.ts";
 import { KriyonNative } from "../../modules/kriyon-native/index.ts";
-import { canType, toBase64, usePhone } from "../state/phone.ts";
+import { toBase64, usePhone } from "../state/phone.ts";
 import { TERMINAL_PAGE } from "../terminal/page.generated.ts";
 import { readPageMessage } from "../terminal/protocol.ts";
 import { colors, ui } from "../ui.ts";
@@ -98,7 +98,7 @@ export function TerminalView({
   const [note, setNote] = useState<string | null>(null);
   const host = usePhone((state) => state.states[hostId]);
   const session = host?.sessions.find((one) => one.id === sessionId);
-  const typing = canType(host, session);
+  const typing = Boolean(session?.mayType);
   const connected = host?.link === "connected";
   const controller = host?.role === "controller";
 

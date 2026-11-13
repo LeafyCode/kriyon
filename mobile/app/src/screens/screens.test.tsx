@@ -1,7 +1,7 @@
 import { beforeEach, expect, jest, test } from "@jest/globals";
 import { fireEvent, render, screen } from "@testing-library/react-native";
+import type { HostSummary } from "../../../../src/remote/hostSummary.ts";
 import {
-  type HostState,
   KriyonNative,
   type PairedHost,
 } from "../../modules/kriyon-native/index.ts";
@@ -33,10 +33,11 @@ const paired: PairedHost = {
   relayUrl: null,
 };
 
-const connected: HostState = {
+const connected: HostSummary = {
   hostId: MAC,
   hostName: "Mac",
   link: "connected",
+  mayStart: false,
   projects: [],
   refused: null,
   role: "controller",
@@ -50,6 +51,7 @@ const connected: HostState = {
       standing: "awaiting_input",
       status: "waiting",
       title: "Fix the build",
+      mayType: false,
       typing: null,
     },
     {
@@ -61,6 +63,7 @@ const connected: HostState = {
       standing: "running",
       status: "running",
       title: "Write the docs",
+      mayType: false,
       typing: null,
     },
   ],
