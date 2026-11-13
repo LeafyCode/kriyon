@@ -53,19 +53,15 @@ cargo run -q -p kriyon-mobile --features bindgen --bin uniffi-bindgen -- \
   generate --library "$target_dir/$profile/libkriyon_mobile.dylib" \
   --language swift --out-dir "$generated"
 
-# The C header and module map go beside each static library, so Swift can
-# import the module the generated code names.
-headers="$out/Headers"
-rm -rf "$headers"
-mkdir -p "$headers"
-cp "$generated"/*.h "$headers/"
-module_name="$(basename "$generated"/*FFI.modulemap .modulemap)"
-cp "$generated/$module_name.modulemap" "$headers/module.modulemap"
+# The C header the bindings call is compiled into the Expo module's pod
+# (its podspec lists Rust/Generated/*.h), so the XCFramework carries the
+# libraries only and the header lives in one place.
+rm -rf "$out/Headers"
 
 rm -rf "$out/KriyonMobile.xcframework"
 xcodebuild -create-xcframework \
-  -library "$target_dir/aarch64-apple-ios/$profile/libkriyon_mobile.a" -headers "$headers" \
-  -library "$target_dir/aarch64-apple-ios-sim/$profile/libkriyon_mobile.a" -headers "$headers" \
+  -library "$target_dir/aarch64-apple-ios/$profile/libkriyon_mobile.a" \
+  -library "$target_dir/aarch64-apple-ios-sim/$profile/libkriyon_mobile.a" \
   -output "$out/KriyonMobile.xcframework"
 
 echo "build-ios: $out"

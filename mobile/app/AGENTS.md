@@ -17,7 +17,9 @@ Rust" in the remote plan.
 - **Add packages by editing `package.json` and running `pnpm install` from the repo root**,
   with the version Expo lists for this SDK (`expo/bundledNativeModules.json`). `expo install`
   runs `pnpm add`, which can re-resolve the desktop's packages too.
-- **Development build, not Expo Go**: the native module needs one (`pnpm ios`).
+- **Development build, not Expo Go**: the native module needs one. Build the Rust library
+  first (`scripts/mobile/build-ios.sh`, which writes `modules/kriyon-native/ios/Rust`), then
+  `pnpm ios`. The library is built for iPhones and Apple-silicon Simulators only.
 - **Tests**: Jest with `jest-expo` and React Native Testing Library 14 (`render`, `fireEvent`
   and `act` are async: always `await`). Import `test` and `expect` from `@jest/globals`.
   Failing test first.

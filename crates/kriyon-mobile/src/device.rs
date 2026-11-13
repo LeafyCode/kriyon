@@ -255,6 +255,7 @@ pub struct Pairing {
     invite: PairingInvite,
     finish: tokio::sync::Mutex<Option<DevicePairing>>,
     shared: Arc<Shared>,
+    cancelled: std::sync::atomic::AtomicBool,
 }
 
 #[uniffi::export]
@@ -263,6 +264,13 @@ impl Pairing {
     #[must_use]
     pub fn code(&self) -> String {
         self.code.clone()
+    }
+
+    /// Stop this pairing: if the computer still accepts the code, the phone
+    /// keeps nothing of it.
+    pub fn cancel(&self) {
+        self.cancelled
+            .store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
     /// Wait for the computer to accept the code. The computer is kept and
@@ -287,6 +295,11 @@ impl Pairing {
             .map_err(|e| MobileError::Link {
                 reason: e.to_string(),
             })?;
+        if self.cancelled.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(MobileError::Invalid {
+                reason: "the pairing was cancelled".into(),
+            });
+        }
         let host = PairedHost {
             host_id: hex(&self.invite.host_id),
             name,
@@ -443,6 +456,7 @@ impl MobileDevice {
             invite: start.invite,
             finish: tokio::sync::Mutex::new(Some(start.finish)),
             shared: Arc::clone(&self.shared),
+            cancelled: std::sync::atomic::AtomicBool::new(false),
         }))
     }
 
@@ -729,6 +743,67 @@ mod tests {
             async move { device.forget("not-an-id".into()).await }
         })
         .is_err());
+    }
+
+    #[test]
+    fn a_cancelled_pairing_keeps_no_computer() {
+        let store = Arc::new(Memory::default());
+        let device = phone(&store);
+        let roles = Arc::new(Roles::default());
+        let finished = run({
+            let device = Arc::clone(&device);
+            let roles = Arc::clone(&roles);
+            async move {
+                let host = Arc::new(
+                    Host::bind(
+                        &LinkConfig {
+                            bind: loopback(),
+                            ..LinkConfig::new([1; 32])
+                        },
+                        Arc::clone(&roles) as Arc<dyn PairedDevices>,
+                        10,
+                    )
+                    .await
+                    .expect("host binds"),
+                );
+                host.start_pairing(SECRET, Role::Controller);
+                let invite = kriyon_remote_link::invite::invite(&host, SECRET).to_qr_text();
+                let host_side = {
+                    let host = Arc::clone(&host);
+                    tokio::spawn(async move {
+                        let Accepted::Pair(link) = tokio::time::timeout(WAIT, host.accept())
+                            .await
+                            .expect("in time")
+                            .expect("open")
+                        else {
+                            panic!("a pairing connection");
+                        };
+                        link.request().await.expect("the right proof")
+                    })
+                };
+                let pairing = device.pair(invite).await.expect("pairs");
+                let mut attempt = host_side.await.expect("host task");
+                let code = pairing.code();
+                // The person backs out while the computer is still asking.
+                let finish = {
+                    let pairing = Arc::clone(&pairing);
+                    tokio::spawn(async move { pairing.finish().await })
+                };
+                pairing.cancel();
+                let _ = attempt
+                    .confirm(&code, "Test Mac", |id, role| {
+                        roles.0.lock().expect("roles").insert(id, role);
+                        true
+                    })
+                    .await;
+                finish.await.expect("finish task")
+            }
+        });
+        assert!(
+            finished.is_err(),
+            "a cancelled pairing ends without a computer"
+        );
+        assert_eq!(device.hosts().expect("hosts"), Vec::<PairedHost>::new());
     }
 
     #[test]
