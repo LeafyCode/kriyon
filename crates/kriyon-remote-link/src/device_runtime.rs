@@ -540,16 +540,25 @@ impl DeviceRuntime {
         sent.map_err(|e| DeviceError::Link(e.to_string()))
     }
 
-    /// Stop reading `session` as entries here; what the host still sends is
-    /// let go until the session closes.
+    /// Stop reading `session` as entries here: the host is told
+    /// (`StopEntries`) and stops building them for this device; the screen
+    /// goes on. A link down now has nothing to tell: the next one doesn't
+    /// ask.
     pub async fn stop_entries(&self, host: &EndpointId, session: &str) {
         let Ok(conn) = self.host(host).await else {
             return;
         };
-        let mut c = conn.conn.lock().await;
-        c.reading.remove(session);
-        if let Some(open) = c.sessions.get(session) {
-            *slot(&open.reading) = None;
+        let writer = {
+            let mut c = conn.conn.lock().await;
+            c.reading.remove(session);
+            c.sessions.get(session).map(|open| {
+                *slot(&open.reading) = None;
+                Arc::clone(&open.writer)
+            })
+        };
+        if let Some(writer) = writer {
+            // A failed send is a link going down, which stops it too.
+            let _ = writer.lock().await.send(&FromDevice::StopEntries).await;
         }
     }
 

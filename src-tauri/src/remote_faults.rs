@@ -307,6 +307,14 @@ fn a_phone_reads_a_session_as_entries_across_a_dropped_link() {
         let id = asked(&world).await;
         answer(&world, id, b"y");
         wait_until("the third", || texts(&seen).len() == 3).await;
+
+        // Back to the terminal: the host stops building for this phone.
+        phone.rt.stop_entries(&phone.host, "s").await;
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        let builds = world.fake.builds.load(Ordering::Relaxed);
+        *world.fake.entries.lock() = Ok(vec![note("a", "A"), note("d", "D")]);
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        assert_eq!(world.fake.builds.load(Ordering::Relaxed), builds);
     });
 }
 

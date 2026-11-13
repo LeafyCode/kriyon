@@ -166,11 +166,18 @@ the source of truth; entries are best-effort and say so.
 **Messages** (session stream, after `Open`; tags append to the enums in
 `kriyon_remote::message`):
 
-- device → host `RequestEntries { since: u64 }`: start sending entries, and
-  send every entry with a `seq` above `since` (0: the whole window). Sent
-  again after a reconnect or a gap, with the highest `seq` the device has.
-- host → device `Entries { entries: Vec<Entry>, reset: bool }`. `reset`: drop
-  every entry you have; these start the window again.
+- device → host `RequestEntries { since: u64 }`: start sending entries. Sent
+  again after a reconnect, with the highest `seq` the device has. The host
+  answers with the whole window and `reset: true`: an entry may have changed
+  while the device was away, or the host numbered afresh, and `since` can't
+  tell. (`since` is kept so a later host can send less.)
+- device → host `StopEntries`: stop sending entries (the device went back to
+  the terminal); the screen goes on. The host stops building them for that
+  device.
+- host → device `Entries { entries: Vec<Entry>, reset: bool, from: u64 }`.
+  `reset`: drop every entry you have; these start the window again. `from`:
+  the lowest `seq` still in the host's window past the "older" note; drop
+  what you have below it, other than that note.
 - host → device `EntriesUnavailable { reason }`, `reason` one of
   `CompanionOff` or `NoTranscript`. The device shows the terminal view with a
   one-line note and asks again when it reopens the readable view.
@@ -191,7 +198,7 @@ the source of truth; entries are best-effort and say so.
     view (ADR 0040). When the dialog closes, the host sends the same `seq`
     again as a `Note` ("Answered in the terminal").
   - `Note { text }`: context compacted, turn interrupted, or "Older in the
-    terminal" at the window's start.
+    terminal" at the window's start, which is always `seq` 0.
 
 **Who.** Viewers and Controllers alike: a Viewer sees the screen anyway.
 Answering stays a Controller's, in the terminal.
@@ -233,8 +240,9 @@ are stable across rebuilds: a step by its tool-use id, any other entry by
 its turn's start and its place in the turn. Entries share the device's
 session queue with screen updates; when it overflows, the device gets
 `reset: true` with the window once there is room, as a screen gets a fresh
-snapshot. A `RequestEntries { since }` with `since` still in the window gets
-what's newer; otherwise `reset: true` and the window.
+snapshot. Entries falling off the window's old end are dropped by `from`,
+with no reset; one gone from the middle (a rewind) numbers the window again
+and resets every reader.
 
 ## 7. Input and control
 
@@ -271,7 +279,7 @@ removal or new dialog between the check and the write still wins.
 
 | Message | Roles | Stream | Checks (refusal) |
 |---|---|---|---|
-| `Hello`, `Resync`, `Open`, `RequestEntries` | Viewer, Controller | control / session | paired (`NotPaired`), session exists (`NoSuchSession`) |
+| `Hello`, `Resync`, `Open`, `RequestEntries`, `StopEntries` | Viewer, Controller | control / session | paired (`NotPaired`), session exists (`NoSuchSession`) |
 | `TakeControl` | Controller | control | role (`NotAllowed`), control rules §7 (`NotInControl`) |
 | `Input`, `Resize` | Controller | session | role, holds control, run + epoch + `seen_seq` (`Stale`), size bounds shared with the local resize command (`OutOfRange`) |
 | `Compose` | Controller | session | as `Input`, plus no dialog showing (`DialogOpen`) |
@@ -285,7 +293,7 @@ the host without the payload.
 **Rules the table implies:**
 
 - Session-stream messages (`Input`, `Compose`, `Resize`, `Resync`,
-  `RequestEntries`) carry no session id: the stream names it. `Open
+  `RequestEntries`, `StopEntries`) carry no session id: the stream names it. `Open
   { session_id }` is the first message on a new session stream. `authorize`
   takes the stream (`Control` or `Session(id)`) as input.
 - A message on the wrong stream is refused `NotAllowed`.

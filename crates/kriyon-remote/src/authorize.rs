@@ -234,9 +234,10 @@ pub fn authorize(
                 Err(RefuseReason::ScreenTooLarge)
             }
         }
-        (FromDevice::Resync | FromDevice::RequestEntries { .. }, Stream::Session(id)) => {
-            session_exists(id)
-        }
+        (
+            FromDevice::Resync | FromDevice::RequestEntries { .. } | FromDevice::StopEntries,
+            Stream::Session(id),
+        ) => session_exists(id),
         (FromDevice::TakeControl { session_id }, Stream::Control) => {
             controller()?;
             let session = host
@@ -512,6 +513,12 @@ mod tests {
         assert_eq!(
             check(&h, VIEWER, SESSION, FromDevice::RequestEntries { since: 0 }),
             Ok(())
+        );
+        assert_eq!(check(&h, VIEWER, SESSION, FromDevice::StopEntries), Ok(()));
+        assert_eq!(
+            check(&h, VIEWER, Stream::Control, FromDevice::StopEntries),
+            Err(RefuseReason::NotAllowed),
+            "a session stream's"
         );
     }
 

@@ -62,6 +62,22 @@ fn stamp(files: &[&Path], asking: Option<&AskShown>) -> u64 {
     hasher.finish()
 }
 
+/// A build's stamp: the turns' files, the partial reply as it stands (gone
+/// once stale) and the question showing.
+fn build_stamp(
+    turns_stamp: u64,
+    partial: Option<&kriyon_core::structured::PartialReply>,
+    asking: Option<&AskShown>,
+) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    turns_stamp.hash(&mut hasher);
+    partial
+        .map(|p| (&p.turn_id, p.step, p.block, &p.text, p.done, p.received_ms))
+        .hash(&mut hasher);
+    stamp(&[], asking).hash(&mut hasher);
+    hasher.finish()
+}
+
 /// The question showing: an open ask while the terminal shows a dialog. A
 /// question the hook described brings its header and options; any other ask
 /// (a permission, a plan) its one line.
@@ -112,24 +128,20 @@ pub fn entries(app: &tauri::AppHandle, id: &str, last: Option<u64>) -> EntriesBu
         .is_some_and(|facts| facts.dialog.showing);
     let asking = asking(ask.as_ref(), showing);
     let spool = kriyon_core::paths::bridge_spool(&home, id);
-    let partial_file = kriyon_core::paths::bridge_partial(&home, id);
     let transcript = crate::structured_cmd::session_transcript(&home, &row);
     let mut turn_files = vec![spool.as_path()];
     turn_files.extend(transcript.as_deref());
     let turns_stamp = stamp(&turn_files, None);
-    let now = {
-        let mut hasher = DefaultHasher::new();
-        turns_stamp.hash(&mut hasher);
-        stamp(&[partial_file.as_path()], asking.as_ref()).hash(&mut hasher);
-        hasher.finish()
-    };
+    // The partial is read every time (a small file): it goes stale with
+    // time, which its file's size and time don't show.
+    let partial = crate::structured_cmd::load_partial(&home, id, row.claude_session_id.as_deref());
+    let now = build_stamp(turns_stamp, partial.as_ref(), asking.as_ref());
     if last == Some(now) {
         return EntriesBuilt::Unchanged;
     }
     let turns = turns(id, turns_stamp, || {
         crate::structured_cmd::load_turns(app, &home, id, Some(&row))
     });
-    let partial = crate::structured_cmd::load_partial(&home, id, row.claude_session_id.as_deref());
     EntriesBuilt::Built {
         stamp: now,
         entries: kriyon_core::readable::entries(&turns, partial.as_ref(), asking.as_ref()),
@@ -171,6 +183,23 @@ mod tests {
         let shown = asking(Some(&permission), true).expect("showing");
         assert_eq!(shown.question, "Bash: cargo test");
         assert_eq!(shown.options, Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_partial_reply_going_stale_moves_the_stamp() {
+        let partial = kriyon_core::structured::PartialReply {
+            turn_id: "t".into(),
+            step: 0,
+            block: 0,
+            text: "Half".into(),
+            done: false,
+            received_ms: 1,
+        };
+        assert_ne!(
+            build_stamp(7, Some(&partial), None),
+            build_stamp(7, None, None)
+        );
+        assert_eq!(build_stamp(7, None, None), build_stamp(7, None, None));
     }
 
     #[test]

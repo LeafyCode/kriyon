@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { expect, test, vi } from "vitest";
-import { RemoteReadable } from "./RemoteReadable.tsx";
+import { atBottom, RemoteReadable } from "./RemoteReadable.tsx";
 import type { ReadableSummary } from "./readableSummary.ts";
 
 const LOADING = /Loading/;
@@ -52,4 +52,16 @@ test("a question is answered only in the terminal", () => {
 test("says so while nothing has come yet", () => {
   render(<RemoteReadable onTerminal={vi.fn()} summary={undefined} />);
   expect(screen.getByText(LOADING)).toBeInTheDocument();
+});
+
+test("it follows the newest entry only while the view is at the bottom", () => {
+  expect(
+    atBottom({ clientHeight: 100, scrollHeight: 500, scrollTop: 400 })
+  ).toBe(true);
+  expect(
+    atBottom({ clientHeight: 100, scrollHeight: 500, scrollTop: 396 })
+  ).toBe(true);
+  expect(
+    atBottom({ clientHeight: 100, scrollHeight: 500, scrollTop: 200 })
+  ).toBe(false);
 });

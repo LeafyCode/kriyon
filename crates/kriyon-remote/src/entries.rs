@@ -11,7 +11,7 @@
 use std::collections::{HashMap, HashSet};
 use std::hash::{DefaultHasher, Hash, Hasher};
 
-use kriyon_core::readable::{EntryKind, Keyed, StepState, OLDER_KEY};
+use kriyon_core::readable::{EntryKind, Keyed, OLDER_KEY};
 
 use crate::message::{Entry, ToDevice};
 
@@ -55,6 +55,9 @@ impl EntryBook {
     /// The entries as built now ([`kriyon_core::readable::entries`]).
     pub fn update(&mut self, built: Vec<Keyed>) {
         let now: HashSet<&str> = built.iter().map(|entry| entry.key.as_str()).collect();
+        // A question showing again (its dialog flickered) is no longer
+        // answered.
+        self.answered.retain(|key| !now.contains(key.as_str()));
         // A question no longer showing was answered: it stays, as a note.
         for (key, entry) in &self.window {
             if matches!(entry.kind, EntryKind::Asking { .. }) && !now.contains(key.as_str()) {
@@ -82,7 +85,10 @@ impl EntryBook {
         }
         let mut window: Vec<(String, Entry)> = Vec::with_capacity(built.len());
         for Keyed { key, kind } in built {
-            let seq = if let Some(seq) = self.seqs.get(&key) {
+            // The "older" note is always first: seq 0, never numbered.
+            let seq = if key == OLDER_KEY {
+                0
+            } else if let Some(seq) = self.seqs.get(&key) {
                 *seq
             } else {
                 let seq = self.next_seq;
@@ -92,7 +98,12 @@ impl EntryBook {
             };
             window.push((key, Entry { seq, kind }));
         }
-        let first = window.first().map(|(_, entry)| entry.seq);
+        // Answered notes fall off the old end like the rest.
+        let first = window
+            .iter()
+            .filter(|(key, _)| key != OLDER_KEY)
+            .map(|(_, entry)| entry.seq)
+            .min();
         let seqs = &self.seqs;
         self.answered.retain(|key| {
             seqs.get(key)
@@ -117,6 +128,17 @@ impl EntryBook {
         self.window = window;
     }
 
+    /// The lowest `seq` in the window past the "older" note: a device drops
+    /// what it has below it, other than that note (seq 0).
+    #[must_use]
+    pub fn from(&self) -> u64 {
+        self.window
+            .iter()
+            .map(|(_, entry)| entry.seq)
+            .find(|seq| *seq > 0)
+            .unwrap_or(self.next_seq)
+    }
+
     /// The window, in `seq` order.
     #[must_use]
     pub fn window(&self) -> Vec<&Entry> {
@@ -128,7 +150,7 @@ impl EntryBook {
     fn in_order(&self, built: &[Keyed]) -> bool {
         let mut last = 0;
         let mut new_seen = false;
-        for entry in built {
+        for entry in built.iter().filter(|entry| entry.key != OLDER_KEY) {
             match self.seqs.get(&entry.key) {
                 Some(seq) if new_seen || *seq <= last => return false,
                 Some(seq) => last = *seq,
@@ -148,8 +170,6 @@ impl EntryBook {
 /// One reading device: what it was sent.
 #[derive(Debug)]
 pub struct EntryReader {
-    /// The highest `seq` it had, from its `RequestEntries`.
-    since: u64,
     /// The numbering it knows; `None` before its first batch.
     numbering: Option<u64>,
     /// A hash of each entry it has, by `seq`.
@@ -157,11 +177,13 @@ pub struct EntryReader {
 }
 
 impl EntryReader {
-    /// A device asked with `RequestEntries { since }`.
+    /// A device asked with `RequestEntries`. What it says it has (`since`)
+    /// isn't trusted: an entry may have changed while it was away, or the
+    /// host numbered afresh since, and it couldn't tell. It gets the window,
+    /// with a reset.
     #[must_use]
-    pub fn new(since: u64) -> Self {
+    pub fn new() -> Self {
         Self {
-            since,
             numbering: None,
             sent: HashMap::new(),
         }
@@ -170,30 +192,19 @@ impl EntryReader {
     /// Its queue overflowed: the next batch starts it over.
     pub fn start_over(&mut self) {
         self.numbering = None;
-        self.since = 0;
         self.sent.clear();
     }
 
     /// The messages that bring it up to `book`: none when it is.
     pub fn next(&mut self, book: &EntryBook) -> Vec<ToDevice> {
-        let mut reset = false;
-        if self.numbering != Some(book.numbering) {
-            let came_back = self.numbering.is_none()
-                && self.since >= book.numbering
-                && self.since < book.next_seq;
+        let reset = self.numbering != Some(book.numbering);
+        if reset {
             self.sent.clear();
-            if came_back {
-                // What it had and can't have changed since need not come again.
-                for (_, entry) in &book.window {
-                    if entry.seq <= self.since && settled(&entry.kind) {
-                        self.sent.insert(entry.seq, hash(&entry.kind));
-                    }
-                }
-            } else {
-                reset = true;
-            }
             self.numbering = Some(book.numbering);
         }
+        // What fell off the window is the device's to drop (`from`).
+        let window: HashSet<u64> = book.window.iter().map(|(_, entry)| entry.seq).collect();
+        self.sent.retain(|seq, _| window.contains(seq));
         let changed: Vec<Entry> = book
             .window
             .iter()
@@ -204,23 +215,16 @@ impl EntryReader {
         if changed.is_empty() && !reset {
             return Vec::new();
         }
-        if reset {
-            self.sent.clear();
-        }
         for entry in &changed {
             self.sent.insert(entry.seq, hash(&entry.kind));
         }
-        batches(changed, reset)
+        batches(changed, reset, book.from())
     }
 }
 
-/// Whether an entry can no longer change.
-fn settled(kind: &EntryKind) -> bool {
-    match kind {
-        EntryKind::Claude { done, .. } => *done,
-        EntryKind::Step { state, .. } => *state != StepState::Running,
-        EntryKind::Asking { .. } => false,
-        EntryKind::You { .. } | EntryKind::Report { .. } | EntryKind::Note { .. } => true,
+impl Default for EntryReader {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -232,7 +236,7 @@ fn hash(kind: &EntryKind) -> u64 {
 
 /// `entries` as `Entries` messages within [`ENTRIES_MESSAGE_MAX`]; only the
 /// first carries `reset`.
-fn batches(entries: Vec<Entry>, reset: bool) -> Vec<ToDevice> {
+fn batches(entries: Vec<Entry>, reset: bool, from: u64) -> Vec<ToDevice> {
     let mut out = Vec::new();
     let mut batch = Vec::new();
     let mut size = MESSAGE_ROOM;
@@ -242,6 +246,7 @@ fn batches(entries: Vec<Entry>, reset: bool) -> Vec<ToDevice> {
             out.push(ToDevice::Entries {
                 entries: std::mem::take(&mut batch),
                 reset: reset && out.is_empty(),
+                from,
             });
             size = MESSAGE_ROOM;
         }
@@ -252,6 +257,7 @@ fn batches(entries: Vec<Entry>, reset: bool) -> Vec<ToDevice> {
         out.push(ToDevice::Entries {
             entries: batch,
             reset: reset && out.is_empty(),
+            from,
         });
     }
     out
@@ -286,6 +292,7 @@ mod tests {
             let ToDevice::Entries {
                 entries,
                 reset: this,
+                ..
             } = message
             else {
                 panic!("entries: {message:?}");
@@ -300,7 +307,7 @@ mod tests {
     fn a_reader_gets_the_window_then_only_what_is_new_or_changed() {
         let mut book = EntryBook::default();
         book.update(vec![keyed("a", "A"), claude("b", "Hal", false)]);
-        let mut reader = EntryReader::new(0);
+        let mut reader = EntryReader::new();
         let (first, reset) = sent(&reader.next(&book));
         assert!(reset);
         assert_eq!(first.len(), 2);
@@ -339,7 +346,7 @@ mod tests {
             },
         };
         book.update(vec![keyed("a", "A"), ask]);
-        let mut reader = EntryReader::new(0);
+        let mut reader = EntryReader::new();
         let (first, _) = sent(&reader.next(&book));
         book.update(vec![keyed("a", "A"), keyed("b", "B")]);
         let (then, reset) = sent(&reader.next(&book));
@@ -362,7 +369,7 @@ mod tests {
     fn an_entry_gone_from_the_middle_or_one_out_of_order_starts_readers_over() {
         let mut book = EntryBook::default();
         book.update(vec![keyed("a", "A"), keyed("b", "B"), keyed("c", "C")]);
-        let mut reader = EntryReader::new(0);
+        let mut reader = EntryReader::new();
         let (first, _) = sent(&reader.next(&book));
         // A rewind: "b" went.
         book.update(vec![keyed("a", "A"), keyed("c", "C")]);
@@ -370,10 +377,20 @@ mod tests {
         assert!(reset);
         assert_eq!(then.len(), 2);
         assert!(then[0].0 > first[2].0, "numbered again, never reused");
-        // The older note appears at the start: out of order.
+        // The older note appears at the start: always seq 0, so no reason
+        // to start over.
         book.update(vec![keyed(OLDER_KEY, "Older"), keyed("c", "C")]);
-        let (_, reset) = sent(&reader.next(&book));
-        assert!(reset);
+        let (older, reset) = sent(&reader.next(&book));
+        assert!(!reset);
+        assert_eq!(
+            older,
+            vec![(
+                0,
+                EntryKind::Note {
+                    text: "Older".into()
+                }
+            )]
+        );
         // Falling off the old end is no reason to start over.
         book.update(vec![
             keyed(OLDER_KEY, "Older"),
@@ -386,29 +403,70 @@ mod tests {
     }
 
     #[test]
-    fn a_reader_coming_back_gets_what_is_newer_and_what_may_still_change() {
+    fn a_reader_coming_back_gets_the_whole_window_again() {
+        // What it had may have changed while it was away (a reply finished,
+        // a question answered), or the host started over: it can't tell.
         let mut book = EntryBook::default();
+        book.update(vec![keyed("a", "A"), claude("b", "Hal", false)]);
+        let mut reader = EntryReader::new();
+        book.update(vec![keyed("a", "A"), claude("b", "Half.", true)]);
+        let (got, reset) = sent(&reader.next(&book));
+        assert!(reset);
+        assert_eq!(got.len(), 2);
+    }
+
+    #[test]
+    fn each_batch_says_where_the_window_starts_past_the_older_note() {
+        let mut book = EntryBook::default();
+        book.update(vec![keyed("a", "A"), keyed("b", "B"), keyed("c", "C")]);
+        let mut reader = EntryReader::new();
+        reader.next(&book);
         book.update(vec![
-            keyed("a", "A"),
-            claude("b", "Hal", false),
-            keyed("c", "C"),
-        ]);
-        let seqs: Vec<u64> = book.window().iter().map(|entry| entry.seq).collect();
-        // It had everything up to "c" when it went.
-        let mut reader = EntryReader::new(seqs[2]);
-        book.update(vec![
-            keyed("a", "A"),
-            claude("b", "Half.", false),
+            keyed(OLDER_KEY, "Older"),
             keyed("c", "C"),
             keyed("d", "D"),
         ]);
-        let (got, reset) = sent(&reader.next(&book));
-        assert!(!reset);
-        let got: Vec<u64> = got.iter().map(|(seq, _)| *seq).collect();
-        assert_eq!(got, vec![seqs[1], seqs[2] + 1], "the open reply, and d");
-        // From before the window, or a numbering since replaced: the window.
-        let mut stale = EntryReader::new(1_000);
-        assert!(sent(&stale.next(&book)).1);
+        let messages = reader.next(&book);
+        let ToDevice::Entries { from, .. } = &messages[0] else {
+            panic!("entries");
+        };
+        assert_eq!(*from, 3, "c's seq: a and b fell off");
+    }
+
+    #[test]
+    fn an_answered_question_falls_off_like_any_entry_and_can_show_again() {
+        let ask = || Keyed {
+            key: "ask:t".into(),
+            kind: EntryKind::Asking {
+                header: String::new(),
+                question: "Q?".into(),
+                options: vec![],
+            },
+        };
+        let mut book = EntryBook::default();
+        book.update(vec![keyed("a", "A"), ask()]);
+        book.update(vec![keyed("a", "A")]);
+        // Shown again (a dialog flickered): one entry, the question.
+        book.update(vec![keyed("a", "A"), ask()]);
+        let window = book.window();
+        assert_eq!(window.len(), 2, "{window:?}");
+        assert!(matches!(window[1].kind, EntryKind::Asking { .. }));
+        // Answered, then off the old end behind the older note.
+        book.update(vec![keyed("a", "A"), keyed("b", "B")]);
+        book.update(vec![
+            keyed(OLDER_KEY, "Older"),
+            keyed("b", "B"),
+            keyed("c", "C"),
+        ]);
+        let texts: Vec<String> = book
+            .window()
+            .iter()
+            .map(|entry| format!("{:?}", entry.kind))
+            .collect();
+        assert!(
+            !texts.iter().any(|text| text.contains(ANSWERED)),
+            "{texts:?}"
+        );
     }
 
     #[test]
@@ -420,7 +478,7 @@ mod tests {
                 .map(|n| claude(&format!("k{n}"), &big, true))
                 .collect(),
         );
-        let mut reader = EntryReader::new(0);
+        let mut reader = EntryReader::new();
         let messages = reader.next(&book);
         assert!(messages.len() > 1);
         for message in &messages {

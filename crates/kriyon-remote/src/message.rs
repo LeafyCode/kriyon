@@ -184,8 +184,9 @@ pub enum FromDevice {
     Open { session_id: SessionId },
     /// Session stream: send a fresh snapshot.
     Resync,
-    /// Session stream: send [Readable view] entries, every one with a `seq`
-    /// above `since` (0: the whole window), and keep sending them (spec §6).
+    /// Session stream: send [Readable view] entries, and keep sending them
+    /// (spec §6). `since`, the highest `seq` the device has, is not trusted
+    /// now: the host sends the window with a reset.
     RequestEntries { since: u64 },
     /// Control stream.
     TakeControl { session_id: SessionId },
@@ -220,6 +221,9 @@ pub enum FromDevice {
     /// Control stream. `key_id` names the push sender's key `sealed` was
     /// sealed to (spec §10), so the sender can rotate keys.
     PushToken { key_id: u32, sealed: Vec<u8> },
+    /// Session stream: stop sending [Readable view] entries; the screen
+    /// goes on (spec §6).
+    StopEntries,
 }
 
 /// The kind of a [`FromDevice`] message; its number is the message's tag on
@@ -236,10 +240,11 @@ pub enum FromDeviceKind {
     Resize = 7,
     StartSession = 8,
     PushToken = 9,
+    StopEntries = 10,
 }
 
 impl FromDeviceKind {
-    const ALL: [Self; 10] = [
+    const ALL: [Self; 11] = [
         Self::Hello,
         Self::Open,
         Self::Resync,
@@ -250,6 +255,7 @@ impl FromDeviceKind {
         Self::Resize,
         Self::StartSession,
         Self::PushToken,
+        Self::StopEntries,
     ];
 
     /// The kind with wire tag `tag`, if this side knows it.
@@ -276,6 +282,7 @@ impl FromDevice {
             Self::Resize { .. } => FromDeviceKind::Resize,
             Self::StartSession { .. } => FromDeviceKind::StartSession,
             Self::PushToken { .. } => FromDeviceKind::PushToken,
+            Self::StopEntries => FromDeviceKind::StopEntries,
         }
     }
 }
@@ -362,6 +369,9 @@ pub enum ToDevice {
     Entries {
         entries: Vec<Entry>,
         reset: bool,
+        /// The lowest `seq` still in the host's window, past the "older in
+        /// the terminal" note (seq 0): drop what you have below it.
+        from: u64,
     },
     /// Session stream: no entries can be sent for this session; show the
     /// terminal.
@@ -516,7 +526,7 @@ mod tests {
         }
     }
 
-    fn device_samples() -> [(FromDevice, u8); 10] {
+    fn device_samples() -> [(FromDevice, u8); 11] {
         let s = || "s".to_string();
         [
             (
@@ -573,6 +583,7 @@ mod tests {
                 },
                 9,
             ),
+            (FromDevice::StopEntries, 10),
         ]
     }
 
@@ -683,6 +694,7 @@ mod tests {
                 kind: EntryKind::Note { text: "n".into() },
             }],
             reset: true,
+            from: 1,
         };
         assert_eq!(tag(&entries), 13);
         let unavailable = ToDevice::EntriesUnavailable {

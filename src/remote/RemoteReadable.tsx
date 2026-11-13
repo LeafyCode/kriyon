@@ -19,15 +19,15 @@ export function RemoteReadable({
   summary: ReadableSummary | undefined;
 }) {
   const listRef = useRef<HTMLDivElement>(null);
-  const count = summary?.entries.length ?? 0;
-  const last = summary?.entries[count - 1];
-  // Follow the newest entry, as the terminal does.
+  // Follow the newest entry, as the terminal does, unless the person
+  // scrolled up to read.
+  const following = useRef(true);
   useEffect(() => {
     const list = listRef.current;
-    if (list && (count > 0 || last)) {
+    if (list && summary && following.current) {
       list.scrollTop = list.scrollHeight;
     }
-  }, [count, last]);
+  }, [summary]);
 
   if (summary === undefined) {
     return <p style={quietStyle}>Loading the session…</p>;
@@ -36,12 +36,30 @@ export function RemoteReadable({
     return <p style={quietStyle}>Nothing in this session yet.</p>;
   }
   return (
-    <div ref={listRef} style={listStyle}>
+    <div
+      onScroll={(event) => {
+        following.current = atBottom(event.currentTarget);
+      }}
+      ref={listRef}
+      style={listStyle}
+    >
       {summary.entries.map((entry) => (
         <Entry entry={entry} key={entry.seq} onTerminal={onTerminal} />
       ))}
     </div>
   );
+}
+
+/** How near the bottom still counts as at it, in pixels. */
+const BOTTOM_SLACK = 8;
+
+/** Whether a scrolled list shows its end. */
+export function atBottom(list: {
+  clientHeight: number;
+  scrollHeight: number;
+  scrollTop: number;
+}): boolean {
+  return list.scrollHeight - list.scrollTop - list.clientHeight <= BOTTOM_SLACK;
 }
 
 function Entry({

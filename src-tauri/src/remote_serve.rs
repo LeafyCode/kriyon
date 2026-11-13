@@ -1270,9 +1270,9 @@ impl Serve {
         })
     }
 
-    /// A device's `Resync` (a fresh snapshot) or `RequestEntries` (start
-    /// reading entries) on session `id`'s stream, done; `false` for any
-    /// other message (a write).
+    /// A device's `Resync` (a fresh snapshot), `RequestEntries` (start
+    /// reading entries) or `StopEntries` on session `id`'s stream, done;
+    /// `false` for any other message (a write).
     fn stream_request(
         &self,
         served: &Arc<Served>,
@@ -1281,12 +1281,13 @@ impl Serve {
         request: &FromDevice,
     ) -> bool {
         match request {
-            FromDevice::RequestEntries { since } => {
-                served
-                    .readers
-                    .lock()
-                    .insert(device, EntryReader::new(*since));
+            FromDevice::RequestEntries { .. } => {
+                served.readers.lock().insert(device, EntryReader::new());
                 self.start_reading(served, id);
+            }
+            FromDevice::StopEntries => {
+                // Its entries thread ends once nobody reads.
+                served.readers.lock().remove(&device);
             }
             FromDevice::Resync => {
                 let ask = served.fanout.lock().resync(&device, Instant::now());
@@ -1700,13 +1701,13 @@ mod tests {
             sw.send(&FromDevice::RequestEntries { since: 0 })
                 .await
                 .expect("asked");
-            let ToDevice::Entries { entries, reset } = next_entries(&mut sr).await else {
+            let ToDevice::Entries { entries, reset, .. } = next_entries(&mut sr).await else {
                 panic!("entries");
             };
             assert!(reset);
             assert_eq!(entries.len(), 1);
             *world.fake.entries.lock() = Ok(vec![note("a", "A"), note("b", "B")]);
-            let ToDevice::Entries { entries, reset } = next_entries(&mut sr).await else {
+            let ToDevice::Entries { entries, reset, .. } = next_entries(&mut sr).await else {
                 panic!("entries");
             };
             assert!(!reset);
@@ -1724,6 +1725,47 @@ mod tests {
                 world.fake.builds.load(std::sync::atomic::Ordering::Relaxed),
                 builds
             );
+        });
+    }
+
+    #[test]
+    fn a_device_that_stops_reading_gets_no_more_entries_and_nothing_is_built_for_it() {
+        run(async {
+            let world = world().await;
+            *world.fake.entries.lock() = Ok(vec![note("a", "A")]);
+            let (_phone, link, _cw, _cr) = device(&world, 3, Role::Viewer).await;
+            let (mut sw, mut sr) = open(&link).await;
+            let id = asked(&world).await;
+            answer(&world, id, b"x");
+            sw.send(&FromDevice::RequestEntries { since: 0 })
+                .await
+                .expect("asked");
+            assert!(matches!(
+                next_entries(&mut sr).await,
+                ToDevice::Entries { .. }
+            ));
+            sw.send(&FromDevice::StopEntries).await.expect("stopped");
+            tokio::time::sleep(ENTRIES_EVERY * 2).await;
+            let builds = world.fake.builds.load(std::sync::atomic::Ordering::Relaxed);
+            *world.fake.entries.lock() = Ok(vec![note("a", "A"), note("b", "B")]);
+            tokio::time::sleep(ENTRIES_EVERY * 3).await;
+            assert_eq!(
+                world.fake.builds.load(std::sync::atomic::Ordering::Relaxed),
+                builds,
+                "nobody reads: nothing built"
+            );
+            // The stream is still served: a resync still gets a screen, and
+            // no entries came before it.
+            sw.send(&FromDevice::Resync).await.expect("resync");
+            let id = asked(&world).await;
+            answer(&world, id, b"y");
+            loop {
+                match next(&mut sr).await {
+                    ToDevice::Snapshot { .. } => break,
+                    ToDevice::Entries { .. } => panic!("entries after stopping"),
+                    _ => {}
+                }
+            }
         });
     }
 

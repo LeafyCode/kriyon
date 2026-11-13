@@ -412,10 +412,16 @@ impl ReadableEntries {
     /// isn't about entries.
     pub fn apply(&mut self, message: &ToDevice) -> Option<EntriesEvent> {
         match message {
-            ToDevice::Entries { entries, reset } => {
+            ToDevice::Entries {
+                entries,
+                reset,
+                from,
+            } => {
                 if *reset {
                     self.entries.clear();
                 }
+                // Fallen off the host's window; the "older" note (0) stays.
+                self.entries.retain(|seq, _| *seq == 0 || seq >= from);
                 for entry in entries {
                     self.entries.insert(entry.seq, entry.kind.clone());
                 }
@@ -592,11 +598,13 @@ mod entries_tests {
         let event = readable.apply(&ToDevice::Entries {
             entries: vec![note(2, "B"), note(1, "A")],
             reset: true,
+            from: 0,
         });
         assert_eq!(texts(event), vec![(1, "A".into()), (2, "B".into())]);
         let event = readable.apply(&ToDevice::Entries {
             entries: vec![note(2, "B2"), note(3, "C")],
             reset: false,
+            from: 0,
         });
         assert_eq!(
             texts(event),
@@ -607,8 +615,28 @@ mod entries_tests {
         let event = readable.apply(&ToDevice::Entries {
             entries: vec![note(9, "Z")],
             reset: true,
+            from: 0,
         });
         assert_eq!(texts(event), vec![(9, "Z".into())]);
+    }
+
+    #[test]
+    fn what_fell_off_the_hosts_window_is_dropped_but_the_older_note_stays() {
+        let mut readable = ReadableEntries::default();
+        readable.apply(&ToDevice::Entries {
+            entries: vec![note(1, "A"), note(2, "B"), note(3, "C")],
+            reset: true,
+            from: 1,
+        });
+        let event = readable.apply(&ToDevice::Entries {
+            entries: vec![note(0, "Older"), note(4, "D")],
+            reset: false,
+            from: 3,
+        });
+        assert_eq!(
+            texts(event),
+            vec![(0, "Older".into()), (3, "C".into()), (4, "D".into())]
+        );
     }
 
     #[test]

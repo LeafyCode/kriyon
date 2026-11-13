@@ -167,16 +167,17 @@ fn turn_entries(
         .filter(|item| matches!(item, TurnItem::Text { .. }))
         .count()
         + usize::from(turn.reply.is_some());
-    let more = live.is_some() || !turn.ended;
+    // A text something came after is done; the reply only once the turn
+    // ended or another text streams after it.
+    let reply_done = turn.ended || live.is_some();
     let mut nth = 0;
-    let mut text_entry = |out: &mut Vec<Keyed>, text: &str| {
-        let last = nth + 1 == texts;
-        out.push(claude(format!("{key}:text:{nth}"), text, !(last && more)));
+    let mut text_entry = |out: &mut Vec<Keyed>, text: &str, done: bool| {
+        out.push(claude(format!("{key}:text:{nth}"), text, done));
         nth += 1;
     };
     for (n, item) in turn.did.iter().enumerate() {
         match item {
-            TurnItem::Text { text } => text_entry(out, text),
+            TurnItem::Text { text } => text_entry(out, text, true),
             TurnItem::Step {
                 id,
                 name,
@@ -198,7 +199,7 @@ fn turn_entries(
         }
     }
     if let Some(reply) = &turn.reply {
-        text_entry(out, reply);
+        text_entry(out, reply, reply_done);
     }
     if let Some(partial) = live {
         out.push(claude(format!("{key}:text:{texts}"), &partial.text, false));
@@ -406,6 +407,31 @@ mod tests {
                     done: false
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn a_text_something_came_after_is_done_and_the_reply_is_while_more_streams() {
+        let mut t = turn(10, "Go");
+        t.did = vec![text("Looking."), step("s1", None, false)];
+        let built = entries(std::slice::from_ref(&t), None, None);
+        assert_eq!(
+            built[1].kind,
+            EntryKind::Claude {
+                text: "Looking.".into(),
+                done: true
+            }
+        );
+        t.did = Vec::new();
+        t.reply = Some("First.".into());
+        let streaming = entries(&[t], Some(&partial("Second", 20)), None);
+        assert_eq!(
+            streaming[1].kind,
+            EntryKind::Claude {
+                text: "First.".into(),
+                done: true
+            },
+            "a text streams after it"
         );
     }
 

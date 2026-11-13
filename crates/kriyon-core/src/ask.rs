@@ -207,8 +207,9 @@ fn question_text(raw: Option<&str>) -> String {
 }
 
 /// The first question in the raw questions JSON, with its header and at
-/// most [`ASK_OPTIONS`](crate::readable::ASK_OPTIONS) option labels, each cut
-/// short. `None` when it doesn't parse.
+/// most [`ASK_OPTIONS`](crate::readable::ASK_OPTIONS) option labels, each
+/// redacted, then cut short (a cut secret might no longer be recognised).
+/// `None` when it doesn't parse.
 fn first_question(raw: Option<&str>) -> Option<AskQuestion> {
     use crate::readable::{cut, ASK_HEADER_MAX, ASK_OPTIONS, ASK_OPTION_MAX, ASK_QUESTION_MAX};
     #[derive(Deserialize)]
@@ -227,14 +228,15 @@ fn first_question(raw: Option<&str>) -> Option<AskQuestion> {
         .ok()?
         .into_iter()
         .next()?;
+    let shown = |text: &str, max| cut(&crate::redact::redact(text), max);
     Some(AskQuestion {
-        header: cut(&first.header, ASK_HEADER_MAX),
-        question: cut(&first.question, ASK_QUESTION_MAX),
+        header: shown(&first.header, ASK_HEADER_MAX),
+        question: shown(&first.question, ASK_QUESTION_MAX),
         options: first
             .options
             .iter()
             .take(ASK_OPTIONS)
-            .map(|choice| cut(&choice.label, ASK_OPTION_MAX))
+            .map(|choice| shown(&choice.label, ASK_OPTION_MAX))
             .collect(),
     })
 }
@@ -305,6 +307,26 @@ mod tests {
         post.event = "PostToolUse".to_string();
         state.ingest(&post);
         assert_eq!(state.current().and_then(|ask| ask.question), None);
+    }
+
+    #[test]
+    fn a_secret_in_an_option_is_redacted_before_it_is_cut() {
+        let mut state = AskState::new();
+        let mut event = pre("AskUserQuestion");
+        let option = format!("{}sk-ant-api03-abcdefghijklmnopqrstuvwxyz", "x".repeat(60));
+        event.questions = Some(format!(
+            r#"[{{"question":"Q","options":[{{"label":"{option}"}}]}}]"#
+        ));
+        state.ingest(&event);
+        let question = state
+            .current()
+            .and_then(|ask| ask.question)
+            .expect("a question");
+        assert!(
+            !question.options[0].contains("sk-ant"),
+            "{}",
+            question.options[0]
+        );
     }
 
     #[test]
