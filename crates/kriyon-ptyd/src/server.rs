@@ -240,7 +240,7 @@ struct Shared {
     /// always the current one to repaint a reattaching client from.
     emulator: Mutex<vt100::Parser>,
     /// The [Output history], fed every output byte like the emulator. A leaf
-    /// lock: taken last under `client`, or alone.
+    /// lock, taken alone.
     history: Mutex<OutputHistory>,
     /// The [CLI dialog] on the emulator's screen and its [Dialog generation],
     /// looked at after every output read. A leaf lock: taken last under
@@ -272,7 +272,6 @@ impl Shared {
             emulator.process(bytes);
             self.dialog.lock().after_output(emulator.screen())
         };
-        self.history.lock().push(bytes);
         let mut frames = output_frames(bytes);
         // After the output that drew it, so a receiver numbering updates knows
         // which one the dialog changed after.
@@ -280,6 +279,10 @@ impl Shared {
             frames.extend(dialog_frame(state));
         }
         self.queue_frame(&mut client, frames);
+        drop(client);
+        // Outside the client lock: the history is a leaf, and only this, the
+        // PTY reader's thread, adds to it, so its order stays the output's.
+        self.history.lock().push(bytes);
     }
 
     /// Look at the screen if output came since the last look and one is due,

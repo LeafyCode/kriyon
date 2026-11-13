@@ -29,6 +29,8 @@ pub struct OutputHistory {
     front_start: usize,
     len: usize,
     limit: usize,
+    /// The last byte trimmed away was a line break (or nothing was trimmed).
+    front_at_line_start: bool,
 }
 
 impl OutputHistory {
@@ -40,6 +42,7 @@ impl OutputHistory {
             front_start: 0,
             len: 0,
             limit,
+            front_at_line_start: true,
         }
     }
 
@@ -51,24 +54,37 @@ impl OutputHistory {
             _ => self.chunks.push_back(bytes.to_vec()),
         }
         self.len += bytes.len();
-        if self.len > self.limit {
-            let at_line_start = self.drop_front(self.len - self.limit);
-            if !at_line_start {
-                if let Some(line_end) = self.next_line_break() {
-                    self.drop_front(line_end + 1);
-                }
-            }
+        // Trimmed in steps of a sixteenth of the limit, never per push, and
+        // without looking for a line start: that is left to `contents`, which
+        // runs only when a client asks. A push stays cheap even when the
+        // output has no line breaks at all.
+        if self.len > self.limit + self.limit / 16 {
+            self.front_at_line_start = self.drop_front(self.len - self.limit);
         }
     }
 
-    /// Everything kept, oldest first.
+    /// The most recent output, oldest first: at most the limit, and starting
+    /// at a line start when one is within [`LINE_SEARCH_LEN`] bytes of where
+    /// the limit cuts.
     #[must_use]
     pub fn contents(&self) -> Vec<u8> {
-        let mut out = Vec::with_capacity(self.len);
-        for chunk in self.live_chunks() {
-            out.extend_from_slice(chunk);
+        let kept = || self.live_chunks().flat_map(<[u8]>::iter);
+        let mut skip = self.len.saturating_sub(self.limit);
+        let cut_mid_line = if skip > 0 {
+            kept().nth(skip - 1) != Some(&b'\n')
+        } else {
+            !self.front_at_line_start
+        };
+        if cut_mid_line {
+            if let Some(line_end) = kept()
+                .skip(skip)
+                .take(LINE_SEARCH_LEN)
+                .position(|&byte| byte == b'\n')
+            {
+                skip += line_end + 1;
+            }
         }
-        out
+        kept().skip(skip).copied().collect()
     }
 
     /// The kept bytes, chunk by chunk, without the trimmed front.
@@ -105,14 +121,6 @@ impl OutputHistory {
             }
         }
         at_line_start
-    }
-
-    /// Where the first line break is, within [`LINE_SEARCH_LEN`] bytes.
-    fn next_line_break(&self) -> Option<usize> {
-        self.live_chunks()
-            .flat_map(<[u8]>::iter)
-            .take(LINE_SEARCH_LEN)
-            .position(|&byte| byte == b'\n')
     }
 }
 
@@ -168,5 +176,18 @@ mod tests {
             assert!(history.contents().len() <= 100);
         }
         assert!(history.contents().ends_with(b"line 999\n"));
+    }
+
+    #[test]
+    fn a_long_run_of_output_is_still_cut_to_a_line_start_when_read() {
+        // Pushes trim in steps and never look for a line break; reading does.
+        let mut history = OutputHistory::new(1600);
+        for i in 0..400 {
+            history.push(format!("line {i:03}\n").as_bytes());
+        }
+        let contents = history.contents();
+        assert!(contents.len() <= 1600);
+        assert!(contents.starts_with(b"line "), "starts at a line start");
+        assert!(contents.ends_with(b"line 399\n"));
     }
 }
