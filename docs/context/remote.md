@@ -15,10 +15,11 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
 - **Device key** — a device's own Ed25519 key pair; its public half is the device's iroh endpoint
   id. Kept in the OS keychain, never synced or sent. _Avoid_: node id, identity.
 - **Pairing** — adding a [Remote device] to a [Host] in person: an expiring QR code on the host,
-  a matching [Pairing code] confirmed on both screens. The only way a device is ever trusted; an
+  then the device's [Pairing code] typed into the host. The only way a device is ever trusted; an
   account can't do it. _Avoid_: linking, login.
-- **Pairing code** — the 6-digit code the [Remote device] shows during [Pairing] and the person types into the [Host], derived from the
-  encrypted connection so a device in the middle can't make them match.
+- **Pairing code** — the 6-digit code the [Remote device] shows during [Pairing] and the person
+  types into the [Host]. Derived from the encrypted connection, so a device that connected with
+  a leaked QR code shows a code the person never sees on their own device.
 - **Paired device** — a [Remote device] the [Host] has stored after [Pairing], with its name,
   [Device key] and role ([Viewer] or [Controller]). Removing it on the host cuts it off at once.
 - **Viewer** — a [Paired device] role that sees screens and status but can never send input,
