@@ -18,6 +18,10 @@ use crate::message::{EndpointId, Epoch, FromDevice, Holder, RefuseReason, Role};
 /// What [`authorize`] decided.
 pub type Verdict = Result<(), RefuseReason>;
 
+/// The most cells (columns × rows) a session's screen may have to be viewed
+/// remotely, so its worst snapshot fits [`crate::compress::MAX_SNAPSHOT`].
+pub const MAX_REMOTE_CELLS: u32 = 250_000;
+
 /// The narrowest a remote device may make a session (spec §7).
 pub const MIN_REMOTE_COLS: u16 = 80;
 
@@ -65,6 +69,14 @@ pub struct SessionView<'a> {
     pub run: u64,
     pub control: &'a Control,
     pub dialog: Dialog,
+    /// The host's screen size now.
+    pub cols: u16,
+    pub rows: u16,
+}
+
+/// Whether a `cols` × `rows` screen is small enough to view remotely.
+fn viewable(cols: u16, rows: u16) -> bool {
+    u32::from(cols) * u32::from(rows) <= MAX_REMOTE_CELLS
 }
 
 /// What the host knows, looked up as the check needs it.
@@ -164,7 +176,16 @@ pub fn authorize(
             }
             Ok(())
         }
-        (FromDevice::Open { session_id }, Stream::Unopened) => session_exists(session_id),
+        (FromDevice::Open { session_id }, Stream::Unopened) => {
+            let session = host
+                .session(session_id)
+                .ok_or(RefuseReason::NoSuchSession)?;
+            if viewable(session.cols, session.rows) {
+                Ok(())
+            } else {
+                Err(RefuseReason::ScreenTooLarge)
+            }
+        }
         (FromDevice::Resync | FromDevice::RequestEntries, Stream::Session(id)) => {
             session_exists(id)
         }
@@ -189,7 +210,10 @@ pub fn authorize(
             };
             recheck_at_write(device, id, &write, host)?;
             if let FromDevice::Resize { cols, rows, .. } = *message {
-                if cols < MIN_REMOTE_COLS || check_screen_size(cols, rows).is_err() {
+                if cols < MIN_REMOTE_COLS
+                    || check_screen_size(cols, rows).is_err()
+                    || !viewable(cols, rows)
+                {
                     return Err(RefuseReason::OutOfRange);
                 }
             }
@@ -291,6 +315,7 @@ mod tests {
         dialog: Dialog,
         session_exists: bool,
         folder: ProjectFolder,
+        screen: (u16, u16),
     }
 
     impl HostState for Host {
@@ -302,6 +327,8 @@ mod tests {
                 run: RUN,
                 control: &self.control,
                 dialog: self.dialog,
+                cols: self.screen.0,
+                rows: self.screen.1,
             })
         }
         fn project_folder(&self, _project_id: &str) -> ProjectFolder {
@@ -323,6 +350,7 @@ mod tests {
             dialog: Dialog::default(),
             session_exists: true,
             folder: ProjectFolder::Approved,
+            screen: (120, 40),
         };
         (host, now)
     }
@@ -454,6 +482,31 @@ mod tests {
                 Err(RefuseReason::NoSuchSession)
             );
         }
+    }
+
+    #[test]
+    fn a_host_screen_too_big_to_send_cannot_be_opened() {
+        let (mut h, _) = host();
+        let open = || FromDevice::Open {
+            session_id: S.into(),
+        };
+        h.screen = (500, 500);
+        assert_eq!(check(&h, VIEWER, Stream::Unopened, open()), Ok(()));
+        h.screen = (501, 500);
+        assert_eq!(
+            check(&h, VIEWER, Stream::Unopened, open()),
+            Err(RefuseReason::ScreenTooLarge)
+        );
+    }
+
+    #[test]
+    fn a_device_may_not_resize_past_what_it_may_view() {
+        let (h, _) = host();
+        assert_eq!(check(&h, PHONE, SESSION, resize(&h, 500, 500)), Ok(()));
+        assert_eq!(
+            check(&h, PHONE, SESSION, resize(&h, 600, 500)),
+            Err(RefuseReason::OutOfRange)
+        );
     }
 
     #[test]
@@ -601,12 +654,7 @@ mod tests {
             );
         }
         assert_eq!(
-            check(
-                &h,
-                PHONE,
-                SESSION,
-                resize(&h, MAX_SCREEN_SIDE, MAX_SCREEN_SIDE)
-            ),
+            check(&h, PHONE, SESSION, resize(&h, MAX_SCREEN_SIDE, 250)),
             Ok(())
         );
     }

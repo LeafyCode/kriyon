@@ -79,6 +79,8 @@ pub enum RefuseReason {
     },
     /// `StartSession` names a project the host doesn't have.
     NoSuchProject,
+    /// `Open` of a session whose screen is too big to send.
+    ScreenTooLarge,
 }
 
 /// Device to host on `kriyon/remote/1`.
@@ -409,6 +411,7 @@ mod tests {
             RefuseReason::UnknownMessage,
             RefuseReason::TooOld { min_minor: 0 },
             RefuseReason::NoSuchProject,
+            RefuseReason::ScreenTooLarge,
         ];
         for (n, reason) in reasons.iter().enumerate() {
             assert_eq!(usize::from(tag(reason)), n, "{reason:?}");

@@ -3,9 +3,13 @@
 //! header.
 //!
 //! A decoder trusts none of it: the frame must state its content size, at most
-//! [`MAX_DECOMPRESSED`], be decoded with a window of at most
-//! 2^[`WINDOW_LOG_MAX`], and be the only thing in the bytes. Anything else is
-//! a protocol error, and the device sends `Resync`.
+//! [`MAX_UPDATE`] for an update or [`MAX_SNAPSHOT`] for a snapshot, and be the
+//! only thing in the bytes; it is decoded into a buffer of exactly that size.
+//! Anything else is a protocol error, and the device sends `Resync`.
+//!
+//! [`WINDOW_LOG_MAX`] is set as the spec asks, but zstd applies it only when
+//! decoding a stream. Decoding a whole frame at once, as here, the stated size
+//! is what bounds memory, and a 24 MiB snapshot decodes under a 2^23 window.
 //!
 //! A compressed snapshot that doesn't fit in one message goes as numbered
 //! `SnapshotPart`s; [`snapshot_messages`] splits it and [`SnapshotParts`]
@@ -13,10 +17,34 @@
 
 use crate::message::ToDevice;
 
-/// The most one frame may decompress to.
-pub const MAX_DECOMPRESSED: usize = 8 * 1024 * 1024;
+/// The most an update frame may decompress to.
+pub const MAX_UPDATE: usize = 8 * 1024 * 1024;
 
-/// The largest decoding window, as a power of two (8 MiB).
+/// The most a snapshot frame may decompress to. Remote viewing needs a host
+/// screen of at most [`crate::authorize::MAX_REMOTE_CELLS`] cells, whose worst
+/// snapshot (about 67 bytes a cell) fits.
+pub const MAX_SNAPSHOT: usize = 24 * 1024 * 1024;
+
+/// What a frame holds, which sets how big it may be.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Kind {
+    Update,
+    Snapshot,
+}
+
+impl Kind {
+    /// The most a frame of this kind may decompress to.
+    #[must_use]
+    pub fn max(self) -> usize {
+        match self {
+            Self::Update => MAX_UPDATE,
+            Self::Snapshot => MAX_SNAPSHOT,
+        }
+    }
+}
+
+/// The largest decoding window, as a power of two (8 MiB). Only limits
+/// streamed decoding; see the module docs.
 pub const WINDOW_LOG_MAX: u32 = 23;
 
 /// The most compressed bytes one snapshot message carries, leaving room in a
@@ -29,7 +57,7 @@ const LEVEL: i32 = 3;
 /// Why bytes couldn't be compressed or decompressed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CompressError {
-    /// More than [`MAX_DECOMPRESSED`] bytes, stated or found.
+    /// More than its [`Kind`] allows, stated or found.
     TooBig,
     /// The frame doesn't state its content size.
     NoContentSize,
@@ -60,9 +88,9 @@ impl Packer {
     /// Compress `bytes` into one frame with its content size.
     ///
     /// # Errors
-    /// [`CompressError::TooBig`] over [`MAX_DECOMPRESSED`].
-    pub fn pack(&mut self, bytes: &[u8]) -> Result<Vec<u8>, CompressError> {
-        if bytes.len() > MAX_DECOMPRESSED {
+    /// [`CompressError::TooBig`] over what `kind` allows.
+    pub fn pack(&mut self, kind: Kind, bytes: &[u8]) -> Result<Vec<u8>, CompressError> {
+        if bytes.len() > kind.max() {
             return Err(CompressError::TooBig);
         }
         self.inner
@@ -92,13 +120,13 @@ impl Unpacker {
     ///
     /// # Errors
     /// A [`CompressError`]; treat it as a protocol error and resync.
-    pub fn unpack(&mut self, frame: &[u8]) -> Result<Vec<u8>, CompressError> {
+    pub fn unpack(&mut self, kind: Kind, frame: &[u8]) -> Result<Vec<u8>, CompressError> {
         use zstd::zstd_safe;
         let stated = zstd_safe::get_frame_content_size(frame)
             .map_err(|_| CompressError::Malformed)?
             .ok_or(CompressError::NoContentSize)?;
         let size = usize::try_from(stated).map_err(|_| CompressError::TooBig)?;
-        if size > MAX_DECOMPRESSED {
+        if size > kind.max() {
             return Err(CompressError::TooBig);
         }
         // Exactly one frame: a second one would go past the stated size.
@@ -122,18 +150,18 @@ impl Unpacker {
 /// Compress `bytes` into one frame with its content size.
 ///
 /// # Errors
-/// [`CompressError::TooBig`] over [`MAX_DECOMPRESSED`], which no decoder would
+/// [`CompressError::TooBig`] over what `kind` allows, which no decoder would
 /// take.
-pub fn compress(bytes: &[u8]) -> Result<Vec<u8>, CompressError> {
-    Packer::new()?.pack(bytes)
+pub fn compress(kind: Kind, bytes: &[u8]) -> Result<Vec<u8>, CompressError> {
+    Packer::new()?.pack(kind, bytes)
 }
 
 /// Decompress one frame, refusing anything a decoder shouldn't trust.
 ///
 /// # Errors
 /// A [`CompressError`]; treat it as a protocol error and resync.
-pub fn decompress(frame: &[u8]) -> Result<Vec<u8>, CompressError> {
-    Unpacker::new()?.unpack(frame)
+pub fn decompress(kind: Kind, frame: &[u8]) -> Result<Vec<u8>, CompressError> {
+    Unpacker::new()?.unpack(kind, frame)
 }
 
 /// The fields every snapshot message carries.
@@ -205,7 +233,7 @@ impl SnapshotParts {
     ///
     /// # Errors
     /// [`CompressError::PartsMismatch`] for a part out of order or from another
-    /// snapshot, and [`CompressError::TooBig`] past [`MAX_DECOMPRESSED`]
+    /// snapshot, and [`CompressError::TooBig`] past [`MAX_SNAPSHOT`]
     /// compressed bytes. Start over with a `Resync`.
     pub fn add(
         &mut self,
@@ -229,7 +257,7 @@ impl SnapshotParts {
             *self = Self::default();
             return Err(CompressError::PartsMismatch);
         }
-        if self.bytes.len().saturating_add(bytes.len()) > MAX_DECOMPRESSED {
+        if self.bytes.len().saturating_add(bytes.len()) > MAX_SNAPSHOT {
             *self = Self::default();
             return Err(CompressError::TooBig);
         }
@@ -264,14 +292,14 @@ mod tests {
     #[test]
     fn output_comes_back_as_it_went() {
         let bytes = screen(50_000);
-        let frame = compress(&bytes).expect("compresses");
+        let frame = compress(Kind::Update, &bytes).expect("compresses");
         assert!(frame.len() < bytes.len());
-        assert_eq!(decompress(&frame), Ok(bytes));
+        assert_eq!(decompress(Kind::Update, &frame), Ok(bytes));
     }
 
     #[test]
     fn the_frame_states_its_content_size() {
-        let frame = compress(&screen(1000)).expect("compresses");
+        let frame = compress(Kind::Update, &screen(1000)).expect("compresses");
         assert_eq!(
             zstd::zstd_safe::get_frame_content_size(&frame).ok(),
             Some(Some(1000))
@@ -281,10 +309,10 @@ mod tests {
     #[test]
     fn nothing_over_the_cap_is_compressed() {
         assert_eq!(
-            compress(&vec![0; MAX_DECOMPRESSED + 1]),
+            compress(Kind::Update, &vec![0; MAX_UPDATE + 1]),
             Err(CompressError::TooBig)
         );
-        assert!(compress(&vec![0; MAX_DECOMPRESSED]).is_ok());
+        assert!(compress(Kind::Update, &vec![0; MAX_UPDATE]).is_ok());
     }
 
     #[test]
@@ -293,7 +321,7 @@ mod tests {
         let mut c = zstd::bulk::Compressor::new(LEVEL).expect("compressor");
         let bomb = c.compress(&vec![0; 64 * 1024 * 1024]).expect("compresses");
         assert!(bomb.len() < 64 * 1024);
-        assert_eq!(decompress(&bomb), Err(CompressError::TooBig));
+        assert_eq!(decompress(Kind::Update, &bomb), Err(CompressError::TooBig));
     }
 
     #[test]
@@ -304,27 +332,36 @@ mod tests {
             Some(None),
             "a streamed frame doesn't know its size"
         );
-        assert_eq!(decompress(&frame), Err(CompressError::NoContentSize));
+        assert_eq!(
+            decompress(Kind::Update, &frame),
+            Err(CompressError::NoContentSize)
+        );
     }
 
     #[test]
     fn a_second_frame_or_trailing_bytes_are_refused() {
-        let frame = compress(&screen(1000)).expect("compresses");
+        let frame = compress(Kind::Update, &screen(1000)).expect("compresses");
         let mut two = frame.clone();
         two.extend_from_slice(&frame);
-        assert_eq!(decompress(&two), Err(CompressError::Malformed));
+        assert_eq!(
+            decompress(Kind::Update, &two),
+            Err(CompressError::Malformed)
+        );
         let mut trailing = frame;
         trailing.push(0);
-        assert_eq!(decompress(&trailing), Err(CompressError::Malformed));
+        assert_eq!(
+            decompress(Kind::Update, &trailing),
+            Err(CompressError::Malformed)
+        );
     }
 
     #[test]
     fn bytes_that_are_not_a_frame_are_refused() {
         assert_eq!(
-            decompress(b"not zstd at all"),
+            decompress(Kind::Update, b"not zstd at all"),
             Err(CompressError::Malformed)
         );
-        assert_eq!(decompress(&[]), Err(CompressError::Malformed));
+        assert_eq!(decompress(Kind::Update, &[]), Err(CompressError::Malformed));
     }
 
     #[test]
@@ -406,8 +443,8 @@ mod tests {
         let mut parts = SnapshotParts::new();
         let big = vec![0; SNAPSHOT_PART_LEN];
         let mut result = Ok(None);
-        for index in 0..20 {
-            result = parts.add(HEAD, index, 20, &big);
+        for index in 0..30 {
+            result = parts.add(HEAD, index, 30, &big);
             if result.is_err() {
                 break;
             }
@@ -420,17 +457,36 @@ mod tests {
         let mut packer = Packer::new().expect("packer");
         let mut unpacker = Unpacker::new().expect("unpacker");
         let frames: Vec<Vec<u8>> = (1..5)
-            .map(|n| packer.pack(&screen(n * 1000)).expect("packs"))
+            .map(|n| packer.pack(Kind::Update, &screen(n * 1000)).expect("packs"))
             .collect();
         // Each frame stands alone: read out of order, or by a fresh decoder.
-        assert_eq!(decompress(&frames[2]), Ok(screen(3000)));
+        assert_eq!(decompress(Kind::Update, &frames[2]), Ok(screen(3000)));
         for (n, frame) in frames.iter().enumerate().rev() {
-            assert_eq!(unpacker.unpack(frame), Ok(screen((n + 1) * 1000)));
+            assert_eq!(
+                unpacker.unpack(Kind::Update, frame),
+                Ok(screen((n + 1) * 1000))
+            );
         }
         assert_eq!(
-            unpacker.unpack(&[0; 3]),
+            unpacker.unpack(Kind::Update, &[0; 3]),
             Err(CompressError::Malformed),
             "a bad frame is still refused"
+        );
+    }
+
+    #[test]
+    fn a_snapshot_may_unpack_to_more_than_an_update() {
+        let big = screen(MAX_UPDATE + 1);
+        assert_eq!(compress(Kind::Update, &big), Err(CompressError::TooBig));
+        let frame = compress(Kind::Snapshot, &big).expect("a snapshot may be 24 MiB");
+        assert_eq!(decompress(Kind::Update, &frame), Err(CompressError::TooBig));
+        assert_eq!(decompress(Kind::Snapshot, &frame), Ok(big));
+        let largest = screen(MAX_SNAPSHOT);
+        let frame = compress(Kind::Snapshot, &largest).expect("the largest snapshot");
+        assert_eq!(decompress(Kind::Snapshot, &frame), Ok(largest));
+        assert_eq!(
+            compress(Kind::Snapshot, &vec![0; MAX_SNAPSHOT + 1]),
+            Err(CompressError::TooBig)
         );
     }
 }
