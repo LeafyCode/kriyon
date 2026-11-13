@@ -14,9 +14,11 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use kriyon_core::cli_dialog::DialogState;
-use kriyon_remote::authorize::{authorize, Dialog, HostState, ProjectFolder, SessionView, Stream};
+use kriyon_remote::authorize::{
+    authorize, Dialog, HostState, PendingWrite, ProjectFolder, SessionView, Stream,
+};
 use kriyon_remote::codec::{encode, Decoded};
-use kriyon_remote::control::Control;
+use kriyon_remote::control::{Change, Control, HostIsTyping};
 use kriyon_remote::fanout::{Pop, RequesterId, SessionFanout};
 use kriyon_remote::link_policy::CloseCode;
 use kriyon_remote::message::{EndpointId, FromDevice, RefuseReason, Role, SessionInfo, ToDevice};
@@ -52,6 +54,39 @@ pub trait ServeHost: Send + Sync + 'static {
     fn session(&self, id: &str) -> Option<LiveSession>;
     /// Whether any remote device has session `id` open (an [Onlooker]).
     fn set_onlooked(&self, id: &str, onlooked: bool);
+    /// A device's typing into session `id`, checked again atomically with
+    /// the write: whether it reached the PTY.
+    ///
+    /// # Errors
+    /// Why it was refused.
+    fn device_input(
+        &self,
+        id: &str,
+        device: &EndpointId,
+        role: Role,
+        write: &PendingWrite,
+        bytes: &[u8],
+    ) -> Result<bool, RefuseReason>;
+    /// A device's resize of session `id`, checked again likewise.
+    ///
+    /// # Errors
+    /// Why it was refused.
+    fn device_resize(
+        &self,
+        id: &str,
+        device: &EndpointId,
+        role: Role,
+        write: &PendingWrite,
+        size: (u16, u16),
+    ) -> Result<(), RefuseReason>;
+    /// `device` takes [Typing control] of session `id`.
+    ///
+    /// # Errors
+    /// The host typed in the last 10 s.
+    fn take(&self, id: &str, device: EndpointId) -> Result<Option<Change>, HostIsTyping>;
+    /// `device` went away: control of every session it held goes back to the
+    /// host.
+    fn release(&self, device: &EndpointId) -> Vec<(String, Change)>;
 }
 
 /// What a daemon event changed that the session's gate must hear.
@@ -305,6 +340,15 @@ impl Serve {
         }
     }
 
+    /// Every device hears who holds [Typing control] of session `id` now.
+    pub fn broadcast_control(&self, id: &str, change: Change) {
+        self.broadcast(&ToDevice::Control {
+            session_id: id.to_string(),
+            holder: change.holder,
+            epoch: change.epoch,
+        });
+    }
+
     fn broadcast(&self, message: &ToDevice) {
         let controls: Vec<Arc<ControlOut>> = self.0.controls.lock().values().cloned().collect();
         for control in controls {
@@ -349,12 +393,23 @@ impl Serve {
             task.abort();
         }
         // Only this connection's entry: the device may have reconnected.
-        let mut controls = self.0.controls.lock();
-        if controls
-            .get(&device)
-            .is_some_and(|held| Arc::ptr_eq(held, &out))
-        {
-            controls.remove(&device);
+        let ours = {
+            let mut controls = self.0.controls.lock();
+            let ours = controls
+                .get(&device)
+                .is_some_and(|held| Arc::ptr_eq(held, &out));
+            if ours {
+                controls.remove(&device);
+            }
+            ours
+        };
+        // Whatever it held goes back to the host (spec §5): input it buffered
+        // before the drop can never land. Not if it is already back on a new
+        // connection.
+        if ours {
+            for (id, change) in self.0.host.release(&device) {
+                self.broadcast_control(&id, change);
+            }
         }
     }
 
@@ -431,12 +486,22 @@ impl Serve {
         while let Ok(Some(message)) = reader.next().await {
             let facts = self.facts(device, role, named_session(None, &message), false);
             let verdict = authorize(&device, Stream::Control, &message, &facts, Instant::now())
-                .and(match message {
-                    // Typing control is the next step's; remote starts wait
-                    // for `create_session` to run without the webview.
-                    Decoded::Message(
-                        FromDevice::TakeControl { .. } | FromDevice::StartSession { .. },
-                    ) => Err(RefuseReason::NotAllowed),
+                .and_then(|()| match &message {
+                    Decoded::Message(FromDevice::TakeControl { session_id }) => {
+                        match self.0.host.take(session_id, device) {
+                            Ok(Some(change)) => {
+                                self.broadcast_control(session_id, change);
+                                Ok(())
+                            }
+                            Ok(None) => Ok(()),
+                            Err(HostIsTyping) => Err(RefuseReason::NotInControl),
+                        }
+                    }
+                    // Remote starts wait for `create_session` to run without
+                    // the webview (plan Step C).
+                    Decoded::Message(FromDevice::StartSession { .. }) => {
+                        Err(RefuseReason::NotAllowed)
+                    }
                     _ => Ok(()),
                 });
             if let Err(reason) = verdict {
@@ -509,43 +574,97 @@ impl Serve {
             return;
         };
         (served.ask)(ask);
-        let (refusals, refused) = tokio::sync::mpsc::channel::<RefuseReason>(8);
+        let (answers, answered) = tokio::sync::mpsc::channel::<ToDevice>(8);
         let writing = tokio::spawn(write_session(
             writer,
             Arc::clone(&served),
             device,
             Arc::clone(&wake),
-            refused,
+            answered,
         ));
         while let Ok(Some(message)) = reader.next().await {
             let facts = self.facts(device, role, Some(&id), false);
-            let verdict = authorize(
+            let checked = authorize(
                 &device,
                 Stream::Session(&id),
                 &message,
                 &facts,
                 Instant::now(),
-            )
-            .and_then(|()| match message {
-                Decoded::Message(FromDevice::Resync) => {
+            );
+            let answer = match (checked, message) {
+                (Err(reason), _) => Some(ToDevice::Refused { reason }),
+                (Ok(()), Decoded::Message(FromDevice::Resync)) => {
                     let ask = served.fanout.lock().resync(&device, Instant::now());
                     if let Some(ask) = ask {
                         (served.ask)(ask);
                     }
-                    Ok(())
+                    None
                 }
-                // Typing and resizing are the next step's; readable
-                // entries are a later revision's.
-                _ => Err(RefuseReason::NotAllowed),
-            });
-            if let Err(reason) = verdict {
-                // Refusals past a handful waiting are dropped, not queued.
-                let _ = refusals.try_send(reason);
+                (Ok(()), Decoded::Message(message)) => {
+                    self.write(&id, device, role, &message).await
+                }
+                (Ok(()), Decoded::Unknown { .. }) => Some(ToDevice::Refused {
+                    reason: RefuseReason::UnknownMessage,
+                }),
+            };
+            if let Some(answer) = answer {
+                // Answers past a handful waiting are dropped, not queued.
+                let _ = answers.try_send(answer);
                 wake.notify_one();
             }
         }
         writing.abort();
         self.close_session(&served, &id, &device);
+    }
+
+    /// A device's typing, compose or resize, past `authorize`: through the
+    /// session's writer, which checks again atomically with the write. The
+    /// answer: an `InputAck` (the bytes reached the PTY, or not) or a refusal.
+    async fn write(
+        &self,
+        id: &str,
+        device: EndpointId,
+        role: Role,
+        message: &FromDevice,
+    ) -> Option<ToDevice> {
+        let Some(write) = PendingWrite::of(message) else {
+            // Readable entries are a later revision's.
+            return Some(ToDevice::Refused {
+                reason: RefuseReason::NotAllowed,
+            });
+        };
+        let host = &self.0.host;
+        let outcome = match message {
+            FromDevice::Input { bytes, .. } => host.device_input(id, &device, role, &write, bytes),
+            FromDevice::Compose { text, .. } => {
+                // The same keys the desktop's composer sends, with its waits.
+                let mut written = true;
+                for key in kriyon_core::attachment::keystrokes(text, &[]) {
+                    match host.device_input(id, &device, role, &write, key.text.as_bytes()) {
+                        Ok(this) => written &= this,
+                        Err(reason) => return Some(ToDevice::Refused { reason }),
+                    }
+                    if key.wait_ms > 0 {
+                        tokio::time::sleep(std::time::Duration::from_millis(key.wait_ms)).await;
+                    }
+                }
+                Ok(written)
+            }
+            FromDevice::Resize { cols, rows, .. } => {
+                return host
+                    .device_resize(id, &device, role, &write, (*cols, *rows))
+                    .err()
+                    .map(|reason| ToDevice::Refused { reason });
+            }
+            _ => Err(RefuseReason::NotAllowed),
+        };
+        Some(match outcome {
+            Ok(written) => ToDevice::InputAck {
+                epoch: write.epoch,
+                written,
+            },
+            Err(reason) => ToDevice::Refused { reason },
+        })
     }
 
     fn close_session(&self, served: &Served, id: &str, device: &EndpointId) {
@@ -584,18 +703,18 @@ async fn write_control(mut writer: MessageWriter<ToDevice>, out: Arc<ControlOut>
     }
 }
 
-/// Write one device's session stream out: its queue in the fan-out, and
-/// refusals of what it sent.
+/// Write one device's session stream out: its queue in the fan-out, and the
+/// answers to what it sent (acks, refusals).
 async fn write_session(
     mut writer: MessageWriter<ToDevice>,
     served: Arc<Served>,
     device: EndpointId,
     wake: Arc<Notify>,
-    mut refused: tokio::sync::mpsc::Receiver<RefuseReason>,
+    mut answered: tokio::sync::mpsc::Receiver<ToDevice>,
 ) {
     loop {
-        while let Ok(reason) = refused.try_recv() {
-            if writer.send(&ToDevice::Refused { reason }).await.is_err() {
+        while let Ok(answer) = answered.try_recv() {
+            if writer.send(&answer).await.is_err() {
                 return;
             }
         }
@@ -635,12 +754,26 @@ mod tests {
     use super::*;
 
     /// The app, faked: one session "s", paired devices in a map.
-    #[derive(Default)]
     struct FakeHost {
         paired: Mutex<HashMap<EndpointId, Role>>,
-        live: Mutex<Option<LiveSession>>,
+        gate: Mutex<kriyon_remote::writer::SessionGate>,
+        typed: Mutex<Vec<u8>>,
         onlooked: Mutex<HashSet<String>>,
         title: Mutex<String>,
+    }
+
+    impl Default for FakeHost {
+        fn default() -> Self {
+            let mut gate = kriyon_remote::writer::SessionGate::new(5, (80, 24));
+            gate.set_run(1);
+            Self {
+                paired: Mutex::default(),
+                gate: Mutex::new(gate),
+                typed: Mutex::default(),
+                onlooked: Mutex::default(),
+                title: Mutex::default(),
+            }
+        }
     }
 
     impl PairedDevices for FakeHost {
@@ -666,7 +799,54 @@ mod tests {
             }]
         }
         fn session(&self, id: &str) -> Option<LiveSession> {
-            (id == "s").then(|| self.live.lock().clone()).flatten()
+            if id != "s" {
+                return None;
+            }
+            let gate = self.gate.lock();
+            Some(LiveSession {
+                run: gate.run()?,
+                control: gate.control().clone(),
+                dialog: gate.dialog(),
+                size: gate.screen(),
+            })
+        }
+        fn device_input(
+            &self,
+            _id: &str,
+            device: &EndpointId,
+            role: Role,
+            write: &PendingWrite,
+            bytes: &[u8],
+        ) -> Result<bool, RefuseReason> {
+            self.gate
+                .lock()
+                .device_write(device, Some(role), write, None)?;
+            self.typed.lock().extend_from_slice(bytes);
+            Ok(true)
+        }
+        fn device_resize(
+            &self,
+            _id: &str,
+            device: &EndpointId,
+            role: Role,
+            write: &PendingWrite,
+            size: (u16, u16),
+        ) -> Result<(), RefuseReason> {
+            self.gate
+                .lock()
+                .device_write(device, Some(role), write, Some(size))
+        }
+        fn take(&self, _id: &str, device: EndpointId) -> Result<Option<Change>, HostIsTyping> {
+            self.gate.lock().take(device, Instant::now())
+        }
+        fn release(&self, device: &EndpointId) -> Vec<(String, Change)> {
+            self.gate
+                .lock()
+                .release(*device)
+                .change
+                .map(|change| ("s".to_string(), change))
+                .into_iter()
+                .collect()
         }
         fn set_onlooked(&self, id: &str, onlooked: bool) {
             let mut set = self.onlooked.lock();
@@ -693,12 +873,6 @@ mod tests {
     async fn world() -> World {
         let fake = Arc::new(FakeHost::default());
         *fake.title.lock() = "first".into();
-        *fake.live.lock() = Some(LiveSession {
-            run: 1,
-            control: Control::new(5),
-            dialog: Dialog::default(),
-            size: (80, 24),
-        });
         let host = Arc::new(
             Host::bind(
                 &LinkConfig {
@@ -1051,6 +1225,125 @@ mod tests {
             assert!(matches!(
                 next(&mut cr).await,
                 ToDevice::Heartbeat { at: 42, .. }
+            ));
+        });
+    }
+
+    /// A controller that took control of "s" and has its screen open: the
+    /// epoch it holds.
+    async fn in_control(
+        world: &World,
+        link: &DeviceLink,
+        cw: &mut MessageWriter<FromDevice>,
+        cr: &mut MessageReader<ToDevice>,
+    ) -> (MessageWriter<FromDevice>, MessageReader<ToDevice>, Epoch) {
+        let (sw, mut sr) = open(link).await;
+        let id = asked(world).await;
+        answer(world, id, b"x");
+        assert!(matches!(next(&mut sr).await, ToDevice::Snapshot { .. }));
+        cw.send(&FromDevice::TakeControl {
+            session_id: "s".into(),
+        })
+        .await
+        .expect("take");
+        let ToDevice::Control { holder, epoch, .. } = next(cr).await else {
+            panic!("everyone hears who holds control")
+        };
+        assert!(matches!(holder, kriyon_remote::message::Holder::Device(_)));
+        (sw, sr, epoch)
+    }
+
+    fn typing(epoch: Epoch, seen_seq: u64, bytes: &[u8]) -> FromDevice {
+        FromDevice::Input {
+            run: 1,
+            epoch,
+            seen_seq,
+            bytes: bytes.to_vec(),
+        }
+    }
+
+    #[test]
+    fn a_controller_in_control_types_and_every_device_hears_who_holds_it() {
+        run(async {
+            let world = world().await;
+            let (_a, link, mut cw, mut cr) = device(&world, 3, Role::Controller).await;
+            let (_b, _blink, _bcw, mut bcr) = device(&world, 4, Role::Viewer).await;
+            let (mut sw, mut sr, epoch) = in_control(&world, &link, &mut cw, &mut cr).await;
+            assert!(
+                matches!(next(&mut bcr).await, ToDevice::Control { .. }),
+                "the viewer hears too"
+            );
+            sw.send(&typing(epoch, 0, b"ls\r")).await.expect("input");
+            assert_eq!(
+                next(&mut sr).await,
+                ToDevice::InputAck {
+                    epoch,
+                    written: true
+                }
+            );
+            assert_eq!(world.fake.typed.lock().as_slice(), b"ls\r");
+        });
+    }
+
+    #[test]
+    fn typing_after_the_host_took_control_back_is_refused() {
+        run(async {
+            let world = world().await;
+            let (_a, link, mut cw, mut cr) = device(&world, 3, Role::Controller).await;
+            let (mut sw, mut sr, epoch) = in_control(&world, &link, &mut cw, &mut cr).await;
+            let took = world.fake.gate.lock().host_input(Instant::now());
+            world
+                .serve
+                .broadcast_control("s", took.change.expect("the host took it"));
+            assert!(matches!(
+                next(&mut cr).await,
+                ToDevice::Control {
+                    holder: kriyon_remote::message::Holder::Host,
+                    ..
+                }
+            ));
+            sw.send(&typing(epoch, 0, b"late")).await.expect("input");
+            assert!(matches!(next(&mut sr).await, ToDevice::Refused { .. }));
+            assert_eq!(world.fake.typed.lock().as_slice(), b"", "nothing written");
+        });
+    }
+
+    #[test]
+    fn typing_from_before_a_dialog_appeared_is_refused() {
+        run(async {
+            let world = world().await;
+            let (_a, link, mut cw, mut cr) = device(&world, 3, Role::Controller).await;
+            let (mut sw, mut sr, epoch) = in_control(&world, &link, &mut cw, &mut cr).await;
+            world.fake.gate.lock().set_dialog(Dialog {
+                showing: true,
+                changed_at_seq: Some(5),
+            });
+            sw.send(&typing(epoch, 3, b"1")).await.expect("input");
+            assert_eq!(
+                next(&mut sr).await,
+                ToDevice::Refused {
+                    reason: RefuseReason::Stale
+                }
+            );
+            assert_eq!(world.fake.typed.lock().as_slice(), b"");
+        });
+    }
+
+    #[test]
+    fn a_device_that_drops_gives_control_back_to_the_host() {
+        run(async {
+            let world = world().await;
+            let (phone, link, mut cw, mut cr) = device(&world, 3, Role::Controller).await;
+            let (_b, _blink, _bcw, mut bcr) = device(&world, 4, Role::Viewer).await;
+            let _held = in_control(&world, &link, &mut cw, &mut cr).await;
+            assert!(matches!(next(&mut bcr).await, ToDevice::Control { .. }));
+            world.host.cut_off(&phone.id());
+            assert!(matches!(
+                next(&mut bcr).await,
+                ToDevice::Control {
+                    holder: kriyon_remote::message::Holder::Host,
+                    ..
+                }
             ));
         });
     }

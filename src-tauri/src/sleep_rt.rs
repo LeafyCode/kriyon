@@ -597,14 +597,14 @@ fn type_resume<R: tauri::Runtime>(
     // wake that races the user's keystrokes would run `<their text>claude
     // --resume …` as one garbled command.
     // Through the session's writer, as the host typing.
-    app.state::<AppState>()
-        .writers
-        .host_write(
-            &SessionId(id.to_string()),
-            &engine,
-            format!("\x15claude --resume {claude_id}\r").as_bytes(),
-        )
-        .map(|_took| ())
+    let id = SessionId(id.to_string());
+    let took = app.state::<AppState>().writers.host_write(
+        &id,
+        &engine,
+        format!("\x15claude --resume {claude_id}\r").as_bytes(),
+    )?;
+    crate::remote_host_rt::host_took(app, &id, &took);
+    Ok(())
 }
 
 #[cfg(test)]

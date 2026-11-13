@@ -392,6 +392,13 @@ pub async fn create_session(
         engine
             .attach(INITIAL_COLS, INITIAL_ROWS)
             .map_err(|e| e.to_string())?;
+        // The writer keeps the host's size, to give it back when a device
+        // that resized the session lets go.
+        state.writers.host_resize(
+            &SessionId(id.clone()),
+            &engine,
+            (INITIAL_COLS, INITIAL_ROWS),
+        )?;
         register_session(&app, &state, SessionId(id), engine, None)?;
         served.keep();
         return Ok(true);
@@ -492,6 +499,12 @@ pub async fn create_session(
     engine
         .attach(INITIAL_COLS, INITIAL_ROWS)
         .map_err(|e| e.to_string())?;
+    // The writer keeps the host's size (see the reattach path).
+    state.writers.host_resize(
+        &SessionId(id.clone()),
+        &engine,
+        (INITIAL_COLS, INITIAL_ROWS),
+    )?;
     register_session(&app, &state, SessionId(id), engine, zdotdir)?;
     served.keep();
 
@@ -562,6 +575,7 @@ pub fn seed_prompt(app: tauri::AppHandle, id: String, text: String) -> Result<St
 #[allow(clippy::needless_pass_by_value)]
 #[tauri::command]
 pub fn write_stdin(
+    app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
     request: tauri::ipc::Request<'_>,
 ) -> Result<(), String> {
@@ -576,7 +590,9 @@ pub fn write_stdin(
     let id = SessionId(id.to_owned());
     // Cloned out, so the write happens with the sessions lock released.
     let engine = engine_of(&state, &id)?;
-    state.writers.host_write(&id, &engine, data).map(|_took| ())
+    let took = state.writers.host_write(&id, &engine, data)?;
+    crate::remote_host_rt::host_took(&app, &id, &took);
+    Ok(())
 }
 
 /// The engine of session `id`, cloned out from under the sessions lock.

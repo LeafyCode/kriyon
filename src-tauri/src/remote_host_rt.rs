@@ -3,8 +3,9 @@
 
 use kriyon_core::cli_dialog::dialog_showing;
 use kriyon_core::session::SessionId;
-use kriyon_remote::authorize::Dialog;
-use kriyon_remote::message::SessionInfo;
+use kriyon_remote::authorize::{Dialog, PendingWrite};
+use kriyon_remote::control::{Change, HostIsTyping};
+use kriyon_remote::message::{EndpointId, RefuseReason, Role, SessionInfo};
 use tauri::Manager as _;
 
 use crate::daemon_client::DaemonEvent;
@@ -134,6 +135,18 @@ pub fn on_event(app: &tauri::AppHandle, id: &SessionId, event: DaemonEvent<'_>) 
     }
 }
 
+/// The person typed at the host into session `id`: if that took typing
+/// control back from a device, every device hears it.
+pub fn host_took<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    id: &SessionId,
+    took: &kriyon_remote::writer::HostTook,
+) {
+    if let (Some(change), Some(serve)) = (took.change, app.try_state::<Serve>()) {
+        serve.broadcast_control(&id.0, change);
+    }
+}
+
 /// Stop serving session `id`: it closed.
 pub fn detach(app: &tauri::AppHandle, id: &SessionId) {
     if let Some(serve) = app.try_state::<Serve>() {
@@ -143,6 +156,18 @@ pub fn detach(app: &tauri::AppHandle, id: &SessionId) {
 
 /// [`ServeHost`] over the running app.
 pub struct AppServeHost(pub tauri::AppHandle);
+
+impl AppServeHost {
+    /// Session `id`'s daemon client, cloned out from under the sessions lock.
+    fn engine(&self, id: &SessionId) -> Option<std::sync::Arc<crate::daemon_client::DaemonClient>> {
+        self.0
+            .state::<AppState>()
+            .sessions
+            .lock()
+            .get(id)
+            .map(|session| std::sync::Arc::clone(&session.engine))
+    }
+}
 
 impl ServeHost for AppServeHost {
     fn host_name(&self) -> String {
@@ -169,6 +194,73 @@ impl ServeHost for AppServeHost {
             dialog: facts.dialog,
             size: facts.size,
         })
+    }
+
+    fn device_input(
+        &self,
+        id: &str,
+        device: &EndpointId,
+        role: Role,
+        write: &PendingWrite,
+        bytes: &[u8],
+    ) -> Result<bool, RefuseReason> {
+        let id = SessionId(id.to_string());
+        let engine = self.engine(&id).ok_or(RefuseReason::NoSuchSession)?;
+        self.0.state::<AppState>().writers.device_input(
+            &id,
+            &engine,
+            device,
+            Some(role),
+            write,
+            bytes,
+        )
+    }
+
+    fn device_resize(
+        &self,
+        id: &str,
+        device: &EndpointId,
+        role: Role,
+        write: &PendingWrite,
+        size: (u16, u16),
+    ) -> Result<(), RefuseReason> {
+        let id = SessionId(id.to_string());
+        let engine = self.engine(&id).ok_or(RefuseReason::NoSuchSession)?;
+        self.0.state::<AppState>().writers.device_resize(
+            &id,
+            &engine,
+            device,
+            Some(role),
+            write,
+            size,
+        )
+    }
+
+    fn take(&self, id: &str, device: EndpointId) -> Result<Option<Change>, HostIsTyping> {
+        self.0.state::<AppState>().writers.take(
+            &SessionId(id.to_string()),
+            device,
+            std::time::Instant::now(),
+        )
+    }
+
+    fn release(&self, device: &EndpointId) -> Vec<(String, Change)> {
+        let state = self.0.state::<AppState>();
+        let engines: Vec<(
+            SessionId,
+            std::sync::Arc<crate::daemon_client::DaemonClient>,
+        )> = state
+            .sessions
+            .lock()
+            .iter()
+            .map(|(id, session)| (id.clone(), std::sync::Arc::clone(&session.engine)))
+            .collect();
+        state
+            .writers
+            .release_device(device, &engines)
+            .into_iter()
+            .filter_map(|(id, took)| Some((id.0, took.change?)))
+            .collect()
     }
 
     fn set_onlooked(&self, id: &str, onlooked: bool) {

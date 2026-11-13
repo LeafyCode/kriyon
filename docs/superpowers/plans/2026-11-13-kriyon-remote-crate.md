@@ -77,6 +77,10 @@ plan folder):
 7. A session a remote device opens counts as an Onlooker for auto-sleep, and wakes a sleeping
    session the same way desktop focus does (wake-on-focus and the focused-wake retry read
    desktop focus only today).
+8. TODO: remote `StartSession`. The host refuses it `NotAllowed` for now (`remote_serve`); it
+   waits for `create_session` to be split into a Rust `start_session` that runs without the
+   webview (the first design point above), then goes through `kriyon_core::folder` checks and
+   the `(device_id, request_id)` table.
 
 ## Step D — the desktop as a remote device
 
