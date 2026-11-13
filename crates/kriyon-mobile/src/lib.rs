@@ -10,10 +10,8 @@ pub mod device;
 pub mod hosts;
 pub mod push;
 pub mod relay;
-pub mod view;
 
 pub use device::{
     HostListener, MobileDevice, MobileError, Pairing, PhoneStore, ScreenListener, StoreError,
 };
 pub use hosts::PairedHost;
-pub use view::{HostLink, HostProject, HostSession, HostState, Typing};

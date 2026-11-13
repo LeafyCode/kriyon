@@ -10,7 +10,7 @@ use std::sync::Arc;
 use kriyon_relay_client::runtime::{RelayView, SignInView};
 use kriyon_remote_link::keys::SecretVault;
 
-use crate::device::{MobileDevice, MobileError, PhoneStore};
+use crate::device::{json, MobileDevice, MobileError, PhoneStore};
 
 /// The store key of the relay's sign-in, switch and pass.
 pub const RELAY_KEY: &str = "relay";
@@ -36,7 +36,8 @@ impl SecretVault for StoreSecret {
 
 /// A device sign-in in progress: show the code; the page opens in the
 /// phone's browser.
-#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RelaySignIn {
     pub user_code: String,
     pub verification_uri: String,
@@ -54,7 +55,8 @@ impl From<&SignInView> for RelaySignIn {
 }
 
 /// Our relay as the phone shows it.
-#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PhoneRelay {
     /// Whether this build has a relay at all; none: it is hidden.
     pub available: bool,
@@ -81,7 +83,8 @@ impl From<RelayView> for PhoneRelay {
 }
 
 /// A device on the relay account.
-#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RelayAccountDevice {
     pub device_id: String,
     pub name: String,
@@ -91,7 +94,8 @@ pub struct RelayAccountDevice {
 }
 
 /// The relay account as the phone shows it: status only.
-#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RelayAccount {
     /// `pending | active | past_due | canceled | expired`; none when the
     /// person never subscribed.
@@ -103,6 +107,64 @@ pub struct RelayAccount {
 }
 
 #[uniffi::export]
+impl MobileDevice {
+    /// Our relay as it stands, as JSON (`PhoneRelay`).
+    #[uniffi::method(name = "relay")]
+    pub async fn relay_json(&self) -> String {
+        json(&self.relay().await)
+    }
+
+    /// Start a device sign-in, as JSON (`RelaySignIn`); see
+    /// [`MobileDevice::relay_sign_in`].
+    ///
+    /// # Errors
+    /// No relay in this build, or the API refused or can't be reached.
+    #[uniffi::method(name = "relay_sign_in")]
+    pub async fn relay_sign_in_json(&self) -> Result<String, MobileError> {
+        self.relay_sign_in().await.map(|one| json(&one))
+    }
+
+    /// Wait until the sign-in started last ends; whether it signed in.
+    #[uniffi::method(name = "relay_wait_sign_in")]
+    pub async fn relay_wait_sign_in_exported(&self) -> bool {
+        self.relay_wait_sign_in().await
+    }
+
+    /// Stop the sign-in in progress.
+    #[uniffi::method(name = "relay_cancel_sign_in")]
+    pub async fn relay_cancel_sign_in_exported(&self) {
+        self.relay_cancel_sign_in().await;
+    }
+
+    /// Sign out of the relay account on this phone, as JSON (`PhoneRelay`).
+    ///
+    /// # Errors
+    /// No relay in this build, or the store couldn't be written.
+    #[uniffi::method(name = "relay_sign_out")]
+    pub async fn relay_sign_out_json(&self) -> Result<String, MobileError> {
+        self.relay_sign_out().await.map(|one| json(&one))
+    }
+
+    /// Turn our relay on or off, as JSON (`PhoneRelay`).
+    ///
+    /// # Errors
+    /// No relay in this build, not signed in, or the API refused.
+    #[uniffi::method(name = "relay_set_on")]
+    pub async fn relay_set_on_json(&self, on: bool) -> Result<String, MobileError> {
+        self.relay_set_on(on).await.map(|one| json(&one))
+    }
+
+    /// The relay account's status, as JSON (`RelayAccount`).
+    ///
+    /// # Errors
+    /// No relay in this build, not signed in, or the API refused or can't
+    /// be reached.
+    #[uniffi::method(name = "relay_account")]
+    pub async fn relay_account_json(&self) -> Result<String, MobileError> {
+        self.relay_account().await.map(|one| json(&one))
+    }
+}
+
 impl MobileDevice {
     /// Our relay as it stands.
     pub async fn relay(&self) -> PhoneRelay {

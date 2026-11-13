@@ -61,8 +61,8 @@ final class KeychainStore: PhoneStore, @unchecked Sendable {
 final class HostEvents: HostListener, @unchecked Sendable {
   weak var module: KriyonNativeModule?
 
-  func hostChanged(state: HostState) {
-    module?.sendEvent("onHostChanged", Records.host(state))
+  func hostChanged(summary: String) {
+    module?.sendEvent("onHostChanged", object(summary))
   }
 }
 
@@ -87,86 +87,16 @@ final class ScreenEvents: ScreenListener, @unchecked Sendable {
   }
 }
 
-/// Rust's records as JavaScript objects, field for field; an absent value
-/// is JavaScript's null.
-enum Records {
-  static func orNull(_ value: Any?) -> Any {
-    value ?? NSNull()
-  }
-
-  static func pairedHost(_ host: PairedHost) -> [String: Any] {
-    [
-      "hostId": host.hostId,
-      "name": host.name,
-      "addrs": host.addrs,
-      "relayUrl": orNull(host.relayUrl),
-      "pairedAtMs": Double(host.pairedAtMs),
-    ]
-  }
-
-  static func host(_ state: HostState) -> [String: Any] {
-    [
-      "hostId": state.hostId,
-      "link": "\(state.link)",
-      "hostName": orNull(state.hostName),
-      "role": orNull(state.role),
-      "refused": orNull(state.refused),
-      "projects": state.projects.map { project -> [String: Any] in
-        ["id": project.id, "name": project.name, "parked": project.parked]
-      },
-      "sessions": state.sessions.map { session -> [String: Any] in
-        [
-          "id": session.id,
-          "title": session.title,
-          "projectId": session.projectId,
-          "status": session.status,
-          "standing": session.standing,
-          "needsYou": session.needsYou,
-          "dialogOpen": session.dialogOpen,
-          "lastChangeMs": Double(session.lastChangeMs),
-          "typing": orNull(session.typing.map { "\($0)" }),
-        ]
-      },
-    ]
-  }
+/// Rust's JSON as a JavaScript value, as it is: the module adds nothing, so
+/// a Kotlin module reads the same JSON.
+func parsed(_ text: String) -> Any {
+  (try? JSONSerialization.jsonObject(with: Data(text.utf8), options: [.fragmentsAllowed]))
+    ?? NSNull()
 }
 
-extension Records {
-  static func relay(_ view: PhoneRelay) -> [String: Any] {
-    [
-      "available": view.available,
-      "signedIn": view.signedIn,
-      "on": view.on,
-      "signIn": orNull(view.signIn.map(signIn)),
-      "problem": orNull(view.problem),
-      "passExpiresAt": orNull(view.passExpiresAt.map { Double($0) }),
-    ]
-  }
-
-  static func signIn(_ signIn: RelaySignIn) -> [String: Any] {
-    [
-      "userCode": signIn.userCode,
-      "verificationUri": signIn.verificationUri,
-      "verificationUriComplete": signIn.verificationUriComplete,
-    ]
-  }
-
-  static func account(_ account: RelayAccount) -> [String: Any] {
-    [
-      "state": orNull(account.state),
-      "paidUntil": orNull(account.paidUntil),
-      "blocked": account.blocked,
-      "deviceLimit": Double(account.deviceLimit),
-      "devices": account.devices.map { device -> [String: Any] in
-        [
-          "deviceId": device.deviceId,
-          "name": device.name,
-          "platform": device.platform,
-          "thisPhone": device.thisPhone,
-        ]
-      },
-    ]
-  }
+/// Rust's JSON object as an event's body.
+func object(_ text: String) -> [String: Any] {
+  parsed(text) as? [String: Any] ?? [:]
 }
 
 /// A Rust error as a JavaScript one, its kind as the code (`NotConnected`,
@@ -229,8 +159,8 @@ public final class KriyonNativeModule: Module {
       return device.id()
     }
 
-    AsyncFunction("hosts") { () -> [[String: Any]] in
-      try await rust { try self.started().hosts().map(Records.pairedHost) }
+    AsyncFunction("hosts") { () -> Any in
+      parsed(try await rust { try self.started().hosts() })
     }
 
     AsyncFunction("pair") { (inviteText: String) -> String in
@@ -242,7 +172,7 @@ public final class KriyonNativeModule: Module {
       return pairing.code()
     }
 
-    AsyncFunction("finishPairing") { () -> [String: Any] in
+    AsyncFunction("finishPairing") { () -> Any in
       self.lock.lock()
       let pairing = self.pairing
       self.lock.unlock()
@@ -255,7 +185,7 @@ public final class KriyonNativeModule: Module {
         if self.pairing === pairing { self.pairing = nil }
         self.lock.unlock()
       }
-      return Records.pairedHost(try await rust { try await pairing.finish() })
+      return parsed(try await rust { try await pairing.finish() })
     }
 
     AsyncFunction("cancelPairing") {
@@ -273,12 +203,12 @@ public final class KriyonNativeModule: Module {
       try await rust { try await self.started().setPushToken(token: token, platform: platform) }
     }
 
-    AsyncFunction("relay") { () -> [String: Any] in
-      Records.relay(try await self.started().relay())
+    AsyncFunction("relay") { () -> Any in
+      parsed(try await self.started().relay())
     }
 
-    AsyncFunction("relaySignIn") { () -> [String: Any] in
-      Records.signIn(try await rust { try await self.started().relaySignIn() })
+    AsyncFunction("relaySignIn") { () -> Any in
+      parsed(try await rust { try await self.started().relaySignIn() })
     }
 
     AsyncFunction("relayWaitSignIn") { () -> Bool in
@@ -289,16 +219,16 @@ public final class KriyonNativeModule: Module {
       try await self.started().relayCancelSignIn()
     }
 
-    AsyncFunction("relaySignOut") { () -> [String: Any] in
-      Records.relay(try await rust { try await self.started().relaySignOut() })
+    AsyncFunction("relaySignOut") { () -> Any in
+      parsed(try await rust { try await self.started().relaySignOut() })
     }
 
-    AsyncFunction("relaySetOn") { (on: Bool) -> [String: Any] in
-      Records.relay(try await rust { try await self.started().relaySetOn(on: on) })
+    AsyncFunction("relaySetOn") { (on: Bool) -> Any in
+      parsed(try await rust { try await self.started().relaySetOn(on: on) })
     }
 
-    AsyncFunction("relayAccount") { () -> [String: Any] in
-      Records.account(try await rust { try await self.started().relayAccount() })
+    AsyncFunction("relayAccount") { () -> Any in
+      parsed(try await rust { try await self.started().relayAccount() })
     }
 
     Function("wake") {

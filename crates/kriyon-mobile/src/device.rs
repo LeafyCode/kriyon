@@ -9,7 +9,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use kriyon_relay_client::runtime::{RelayRuntime, RelaySetup, ThisDevice};
-use kriyon_remote::device_view::HostView;
+use kriyon_remote::device_view::{host_summary, name_of, HostView};
 use kriyon_remote::message::{hex, parse_id_hex, EndpointId};
 use kriyon_remote::pairing::PairingInvite;
 use kriyon_remote::relay::RelayAction;
@@ -21,7 +21,6 @@ use kriyon_remote_link::keys::{load_or_create, KeyVault};
 use kriyon_remote_link::{LinkConfig, RelayAccess};
 
 use crate::hosts::{hosts_bytes, read_hosts, with_host, without_host, PairedHost, HOSTS_KEY};
-use crate::view::{host_state, HostState};
 
 /// The store key of the device key.
 pub const DEVICE_KEY: &str = "device-key";
@@ -71,10 +70,17 @@ pub trait PhoneStore: Send + Sync {
     fn remove(&self, key: String) -> Result<(), StoreError>;
 }
 
-/// Told whenever a paired computer's link or sessions change.
+/// Told whenever a paired computer's link or sessions change, with its
+/// summary as JSON (`kriyon_remote::device_view::HostSummary`): the app
+/// passes it on as it is.
 #[uniffi::export(with_foreign)]
 pub trait HostListener: Send + Sync {
-    fn host_changed(&self, state: HostState);
+    fn host_changed(&self, summary: String);
+}
+
+/// `value` as the JSON the app reads. Plain records always serialize.
+pub(crate) fn json(value: &impl serde::Serialize) -> String {
+    serde_json::to_string(value).unwrap_or_default()
 }
 
 /// Where one open session's screen goes: frames as the desktop's terminal
@@ -127,7 +133,7 @@ impl From<StartError> for MobileError {
     fn from(error: StartError) -> Self {
         match error {
             StartError::Refused(reason) => Self::Refused {
-                reason: crate::view::refusal_name(&reason),
+                reason: name_of(&reason),
                 words: error.words().to_string(),
             },
             StartError::NotConnected => Self::NotConnected,
@@ -192,7 +198,7 @@ impl DeviceEvents for Told {
             }
         }
         self.listener
-            .host_changed(host_state(&host, &self.me, state, view));
+            .host_changed(json(&host_summary(&host, &self.me, state, view)));
     }
 }
 
@@ -498,6 +504,19 @@ impl Pairing {
             .store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
+    /// Wait for the computer to accept the code; the computer kept, as
+    /// JSON (a `PairedHost`). It is kept and connected before this returns.
+    ///
+    /// # Errors
+    /// The computer refused, the code wasn't typed in time, or the store
+    /// failed.
+    #[uniffi::method(name = "finish")]
+    pub async fn finish_json(&self) -> Result<String, MobileError> {
+        self.finish().await.map(|host| json(&host))
+    }
+}
+
+impl Pairing {
     /// Wait for the computer to accept the code. The computer is kept and
     /// connected before this returns.
     ///
@@ -559,6 +578,14 @@ impl Drop for MobileDevice {
 }
 
 impl MobileDevice {
+    /// The paired computers.
+    ///
+    /// # Errors
+    /// The store failed.
+    pub fn hosts(&self) -> Result<Vec<PairedHost>, MobileError> {
+        self.shared.hosts()
+    }
+
     /// Our relay, when this build has one.
     pub(crate) fn relay_runtime(&self) -> Option<&Arc<RelayRuntime>> {
         self.shared.relay.as_ref()
@@ -742,12 +769,13 @@ impl MobileDevice {
         hex(&self.me)
     }
 
-    /// The paired computers.
+    /// The paired computers, as JSON (`PairedHost`s).
     ///
     /// # Errors
     /// The store failed.
-    pub fn hosts(&self) -> Result<Vec<PairedHost>, MobileError> {
-        self.shared.hosts()
+    #[uniffi::method(name = "hosts")]
+    pub fn hosts_json(&self) -> Result<String, MobileError> {
+        self.hosts().map(|hosts| json(&hosts))
     }
 
     /// Start pairing with the computer whose pairing code (the QR code's
@@ -994,11 +1022,11 @@ pub(crate) mod tests {
     }
 
     #[derive(Default)]
-    pub(crate) struct Seen(Mutex<Vec<HostState>>);
+    pub(crate) struct Seen(Mutex<Vec<String>>);
 
     impl HostListener for Seen {
-        fn host_changed(&self, state: HostState) {
-            self.0.lock().expect("seen").push(state);
+        fn host_changed(&self, summary: String) {
+            self.0.lock().expect("seen").push(summary);
         }
     }
 
@@ -1452,5 +1480,27 @@ pub(crate) mod tests {
                 ));
             }
         });
+    }
+
+    #[test]
+    fn a_computers_news_reaches_the_app_as_its_summary_in_json() {
+        let seen = Arc::new(Seen::default());
+        let told = Told {
+            me: [2; 32],
+            listener: Arc::clone(&seen) as Arc<dyn HostListener>,
+            shared: std::sync::OnceLock::new(),
+            last: std::sync::Mutex::new(std::collections::HashMap::new()),
+        };
+        let view = HostView {
+            host_name: Some("Mac".into()),
+            ..HostView::default()
+        };
+        told.host_changed([0xab; 32], LinkState::Connected, &view);
+        let summary: serde_json::Value =
+            serde_json::from_str(&seen.0.lock().expect("seen")[0]).expect("json");
+        assert_eq!(summary["hostId"], "ab".repeat(32));
+        assert_eq!(summary["hostName"], "Mac");
+        assert_eq!(summary["link"], "connected");
+        assert_eq!(summary["mayStart"], false);
     }
 }

@@ -8,7 +8,8 @@ use serde::{Deserialize, Serialize};
 pub const HOSTS_KEY: &str = "hosts";
 
 /// A computer this phone paired with: what it needs to reach it again.
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, uniffi::Record)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct PairedHost {
     /// Its endpoint id, 64 lowercase hex digits.
     pub host_id: String,
