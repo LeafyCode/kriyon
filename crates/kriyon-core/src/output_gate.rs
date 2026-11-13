@@ -30,6 +30,10 @@ use std::time::{Duration, Instant};
 /// hidden one never does. The longest a session is paused by a hidden window.
 pub const STALL_AFTER: Duration = Duration::from_millis(500);
 
+/// How long, after asking for a repaint, output is dropped while the screen
+/// that answers it is awaited. Past it, output flows again.
+pub const SCREEN_WAIT: Duration = Duration::from_secs(2);
+
 /// A webview's gate paces, then holds, output once this many bytes are
 /// delivered but not drained.
 pub const WEBVIEW_HIGH_WATER: usize = 128 * 1024;
@@ -84,9 +88,13 @@ pub struct OutputGate {
     skipped: bool,
     /// The daemon sends its screen apart from output (see `expect_screens`).
     screens: bool,
-    /// A repaint was asked for and its screen has not come yet: output until
-    /// then would be drawn on the old screen, so it is dropped.
-    awaiting_screen: bool,
+    /// When a repaint was asked for whose screen has not come yet: output
+    /// until then would be drawn on the old screen, so it is dropped, for at
+    /// most [`SCREEN_WAIT`].
+    awaiting_screen: Option<Instant>,
+    /// The hold cap to come back down to (see `set_remote_onlooker`): the
+    /// cap in force stays above what is already held until that drains.
+    cap_target: usize,
 }
 
 impl OutputGate {
@@ -102,7 +110,8 @@ impl OutputGate {
             held: VecDeque::new(),
             skipped: false,
             screens: false,
-            awaiting_screen: false,
+            awaiting_screen: None,
+            cap_target: cap,
         }
     }
 
@@ -113,9 +122,13 @@ impl OutputGate {
     }
 
     /// The daemon's screen for the webview: always delivered, and the end of
-    /// any wait for one.
+    /// any wait for one. It supersedes held output and ends a cut.
     pub fn offer_screen(&mut self, bytes: Vec<u8>, now: Instant) -> Vec<u8> {
-        self.awaiting_screen = false;
+        // It shows everything read before it: what is held is already on it,
+        // and drawn after it would land on the new screen. Any cut is over.
+        self.awaiting_screen = None;
+        self.held = VecDeque::new();
+        self.skipped = false;
         if self.in_flight <= self.low {
             self.progress_at = now;
         }
@@ -126,11 +139,16 @@ impl OutputGate {
     /// Whether a remote device is an onlooker of this session: the hold cap
     /// is then [`WEBVIEW_ONLOOKED_HOLD_CAP`], else [`WEBVIEW_HOLD_CAP`].
     pub fn set_remote_onlooker(&mut self, onlooked: bool) {
-        self.cap = if onlooked {
+        self.cap_target = if onlooked {
             WEBVIEW_ONLOOKED_HOLD_CAP
         } else {
             WEBVIEW_HOLD_CAP
         };
+        // Raised at once; lowered only once what is held fits under it, so
+        // the change itself never cuts.
+        if self.held.len() <= self.cap_target || self.cap_target > self.cap {
+            self.cap = self.cap_target;
+        }
     }
 
     /// The most output this gate holds before it cuts.
@@ -170,7 +188,13 @@ impl OutputGate {
     /// the bytes themselves, or [`CUT_SEAL`] at the moment output starts being
     /// dropped. Otherwise the gate has held or dropped them.
     pub fn offer(&mut self, bytes: Vec<u8>, now: Instant) -> Option<Vec<u8>> {
-        if self.skipped || self.awaiting_screen {
+        if self
+            .awaiting_screen
+            .is_some_and(|since| now.saturating_duration_since(since) >= SCREEN_WAIT)
+        {
+            self.awaiting_screen = None;
+        }
+        if self.skipped || self.awaiting_screen.is_some() {
             return None;
         }
         if self.held.is_empty() && self.in_flight < self.high {
@@ -203,7 +227,7 @@ impl OutputGate {
         }
         if self.skipped {
             self.skipped = false;
-            self.awaiting_screen = self.screens;
+            self.awaiting_screen = self.screens.then_some(now);
             return CatchUp::Repaint;
         }
         if self.held.is_empty() {
@@ -216,6 +240,9 @@ impl OutputGate {
         slice.extend_from_slice(&front[..from_front]);
         slice.extend_from_slice(&back[..take - from_front]);
         self.held.drain(..take);
+        if self.held.len() <= self.cap_target {
+            self.cap = self.cap_target;
+        }
         self.in_flight = self.in_flight.saturating_add(slice.len());
         CatchUp::Deliver(slice)
     }
@@ -484,5 +511,62 @@ mod tests {
         assert_eq!(g.offer(vec![0; 1], stalled), Some(CUT_SEAL.to_vec()));
         g.set_remote_onlooker(false);
         assert_eq!(g.hold_cap(), WEBVIEW_HOLD_CAP);
+    }
+
+    #[test]
+    fn a_screen_supersedes_held_output_and_ends_a_cut() {
+        // Held bytes were read before the screen, so it already shows them;
+        // drawn after it, they would land on the new screen.
+        let t0 = Instant::now();
+        let (mut g, t1) = stalled(t0);
+        assert_eq!(g.offer(vec![1; 140], t1), None, "held");
+        g.offer_screen(b"screen".to_vec(), t1);
+        assert_eq!(
+            g.drained(1000, t1),
+            CatchUp::Nothing,
+            "nothing older to release"
+        );
+        let (mut cut, t2) = stalled(t0);
+        assert_eq!(cut.offer(vec![1; 140], t2), None);
+        assert_eq!(cut.offer(vec![2; 20], t2), Some(CUT_SEAL.to_vec()));
+        cut.offer_screen(b"screen".to_vec(), t2);
+        assert_eq!(
+            cut.offer(b"new".to_vec(), t2),
+            None,
+            "held, not dropped: the cut is over"
+        );
+        assert_eq!(cut.drained(1000, t2), CatchUp::Deliver(b"new".to_vec()));
+    }
+
+    #[test]
+    fn a_screen_that_never_comes_is_not_waited_for_long() {
+        let t0 = Instant::now();
+        let (mut g, t1) = stalled(t0);
+        g.expect_screens();
+        assert_eq!(g.offer(vec![1; 140], t1), None);
+        assert_eq!(g.offer(vec![2; 20], t1), Some(CUT_SEAL.to_vec()));
+        assert_eq!(g.drained(100 + CUT_SEAL.len(), t1), CatchUp::Repaint);
+        assert_eq!(g.offer(b"stale".to_vec(), t1), None);
+        let later = t1 + SCREEN_WAIT;
+        assert_eq!(g.offer(b"on".to_vec(), later), Some(b"on".to_vec()));
+    }
+
+    #[test]
+    fn when_the_onlooker_leaves_what_is_held_is_kept_not_cut() {
+        let t0 = Instant::now();
+        let mut g = OutputGate::for_webview(t0);
+        g.set_remote_onlooker(true);
+        assert!(g.offer(vec![0; WEBVIEW_HIGH_WATER], t0).is_some());
+        let stalled = t0 + STALL_AFTER;
+        assert_eq!(g.offer(vec![0; 3 * WEBVIEW_HOLD_CAP], stalled), None);
+        g.set_remote_onlooker(false);
+        assert_eq!(g.offer(vec![0; 1], stalled), None, "held, not cut");
+        assert_eq!(g.hold_cap(), WEBVIEW_ONLOOKED_HOLD_CAP, "until it drains");
+        // Once what is held fits the window's own cap, that cap is back.
+        let mut t = stalled;
+        while g.hold_cap() != WEBVIEW_HOLD_CAP {
+            t += Duration::from_millis(1);
+            let _ = g.drained(usize::MAX, t);
+        }
     }
 }

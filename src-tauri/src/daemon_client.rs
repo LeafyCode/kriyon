@@ -19,6 +19,10 @@ use kriyon_core::wire::{self, Frame, FrameDecoder};
 use parking_lot::{Condvar, Mutex};
 
 const READ_BUF_LEN: usize = 8192;
+
+/// The requester id of the window's own [Screen snapshot]s, which repaint it
+/// without the daemon skipping ahead. Never a remote device's.
+pub const WINDOW_SNAPSHOT: u32 = u32::MAX;
 /// How long one frame may take to reach the daemon. A frame is a few bytes to a
 /// few kilobytes on a local socket, and the daemon drains its client on a thread
 /// that never blocks on output — so a write that takes this long means the daemon
@@ -58,6 +62,9 @@ pub struct DaemonClient {
     /// A remote device is an [Onlooker] of this session (see
     /// [`DaemonClient::set_remote_onlooker`]).
     onlooked: Arc<AtomicBool>,
+    /// The daemon said `Hello`: it sends its screen apart from output and
+    /// answers requests that carry ids.
+    hello: Arc<AtomicBool>,
 }
 
 /// What the daemon said, as the reader read it: every frame from the daemon,
@@ -236,6 +243,8 @@ impl DaemonClient {
         let reader_dialog = Arc::clone(&dialog);
         let onlooked = Arc::new(AtomicBool::new(false));
         let reader_onlooked = Arc::clone(&onlooked);
+        let hello = Arc::new(AtomicBool::new(false));
+        let reader_hello = Arc::clone(&hello);
 
         let reader_thread = std::thread::spawn(move || {
             let mut dec = FrameDecoder::new();
@@ -282,15 +291,20 @@ impl DaemonClient {
                                         (d.deliver)(out);
                                     }
                                 }
-                                Frame::Screen(bytes) => {
+                                Frame::Screen(bytes)
+                                | Frame::Snapshot {
+                                    id: WINDOW_SNAPSHOT,
+                                    bytes,
+                                } => {
                                     let mut d = reader_outlet.delivery.lock();
                                     let out = d.gate.offer_screen(bytes, Instant::now());
                                     (d.deliver)(out);
                                 }
                                 // A daemon that names its run sends its screen
-                                // apart from output.
+                                // apart from output and answers requests.
                                 Frame::Hello { .. } => {
                                     reader_outlet.delivery.lock().gate.expect_screens();
+                                    reader_hello.store(true, Ordering::Relaxed);
                                 }
                                 Frame::Dialog { open, generation } => {
                                     *reader_dialog.lock() = Some(DialogState { open, generation });
@@ -318,7 +332,40 @@ impl DaemonClient {
             accepted,
             dialog,
             onlooked,
+            hello,
         })
+    }
+
+    /// Ask the daemon for its [Output history], for requester `id`.
+    ///
+    /// # Errors
+    /// [`EngineError::Pty`] on a write failure, or when the daemon has not said
+    /// `Hello`: one built before requests carried ids would misread them.
+    pub fn request_history(&self, id: u32) -> Result<(), EngineError> {
+        self.require_hello()?;
+        self.send(&Frame::RequestHistory { id })
+    }
+
+    /// Ask the daemon for a [Screen snapshot] for requester `id` alone, in
+    /// order with the output; the window is not repainted. A skip ahead the
+    /// window's stream makes (a `Screen` event) drops answers still queued:
+    /// a requester that sees one asks again.
+    ///
+    /// # Errors
+    /// As [`Self::request_history`].
+    pub fn request_snapshot(&self, id: u32) -> Result<(), EngineError> {
+        self.require_hello()?;
+        self.send(&Frame::RequestSnapshot { id })
+    }
+
+    fn require_hello(&self) -> Result<(), EngineError> {
+        if self.hello.load(Ordering::Relaxed) {
+            Ok(())
+        } else {
+            Err(EngineError::Pty(
+                "the session's daemon is too old to answer requests".into(),
+            ))
+        }
     }
 
     /// Whether a remote device is an [Onlooker] of this session. While one is,
@@ -366,14 +413,24 @@ impl DaemonClient {
         self.disconnect();
     }
 
-    /// Ask the daemon to resend its screen snapshot (as a normal `Output`
-    /// frame). Sent when a terminal component (re)attaches to this live
-    /// session, whose xterm starts blank.
+    /// Ask the daemon to resend its screen snapshot for the window: its own
+    /// snapshot from a daemon that said `Hello`, a `Repaint` from an older
+    /// one. Sent when a terminal component (re)attaches to this live session,
+    /// whose xterm starts blank, and when the window catches up after a cut.
     ///
     /// # Errors
     /// Returns [`EngineError::Pty`] on write failure.
     pub fn request_repaint(&self) -> Result<(), EngineError> {
-        self.send(&Frame::Repaint)
+        // A daemon that said hello repaints the window alone; a `Repaint`
+        // would make it drop everything queued, which every other reader of
+        // this stream (a remote device) would see as a gap.
+        if self.hello.load(Ordering::Relaxed) {
+            self.send(&Frame::RequestSnapshot {
+                id: WINDOW_SNAPSHOT,
+            })
+        } else {
+            self.send(&Frame::Repaint)
+        }
     }
 
     fn send(&self, frame: &Frame) -> Result<(), EngineError> {
@@ -784,6 +841,91 @@ mod tests {
         assert!(*flood.wrote_all.lock().expect("lock"));
         stop.store(true, Ordering::Relaxed);
         drainer.join().expect("drainer");
+    }
+
+    /// The frames `daemon` reads from the client within `wait`.
+    fn frames_from_client(daemon: &mut UnixStream, wait: Duration) -> Vec<Frame> {
+        daemon.set_read_timeout(Some(wait)).expect("timeout");
+        let mut decoder = FrameDecoder::new();
+        let mut buf = [0u8; 4096];
+        while let Ok(n) = daemon.read(&mut buf) {
+            if n == 0 {
+                break;
+            }
+            decoder.push(&buf[..n]);
+        }
+        let mut frames = Vec::new();
+        while let Ok(Some(frame)) = decoder.next_frame() {
+            frames.push(frame);
+        }
+        frames
+    }
+
+    #[test]
+    fn a_daemon_that_says_hello_repaints_the_window_without_skipping_its_queue() {
+        // A `Repaint` makes the daemon drop everything queued, which a remote
+        // device reading the same stream would see as a gap; the window's own
+        // snapshot repaints it alone.
+        let (mut daemon, app) = UnixStream::pair().expect("pair");
+        let drawn = Arc::new(StdMutex::new(Vec::new()));
+        let window = Arc::clone(&drawn);
+        let client = DaemonClient::from_stream(
+            app,
+            SessionId("s".into()),
+            |_| {},
+            move |bytes| window.lock().expect("lock").extend(bytes),
+            || {},
+        )
+        .expect("client");
+        assert!(
+            client.request_history(1).is_err(),
+            "not before the daemon says hello"
+        );
+        client.request_repaint().expect("repaint");
+        assert_eq!(
+            frames_from_client(&mut daemon, Duration::from_millis(300)),
+            [Frame::Repaint],
+            "an older daemon gets what it knows"
+        );
+        daemon
+            .write_all(&Frame::Hello { run: 1 }.encode())
+            .expect("hello");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while client.request_history(1).is_err() {
+            assert!(Instant::now() < deadline, "the hello never registered");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        client.request_repaint().expect("repaint");
+        let asked = frames_from_client(&mut daemon, Duration::from_millis(300));
+        assert!(
+            asked.contains(&Frame::RequestSnapshot {
+                id: WINDOW_SNAPSHOT
+            }),
+            "{asked:?}"
+        );
+        daemon
+            .write_all(
+                &[
+                    Frame::Snapshot {
+                        id: WINDOW_SNAPSHOT,
+                        bytes: b"mine".to_vec(),
+                    }
+                    .encode(),
+                    Frame::SnapshotEnd {
+                        id: WINDOW_SNAPSHOT,
+                    }
+                    .encode(),
+                ]
+                .concat(),
+            )
+            .expect("snapshot");
+        while drawn.lock().expect("lock").as_slice() != b"mine" {
+            assert!(
+                Instant::now() < deadline,
+                "the window never got its snapshot"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
     }
 
     #[test]

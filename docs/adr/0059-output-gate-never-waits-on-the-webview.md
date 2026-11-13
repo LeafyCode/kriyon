@@ -98,6 +98,17 @@ reader's waits for the window must not reach it (ADR-0057).
   the output; the app's own terminal is not repainted for it. History answers
   carry the requester's id the same way.
 
+- **The window repaints alone.** A daemon that said `Hello` gets the window's
+  repaints (a remount, a catch-up after a cut) as its own snapshot
+  (`RequestSnapshot` with the reserved `WINDOW_SNAPSHOT` id), not `Repaint`,
+  which makes the daemon drop everything queued: a gap every other reader of
+  the stream would see. A screen supersedes output held from before it and
+  ends a cut; one that never comes is waited for at most 2 s. The app sends
+  id-carrying requests only to a daemon that said `Hello`, since daemons
+  outlive app updates and an older one would misread them.
+- **Leaving lowers the hold without a cut.** When the remote device goes, the
+  hold comes back down to 1 MiB only once what is held fits under it.
+
 The second "not solved yet" consequence above is now solved for a daemon of
 this version.
 

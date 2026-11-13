@@ -398,7 +398,9 @@ impl Shared {
                     else {
                         return;
                     };
-                    if let Some(requester) = attached.history_wanted.pop() {
+                    // Oldest first, so a busy client can't starve one.
+                    if !attached.history_wanted.is_empty() {
+                        let requester = attached.history_wanted.remove(0);
                         attached.sending = true;
                         // Built after the `client` lock is released: copying
                         // megabytes under it would stall the PTY reader.
@@ -466,18 +468,30 @@ impl Shared {
 
     /// Send the live client the [Output history] for `requester`, on request.
     fn request_history(&self, requester: u32) {
-        if let Some(attached) = self.client.lock().as_mut() {
-            let wanted = &mut attached.history_wanted;
-            if !wanted.contains(&requester) && wanted.len() < MAX_HISTORY_REQUESTERS {
-                wanted.push(requester);
-            }
+        let mut client = self.client.lock();
+        let Some(attached) = client.as_mut() else {
+            return;
+        };
+        let wanted = &mut attached.history_wanted;
+        if wanted.contains(&requester) {
+            return;
+        }
+        if wanted.len() < MAX_HISTORY_REQUESTERS {
+            wanted.push(requester);
             self.client_ready.notify_all();
+        } else {
+            // Too many waiting: an empty answer, so it isn't left waiting
+            // for one that never comes.
+            self.queue_frame(&mut client, Frame::HistoryEnd { id: requester }.encode());
         }
     }
 
     /// Queue a [Screen snapshot] for `requester` alone, in order with the
-    /// output: everything queued after it is newer than it. The app's own
-    /// terminal gets nothing, and nothing queued is dropped.
+    /// output: everything queued after it is newer than it. Nothing queued is
+    /// dropped for it. Built under the client lock, so no output can come
+    /// between the screen it shows and its place in the queue. A later skip
+    /// ahead drops it with everything else; the `Screen` that follows tells
+    /// the requester to ask again.
     fn request_snapshot(&self, requester: u32) {
         let mut client = self.client.lock();
         let mut frames =
@@ -1193,6 +1207,19 @@ mod tests {
             .collect::<Vec<_>>()
             .concat();
         assert!(String::from_utf8_lossy(&snapshot).contains("before"));
+    }
+
+    #[test]
+    fn a_history_request_past_the_cap_is_answered_empty_not_ignored() {
+        let shared = with_client(SkipAheadQueue::new(CLIENT_QUEUE_LIMIT));
+        for id in 0..u32::try_from(super::MAX_HISTORY_REQUESTERS).unwrap() {
+            shared.request_history(id);
+        }
+        shared.request_history(9999);
+        assert!(
+            queued(&shared).contains(&Frame::HistoryEnd { id: 9999 }),
+            "a requester the daemon can't take hears so"
+        );
     }
 
     #[test]
