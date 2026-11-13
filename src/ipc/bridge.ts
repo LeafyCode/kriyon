@@ -1725,3 +1725,121 @@ export const onUpdateChanged = subscribe<UpdateSnapshot>("update-changed");
 export const onUpdateChannelAnswered = subscribe<UpdateSnapshot>(
   "update-channel-answered"
 );
+
+// Remote access (ADR 0057). Mirrors `src-tauri/src/remote_cmd.rs`.
+
+/** What a paired device may do. */
+export type RemoteRole = "viewer" | "controller";
+
+/** The pairing in progress, as the host sees it. */
+export type RemotePairing =
+  | { state: "idle" }
+  | { expiresAtMs: number; role: RemoteRole; state: "waiting" }
+  | {
+      deviceName: string;
+      expiresAtMs: number;
+      role: RemoteRole;
+      state: "codeWanted";
+    }
+  | { state: "expired" }
+  | { state: "burned" };
+
+/** Remote access as the settings show it. */
+export interface RemoteStatus {
+  enabled: boolean;
+  /** The host's endpoint id while on. */
+  hostId: string | null;
+  pairing: RemotePairing;
+}
+
+/** What typing a pairing code did. */
+export type RemoteCodeResult =
+  | { deviceId: string; name: string; outcome: "paired"; role: RemoteRole }
+  | { outcome: "wrong"; triesLeft: number }
+  | { outcome: "burned" }
+  | { outcome: "noAttempt" };
+
+/** A paired device. */
+export interface RemoteDevice {
+  id: string;
+  name: string;
+  pairedAt: number;
+  role: RemoteRole;
+}
+
+/** A QR code as a grid: `size * size` of `1` dark / `0` light, row by row. */
+export interface QrGrid {
+  dark: string;
+  size: number;
+}
+
+/** Remote access's state. Off outside the Tauri webview. */
+export function remoteStatus(): Promise<RemoteStatus> {
+  if (!hasTauri()) {
+    return Promise.resolve({
+      enabled: false,
+      hostId: null,
+      pairing: { state: "idle" },
+    });
+  }
+  return invoke("remote_status");
+}
+
+/** Turn remote access on (the host endpoint comes up) or off (none at all). */
+export function remoteSetEnabled(enabled: boolean): Promise<RemoteStatus> {
+  return invoke("remote_set_enabled", { enabled });
+}
+
+/** Start pairing a device as `role`; resolves to the QR code's text. */
+export function remoteStartPairing(role: RemoteRole): Promise<string> {
+  return invoke("remote_start_pairing", { role });
+}
+
+/** The QR code for a pairing invite's text, drawn in Rust. */
+export function remotePairingQr(text: string): Promise<QrGrid> {
+  return invoke("remote_pairing_qr", { text });
+}
+
+/** Stop the pairing in progress. */
+export function remoteStopPairing(): Promise<void> {
+  return invoke("remote_stop_pairing");
+}
+
+/** The person typed the six-digit code the device shows. */
+export function remoteEnterCode(code: string): Promise<RemoteCodeResult> {
+  return invoke("remote_enter_code", { code });
+}
+
+/** Every paired device. None outside the Tauri webview. */
+export function remoteDevices(): Promise<RemoteDevice[]> {
+  if (!hasTauri()) {
+    return Promise.resolve([]);
+  }
+  return invoke("remote_devices");
+}
+
+/** Rename a paired device (1 to 64 bytes of plain text). */
+export function remoteRenameDevice(id: string, name: string): Promise<void> {
+  return invoke("remote_rename_device", { id, name });
+}
+
+/** Remove a paired device: it is forgotten and cut off at once. */
+export function remoteRemoveDevice(id: string): Promise<void> {
+  return invoke("remote_remove_device", { id });
+}
+
+/** Change a paired device's role; it reconnects with the new one. */
+export function remoteSetDeviceRole(
+  id: string,
+  role: RemoteRole
+): Promise<void> {
+  return invoke("remote_set_device_role", { id, role });
+}
+
+/**
+ * Subscribe to `remote-pairing-code-wanted`: a device took the pairing, and
+ * the person should type the code it shows.
+ */
+export const onRemoteCodeWanted = subscribe<{ deviceName: string }>(
+  "remote-pairing-code-wanted"
+);

@@ -25,7 +25,21 @@ vi.mock("../ipc/bridge.ts", () => ({
       sizeCapBytes: 500 * 1024 * 1024,
     })
   ),
+  onRemoteCodeWanted: vi.fn(() => Promise.resolve(() => undefined)),
   previewNotifySound: vi.fn(() => Promise.resolve()),
+  // Remote access on, with a device, so its rows are checked too.
+  remoteDevices: vi.fn(() =>
+    Promise.resolve([
+      { id: "cd".repeat(32), name: "Test phone", pairedAt: 0, role: "viewer" },
+    ])
+  ),
+  remoteStatus: vi.fn(() =>
+    Promise.resolve({
+      enabled: true,
+      hostId: "ab".repeat(32),
+      pairing: { state: "idle" },
+    })
+  ),
 }));
 
 const integrationUpdate = vi.fn(() => Promise.resolve());

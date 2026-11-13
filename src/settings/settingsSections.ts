@@ -38,7 +38,8 @@ export type SettingsSectionId =
   | "sessions"
   | "claude"
   | "updates"
-  | "activity";
+  | "activity"
+  | "remote";
 
 /** The side-menu headings, in order. */
 export const SETTINGS_GROUPS = ["Kriyon", "Claude Code", "App"] as const;
@@ -146,6 +147,23 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
     id: "activity",
     keywords: ["activity log", "delete all", "history"],
     label: "Activity log",
+  },
+  {
+    group: "App",
+    id: "remote",
+    keywords: [
+      "remote access",
+      "phone",
+      "pair",
+      "pair a device",
+      "paired device",
+      "paired devices",
+      "qr code",
+      "viewer",
+      "controller",
+      "role",
+    ],
+    label: "Remote access",
   },
 ];
 

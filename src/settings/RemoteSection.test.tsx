@@ -1,0 +1,216 @@
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { beforeEach, expect, test, vi } from "vitest";
+import {
+  type RemoteStatus,
+  remoteDevices,
+  remoteEnterCode,
+  remotePairingQr,
+  remoteRemoveDevice,
+  remoteRenameDevice,
+  remoteSetDeviceRole,
+  remoteSetEnabled,
+  remoteStartPairing,
+  remoteStatus,
+} from "../ipc/bridge.ts";
+import { CONSENT_LINES, useRemote } from "../state/remote.ts";
+import { RemoteSection } from "./RemoteSection.tsx";
+
+vi.mock("../ipc/bridge.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../ipc/bridge.ts")>()),
+  onRemoteCodeWanted: vi.fn(() => Promise.resolve(() => undefined)),
+  remoteDevices: vi.fn(),
+  remoteEnterCode: vi.fn(),
+  remotePairingQr: vi.fn(),
+  remoteRemoveDevice: vi.fn(),
+  remoteRenameDevice: vi.fn(),
+  remoteSetDeviceRole: vi.fn(),
+  remoteSetEnabled: vi.fn(),
+  remoteStartPairing: vi.fn(),
+  remoteStatus: vi.fn(),
+  remoteStopPairing: vi.fn(),
+}));
+
+const EXPIRED = /QR code expired/;
+const QR_CODE = /QR code/;
+const COUNTDOWN = /^[45]:\d\d$/;
+const SHELL_ACCESS = /full shell access as you/;
+const NAMED_BY_DEVICE = /named by the device/;
+const RECONNECTS = /reconnects/;
+
+const off: RemoteStatus = {
+  enabled: false,
+  hostId: null,
+  pairing: { state: "idle" },
+};
+const on: RemoteStatus = { ...off, enabled: true, hostId: "ab".repeat(32) };
+const phone = {
+  id: "cd".repeat(32),
+  name: "Test phone",
+  pairedAt: Date.UTC(2026, 10, 13),
+  role: "viewer" as const,
+};
+
+beforeEach(() => {
+  vi.resetAllMocks();
+  useRemote.setState(useRemote.getInitialState());
+  vi.mocked(remoteStatus).mockResolvedValue(off);
+  vi.mocked(remoteDevices).mockResolvedValue([]);
+});
+
+test("turning on shows the consent screen, and Cancel leaves it off", async () => {
+  render(<RemoteSection />);
+  fireEvent.click(await screen.findByRole("switch", { name: "Remote access" }));
+  const dialog = await screen.findByRole("dialog");
+  for (const line of CONSENT_LINES) {
+    expect(dialog.textContent).toContain(line);
+  }
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(remoteSetEnabled).not.toHaveBeenCalled();
+});
+
+test("Turn on on the consent screen turns it on", async () => {
+  vi.mocked(remoteSetEnabled).mockResolvedValue(on);
+  render(<RemoteSection />);
+  fireEvent.click(await screen.findByRole("switch", { name: "Remote access" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Turn on" }));
+  await waitFor(() => expect(remoteSetEnabled).toHaveBeenCalledWith(true));
+  expect(
+    await screen.findByRole("button", { name: "Pair a device" })
+  ).toBeTruthy();
+});
+
+test("with it off, nothing about pairing or devices shows", async () => {
+  render(<RemoteSection />);
+  await screen.findByRole("switch", { name: "Remote access" });
+  expect(screen.queryByRole("button", { name: "Pair a device" })).toBeNull();
+});
+
+test("a Controller is paired only after the shell-access warning shows", async () => {
+  vi.mocked(remoteStatus).mockResolvedValue(on);
+  vi.mocked(remoteStartPairing).mockResolvedValue("kriyon-pair:1:00");
+  vi.mocked(remotePairingQr).mockResolvedValue({ dark: "1001", size: 2 });
+  render(<RemoteSection />);
+  const viewer = await screen.findByRole("tab", { name: "Viewer" });
+  expect(viewer.getAttribute("aria-selected")).toBe("true");
+  fireEvent.click(screen.getByRole("tab", { name: "Controller" }));
+  expect(screen.getByText(SHELL_ACCESS)).toBeTruthy();
+  vi.mocked(remoteStatus).mockResolvedValue({
+    ...on,
+    pairing: {
+      expiresAtMs: Date.now() + 300_000,
+      role: "controller",
+      state: "waiting",
+    },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Pair a device" }));
+  await waitFor(() =>
+    expect(remoteStartPairing).toHaveBeenCalledWith("controller")
+  );
+  const code = await screen.findByRole("img", { name: QR_CODE });
+  expect(code.querySelectorAll("rect[data-dark]").length).toBe(2);
+  expect(screen.getByText(COUNTDOWN)).toBeTruthy();
+});
+
+test("the device that took the pairing is named as it named itself, and its code is asked for", async () => {
+  vi.mocked(remoteStatus).mockResolvedValue({
+    ...on,
+    pairing: {
+      deviceName: "Test phone",
+      expiresAtMs: Date.now() + 200_000,
+      role: "viewer",
+      state: "codeWanted",
+    },
+  });
+  vi.mocked(remoteEnterCode).mockResolvedValue({
+    outcome: "wrong",
+    triesLeft: 2,
+  });
+  render(<RemoteSection />);
+  expect(await screen.findByText("Test phone")).toBeTruthy();
+  expect(screen.getByText(NAMED_BY_DEVICE)).toBeTruthy();
+  const field = screen.getByRole("textbox", { name: "Pairing code" });
+  fireEvent.change(field, { target: { value: "123456" } });
+  fireEvent.submit(field);
+  await waitFor(() => expect(remoteEnterCode).toHaveBeenCalledWith("123456"));
+  expect(
+    await screen.findByText("That code is wrong. 2 tries left.")
+  ).toBeTruthy();
+});
+
+test("an expired pairing says so and offers to start again", async () => {
+  vi.mocked(remoteStatus).mockResolvedValue({
+    ...on,
+    pairing: { state: "expired" },
+  });
+  render(<RemoteSection />);
+  expect(await screen.findByText(EXPIRED)).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Pair a device" })).toBeTruthy();
+});
+
+test("a paired device can be renamed inline", async () => {
+  vi.mocked(remoteStatus).mockResolvedValue(on);
+  vi.mocked(remoteDevices).mockResolvedValue([phone]);
+  vi.mocked(remoteRenameDevice).mockResolvedValue();
+  render(<RemoteSection />);
+  fireEvent.click(
+    await screen.findByRole("button", { name: "Rename Test phone" })
+  );
+  const field = screen.getByRole("textbox", { name: "Name for Test phone" });
+  fireEvent.change(field, { target: { value: "Work phone" } });
+  fireEvent.keyDown(field, { key: "Enter" });
+  await waitFor(() =>
+    expect(remoteRenameDevice).toHaveBeenCalledWith(phone.id, "Work phone")
+  );
+});
+
+test("Escape leaves a rename without saving", async () => {
+  vi.mocked(remoteStatus).mockResolvedValue(on);
+  vi.mocked(remoteDevices).mockResolvedValue([phone]);
+  render(<RemoteSection />);
+  fireEvent.click(
+    await screen.findByRole("button", { name: "Rename Test phone" })
+  );
+  const field = screen.getByRole("textbox", { name: "Name for Test phone" });
+  fireEvent.keyDown(field, { key: "Escape" });
+  expect(
+    screen.queryByRole("textbox", { name: "Name for Test phone" })
+  ).toBeNull();
+  expect(remoteRenameDevice).not.toHaveBeenCalled();
+});
+
+test("changing a device's role says it reconnects", async () => {
+  vi.mocked(remoteStatus).mockResolvedValue(on);
+  vi.mocked(remoteDevices).mockResolvedValue([phone]);
+  vi.mocked(remoteSetDeviceRole).mockResolvedValue();
+  render(<RemoteSection />);
+  const group = await screen.findByRole("tablist", {
+    name: "Role of Test phone",
+  });
+  expect(screen.getByText(RECONNECTS)).toBeTruthy();
+  fireEvent.click(
+    Array.from(group.querySelectorAll('[role="tab"]')).find(
+      (tab) => tab.textContent === "Controller"
+    ) as HTMLElement
+  );
+  await waitFor(() =>
+    expect(remoteSetDeviceRole).toHaveBeenCalledWith(phone.id, "controller")
+  );
+});
+
+test("removing a device asks first", async () => {
+  vi.mocked(remoteStatus).mockResolvedValue(on);
+  vi.mocked(remoteDevices).mockResolvedValue([phone]);
+  vi.mocked(remoteRemoveDevice).mockResolvedValue();
+  render(<RemoteSection />);
+  fireEvent.click(
+    await screen.findByRole("button", { name: "Remove Test phone" })
+  );
+  expect(remoteRemoveDevice).not.toHaveBeenCalled();
+  const dialog = await screen.findByRole("dialog");
+  expect(dialog.textContent).toContain("Test phone");
+  fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+  await waitFor(() =>
+    expect(remoteRemoveDevice).toHaveBeenCalledWith(phone.id)
+  );
+});

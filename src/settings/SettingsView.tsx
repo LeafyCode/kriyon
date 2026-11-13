@@ -40,6 +40,7 @@ import {
   removalLines,
 } from "../welcome/integrationCopy.ts";
 import { MascotPicker } from "./MascotPicker.tsx";
+import { RemoteSection } from "./RemoteSection.tsx";
 import {
   errorTextStyle,
   groupLabelStyle,
@@ -971,6 +972,7 @@ function ActivitySection() {
 
 const SECTION_PAGES: Record<SettingsSectionId, () => ReactNode> = {
   activity: ActivitySection,
+  remote: RemoteSection,
   appearance: AppearanceSection,
   claude: ClaudeSection,
   layout: LayoutSection,
