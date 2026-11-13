@@ -150,7 +150,8 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
   through the app's connection, not one of its own.
 - **Onlooker** (`Onlooker`, `Onlookers`) — anything that counts as someone looking at a [Session]
   for auto-sleep: the desktop app's focused pane today, a remote device later. A session with an
-  onlooker is never slept. The sleep gate asks "is anyone looking?", never "is the desktop?", so a
+  onlooker is never slept. A remote onlooker also stops the [Daemon client] pacing its reader by
+  the desktop window (`set_remote_onlooker`, ADR-0059), so a slow window never slows the device. The sleep gate asks "is anyone looking?", never "is the desktop?", so a
   new kind of onlooker counts without changing it. Waking a sleeping session still follows the
   desktop's focus only. _Avoid_: watcher (taken by the hook-events watch and the [Watch route]),
   viewer (reserved for the remote device role), client (a daemon connection), focused (that is

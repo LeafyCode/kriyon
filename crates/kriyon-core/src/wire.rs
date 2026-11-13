@@ -20,6 +20,11 @@ const TAG_REQUEST_HISTORY: u8 = 7;
 const TAG_HISTORY: u8 = 8;
 const TAG_HISTORY_END: u8 = 9;
 const TAG_DIALOG: u8 = 10;
+const TAG_HELLO: u8 = 11;
+const TAG_SCREEN: u8 = 12;
+const TAG_REQUEST_SNAPSHOT: u8 = 13;
+const TAG_SNAPSHOT: u8 = 14;
+const TAG_SNAPSHOT_END: u8 = 15;
 
 const HEADER_LEN: usize = 5;
 
@@ -41,6 +46,10 @@ const DIMS_LEN: usize = 4;
 const BUSY_LEN: usize = 1;
 /// `[open u8][generation u64 LE]`.
 const DIALOG_LEN: usize = 9;
+/// A requester's id, at the head of a request's or an answer's payload.
+const ID_LEN: usize = 4;
+/// A [Session run]'s id.
+const RUN_LEN: usize = 8;
 
 /// One message on the session socket.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -59,27 +68,50 @@ pub enum Frame {
     /// Derived from the tty's foreground process group; pushed on change and once
     /// on attach so a reattaching client learns the current state.
     Busy(bool),
-    /// Ask the daemon to resend its screen snapshot as an `Output` frame,
+    /// Ask the daemon to resend its screen snapshot as `Screen` frames,
     /// app → daemon. Sent when a terminal (re)attaches to an already-live
     /// session — a remounted xterm starts blank and the socket-level attach
-    /// repaint only happens once per connection.
+    /// repaint only happens once per connection. It is a [Skip ahead]: output
+    /// still queued is dropped, being on the screen it gets.
     Repaint,
-    /// Ask the daemon for its [Output history], app → daemon. Answered with
-    /// zero or more `History` frames, then one `HistoryEnd`. Requests made
-    /// before an answer goes out share it: ask again only after `HistoryEnd`.
-    RequestHistory,
-    /// Part of the [Output history], daemon → app, oldest first. Kept apart
-    /// from `Output`, so earlier output is never drawn as if it were live. It
-    /// can overlap the `Output` that follows it (ADR-0060).
-    History(Vec<u8>),
-    /// The last frame of an [Output history] answer, daemon → app: the
-    /// `History` frames before it, since the last `HistoryEnd`, are all of it.
-    HistoryEnd,
+    /// Ask the daemon for its [Output history], app → daemon, for the
+    /// requester `id` (the app's, or one remote device's). Answered with zero
+    /// or more `History` frames naming `id`, then one `HistoryEnd`. Requests
+    /// with the same id made before the answer goes out share it: ask again
+    /// only after `HistoryEnd`.
+    RequestHistory { id: u32 },
+    /// Part of the [Output history] for requester `id`, daemon → app, oldest
+    /// first. Kept apart from `Output`, so earlier output is never drawn as if
+    /// it were live. It can overlap the `Output` that follows it (ADR-0060).
+    History { id: u32, bytes: Vec<u8> },
+    /// The last frame of an [Output history] answer for requester `id`,
+    /// daemon → app: the `History` frames naming `id` since its last
+    /// `HistoryEnd` are all of it.
+    HistoryEnd { id: u32 },
     /// The [CLI dialog] on the daemon's screen, daemon → app: whether one
     /// shows, and its [Dialog generation]. Sent when the generation moves,
     /// and once on attach. In order with `Output`, so the receiver knows
     /// which output the change came after.
     Dialog { open: bool, generation: u64 },
+    /// The daemon's [Session run], daemon → app: a random id it made when it
+    /// started, sent first to every client it attaches, so a client knows a
+    /// restarted session from the one it knew.
+    Hello { run: u64 },
+    /// Part of the daemon's [Screen snapshot] for the app's own terminal,
+    /// daemon → app: on attach, on a `Repaint`, and when the daemon skipped
+    /// ahead. Apart from `Output`, so the app never takes a repaint for output
+    /// the session just made. A snapshot opens with a clear; the parts that
+    /// follow, until other frames, are the rest of it.
+    Screen(Vec<u8>),
+    /// Ask for a [Screen snapshot] for requester `id` alone, app → daemon: a
+    /// remote device that is starting or has skipped ahead. Unlike `Repaint`,
+    /// the app's terminal gets nothing and nothing queued is dropped.
+    RequestSnapshot { id: u32 },
+    /// Part of the [Screen snapshot] for requester `id`, daemon → app, in order
+    /// with `Output`: everything after its `SnapshotEnd` is newer than it.
+    Snapshot { id: u32, bytes: Vec<u8> },
+    /// The last frame of a snapshot for requester `id`, daemon → app.
+    SnapshotEnd { id: u32 },
 }
 
 /// A frame kind that carries a stream of bytes with no message boundaries, so
@@ -88,10 +120,14 @@ pub enum Frame {
 pub enum ByteStream {
     /// [`Frame::Output`].
     Output,
-    /// [`Frame::History`].
-    History,
     /// [`Frame::Stdin`].
     Stdin,
+    /// [`Frame::Screen`].
+    Screen,
+    /// [`Frame::History`] for the requester with this id.
+    History(u32),
+    /// [`Frame::Snapshot`] for the requester with this id.
+    Snapshot(u32),
 }
 
 impl ByteStream {
@@ -108,23 +144,33 @@ impl ByteStream {
     /// filled across their boundaries, written straight from each.
     #[must_use]
     pub fn encode_parts(self, parts: &[&[u8]]) -> Vec<u8> {
-        let tag = match self {
-            ByteStream::Output => TAG_OUTPUT,
-            ByteStream::History => TAG_HISTORY,
-            ByteStream::Stdin => TAG_STDIN,
+        let (tag, id) = match self {
+            ByteStream::Output => (TAG_OUTPUT, None),
+            ByteStream::Stdin => (TAG_STDIN, None),
+            ByteStream::Screen => (TAG_SCREEN, None),
+            ByteStream::History(id) => (TAG_HISTORY, Some(id)),
+            ByteStream::Snapshot(id) => (TAG_SNAPSHOT, Some(id)),
         };
+        // Each frame of an answer opens with the requester's id.
+        let head = if id.is_some() { ID_LEN } else { 0 };
+        let per_frame = MAX_PAYLOAD_LEN - head;
         let total: usize = parts.iter().map(|part| part.len()).sum();
-        let mut out = Vec::with_capacity(total + total.div_ceil(MAX_PAYLOAD_LEN) * HEADER_LEN);
+        let frames = total.div_ceil(per_frame);
+        let mut out = Vec::with_capacity(total + frames * (HEADER_LEN + head));
         let mut left = total;
         let mut room = 0;
         for part in parts {
             let mut part: &[u8] = part;
             while !part.is_empty() {
                 if room == 0 {
-                    room = left.min(MAX_PAYLOAD_LEN);
+                    room = left.min(per_frame);
                     out.push(tag);
                     // At most `MAX_PAYLOAD_LEN`, which fits in a `u32`.
-                    out.extend_from_slice(&u32::try_from(room).unwrap_or(u32::MAX).to_le_bytes());
+                    let len = u32::try_from(room + head).unwrap_or(u32::MAX);
+                    out.extend_from_slice(&len.to_le_bytes());
+                    if let Some(id) = id {
+                        out.extend_from_slice(&id.to_le_bytes());
+                    }
                 }
                 let (now, rest) = part.split_at(part.len().min(room));
                 out.extend_from_slice(now);
@@ -135,6 +181,20 @@ impl ByteStream {
         }
         out
     }
+}
+
+/// `bytes` behind the requester id that opens an answer frame's payload.
+fn with_id(id: u32, bytes: &[u8]) -> Vec<u8> {
+    let mut v = Vec::with_capacity(ID_LEN + bytes.len());
+    v.extend_from_slice(&id.to_le_bytes());
+    v.extend_from_slice(bytes);
+    v
+}
+
+/// The requester id that opens `payload`, and what follows it.
+fn split_id(payload: &[u8]) -> Option<(u32, &[u8])> {
+    let (id, rest) = payload.split_first_chunk::<ID_LEN>()?;
+    Some((u32::from_le_bytes(*id), rest))
 }
 
 fn dims(cols: u16, rows: u16) -> Vec<u8> {
@@ -156,9 +216,14 @@ impl Frame {
             Frame::Shutdown => (TAG_SHUTDOWN, Vec::new()),
             Frame::Busy(busy) => (TAG_BUSY, vec![u8::from(*busy)]),
             Frame::Repaint => (TAG_REPAINT, Vec::new()),
-            Frame::RequestHistory => (TAG_REQUEST_HISTORY, Vec::new()),
-            Frame::History(b) => (TAG_HISTORY, b.clone()),
-            Frame::HistoryEnd => (TAG_HISTORY_END, Vec::new()),
+            Frame::RequestHistory { id } => (TAG_REQUEST_HISTORY, id.to_le_bytes().to_vec()),
+            Frame::History { id, bytes } => (TAG_HISTORY, with_id(*id, bytes)),
+            Frame::HistoryEnd { id } => (TAG_HISTORY_END, id.to_le_bytes().to_vec()),
+            Frame::Hello { run } => (TAG_HELLO, run.to_le_bytes().to_vec()),
+            Frame::Screen(b) => (TAG_SCREEN, b.clone()),
+            Frame::RequestSnapshot { id } => (TAG_REQUEST_SNAPSHOT, id.to_le_bytes().to_vec()),
+            Frame::Snapshot { id, bytes } => (TAG_SNAPSHOT, with_id(*id, bytes)),
+            Frame::SnapshotEnd { id } => (TAG_SNAPSHOT_END, id.to_le_bytes().to_vec()),
             Frame::Dialog { open, generation } => {
                 let mut v = Vec::with_capacity(DIALOG_LEN);
                 v.push(u8::from(*open));
@@ -254,9 +319,35 @@ impl FrameDecoder {
                     return Ok(Some(Frame::Busy(payload[0] != 0)));
                 }
                 TAG_REPAINT => return Ok(Some(Frame::Repaint)),
-                TAG_REQUEST_HISTORY => return Ok(Some(Frame::RequestHistory)),
-                TAG_HISTORY => return Ok(Some(Frame::History(payload))),
-                TAG_HISTORY_END => return Ok(Some(Frame::HistoryEnd)),
+                TAG_REQUEST_HISTORY | TAG_HISTORY_END | TAG_REQUEST_SNAPSHOT | TAG_SNAPSHOT_END
+                    if payload.len() == ID_LEN =>
+                {
+                    let id = u32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]);
+                    return Ok(Some(match tag {
+                        TAG_REQUEST_HISTORY => Frame::RequestHistory { id },
+                        TAG_HISTORY_END => Frame::HistoryEnd { id },
+                        TAG_REQUEST_SNAPSHOT => Frame::RequestSnapshot { id },
+                        _ => Frame::SnapshotEnd { id },
+                    }));
+                }
+                TAG_HISTORY | TAG_SNAPSHOT => {
+                    if let Some((id, bytes)) = split_id(&payload) {
+                        let bytes = bytes.to_vec();
+                        return Ok(Some(if tag == TAG_HISTORY {
+                            Frame::History { id, bytes }
+                        } else {
+                            Frame::Snapshot { id, bytes }
+                        }));
+                    }
+                }
+                TAG_HELLO if payload.len() == RUN_LEN => {
+                    let mut run = [0; RUN_LEN];
+                    run.copy_from_slice(&payload);
+                    return Ok(Some(Frame::Hello {
+                        run: u64::from_le_bytes(run),
+                    }));
+                }
+                TAG_SCREEN => return Ok(Some(Frame::Screen(payload))),
                 TAG_DIALOG if payload.len() == DIALOG_LEN => {
                     let mut generation = [0; 8];
                     generation.copy_from_slice(&payload[1..]);
@@ -265,7 +356,7 @@ impl FrameDecoder {
                         generation: u64::from_le_bytes(generation),
                     }));
                 }
-                // Unknown tag, or a Resize/Attach/Busy/Dialog with bad length: skip.
+                // Unknown tag, or a frame of a known tag with a bad length: skip.
                 _ => {}
             }
         }
@@ -297,9 +388,20 @@ mod tests {
             Frame::Busy(true),
             Frame::Busy(false),
             Frame::Repaint,
-            Frame::RequestHistory,
-            Frame::History(b"earlier\n".to_vec()),
-            Frame::HistoryEnd,
+            Frame::RequestHistory { id: 3 },
+            Frame::History {
+                id: 3,
+                bytes: b"earlier\n".to_vec(),
+            },
+            Frame::HistoryEnd { id: 3 },
+            Frame::Hello { run: u64::MAX - 5 },
+            Frame::Screen(b"\x1b[2Jscreen".to_vec()),
+            Frame::RequestSnapshot { id: 9 },
+            Frame::Snapshot {
+                id: 9,
+                bytes: b"\x1b[2Jtheirs".to_vec(),
+            },
+            Frame::SnapshotEnd { id: 9 },
             Frame::Dialog {
                 open: true,
                 generation: u64::MAX - 1,
@@ -340,10 +442,66 @@ mod tests {
                 Frame::Output(bytes.to_vec()).encode()
             );
             assert_eq!(
-                ByteStream::History.encode(bytes),
-                Frame::History(bytes.to_vec()).encode()
+                ByteStream::History(0).encode(bytes),
+                Frame::History {
+                    id: 0,
+                    bytes: bytes.to_vec()
+                }
+                .encode()
             );
         }
+    }
+
+    #[test]
+    fn an_answer_stream_encodes_as_its_frames_would() {
+        let bytes = b"some output".to_vec();
+        assert_eq!(
+            ByteStream::History(7).encode(&bytes),
+            Frame::History {
+                id: 7,
+                bytes: bytes.clone()
+            }
+            .encode()
+        );
+        assert_eq!(
+            ByteStream::Snapshot(7).encode(&bytes),
+            Frame::Snapshot {
+                id: 7,
+                bytes: bytes.clone()
+            }
+            .encode()
+        );
+        assert_eq!(
+            ByteStream::Screen.encode(&bytes),
+            Frame::Screen(bytes).encode()
+        );
+    }
+
+    #[test]
+    fn a_long_answer_is_cut_into_frames_that_each_name_it() {
+        let bytes = vec![4u8; MAX_PAYLOAD_LEN];
+        let mut dec = FrameDecoder::new();
+        dec.push(&ByteStream::Snapshot(2).encode(&bytes));
+        let mut got = 0;
+        while let Ok(Some(frame)) = dec.next_frame() {
+            let Frame::Snapshot { id, bytes } = frame else {
+                panic!("snapshot frames only")
+            };
+            assert_eq!(id, 2);
+            got += bytes.len();
+        }
+        assert_eq!(
+            got, MAX_PAYLOAD_LEN,
+            "the id's bytes push the last part over"
+        );
+    }
+
+    #[test]
+    fn an_answer_frame_too_short_to_name_its_id_is_skipped() {
+        let mut dec = FrameDecoder::new();
+        dec.push(&[TAG_HISTORY, 2, 0, 0, 0, 1, 0]);
+        dec.push(&Frame::Busy(true).encode());
+        assert_eq!(dec.next_frame(), Ok(Some(Frame::Busy(true))));
     }
 
     #[test]
@@ -351,8 +509,8 @@ mod tests {
         let whole = vec![5u8; MAX_PAYLOAD_LEN + 7];
         let (a, b) = whole.split_at(MAX_PAYLOAD_LEN - 3);
         assert_eq!(
-            ByteStream::History.encode_parts(&[a, &[], b]),
-            ByteStream::History.encode(&whole)
+            ByteStream::History(1).encode_parts(&[a, &[], b]),
+            ByteStream::History(1).encode(&whole)
         );
         assert_eq!(
             ByteStream::Stdin.encode_parts(&[&[], &[]]),

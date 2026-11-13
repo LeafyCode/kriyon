@@ -17,7 +17,7 @@ Session, Claude session id, Session title, Project (Workspace), Worktree, Sessio
 
 The terminals Kriyon hosts and the daemon process that keeps each PTY alive.
 
-Project terminal, Warm pane, Terminal scope, Terminal tab, Terminal pane, Terminal workspace, Terminal dock, Terminal view, Link target, Raw view, Block, Engine, Write queue, Output gate, Drained counter, PTY daemon, Run dir, Session socket, Daemon frame, Daemon client, Screen snapshot, Output history.
+Project terminal, Warm pane, Terminal scope, Terminal tab, Terminal pane, Terminal workspace, Terminal dock, Terminal view, Link target, Raw view, Block, Engine, Write queue, Output gate, Drained counter, PTY daemon, Run dir, Session socket, Daemon frame, Daemon event, Daemon client, Screen snapshot, Output history.
 
 ## [Changes view, files and git](docs/context/changes.md)
 

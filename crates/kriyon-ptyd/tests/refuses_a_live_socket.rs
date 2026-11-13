@@ -37,7 +37,7 @@ fn read_until(stream: &mut UnixStream, needle: &str, timeout: Duration) -> Strin
             Ok(n) => {
                 decoder.push(&buf[..n]);
                 while let Ok(Some(frame)) = decoder.next_frame() {
-                    if let Frame::Output(bytes) = frame {
+                    if let Frame::Output(bytes) | Frame::Screen(bytes) = frame {
                         seen.push_str(&String::from_utf8_lossy(&bytes));
                     }
                 }

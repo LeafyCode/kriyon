@@ -40,6 +40,11 @@ pub const WEBVIEW_LOW_WATER: usize = 16 * 1024;
 /// and the webview repaints from the daemon's screen when it is back: the
 /// app's memory per session, however long the window stays hidden.
 pub const WEBVIEW_HOLD_CAP: usize = 1024 * 1024;
+/// A webview's hold while a remote device is an onlooker of its session: the
+/// reader then never waits for the window, so it holds as much as the
+/// daemon's Output history keeps, from which "Show earlier output" can
+/// back-fill a cut.
+pub const WEBVIEW_ONLOOKED_HOLD_CAP: usize = 4 * 1024 * 1024;
 
 /// Delivered where output is cut, so the dropped bytes cannot leave the
 /// terminal's parser mid-sequence: string terminator (ends an OSC or DCS that
@@ -77,6 +82,11 @@ pub struct OutputGate {
     held: VecDeque<u8>,
     /// Output has been dropped since the webview last caught up.
     skipped: bool,
+    /// The daemon sends its screen apart from output (see `expect_screens`).
+    screens: bool,
+    /// A repaint was asked for and its screen has not come yet: output until
+    /// then would be drawn on the old screen, so it is dropped.
+    awaiting_screen: bool,
 }
 
 impl OutputGate {
@@ -91,7 +101,42 @@ impl OutputGate {
             progress_at: now,
             held: VecDeque::new(),
             skipped: false,
+            screens: false,
+            awaiting_screen: false,
         }
+    }
+
+    /// The daemon sends its screen apart from output (`Frame::Screen`), so
+    /// after a repaint is asked for, output is dropped until the screen comes.
+    pub fn expect_screens(&mut self) {
+        self.screens = true;
+    }
+
+    /// The daemon's screen for the webview: always delivered, and the end of
+    /// any wait for one.
+    pub fn offer_screen(&mut self, bytes: Vec<u8>, now: Instant) -> Vec<u8> {
+        self.awaiting_screen = false;
+        if self.in_flight <= self.low {
+            self.progress_at = now;
+        }
+        self.in_flight = self.in_flight.saturating_add(bytes.len());
+        bytes
+    }
+
+    /// Whether a remote device is an onlooker of this session: the hold cap
+    /// is then [`WEBVIEW_ONLOOKED_HOLD_CAP`], else [`WEBVIEW_HOLD_CAP`].
+    pub fn set_remote_onlooker(&mut self, onlooked: bool) {
+        self.cap = if onlooked {
+            WEBVIEW_ONLOOKED_HOLD_CAP
+        } else {
+            WEBVIEW_HOLD_CAP
+        };
+    }
+
+    /// The most output this gate holds before it cuts.
+    #[must_use]
+    pub fn hold_cap(&self) -> usize {
+        self.cap
     }
 
     /// The gate for a webview that draws a session's terminal (ADR-0059).
@@ -125,7 +170,7 @@ impl OutputGate {
     /// the bytes themselves, or [`CUT_SEAL`] at the moment output starts being
     /// dropped. Otherwise the gate has held or dropped them.
     pub fn offer(&mut self, bytes: Vec<u8>, now: Instant) -> Option<Vec<u8>> {
-        if self.skipped {
+        if self.skipped || self.awaiting_screen {
             return None;
         }
         if self.held.is_empty() && self.in_flight < self.high {
@@ -158,6 +203,7 @@ impl OutputGate {
         }
         if self.skipped {
             self.skipped = false;
+            self.awaiting_screen = self.screens;
             return CatchUp::Repaint;
         }
         if self.held.is_empty() {
@@ -396,5 +442,47 @@ mod tests {
             Some(CUT_SEAL.to_vec()),
             "then cut"
         );
+    }
+
+    #[test]
+    fn once_screens_come_apart_output_after_a_cut_waits_for_the_screen() {
+        // Output read between the cut and the repaint would be drawn on the
+        // old screen; with the daemon's screen in frames of its own, the gate
+        // can drop it and let the screen through first.
+        let t0 = Instant::now();
+        let (mut g, t1) = stalled(t0);
+        g.expect_screens();
+        assert_eq!(g.offer(vec![1; 140], t1), None);
+        assert_eq!(g.offer(vec![2; 20], t1), Some(CUT_SEAL.to_vec()));
+        assert_eq!(g.drained(100 + CUT_SEAL.len(), t1), CatchUp::Repaint);
+        assert_eq!(
+            g.offer(b"stale".to_vec(), t1),
+            None,
+            "dropped until the screen"
+        );
+        assert_eq!(g.offer_screen(b"screen".to_vec(), t1), b"screen".to_vec());
+        assert_eq!(g.offer(b"new".to_vec(), t1), Some(b"new".to_vec()));
+    }
+
+    #[test]
+    fn a_screen_always_goes_through() {
+        let t0 = Instant::now();
+        let mut g = gate(t0);
+        assert_eq!(g.offer_screen(b"screen".to_vec(), t0), b"screen".to_vec());
+    }
+
+    #[test]
+    fn while_a_remote_device_looks_on_a_webview_holds_up_to_its_bigger_cap() {
+        // The reader no longer waits for the window then, so the gate holds as
+        // much as the daemon's Output history keeps, to back-fill a cut.
+        let t0 = Instant::now();
+        let mut g = OutputGate::for_webview(t0);
+        g.set_remote_onlooker(true);
+        assert!(g.offer(vec![0; WEBVIEW_HIGH_WATER], t0).is_some());
+        let stalled = t0 + STALL_AFTER;
+        assert_eq!(g.offer(vec![0; WEBVIEW_ONLOOKED_HOLD_CAP], stalled), None);
+        assert_eq!(g.offer(vec![0; 1], stalled), Some(CUT_SEAL.to_vec()));
+        g.set_remote_onlooker(false);
+        assert_eq!(g.hold_cap(), WEBVIEW_HOLD_CAP);
     }
 }

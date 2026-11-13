@@ -67,3 +67,37 @@ case: the desktop app is often hidden while someone uses their phone.
 - The daemon never blocks on the app either: it queues each client's output
   and skips ahead when the queue is full. So the child is paced by no one; the
   gate only decides how much reaches the webview, and in what order.
+
+## Update 2026-11-14 — remote onlookers, and the screen apart from output
+
+Remote access adds a second kind of reader of a session's output, and the
+reader's waits for the window must not reach it (ADR-0057).
+
+- **One hook, before any wait.** The [Daemon client]'s reader hands every
+  frame, in order, to one listener (`on_event(DaemonEvent)`) before the
+  webview's pacing can wait. The remote layer and the app's own listeners
+  (the "still printing" clock, the refusal watch, busy state) all read there.
+- **Pacing only while no remote device looks on.** While nobody remote
+  watches, the reader paces by a draining window as before, so the desktop
+  alone still gets every byte of a fast program. While a remote device is an
+  [Onlooker] of the session (`set_remote_onlooker`, fed by the remote layer;
+  a per-session flag until `Onlooker::Device` exists), the reader never waits:
+  the daemon is no longer slowed by the window, and the window's gate holds up
+  to 4 MiB (`WEBVIEW_ONLOOKED_HOLD_CAP`, the size of the daemon's Output
+  history) before it cuts and repaints, so "Show earlier output" can back-fill
+  a cut stretch.
+- **The screen comes apart from output.** The daemon sends the app's
+  terminal its [Screen snapshot] as `Screen` frames, opened by `Hello { run }`
+  (the [Session run]). A repaint no longer counts as fresh output for the
+  "still printing" clock or the refusal watch. After a cut, once the daemon has
+  said `Hello`, the gate drops output read between the repaint request and the
+  `Screen` that answers it, so nothing is drawn on the old screen. A daemon
+  from before this change sends neither, and the gate behaves as before.
+- **A snapshot for one requester.** A remote device's snapshot comes from
+  `RequestSnapshot { id }` and `Snapshot { id }` frames, queued in order with
+  the output; the app's own terminal is not repainted for it. History answers
+  carry the requester's id the same way.
+
+The second "not solved yet" consequence above is now solved for a daemon of
+this version.
+

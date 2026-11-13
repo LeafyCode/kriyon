@@ -23,7 +23,7 @@ fn read_until(stream: &mut UnixStream, needle: &str, timeout: Duration) -> Strin
             Ok(n) => {
                 dec.push(&buf[..n]);
                 while let Ok(Some(frame)) = dec.next_frame() {
-                    if let Frame::Output(bytes) = frame {
+                    if let Frame::Output(bytes) | Frame::Screen(bytes) = frame {
                         acc.push_str(&String::from_utf8_lossy(&bytes));
                     }
                 }
@@ -56,8 +56,8 @@ fn read_history(stream: &mut UnixStream, timeout: Duration) -> Option<String> {
                 dec.push(&buf[..n]);
                 while let Ok(Some(frame)) = dec.next_frame() {
                     match frame {
-                        Frame::History(bytes) => history.extend(bytes),
-                        Frame::HistoryEnd => {
+                        Frame::History { bytes, .. } => history.extend(bytes),
+                        Frame::HistoryEnd { .. } => {
                             return Some(String::from_utf8_lossy(&history).into_owned());
                         }
                         _ => {}
@@ -128,7 +128,7 @@ fn a_history_request_returns_output_that_scrolled_off_the_screen() {
     );
 
     client
-        .write_all(&Frame::RequestHistory.encode())
+        .write_all(&Frame::RequestHistory { id: 0 }.encode())
         .expect("history request");
     let history = read_history(&mut client, Duration::from_secs(5))
         .expect("a history answer closed by HistoryEnd");

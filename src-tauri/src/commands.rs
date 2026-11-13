@@ -235,26 +235,32 @@ pub async fn create_session(
     // `claude` exits at startup when the org forbids the companion folder; the
     // message is the only sign, so the output is watched for it.
     let refusal = parking_lot::Mutex::new(kriyon_core::integration::RefusalWatch::default());
-    let read_callback = move |bytes: &[u8]| {
-        {
-            use tauri::Manager as _;
-            let state = output_app.state::<AppState>();
-            let mut runtimes = state.runtimes.lock();
-            if let Some(runtime) = runtimes.get_mut(&output_id) {
-                runtime.note_pty_output(Instant::now());
+    // Every frame from the daemon, in order, before the webview's pacing. A
+    // repaint (`Screen`) is not output the session made, so neither the
+    // "still painting" clock nor the refusal watch counts it.
+    let event_callback = move |event: crate::daemon_client::DaemonEvent<'_>| match event {
+        crate::daemon_client::DaemonEvent::Output(bytes) => {
+            {
+                use tauri::Manager as _;
+                let state = output_app.state::<AppState>();
+                let mut runtimes = state.runtimes.lock();
+                if let Some(runtime) = runtimes.get_mut(&output_id) {
+                    runtime.note_pty_output(Instant::now());
+                }
+            }
+            if refusal.lock().feed(bytes) {
+                let app = output_app.clone();
+                std::thread::spawn(move || crate::integration::note_sideload_refused(&app));
             }
         }
-        if refusal.lock().feed(bytes) {
-            let app = output_app.clone();
-            std::thread::spawn(move || crate::integration::note_sideload_refused(&app));
+        crate::daemon_client::DaemonEvent::Busy(busy) => {
+            let _ = on_busy.send(busy);
         }
+        _ => {}
     };
-    // The same bytes on their way to the webview, paced by `report_drained`.
+    // Output and repaints on their way to the webview, paced by `report_drained`.
     let output_callback = move |bytes: Vec<u8>| {
         let _ = on_output.send(bytes);
-    };
-    let busy_callback = move |busy: bool| {
-        let _ = on_busy.send(busy);
     };
     // The session died underneath the app. Record it on the [Session runtime]
     // *first*: nothing else can retire the tracker's last word (a killed
@@ -372,9 +378,8 @@ pub async fn create_session(
         let engine = DaemonClient::from_stream(
             stream,
             SessionId(id.clone()),
-            read_callback,
+            event_callback,
             output_callback,
-            busy_callback,
             exit_callback,
         )
         .map_err(|e| e.to_string())?;
@@ -472,9 +477,8 @@ pub async fn create_session(
     let engine = DaemonClient::connect(
         &socket,
         SessionId(id.clone()),
-        read_callback,
+        event_callback,
         output_callback,
-        busy_callback,
         exit_callback,
     )
     .map_err(|e| e.to_string())?;

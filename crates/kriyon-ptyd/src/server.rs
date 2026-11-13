@@ -40,6 +40,10 @@ const CLIENT_QUEUE_LIMIT: usize = 4 * 1024 * 1024;
 /// How long a daemon whose shell exited waits for its client to receive the
 /// output still queued, before it stops.
 const FINAL_SEND_WAIT: Duration = Duration::from_secs(1);
+
+/// The most requesters whose [Output history] answers can wait at once: one
+/// per remote device, with room.
+const MAX_HISTORY_REQUESTERS: usize = 64;
 /// How much recent output each session keeps as its [Output history]. The
 /// same as a client's queue, so whatever a skip ahead dropped is still there
 /// if the client asks soon after. About 40 MB across ten sessions.
@@ -90,11 +94,12 @@ struct AttachedClient {
     queue: SkipAheadQueue,
     /// The writer has taken bytes off the queue and not finished writing them.
     sending: bool,
-    /// The client asked for the [Output history] and has not had it yet.
-    /// Requests that pile up before it is sent share one answer: each copies
-    /// up to the whole history. The writer sends it outside the queue: at up
-    /// to the queue's own size, queueing it would make the client skip ahead.
-    history_wanted: bool,
+    /// The requesters who asked for the [Output history] and have not had
+    /// it yet, each once: a requester's requests that pile up before its
+    /// answer goes out share it, since each copies up to the whole history.
+    /// The writer sends it outside the queue: at up to the queue's own size,
+    /// queueing it would make the client skip ahead.
+    history_wanted: Vec<u32>,
 }
 
 /// The text of one screen row, as the desktop's terminal reads it: the second
@@ -169,10 +174,11 @@ fn dialog_look(screen: &vt100::Screen) -> (bool, u64) {
     (true, std::hash::Hasher::finish(&hasher))
 }
 
-/// Where a daemon's [Dialog generation]s start: a random number, so a restart
-/// of the same session never repeats one (a clock can be set back). `std`'s
-/// hasher keys are drawn from the OS's randomness once per process.
-fn dialog_generation_base() -> u64 {
+/// A random number: where a daemon's [Dialog generation]s start, so a restart
+/// of the same session never repeats one (a clock can be set back), and its
+/// [Session run]'s id. `std`'s hasher keys are drawn from the OS's randomness
+/// once per process, and each new `RandomState` moves them on.
+fn random_u64() -> u64 {
     use std::hash::{BuildHasher as _, Hasher as _};
     std::collections::hash_map::RandomState::new()
         .build_hasher()
@@ -246,6 +252,8 @@ struct Shared {
     /// looked at after every output read. A leaf lock: taken last under
     /// `client` and `emulator`, or alone.
     dialog: Mutex<DialogSight>,
+    /// This daemon's [Session run]: random, made at start, sent on attach.
+    run: u64,
     /// Last-known foreground-busy state, updated by the busy poller and sent
     /// with every screen snapshot, so a client that attaches or skips ahead
     /// learns it at once. An atomic (not a lock) so the writer can read it
@@ -340,7 +348,7 @@ impl Shared {
             id,
             queue: SkipAheadQueue::starting_with_screen(CLIENT_QUEUE_LIMIT),
             sending: false,
-            history_wanted: false,
+            history_wanted: Vec::new(),
         });
         let shared = Arc::clone(self);
         // A thread the OS refuses must not panic the daemon (and the session
@@ -390,12 +398,11 @@ impl Shared {
                     else {
                         return;
                     };
-                    if attached.history_wanted {
-                        attached.history_wanted = false;
+                    if let Some(requester) = attached.history_wanted.pop() {
                         attached.sending = true;
                         // Built after the `client` lock is released: copying
                         // megabytes under it would stall the PTY reader.
-                        break None;
+                        break Err(requester);
                     }
                     let bytes = match attached.queue.pop() {
                         Next::Frame(bytes) => bytes,
@@ -406,10 +413,10 @@ impl Shared {
                         }
                     };
                     attached.sending = true;
-                    break Some(bytes);
+                    break Ok(bytes);
                 }
             };
-            let bytes = bytes.unwrap_or_else(|| self.history_frames());
+            let bytes = bytes.unwrap_or_else(|requester| self.history_frames(requester));
             let sent = out.write_all(&bytes).is_ok() && out.flush().is_ok();
             if let Some(attached) = self
                 .client
@@ -432,11 +439,13 @@ impl Shared {
         }
     }
 
-    /// The current screen snapshot (the escape codes that reconstruct the
-    /// contents, colours, cursor and modes) and busy state, as frames.
+    /// The [Session run], then the current screen snapshot for the app's own
+    /// terminal (the escape codes that reconstruct the contents, colours,
+    /// cursor and modes) as `Screen` frames, then busy and dialog state.
     fn screen_frames(&self) -> Vec<u8> {
         let emulator = self.emulator.lock();
-        let mut bytes = output_frames(&screen_snapshot(&emulator));
+        let mut bytes = Frame::Hello { run: self.run }.encode();
+        bytes.extend(ByteStream::Screen.encode(&screen_snapshot(&emulator)));
         bytes.extend(Frame::Busy(self.busy.load(Ordering::Relaxed)).encode());
         // Looked at now, with the screen it goes with: a look left pending
         // would pair this screen with an older state.
@@ -446,21 +455,35 @@ impl Shared {
         bytes
     }
 
-    /// The [Output history] as `History` frames, split to the frame limit,
-    /// then the `HistoryEnd` that tells the client it has all of it.
-    fn history_frames(&self) -> Vec<u8> {
+    /// The [Output history] for `requester` as `History` frames, split to
+    /// the frame limit, then the `HistoryEnd` that tells it it has all of it.
+    fn history_frames(&self, requester: u32) -> Vec<u8> {
         // One copy, straight from the history's own chunks.
-        let mut bytes = ByteStream::History.encode_parts(&self.history.lock().parts());
-        bytes.extend(Frame::HistoryEnd.encode());
+        let mut bytes = ByteStream::History(requester).encode_parts(&self.history.lock().parts());
+        bytes.extend(Frame::HistoryEnd { id: requester }.encode());
         bytes
     }
 
-    /// Send the live client the [Output history], on request.
-    fn request_history(&self) {
+    /// Send the live client the [Output history] for `requester`, on request.
+    fn request_history(&self, requester: u32) {
         if let Some(attached) = self.client.lock().as_mut() {
-            attached.history_wanted = true;
+            let wanted = &mut attached.history_wanted;
+            if !wanted.contains(&requester) && wanted.len() < MAX_HISTORY_REQUESTERS {
+                wanted.push(requester);
+            }
             self.client_ready.notify_all();
         }
+    }
+
+    /// Queue a [Screen snapshot] for `requester` alone, in order with the
+    /// output: everything queued after it is newer than it. The app's own
+    /// terminal gets nothing, and nothing queued is dropped.
+    fn request_snapshot(&self, requester: u32) {
+        let mut client = self.client.lock();
+        let mut frames =
+            ByteStream::Snapshot(requester).encode(&screen_snapshot(&self.emulator.lock()));
+        frames.extend(Frame::SnapshotEnd { id: requester }.encode());
+        self.queue_frame(&mut client, frames);
     }
 
     /// Resend the screen snapshot to the live client, on request. A terminal
@@ -544,7 +567,8 @@ pub fn run(
         next_client: AtomicU64::new(0),
         emulator: Mutex::new(vt100::Parser::new(INITIAL_ROWS, INITIAL_COLS, 0)),
         history: Mutex::new(OutputHistory::new(OUTPUT_HISTORY_LIMIT)),
-        dialog: Mutex::new(DialogSight::new(dialog_generation_base())),
+        dialog: Mutex::new(DialogSight::new(random_u64())),
+        run: random_u64(),
         busy: AtomicBool::new(false),
         lease: Mutex::new(DetachedLease::new(detached_ttl, Instant::now())),
     });
@@ -747,14 +771,19 @@ fn serve_client(stream: &mut UnixStream, engine: &Arc<PtyEngine>, shared: &Arc<S
                             }
                         }
                         Frame::Repaint => shared.repaint(),
-                        Frame::RequestHistory => shared.request_history(),
+                        Frame::RequestHistory { id } => shared.request_history(id),
+                        Frame::RequestSnapshot { id } => shared.request_snapshot(id),
                         Frame::Shutdown => return true,
                         // Daemon → app frames never arrive from a client; ignore.
                         Frame::Output(_)
                         | Frame::Busy(_)
                         | Frame::Dialog { .. }
-                        | Frame::History(_)
-                        | Frame::HistoryEnd => {}
+                        | Frame::History { .. }
+                        | Frame::HistoryEnd { .. }
+                        | Frame::Hello { .. }
+                        | Frame::Screen(_)
+                        | Frame::Snapshot { .. }
+                        | Frame::SnapshotEnd { .. } => {}
                     }
                 }
             }
@@ -788,6 +817,7 @@ mod tests {
             emulator: Mutex::new(vt100::Parser::new(24, 80, 0)),
             history: Mutex::new(OutputHistory::new(OUTPUT_HISTORY_LIMIT)),
             dialog: Mutex::new(super::DialogSight::new(0)),
+            run: 7,
             busy: AtomicBool::new(false),
             lease: Mutex::new(DetachedLease::new(Duration::from_secs(60), Instant::now())),
         }
@@ -1064,7 +1094,7 @@ mod tests {
             id: 0,
             queue,
             sending: false,
-            history_wanted: false,
+            history_wanted: Vec::new(),
         });
         shared
     }
@@ -1089,9 +1119,9 @@ mod tests {
         // than they are sent must not queue a copy per ask.
         let shared = with_client(SkipAheadQueue::new(CLIENT_QUEUE_LIMIT));
         shared.history.lock().push(b"earlier\n");
-        shared.request_history();
-        shared.request_history();
-        shared.request_history();
+        shared.request_history(0);
+        shared.request_history(0);
+        shared.request_history(0);
         let (tx, rx) = std::sync::mpsc::channel();
         let mut decoder = FrameDecoder::new();
         let mut ends = 0;
@@ -1103,7 +1133,7 @@ mod tests {
             while let Ok(bytes) = rx.recv_timeout(wait) {
                 decoder.push(&bytes);
                 while let Ok(Some(frame)) = decoder.next_frame() {
-                    if frame == Frame::HistoryEnd {
+                    if frame == (Frame::HistoryEnd { id: 0 }) {
                         ends += 1;
                         wait = Duration::from_millis(300);
                     }
@@ -1112,6 +1142,87 @@ mod tests {
             shared.detach(&UnixStream::pair().expect("socket pair").0);
         });
         assert_eq!(ends, 1);
+    }
+
+    fn decoded(bytes: &[u8]) -> Vec<Frame> {
+        let mut decoder = FrameDecoder::new();
+        decoder.push(bytes);
+        let mut frames = Vec::new();
+        while let Ok(Some(frame)) = decoder.next_frame() {
+            frames.push(frame);
+        }
+        frames
+    }
+
+    #[test]
+    fn the_apps_screen_opens_with_the_run_and_never_comes_as_output() {
+        let shared = shared();
+        shared.emulator.lock().process(b"on screen");
+        let frames = decoded(&shared.screen_frames());
+        assert_eq!(frames[0], Frame::Hello { run: 7 });
+        assert!(
+            matches!(&frames[1], Frame::Screen(bytes) if String::from_utf8_lossy(bytes).contains("on screen"))
+        );
+        assert!(!frames.iter().any(|f| matches!(f, Frame::Output(_))));
+    }
+
+    #[test]
+    fn a_requesters_snapshot_is_queued_in_order_and_the_app_is_not_repainted() {
+        let shared = with_client(SkipAheadQueue::new(CLIENT_QUEUE_LIMIT));
+        shared.on_output(b"before ");
+        shared.request_snapshot(5);
+        shared.on_output(b"after");
+        let frames = queued(&shared);
+        let kinds: Vec<&str> = frames
+            .iter()
+            .filter_map(|f| match f {
+                Frame::Output(_) => Some("output"),
+                Frame::Snapshot { id: 5, .. } => Some("snapshot"),
+                Frame::SnapshotEnd { id: 5 } => Some("end"),
+                Frame::Screen(_) => Some("screen"),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(kinds, ["output", "snapshot", "end", "output"]);
+        let snapshot: Vec<u8> = frames
+            .iter()
+            .filter_map(|f| match f {
+                Frame::Snapshot { bytes, .. } => Some(bytes.as_slice()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .concat();
+        assert!(String::from_utf8_lossy(&snapshot).contains("before"));
+    }
+
+    #[test]
+    fn each_requester_gets_its_own_history_answer() {
+        let shared = with_client(SkipAheadQueue::new(CLIENT_QUEUE_LIMIT));
+        shared.history.lock().push(b"earlier\n");
+        shared.request_history(1);
+        shared.request_history(2);
+        shared.request_history(1);
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut ends = Vec::new();
+        std::thread::scope(|scope| {
+            scope.spawn(|| shared.write_to_client(0, ChannelWriter(tx)));
+            let mut decoder = FrameDecoder::new();
+            let mut wait = Duration::from_secs(30);
+            while let Ok(bytes) = rx.recv_timeout(wait) {
+                decoder.push(&bytes);
+                while let Ok(Some(frame)) = decoder.next_frame() {
+                    if let Frame::HistoryEnd { id } = frame {
+                        ends.push(id);
+                        if ends.len() == 2 {
+                            wait = Duration::from_millis(300);
+                        }
+                    }
+                }
+            }
+            shared.detach(&UnixStream::pair().expect("socket pair").0);
+        });
+        ends.sort_unstable();
+        assert_eq!(ends, [1, 2]);
     }
 
     #[test]
@@ -1386,8 +1497,8 @@ mod tests {
             dec.push(&buf[..n]);
             while let Some(frame) = dec.next_frame().expect("frames within the limit") {
                 match frame {
-                    Frame::History(bytes) => history.extend(bytes),
-                    Frame::HistoryEnd => return history,
+                    Frame::History { bytes, .. } => history.extend(bytes),
+                    Frame::HistoryEnd { .. } => return history,
                     _ => {}
                 }
             }
@@ -1398,7 +1509,7 @@ mod tests {
     fn a_client_gets_the_output_history_it_asks_for() {
         let (shared, _daemon_end, mut client_end, _writer) = attached();
         shared.on_output(b"earlier line\n");
-        shared.request_history();
+        shared.request_history(0);
         let history = read_history(&mut client_end);
         assert!(String::from_utf8_lossy(&history).contains("earlier line"));
     }
@@ -1409,7 +1520,7 @@ mod tests {
         shared.on_output(b"nobody was watching\n");
         let (daemon_end, mut client_end) = UnixStream::pair().expect("socket pair");
         let _writer = shared.attach(&daemon_end);
-        shared.request_history();
+        shared.request_history(0);
         let history = read_history(&mut client_end);
         assert!(String::from_utf8_lossy(&history).contains("nobody was watching"));
     }
@@ -1433,7 +1544,7 @@ mod tests {
             shared.on_output(line(i).as_bytes());
         }
         let mut client_end = reader.join().expect("reader");
-        shared.request_history();
+        shared.request_history(0);
         let history = read_history(&mut client_end);
         assert!(history.len() > OUTPUT_HISTORY_LIMIT - line(0).len());
         assert!(String::from_utf8_lossy(&history).ends_with(&line(count - 1)));

@@ -55,6 +55,62 @@ pub struct DaemonClient {
     /// The last [`Frame::Dialog`] the daemon sent, for whoever must know
     /// whether a [CLI dialog] shows without the window (ADR-0040).
     dialog: Arc<Mutex<Option<DialogState>>>,
+    /// A remote device is an [Onlooker] of this session (see
+    /// [`DaemonClient::set_remote_onlooker`]).
+    onlooked: Arc<AtomicBool>,
+}
+
+/// What the daemon said, as the reader read it: every frame from the daemon,
+/// in order, handed to the client's listener before anything can wait.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DaemonEvent<'a> {
+    /// The daemon's [Session run], first on every attach.
+    Hello { run: u64 },
+    /// Output the session just made.
+    Output(&'a [u8]),
+    /// Part of the daemon's [Screen snapshot] for the app's own terminal: a
+    /// repaint, not output the session made.
+    Screen(&'a [u8]),
+    /// The shell's foreground-busy state.
+    Busy(bool),
+    /// The [CLI dialog] on the daemon's screen.
+    Dialog(DialogState),
+    /// Part of the [Output history] for requester `id`.
+    History { id: u32, bytes: &'a [u8] },
+    /// The end of the [Output history] for requester `id`.
+    HistoryEnd { id: u32 },
+    /// Part of a [Screen snapshot] for requester `id`.
+    Snapshot { id: u32, bytes: &'a [u8] },
+    /// The end of the snapshot for requester `id`.
+    SnapshotEnd { id: u32 },
+}
+
+impl<'a> DaemonEvent<'a> {
+    /// The event a frame from the daemon is; `None` for a frame only the app
+    /// sends.
+    fn of(frame: &'a Frame) -> Option<Self> {
+        Some(match frame {
+            Frame::Hello { run } => Self::Hello { run: *run },
+            Frame::Output(bytes) => Self::Output(bytes),
+            Frame::Screen(bytes) => Self::Screen(bytes),
+            Frame::Busy(busy) => Self::Busy(*busy),
+            Frame::Dialog { open, generation } => Self::Dialog(DialogState {
+                open: *open,
+                generation: *generation,
+            }),
+            Frame::History { id, bytes } => Self::History { id: *id, bytes },
+            Frame::HistoryEnd { id } => Self::HistoryEnd { id: *id },
+            Frame::Snapshot { id, bytes } => Self::Snapshot { id: *id, bytes },
+            Frame::SnapshotEnd { id } => Self::SnapshotEnd { id: *id },
+            Frame::Stdin(_)
+            | Frame::Resize { .. }
+            | Frame::Attach { .. }
+            | Frame::Shutdown
+            | Frame::Repaint
+            | Frame::RequestHistory { .. }
+            | Frame::RequestSnapshot { .. } => return None,
+        })
+    }
 }
 
 /// The [Output gate] and the sink it feeds, behind one lock.
@@ -84,22 +140,20 @@ impl DaemonClient {
     ///
     /// # Errors
     /// Returns [`EngineError::Pty`] if the socket cannot be connected or cloned.
-    pub fn connect<R, F, G, H>(
+    pub fn connect<E, F, H>(
         socket: &Path,
         id: SessionId,
-        on_read: R,
+        on_event: E,
         on_output: F,
-        on_busy: G,
         on_exit: H,
     ) -> Result<Self, EngineError>
     where
-        R: FnMut(&[u8]) + Send + 'static,
+        E: FnMut(DaemonEvent<'_>) + Send + 'static,
         F: FnMut(Vec<u8>) + Send + 'static,
-        G: Fn(bool) + Send + 'static,
         H: FnOnce() + Send + 'static,
     {
         let stream = UnixStream::connect(socket).map_err(io_err)?;
-        Self::from_stream(stream, id, on_read, on_output, on_busy, on_exit)
+        Self::from_stream(stream, id, on_event, on_output, on_exit)
     }
 
     /// Build a client from an already-connected stream. Lets the caller probe a
@@ -109,22 +163,20 @@ impl DaemonClient {
     ///
     /// # Errors
     /// Returns [`EngineError::Pty`] if the stream cannot be cloned.
-    pub fn from_stream<R, F, G, H>(
+    pub fn from_stream<E, F, H>(
         stream: UnixStream,
         id: SessionId,
-        on_read: R,
+        on_event: E,
         on_output: F,
-        on_busy: G,
         on_exit: H,
     ) -> Result<Self, EngineError>
     where
-        R: FnMut(&[u8]) + Send + 'static,
+        E: FnMut(DaemonEvent<'_>) + Send + 'static,
         F: FnMut(Vec<u8>) + Send + 'static,
-        G: Fn(bool) + Send + 'static,
         H: FnOnce() + Send + 'static,
     {
         let gate = OutputGate::for_webview(Instant::now());
-        Self::build(stream, id, on_read, on_output, on_busy, on_exit, gate)
+        Self::build(stream, id, on_event, on_output, on_exit, gate)
     }
 
     /// [Daemon adoption]: connect to a live daemon nobody is looking at, so the
@@ -146,25 +198,22 @@ impl DaemonClient {
             id,
             |_| {},
             |_| {},
-            |_| {},
             || {},
             OutputGate::unpaced(Instant::now()),
         )
     }
 
-    fn build<R, F, G, H>(
+    fn build<E, F, H>(
         stream: UnixStream,
         id: SessionId,
-        mut on_read: R,
+        mut on_event: E,
         on_output: F,
-        on_busy: G,
         on_exit: H,
         gate: OutputGate,
     ) -> Result<Self, EngineError>
     where
-        R: FnMut(&[u8]) + Send + 'static,
+        E: FnMut(DaemonEvent<'_>) + Send + 'static,
         F: FnMut(Vec<u8>) + Send + 'static,
-        G: Fn(bool) + Send + 'static,
         H: FnOnce() + Send + 'static,
     {
         let mut reader = stream.try_clone().map_err(io_err)?;
@@ -185,6 +234,8 @@ impl DaemonClient {
         let reader_closing = Arc::clone(&closing);
         let dialog = Arc::new(Mutex::new(None));
         let reader_dialog = Arc::clone(&dialog);
+        let onlooked = Arc::new(AtomicBool::new(false));
+        let reader_onlooked = Arc::clone(&onlooked);
 
         let reader_thread = std::thread::spawn(move || {
             let mut dec = FrameDecoder::new();
@@ -207,14 +258,22 @@ impl DaemonClient {
                                 }
                             };
                             reader_accepted.store(true, Ordering::Relaxed);
+                            // Every listener first, in the order the frames
+                            // came, before the webview's pacing can wait.
+                            if let Some(event) = DaemonEvent::of(&frame) {
+                                on_event(event);
+                            }
                             match frame {
                                 Frame::Output(bytes) => {
-                                    on_read(&bytes);
                                     let mut d = reader_outlet.delivery.lock();
-                                    // Paced by a webview that draws; never by
-                                    // one that has stopped.
+                                    // Paced by a webview that draws, and never
+                                    // by one that has stopped. Not paced at all
+                                    // while a remote device is an onlooker: a
+                                    // slow window must not slow it (ADR-0059).
                                     while let Some(until) = d.gate.pace_until(Instant::now()) {
-                                        if reader_closing.load(Ordering::Relaxed) {
+                                        if reader_closing.load(Ordering::Relaxed)
+                                            || reader_onlooked.load(Ordering::Relaxed)
+                                        {
                                             break;
                                         }
                                         reader_outlet.progress.wait_until(&mut d, until);
@@ -223,11 +282,19 @@ impl DaemonClient {
                                         (d.deliver)(out);
                                     }
                                 }
-                                Frame::Busy(busy) => on_busy(busy),
+                                Frame::Screen(bytes) => {
+                                    let mut d = reader_outlet.delivery.lock();
+                                    let out = d.gate.offer_screen(bytes, Instant::now());
+                                    (d.deliver)(out);
+                                }
+                                // A daemon that names its run sends its screen
+                                // apart from output.
+                                Frame::Hello { .. } => {
+                                    reader_outlet.delivery.lock().gate.expect_screens();
+                                }
                                 Frame::Dialog { open, generation } => {
                                     *reader_dialog.lock() = Some(DialogState { open, generation });
                                 }
-                                // Other frames are app → daemon; never arrive here.
                                 _ => {}
                             }
                         }
@@ -250,7 +317,23 @@ impl DaemonClient {
             closing,
             accepted,
             dialog,
+            onlooked,
         })
+    }
+
+    /// Whether a remote device is an [Onlooker] of this session. While one is,
+    /// the reader never waits for the webview, and the webview's gate holds
+    /// up to [`kriyon_core::output_gate::WEBVIEW_ONLOOKED_HOLD_CAP`] before it
+    /// cuts (ADR-0059). Set by the remote layer.
+    pub fn set_remote_onlooker(&self, onlooked: bool) {
+        self.onlooked.store(onlooked, Ordering::Relaxed);
+        self.outlet
+            .delivery
+            .lock()
+            .gate
+            .set_remote_onlooker(onlooked);
+        // A reader waiting on the webview stops waiting.
+        self.outlet.progress.notify_all();
     }
 
     /// The [CLI dialog] on the daemon's screen and its [Dialog generation], as
@@ -658,6 +741,90 @@ mod tests {
         flood
     }
 
+    #[test]
+    fn a_remote_onlooker_is_never_held_back_by_a_slow_window() {
+        // A window that drains a little at a time keeps the reader pacing,
+        // which holds the daemon's writes back; with a remote device looking
+        // on, the reader reads on and every event arrives.
+        let dir = tempfile::tempdir().expect("tmp dir");
+        let socket = dir.path().join("s.sock");
+        let total = 32 * HIGH_WATER;
+        let flood = spawn_flooding_daemon(&socket, total);
+        let seen = Arc::new(StdMutex::new(0usize));
+        let seen_by_listener = Arc::clone(&seen);
+        let client = Arc::new(
+            DaemonClient::connect(
+                &socket,
+                SessionId("s".into()),
+                move |event| {
+                    if let DaemonEvent::Output(bytes) = event {
+                        *seen_by_listener.lock().expect("lock") += bytes.len();
+                    }
+                },
+                |_| {},
+                || {},
+            )
+            .expect("connect"),
+        );
+        client.set_remote_onlooker(true);
+        let slow = Arc::clone(&client);
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_drainer = Arc::clone(&stop);
+        let drainer = std::thread::spawn(move || {
+            while !stop_drainer.load(Ordering::Relaxed) {
+                slow.report_drained(1024);
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        });
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while *seen.lock().expect("lock") < total {
+            assert!(Instant::now() < deadline, "the listener was held back");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(*flood.wrote_all.lock().expect("lock"));
+        stop.store(true, Ordering::Relaxed);
+        drainer.join().expect("drainer");
+    }
+
+    #[test]
+    fn a_screen_goes_to_the_window_but_is_not_output() {
+        let (mut daemon, app) = UnixStream::pair().expect("pair");
+        let outputs = Arc::new(StdMutex::new(0usize));
+        let counted = Arc::clone(&outputs);
+        let drawn = Arc::new(StdMutex::new(Vec::new()));
+        let window = Arc::clone(&drawn);
+        let _client = DaemonClient::from_stream(
+            app,
+            SessionId("s".into()),
+            move |event| {
+                if let DaemonEvent::Output(_) = event {
+                    *counted.lock().expect("lock") += 1;
+                }
+            },
+            move |bytes| window.lock().expect("lock").extend(bytes),
+            || {},
+        )
+        .expect("client");
+        daemon
+            .write_all(
+                &[
+                    Frame::Hello { run: 1 }.encode(),
+                    Frame::Screen(b"repaint".to_vec()).encode(),
+                ]
+                .concat(),
+            )
+            .expect("write");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while drawn.lock().expect("lock").as_slice() != b"repaint" {
+            assert!(
+                Instant::now() < deadline,
+                "the screen never reached the window"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(*outputs.lock().expect("lock"), 0, "a repaint is not output");
+    }
+
     fn wait_for(flag: &StdMutex<bool>, what: &str) {
         let deadline = Instant::now() + Duration::from_secs(5);
         while !*flag.lock().expect("lock") {
@@ -678,15 +845,8 @@ mod tests {
         let flood = spawn_flooding_daemon(&socket, 64 * HIGH_WATER);
 
         // A live, attached sink that takes bytes but never reports them drained.
-        let client = DaemonClient::connect(
-            &socket,
-            SessionId("s".into()),
-            |_| {},
-            |_| {},
-            |_| {},
-            || {},
-        )
-        .expect("connect");
+        let client = DaemonClient::connect(&socket, SessionId("s".into()), |_| {}, |_| {}, || {})
+            .expect("connect");
 
         wait_for(
             &flood.wrote_all,
@@ -718,7 +878,6 @@ mod tests {
                     *seen.lock().expect("lock") += bytes.len();
                     let _ = tx.send(bytes.len());
                 },
-                |_| {},
                 || {},
             )
             .expect("connect"),
@@ -777,9 +936,12 @@ mod tests {
         let client = DaemonClient::connect(
             &socket,
             SessionId("s".into()),
-            move |bytes| *read_sink.lock().expect("lock") += bytes.len(),
+            move |event| {
+                if let DaemonEvent::Output(bytes) = event {
+                    *read_sink.lock().expect("lock") += bytes.len();
+                }
+            },
             move |bytes| *sent_sink.lock().expect("lock") += bytes.len(),
-            |_| {},
             || {},
         )
         .expect("connect");
@@ -822,15 +984,9 @@ mod tests {
             std::thread::sleep(Duration::from_millis(10));
         }
 
-        let client = DaemonClient::connect(
-            &socket,
-            SessionId("s1".to_string()),
-            |_| {},
-            |_| {},
-            |_| {},
-            || {},
-        )
-        .expect("connect");
+        let client =
+            DaemonClient::connect(&socket, SessionId("s1".to_string()), |_| {}, |_| {}, || {})
+                .expect("connect");
         client.attach(80, 24).expect("attach");
         drop(client);
 
@@ -885,7 +1041,6 @@ mod tests {
             move |bytes| {
                 sink.lock().expect("lock").extend_from_slice(&bytes);
             },
-            |_| {},
             || {},
         )
         .expect("connect");
@@ -944,11 +1099,12 @@ mod tests {
         let client = DaemonClient::connect(
             &socket,
             SessionId("s1".to_string()),
-            |_| {},
-            |_| {},
-            move |b| {
-                *sink.lock().expect("lock") = Some(b);
+            move |event| {
+                if let DaemonEvent::Busy(b) = event {
+                    *sink.lock().expect("lock") = Some(b);
+                }
             },
+            |_| {},
             || {},
         )
         .expect("connect");
@@ -991,7 +1147,6 @@ mod tests {
         let client = DaemonClient::connect(
             &socket,
             SessionId("s1".to_string()),
-            |_| {},
             |_| {},
             |_| {},
             move || {
@@ -1048,15 +1203,9 @@ mod tests {
             sizes
         });
 
-        let client = DaemonClient::connect(
-            &socket,
-            SessionId("s1".to_string()),
-            |_| {},
-            |_| {},
-            |_| {},
-            || {},
-        )
-        .expect("connect");
+        let client =
+            DaemonClient::connect(&socket, SessionId("s1".to_string()), |_| {}, |_| {}, || {})
+                .expect("connect");
         client.write_stdin(&vec![b'x'; total]).expect("write");
 
         assert_eq!(daemon.join().expect("join"), vec![MAX_PAYLOAD_LEN, 10]);
@@ -1081,7 +1230,6 @@ mod tests {
         let client = DaemonClient::connect(
             &socket,
             SessionId("s1".to_string()),
-            |_| {},
             |_| {},
             |_| {},
             move || {
@@ -1124,7 +1272,6 @@ mod tests {
         let client = DaemonClient::connect(
             &socket,
             SessionId("s1".to_string()),
-            |_| {},
             |_| {},
             |_| {},
             move || {
