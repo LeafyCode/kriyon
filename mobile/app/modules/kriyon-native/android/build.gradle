@@ -1,0 +1,37 @@
+// The phone app's way into Kriyon's Rust library on Android. The library
+// and its Kotlin bindings come from scripts/mobile/build-android.sh, into
+// rust/ beside this file (not committed, as ios/Rust).
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'com.leafycode.kriyon'
+version = '0.1.0'
+
+android {
+  namespace "com.leafycode.kriyon.nativemodule"
+  defaultConfig {
+    consumerProguardFiles "proguard-rules.pro"
+  }
+  sourceSets {
+    main {
+      java.srcDirs += ['rust/kotlin']
+      jniLibs.srcDirs += ['rust/jniLibs']
+    }
+  }
+  testOptions {
+    unitTests.returnDefaultValues = true
+  }
+}
+
+dependencies {
+  // What UniFFI's Kotlin calls Rust through. The aar carries JNA's own
+  // native library for Android.
+  implementation "net.java.dev.jna:jna:5.17.0@aar"
+  implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2"
+
+  testImplementation "junit:junit:4.13.2"
+  // android.jar has org.json as stubs only; the tests need the real one.
+  testImplementation "org.json:json:20250517"
+}

@@ -7,3 +7,7 @@ test("the Android icon tile is the app's own window colour", () => {
     steel.colors.chromeWindow
   );
 });
+
+test("nothing of the app's is backed up: the phone's keys never leave it", () => {
+  expect(appJson.expo.android.allowBackup).toBe(false);
+});

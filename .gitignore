@@ -81,3 +81,11 @@ crates/kriyon-push/push.env
 
 # The phone library for iOS, built by scripts/mobile/build-ios.sh
 /mobile/app/modules/kriyon-native/ios/Rust
+
+# The phone library for Android, built by scripts/mobile/build-android.sh,
+# and the Kotlin module's Gradle output
+/mobile/app/modules/kriyon-native/android/rust
+/mobile/app/modules/kriyon-native/android/build
+
+# Firebase's file for Android push: the person's own, never committed
+/mobile/app/google-services.json

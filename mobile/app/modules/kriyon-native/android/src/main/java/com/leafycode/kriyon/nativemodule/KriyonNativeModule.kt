@@ -1,0 +1,188 @@
+// The phone app's way into Kriyon's Rust library (crates/kriyon-mobile) on
+// Android: a pass-through with no logic, call for call the Swift module's.
+// Rust decides; this hands calls to it and its news to JavaScript as events.
+
+package com.leafycode.kriyon.nativemodule
+
+import expo.modules.kotlin.exception.CodedException
+import expo.modules.kotlin.exception.Exceptions
+import expo.modules.kotlin.functions.Coroutine
+import expo.modules.kotlin.modules.Module
+import expo.modules.kotlin.modules.ModuleDefinition
+import java.io.File
+import java.lang.ref.WeakReference
+import uniffi.kriyon_mobile.HostListener
+import uniffi.kriyon_mobile.MobileDevice
+import uniffi.kriyon_mobile.MobileException
+import uniffi.kriyon_mobile.Pairing
+import uniffi.kriyon_mobile.ScreenListener
+
+/** Rust's news about a computer, as an event. */
+private class HostEvents(module: KriyonNativeModule) : HostListener {
+  private val module = WeakReference(module)
+
+  override fun hostChanged(summary: String) {
+    module.get()?.sendEvent("onHostChanged", objectOf(summary))
+  }
+}
+
+/** One open session's screen, as events. */
+private class ScreenEvents(
+  module: KriyonNativeModule,
+  private val hostId: String,
+  private val sessionId: String,
+) : ScreenListener {
+  private val module = WeakReference(module)
+
+  override fun frame(frame: ByteArray) {
+    module.get()?.sendEvent(
+      "onScreenFrame",
+      mapOf("hostId" to hostId, "sessionId" to sessionId, "frame" to frame),
+    )
+  }
+}
+
+/**
+ * A Rust error as a JavaScript one, its kind as the code (`NotConnected`,
+ * `NoControl`, …), so the screens never read the wording. The words are
+ * Rust's own (its Display, exported through UniFFI).
+ */
+private inline fun <T> rust(call: () -> T): T =
+  try {
+    call()
+  } catch (error: MobileException) {
+    throw CodedException(error.javaClass.simpleName, error.toString(), error)
+  }
+
+class KriyonNativeModule : Module() {
+  /** `device` and `pairing` are reached from several threads: always under this lock. */
+  private val lock = Any()
+  private var device: MobileDevice? = null
+  private var pairing: Pairing? = null
+
+  private fun started(): MobileDevice =
+    synchronized(lock) { device }
+      ?: throw CodedException("NotStarted", "start the device first", null)
+
+  /** Where the store keeps its sealed values: never backed up or moved to another phone. */
+  private fun storeDir(): File {
+    val context = appContext.reactContext ?: throw Exceptions.ReactContextLost()
+    return File(context.noBackupFilesDir, "kriyon")
+  }
+
+  override fun definition() = ModuleDefinition {
+    Name("KriyonNative")
+
+    Events("onHostChanged", "onScreenFrame")
+
+    // Once per app run: a later call returns the same device and its name
+    // stays the first one given.
+    AsyncFunction("start") { deviceName: String ->
+      synchronized(lock) {
+        device?.let { return@AsyncFunction it.id() }
+        val sealer = KeystoreSealer()
+        val store = SealedFileStore(storeDir(), sealer)
+        // Values sealed by a key the Keystore no longer has can't be opened
+        // again: start afresh rather than fail every launch.
+        if (!sealer.hasKey()) store.clear()
+        val started = rust { MobileDevice.start(store, HostEvents(this@KriyonNativeModule), deviceName) }
+        device = started
+        started.id()
+      }
+    }
+
+    AsyncFunction("hosts") {
+      parsed(rust { started().hosts() })
+    }
+
+    AsyncFunction("pair") Coroutine { inviteText: String ->
+      val next = rust { started().pair(inviteText) }
+      synchronized(lock) {
+        pairing?.cancel()
+        pairing = next
+      }
+      next.code()
+    }
+
+    AsyncFunction("finishPairing") Coroutine { ->
+      val current = synchronized(lock) { pairing }
+        ?: throw CodedException("NoPairing", "no pairing is in progress", null)
+      try {
+        parsed(rust { current.finish() })
+      } finally {
+        // Only this pairing: a newer one started meanwhile stays.
+        synchronized(lock) {
+          if (pairing === current) pairing = null
+        }
+      }
+    }
+
+    AsyncFunction("cancelPairing") {
+      synchronized(lock) {
+        pairing?.cancel()
+        pairing = null
+      }
+    }
+
+    AsyncFunction("forget") Coroutine { hostId: String ->
+      rust { started().forget(hostId) }
+    }
+
+    AsyncFunction("setPushToken") Coroutine { token: String, platform: String ->
+      rust { started().setPushToken(token, platform) }
+    }
+
+    AsyncFunction("relay") Coroutine { ->
+      parsed(started().relay())
+    }
+
+    AsyncFunction("relaySignIn") Coroutine { ->
+      parsed(rust { started().relaySignIn() })
+    }
+
+    AsyncFunction("relayWaitSignIn") Coroutine { ->
+      started().relayWaitSignIn()
+    }
+
+    AsyncFunction("relayCancelSignIn") Coroutine { ->
+      started().relayCancelSignIn()
+    }
+
+    AsyncFunction("relaySignOut") Coroutine { ->
+      parsed(rust { started().relaySignOut() })
+    }
+
+    AsyncFunction("relaySetOn") Coroutine { on: Boolean ->
+      parsed(rust { started().relaySetOn(on) })
+    }
+
+    AsyncFunction("relayAccount") Coroutine { ->
+      parsed(rust { started().relayAccount() })
+    }
+
+    Function("wake") {
+      started().wake()
+    }
+
+    AsyncFunction("openSession") Coroutine { hostId: String, sessionId: String ->
+      val screen = ScreenEvents(this@KriyonNativeModule, hostId, sessionId)
+      rust { started().openSession(hostId, sessionId, screen) }
+    }
+
+    AsyncFunction("closeSession") Coroutine { hostId: String, sessionId: String ->
+      rust { started().closeSession(hostId, sessionId) }
+    }
+
+    AsyncFunction("startSession") Coroutine { hostId: String, projectId: String, title: String? ->
+      rust { started().startSession(hostId, projectId, title) }
+    }
+
+    AsyncFunction("takeControl") Coroutine { hostId: String, sessionId: String ->
+      rust { started().takeControl(hostId, sessionId) }
+    }
+
+    AsyncFunction("input") Coroutine { hostId: String, sessionId: String, bytes: ByteArray ->
+      rust { started().input(hostId, sessionId, bytes) }
+    }
+  }
+}
