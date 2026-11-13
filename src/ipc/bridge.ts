@@ -1380,13 +1380,13 @@ export function homeDir(): Promise<string> {
  * `null` if the user cancels (or there is no Tauri runtime). Used to choose the
  * working directory for a new session.
  */
-export async function pickDirectory(): Promise<string | null> {
+export function pickDirectory(): Promise<string | null> {
   if (!hasTauri()) {
-    return null;
+    return Promise.resolve(null);
   }
-  const { open } = await import("@tauri-apps/plugin-dialog");
-  const selected = await open({ directory: true, multiple: false });
-  return typeof selected === "string" ? selected : null;
+  // The Rust core runs the picker and records the pick as a [Chosen folder]:
+  // only those may become a new project (ADR-0058).
+  return invoke<string | null>("pick_folder");
 }
 
 // --- Composer completions ---

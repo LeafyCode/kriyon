@@ -221,21 +221,28 @@ function ignore(promise: Promise<unknown>): void {
   });
 }
 
-function persistThenWarm(project: ProjectRow, session: SessionRow): void {
+function persistThenWarm(
+  project: ProjectRow,
+  session: SessionRow
+): Promise<void> {
   const warm = (): void => {
     ignore(useCompletions.getState().warmup(session.cwd));
   };
   if (!isTauriRuntime()) {
     warm();
-    return;
+    return Promise.resolve();
   }
-  const saved = Promise.allSettled([
-    upsertProject(project),
-    upsertSession(session),
-  ]);
+  // The project first: the core saves a session only once its project is
+  // saved, and checks the session's folders against it (ADR-0058). Settles
+  // either way; a refused write surfaces where the session fails to start.
+  const saved = upsertProject(project)
+    .catch(() => undefined)
+    .then(() => upsertSession(session))
+    .catch(() => undefined);
   // Its shell must not start before these rows approve its folder.
   noteRowSave(session.id, saved);
   ignore(saved.then(warm));
+  return saved;
 }
 
 /**
@@ -303,11 +310,11 @@ export function createSession(
     // Mounted out of sight, then launched: the activation effect that starts
     // a shown session never runs for it.
     state.warmSession(id);
-    persistThenWarm(stored, row);
+    const saved = persistThenWarm(stored, row);
     // Its [Boot phase] reads `launching` from this call on, so a second
     // request in the same batch counts it against the [Nested session cap].
     ignore(launchActiveSession(id));
-    captureBaselineFor(id, cwd);
+    captureBaselineFor(id, cwd, saved);
     return id;
   }
   // `addSession` only activates the *first* session, so switch explicitly —
@@ -319,7 +326,7 @@ export function createSession(
   useLayout.getState().revealSessionView();
   // Persist the row, then warm the composer's slash-command catalog for this
   // cwd so it's ready before the user's first `/`.
-  persistThenWarm(stored, row);
+  const saved = persistThenWarm(stored, row);
   // Fire-and-forget: capture a git baseline for the Changes view to diff
   // against later. Must never block session creation or throw — `ignore`
   // swallows a rejection (cwd isn't a git repo, capture failed), leaving
@@ -333,18 +340,24 @@ export function createSession(
   // blocking a pool thread for minutes and permanently growing
   // `~/.git/objects` — once per Home session. There is no real "project" to
   // baseline for a Home session anyway.
-  captureBaselineFor(id, cwd);
+  captureBaselineFor(id, cwd, saved);
   return id;
 }
 
 /** Capture the session's git baseline, except for the Home cwd (see
  *  {@link createSession}). Never blocks and never throws. */
-function captureBaselineFor(id: string, cwd: string): void {
+function captureBaselineFor(
+  id: string,
+  cwd: string,
+  saved: Promise<void>
+): void {
   if (cwd !== defaultCwd) {
+    // After the rows are saved: recording the baseline rewrites the session
+    // row, which the core refuses before its project is saved.
     ignore(
-      captureBaseline(cwd).then((oid) =>
-        useSessions.getState().setBaseline(id, oid)
-      )
+      saved
+        .then(() => captureBaseline(cwd))
+        .then((oid) => useSessions.getState().setBaseline(id, oid))
     );
   }
 }
@@ -431,7 +444,7 @@ export function resumePastSession(past: PastSession): void {
   useLayout.getState().revealSessionView();
   // Persist + warm so the composer's completions validate against a known root
   // and are ready before the first `/`, the same as a fresh session.
-  persistThenWarm(stored, row);
+  ignore(persistThenWarm(stored, row));
 }
 
 /**

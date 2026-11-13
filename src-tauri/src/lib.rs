@@ -9,6 +9,7 @@ pub mod daemon_client;
 pub mod daemon_rt;
 pub mod entry_cmd;
 pub mod file_cmd;
+pub mod folder_cmd;
 pub mod git_cmd;
 pub mod git_run;
 pub mod handoff_rt;
@@ -299,6 +300,7 @@ pub fn run() {
         .plugin(tauri_plugin_positioner::init())
         .manage(AppState::default())
         .manage(attachment_cmd::AttachmentRegistry::default())
+        .manage(folder_cmd::ChosenFolders::default())
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::DragDrop(drag) = event {
                 if window.label() == "main" {
@@ -484,6 +486,7 @@ pub fn run() {
             window_cmd::session_snapshots,
             links_cmd::open_path,
             attachment_cmd::pick_attachments,
+            folder_cmd::pick_folder,
             attachment_cmd::clipboard_attachments,
             attachment_cmd::save_pasted_image,
             attachment_cmd::attachment_preview,

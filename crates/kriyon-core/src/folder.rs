@@ -29,6 +29,9 @@ pub enum FolderRefusal {
     /// Its canonical form is not inside any approved root's canonical form.
     #[error("folder is outside every approved folder")]
     OutsideApprovedRoots,
+    /// Not exactly one of the [Chosen folder]s (inside one is not enough).
+    #[error("folder was not chosen on this computer")]
+    NotChosen,
 }
 
 /// A folder path that passed [`check_folder`]. Its only constructor is that
@@ -87,6 +90,84 @@ pub fn check_folder(
     } else {
         Err(FolderRefusal::OutsideApprovedRoots)
     }
+}
+
+/// Check that `path` is exactly one of the [Chosen folder]s, not merely
+/// inside one: the folder a new [Project (Workspace)] may be saved with.
+/// Inside is enough for a session, but a project must be the very folder the
+/// person chose, or the home folder being chosen would approve all of it.
+///
+/// # Errors
+/// The [`FolderRefusal`] for the first rule the path breaks; `NotChosen` when
+/// it passes [`check_folder`] against `chosen` but is not one of them.
+pub fn check_chosen_folder(path: &str, chosen: &[PathBuf]) -> Result<CheckedFolder, FolderRefusal> {
+    let folder = check_folder(path, chosen).map_err(|refusal| match refusal {
+        FolderRefusal::OutsideApprovedRoots => FolderRefusal::NotChosen,
+        other => other,
+    })?;
+    let is_chosen = chosen
+        .iter()
+        .filter_map(|root| root.canonicalize().ok())
+        .any(|root| root == folder.canonical());
+    if is_chosen {
+        Ok(folder)
+    } else {
+        Err(FolderRefusal::NotChosen)
+    }
+}
+
+/// The folder a project row may be saved with: the one it was saved with
+/// before, unchecked (it was approved then, and a parked or removed project's
+/// row must still save once its folder is gone), or a [Chosen folder].
+///
+/// # Errors
+/// The [`FolderRefusal`] from [`check_chosen_folder`] for a new or changed path.
+pub fn check_project_path(
+    path: &str,
+    saved: Option<&str>,
+    chosen: &[PathBuf],
+) -> Result<(), FolderRefusal> {
+    if saved == Some(path) {
+        return Ok(());
+    }
+    check_chosen_folder(path, chosen).map(|_| ())
+}
+
+/// A folder a session row may be saved with (its `cwd`, or its worktree): the
+/// one it was saved with before, unchecked, or a [Checked folder] inside its
+/// project's folder or one of the project repository's worktrees. `worktrees`
+/// is asked only when the project folder does not settle it, because listing
+/// them runs git, and rows are saved on every title or pin change.
+///
+/// # Errors
+/// The [`FolderRefusal`] from [`check_folder`] for a new or changed path.
+pub fn check_session_path(
+    path: &str,
+    saved: Option<&str>,
+    project_folder: &Path,
+    worktrees: impl FnOnce() -> Vec<PathBuf>,
+) -> Result<(), FolderRefusal> {
+    if saved == Some(path) {
+        return Ok(());
+    }
+    let mut roots = vec![project_folder.to_path_buf()];
+    match check_folder(path, &roots) {
+        Err(FolderRefusal::OutsideApprovedRoots) => {
+            roots.extend(worktrees());
+            check_folder(path, &roots).map(|_| ())
+        }
+        other => other.map(|_| ()),
+    }
+}
+
+/// The folders `git worktree list --porcelain` names, the main checkout first.
+#[must_use]
+pub fn parse_worktree_list(porcelain: &str) -> Vec<PathBuf> {
+    porcelain
+        .lines()
+        .filter_map(|line| line.strip_prefix("worktree "))
+        .map(PathBuf::from)
+        .collect()
 }
 
 #[cfg(test)]
@@ -236,5 +317,153 @@ mod tests {
         drop(gone);
         let err = check_folder("/", &[gone_path]).unwrap_err();
         assert_eq!(err, FolderRefusal::OutsideApprovedRoots);
+    }
+
+    // --- Chosen folders and saved rows ---
+
+    #[test]
+    fn a_chosen_folder_itself_passes() {
+        let chosen = tempfile::tempdir().unwrap();
+        let folder = check_chosen_folder(s(chosen.path()), &approved(&chosen)).unwrap();
+        assert_eq!(folder.canonical(), canon(chosen.path()));
+    }
+
+    #[test]
+    fn a_folder_inside_a_chosen_folder_was_not_itself_chosen() {
+        // Inside is enough for a session; a project must be the very folder
+        // the person picked, or choosing HOME would approve all of it.
+        let chosen = tempfile::tempdir().unwrap();
+        std::fs::create_dir(chosen.path().join("sub")).unwrap();
+        let err =
+            check_chosen_folder(s(&chosen.path().join("sub")), &approved(&chosen)).unwrap_err();
+        assert_eq!(err, FolderRefusal::NotChosen);
+    }
+
+    #[test]
+    fn a_chosen_folder_matches_through_a_symlinked_spelling() {
+        let real = tempfile::tempdir().unwrap();
+        let links = tempfile::tempdir().unwrap();
+        let alias = links.path().join("alias");
+        std::os::unix::fs::symlink(real.path(), &alias).unwrap();
+        check_chosen_folder(s(&alias), &[real.path().to_path_buf()]).unwrap();
+    }
+
+    #[test]
+    fn a_missing_folder_cannot_be_chosen() {
+        let chosen = tempfile::tempdir().unwrap();
+        let err =
+            check_chosen_folder(s(&chosen.path().join("gone")), &approved(&chosen)).unwrap_err();
+        assert_eq!(err, FolderRefusal::NotADirectory);
+    }
+
+    #[test]
+    fn a_project_keeps_its_saved_folder_even_once_the_folder_is_gone() {
+        // A parked or removed project's row must still save (its name, its
+        // pin); its folder was approved when it was first saved.
+        assert_eq!(
+            check_project_path("/no/such/project", Some("/no/such/project"), &[]),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn a_new_project_folder_must_be_chosen() {
+        let chosen = tempfile::tempdir().unwrap();
+        let other = tempfile::tempdir().unwrap();
+        assert_eq!(
+            check_project_path(s(chosen.path()), None, &approved(&chosen)),
+            Ok(())
+        );
+        assert_eq!(
+            check_project_path(s(other.path()), None, &approved(&chosen)),
+            Err(FolderRefusal::NotChosen)
+        );
+    }
+
+    #[test]
+    fn re_pointing_a_saved_project_is_checked_like_a_new_one() {
+        let saved = tempfile::tempdir().unwrap();
+        let other = tempfile::tempdir().unwrap();
+        assert_eq!(
+            check_project_path(s(other.path()), Some(s(saved.path())), &[]),
+            Err(FolderRefusal::NotChosen)
+        );
+    }
+
+    fn no_worktrees() -> Vec<PathBuf> {
+        panic!("git must not be asked when the project folder settles it")
+    }
+
+    #[test]
+    fn a_session_keeps_its_saved_folder_without_asking_git() {
+        assert_eq!(
+            check_session_path("/gone/wt", Some("/gone/wt"), Path::new("/p"), no_worktrees),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn a_session_inside_its_project_folder_passes_without_asking_git() {
+        let project = tempfile::tempdir().unwrap();
+        std::fs::create_dir(project.path().join("sub")).unwrap();
+        assert_eq!(
+            check_session_path(
+                s(&project.path().join("sub")),
+                None,
+                project.path(),
+                no_worktrees
+            ),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn a_session_in_one_of_the_projects_worktrees_passes() {
+        let project = tempfile::tempdir().unwrap();
+        let worktree = tempfile::tempdir().unwrap();
+        let wt = worktree.path().to_path_buf();
+        assert_eq!(
+            check_session_path(s(worktree.path()), None, project.path(), move || vec![wt]),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn a_session_outside_its_project_and_worktrees_is_refused() {
+        let project = tempfile::tempdir().unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+        assert_eq!(
+            check_session_path(s(elsewhere.path()), None, project.path(), Vec::new),
+            Err(FolderRefusal::OutsideApprovedRoots)
+        );
+    }
+
+    #[test]
+    fn a_session_in_a_missing_folder_is_refused() {
+        let project = tempfile::tempdir().unwrap();
+        assert_eq!(
+            check_session_path(
+                s(&project.path().join("gone")),
+                None,
+                project.path(),
+                Vec::new
+            ),
+            Err(FolderRefusal::NotADirectory)
+        );
+    }
+
+    #[test]
+    fn worktree_list_names_every_worktree_path() {
+        let porcelain = "worktree /repo\nHEAD abc\nbranch refs/heads/main\n\n\
+                         worktree /repo-worktrees/feat x\nHEAD def\nbranch refs/heads/feat\n\n\
+                         worktree /tmp/detached\nHEAD 123\ndetached\n";
+        assert_eq!(
+            parse_worktree_list(porcelain),
+            vec![
+                PathBuf::from("/repo"),
+                PathBuf::from("/repo-worktrees/feat x"),
+                PathBuf::from("/tmp/detached"),
+            ]
+        );
     }
 }

@@ -206,6 +206,23 @@ describe("createSessionInFolder", () => {
     expect(Object.keys(state.sessions)).toHaveLength(2);
   });
 
+  it("saves a new project before its session, which the core checks against it", async () => {
+    // `upsert_session` refuses a session whose project is not saved yet
+    // (ADR-0058), so the session's write waits for the project's.
+    let projectSaved: () => void = () => undefined;
+    vi.mocked(upsertProject).mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        projectSaved = resolve;
+      })
+    );
+    vi.mocked(upsertSession).mockClear();
+    createSessionInFolder("/work/proj");
+    await Promise.resolve();
+    expect(upsertSession).not.toHaveBeenCalled();
+    projectSaved();
+    await vi.waitFor(() => expect(upsertSession).toHaveBeenCalled());
+  });
+
   it("hands the session host its rows' save, so the shell waits for it", () => {
     // `create_session` refuses a folder that no saved row approves yet
     // (ADR-0058); the session host holds the shell until this settles.
