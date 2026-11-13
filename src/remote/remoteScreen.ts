@@ -123,3 +123,27 @@ export function linkLine(state: LinkState): string {
       return "Connected";
   }
 }
+
+/** The line a note from the stream shows under the screen. */
+export function noteLine(note: ScreenNote): string {
+  switch (note.kind) {
+    case "skipped":
+      return "Skipped ahead: this computer fell behind, so it shows the screen as it is now.";
+    case "receipt":
+      return receiptLine(note.written);
+    default:
+      return refusalLine(note.reason);
+  }
+}
+
+/**
+ * Whether a device may type into a session now: connected, as a Controller,
+ * holding typing control. The computer checks again at the write.
+ */
+export function mayType(
+  link: LinkState,
+  role: "viewer" | "controller" | null,
+  holdsControl: boolean
+): boolean {
+  return link === "connected" && role === "controller" && holdsControl;
+}

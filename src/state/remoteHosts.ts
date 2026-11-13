@@ -17,6 +17,7 @@ import {
 } from "../ipc/bridge.ts";
 import { failureMessage } from "../ipc/failures.ts";
 import { onEvent, stopAll } from "../ipc/onEvent.ts";
+import { mayType } from "../remote/remoteScreen.ts";
 
 /**
  * This computer as a [Remote device] of other computers (plan Step D). Rust
@@ -203,7 +204,5 @@ export function remoteNeedsYouCount(state: {
 
 /** Whether this computer may type into `session` now. */
 export function canType(link: HostLink, session: HostSession): boolean {
-  return (
-    link.state === "connected" && link.role === "controller" && session.mine
-  );
+  return mayType(link.state, link.role, session.mine);
 }

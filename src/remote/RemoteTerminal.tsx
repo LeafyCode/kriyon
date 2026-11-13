@@ -11,22 +11,8 @@ import {
   applyScreenFrame,
   decodeScreenFrame,
   linkLine,
-  receiptLine,
-  refusalLine,
-  type ScreenNote,
+  noteLine,
 } from "./remoteScreen.ts";
-
-/** The line a note from the stream shows under the screen. */
-function noteLine(note: ScreenNote): string {
-  switch (note.kind) {
-    case "skipped":
-      return "Skipped ahead: this computer fell behind, so it shows the screen as it is now.";
-    case "receipt":
-      return receiptLine(note.written);
-    default:
-      return refusalLine(note.reason);
-  }
-}
 
 /**
  * A paired computer's session, drawn from its stream. It only watches until

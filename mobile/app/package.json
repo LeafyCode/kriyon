@@ -6,21 +6,25 @@
   "main": "index.ts",
   "scripts": {
     "android": "expo run:android",
-    "ios": "expo run:ios",
-    "start": "expo start --dev-client",
-    "test": "jest",
-    "typecheck": "tsc --noEmit"
+    "ios": "pnpm terminal-page && expo run:ios",
+    "start": "pnpm terminal-page && expo start --dev-client",
+    "terminal-page": "node scripts/terminal-page.mjs",
+    "test": "pnpm terminal-page && jest",
+    "typecheck": "pnpm terminal-page && tsc --noEmit"
   },
   "jest": {
     "preset": "jest-expo"
   },
   "dependencies": {
+    "@xterm/addon-unicode11": "0.10.0-beta.301",
+    "@xterm/xterm": "6.1.0-beta.304",
     "expo": "~58.0.25",
     "expo-dev-client": "~58.0.20",
     "expo-device": "~58.0.5",
     "expo-status-bar": "~58.0.5",
     "react": "19.3.0",
     "react-native": "0.88.1",
+    "react-native-webview": "14.0.1",
     "zustand": "^5.0.15"
   },
   "devDependencies": {
@@ -29,6 +33,7 @@
     "@types/react": "~19.3.0",
     "jest": "~30.5.2",
     "jest-expo": "~58.0.14",
+    "rolldown": "1.2.13",
     "typescript": "~7.0.2"
   }
 }

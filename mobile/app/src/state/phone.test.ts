@@ -6,12 +6,20 @@ import type {
   PairedHost,
 } from "../../modules/kriyon-native/index.ts";
 import { KriyonNative } from "../../modules/kriyon-native/index.ts";
-import { needsYou, standingMeta, usePhone } from "./phone.ts";
+import {
+  canType,
+  needsYou,
+  standingMeta,
+  toBase64,
+  usePhone,
+} from "./phone.ts";
 
 jest.mock("../../modules/kriyon-native/index.ts", () => ({
   KriyonNative: {
     addListener: jest.fn(() => ({ remove: jest.fn() })),
     cancelPairing: jest.fn(),
+    closeSession: jest.fn(),
+    openSession: jest.fn(),
     finishPairing: jest.fn(),
     forget: jest.fn(),
     hosts: jest.fn(),
@@ -185,4 +193,58 @@ test("each standing reads as the desktop says it, in the theme's colour", () => 
     label: "Unknown",
   });
   expect(standingMeta("something-new", colors).label).toBe("Unknown");
+});
+
+test("typing is on only while connected, as a Controller, holding control", () => {
+  const typing = session({ typing: "you" });
+  expect(canType(host({}), typing)).toBe(true);
+  expect(canType(host({ link: "lost" }), typing)).toBe(false);
+  expect(canType(host({ role: "viewer" }), typing)).toBe(false);
+  expect(canType(host({}), session({ typing: "host" }))).toBe(false);
+  expect(canType(host({}), session({ typing: null }))).toBe(false);
+  expect(canType(undefined, typing)).toBe(false);
+  expect(canType(host({}), undefined)).toBe(false);
+});
+
+test("bytes travel to the terminal page as base64", () => {
+  expect(toBase64(new Uint8Array([]))).toBe("");
+  expect(toBase64(new Uint8Array([104, 105]))).toBe("aGk=");
+  expect(toBase64(new Uint8Array([0, 255, 27, 91]))).toBe("AP8bWw==");
+  const big = new Uint8Array(100_000).fill(65);
+  expect(toBase64(big)).toHaveLength(133_336);
+});
+
+test("a session's open and close reach Rust in the order asked", async () => {
+  const order: string[] = [];
+  let opened: () => void = () => undefined;
+  native.openSession.mockImplementation(
+    () =>
+      new Promise<void>((resolve) => {
+        order.push("open starts");
+        opened = () => {
+          order.push("open ends");
+          resolve();
+        };
+      })
+  );
+  native.closeSession.mockImplementation(() => {
+    order.push("close");
+    return Promise.resolve();
+  });
+  const { closeSession, openSession } = usePhone.getState();
+  const open = openSession(MAC, "s");
+  const close = closeSession(MAC, "s");
+  await Promise.resolve();
+  expect(order).toEqual(["open starts"]);
+  opened();
+  await Promise.all([open, close]);
+  expect(order).toEqual(["open starts", "open ends", "close"]);
+});
+
+test("a failed open doesn't stop the next one", async () => {
+  native.openSession.mockRejectedValueOnce(new Error("NotConnected"));
+  native.openSession.mockResolvedValueOnce();
+  const { openSession } = usePhone.getState();
+  await expect(openSession(MAC, "s")).rejects.toThrow("NotConnected");
+  await expect(openSession(MAC, "s")).resolves.toBeUndefined();
 });

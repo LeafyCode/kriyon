@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { mayType } from "../../../../src/remote/remoteScreen.ts";
 import type { ThemeColors } from "../../../../src/theme/themes/types.ts";
 import {
   type HostSession,
@@ -23,10 +24,14 @@ export type Pairing =
 
 interface PhoneStore {
   cancelPairing: () => Promise<void>;
+  /** Close a session's stream, after any open asked before it. */
+  closeSession: (hostId: string, sessionId: string) => Promise<void>;
   deviceId: string | null;
   forget: (hostId: string) => Promise<void>;
   hostChanged: (state: HostState) => void;
   hosts: PairedHost[];
+  /** Open a session's stream, after any open or close asked before it. */
+  openSession: (hostId: string, sessionId: string) => Promise<void>;
   pair: (inviteText: string) => Promise<void>;
   pairing: Pairing;
   screen: Screen;
@@ -42,6 +47,18 @@ function reasonOf(error: unknown): string {
 }
 
 /**
+ * Session opens and closes run one after another, so a close never
+ * overtakes the open it follows; a failed one doesn't stop the next.
+ */
+let sessionCalls: Promise<unknown> = Promise.resolve();
+
+function inTurn(call: () => Promise<void>): Promise<void> {
+  const turn = sessionCalls.then(call, call);
+  sessionCalls = turn.catch(() => undefined);
+  return turn;
+}
+
+/**
  * The phone app's copy of what Rust reports: this phone's id, its paired
  * computers and each one's latest state, the pairing in progress, and which
  * screen shows. Rust keeps the computers and decides; this keeps what it
@@ -52,6 +69,8 @@ export const usePhone = create<PhoneStore>((set) => ({
     set({ pairing: { phase: "idle" } });
     await KriyonNative.cancelPairing().catch(() => undefined);
   },
+  closeSession: (hostId, sessionId) =>
+    inTurn(() => KriyonNative.closeSession(hostId, sessionId)),
   deviceId: null,
   forget: async (hostId) => {
     await KriyonNative.forget(hostId);
@@ -71,6 +90,8 @@ export const usePhone = create<PhoneStore>((set) => ({
       states: { ...state.states, [hostState.hostId]: hostState },
     })),
   hosts: [],
+  openSession: (hostId, sessionId) =>
+    inTurn(() => KriyonNative.openSession(hostId, sessionId)),
   pair: async (inviteText) => {
     const text = inviteText.trim();
     if (text === "") {
@@ -158,4 +179,31 @@ export function standingMeta(
     default:
       return { color: colors.inkFaint, label: "Unknown" };
   }
+}
+
+/**
+ * Whether this phone may type into `session` now: connected, as a
+ * Controller, holding typing control. Rust checks again at the write.
+ */
+export function canType(
+  host: HostState | undefined,
+  session: HostSession | undefined
+): boolean {
+  return (
+    host !== undefined &&
+    mayType(host.link, host.role, session?.typing === "you")
+  );
+}
+
+/**
+ * Bytes as base64, for the terminal page: a script can carry only text.
+ * Built in chunks, so a big screen never overflows the call stack.
+ */
+export function toBase64(bytes: Uint8Array): string {
+  const CHUNK = 0x80_00;
+  let text = "";
+  for (let at = 0; at < bytes.length; at += CHUNK) {
+    text += String.fromCharCode(...bytes.subarray(at, at + CHUNK));
+  }
+  return btoa(text);
 }

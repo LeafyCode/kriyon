@@ -3,6 +3,8 @@ import {
   applyScreenFrame,
   decodeScreenFrame,
   linkLine,
+  mayType,
+  noteLine,
   receiptLine,
   refusalLine,
 } from "./remoteScreen.ts";
@@ -107,4 +109,21 @@ test("each link state has its line", () => {
   );
   expect(linkLine("connecting")).toBe("Connecting…");
   expect(linkLine("connected")).toBe("Connected");
+});
+
+test("each note from the stream has its line", () => {
+  expect(noteLine({ kind: "skipped" })).toBe(
+    "Skipped ahead: this computer fell behind, so it shows the screen as it is now."
+  );
+  expect(noteLine({ kind: "receipt", written: true })).toBe(receiptLine(true));
+  expect(noteLine({ kind: "refused", reason: 3 })).toBe(refusalLine(3));
+});
+
+test("typing is on only while connected, as a Controller, holding control", () => {
+  expect(mayType("connected", "controller", true)).toBe(true);
+  expect(mayType("lost", "controller", true)).toBe(false);
+  expect(mayType("connecting", "controller", true)).toBe(false);
+  expect(mayType("connected", "viewer", true)).toBe(false);
+  expect(mayType("connected", "controller", false)).toBe(false);
+  expect(mayType("connected", null, true)).toBe(false);
 });
