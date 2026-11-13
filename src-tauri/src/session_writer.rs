@@ -222,6 +222,29 @@ impl Writers {
         Some(Ok(change))
     }
 
+    /// The person clicked "Let <device> type" on session `id`: control goes
+    /// to `device` (connected as `role`) even though the host typed just
+    /// now. `None` for a session that closed; refused for a device that is
+    /// no longer a Controller.
+    pub fn let_device_type(
+        &self,
+        id: &SessionId,
+        device: EndpointId,
+        role: Option<Role>,
+    ) -> Option<Result<Option<Change>, RefuseReason>> {
+        let gate = self.gates.lock().get(id).cloned()?;
+        let mut gate = gate.lock();
+        match self.role_now(&device, role) {
+            None => return Some(Err(RefuseReason::NotPaired)),
+            Some(Role::Viewer) => return Some(Err(RefuseReason::NotAllowed)),
+            Some(Role::Controller) => {}
+        }
+        let change = gate.let_device_type(device);
+        // Under the gate's lock, in epoch order.
+        self.tell(id, change);
+        Some(Ok(change))
+    }
+
     /// Call `hook` on every change of [Typing control] these writers make,
     /// so every device hears it: the host typing, a device taking control,
     /// a device let go. Set once at app start.
@@ -442,6 +465,39 @@ mod tests {
             }
         }
         out
+    }
+
+    #[test]
+    fn the_person_lets_a_device_type_even_right_after_typing_here() {
+        let writers = Writers::default();
+        let id = SessionId("s".into());
+        let (engine, _daemon) = engine();
+        writers.set_run(&id, 1);
+        let now = Instant::now();
+        writers
+            .host_write(&id, &engine, b"x")
+            .expect("the host types");
+        assert!(matches!(
+            writers.take(&id, PHONE, Some(Role::Controller), now),
+            Some(Err(RefuseReason::NotInControl))
+        ));
+        let change = writers
+            .let_device_type(&id, PHONE, Some(Role::Controller))
+            .expect("live")
+            .expect("allowed")
+            .expect("a change");
+        assert_eq!(change.holder, Holder::Device(PHONE));
+        // Never to a Viewer, nor a device removed since.
+        writers.revoke(PHONE, Revoked::Demoted(Role::Viewer));
+        assert!(matches!(
+            writers.let_device_type(&id, PHONE, Some(Role::Controller)),
+            Some(Err(RefuseReason::NotAllowed))
+        ));
+        writers.revoke(PHONE, Revoked::Removed);
+        assert!(matches!(
+            writers.let_device_type(&id, PHONE, Some(Role::Controller)),
+            Some(Err(RefuseReason::NotPaired))
+        ));
     }
 
     #[test]

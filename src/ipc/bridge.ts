@@ -319,6 +319,26 @@ export interface HooksOffUpdate {
  */
 export const onSessionHooksOff = subscribe<HooksOffUpdate>("session-hooks-off");
 
+/** A device that wants to type in a session the person typed in just now. */
+export interface ControlAsk {
+  deviceId: string;
+  deviceName: string;
+  sessionId: string;
+}
+
+/** Subscribe to `remote-control-asked`. */
+export const onRemoteControlAsked = subscribe<ControlAsk>(
+  "remote-control-asked"
+);
+
+/** The person lets a device type in a session ("Let <device> type"). */
+export function remoteLetDeviceType(
+  sessionId: string,
+  deviceId: string
+): Promise<void> {
+  return invoke("remote_let_device_type", { deviceId, sessionId });
+}
+
 /** A session started without the window (by a remote device): its row. */
 export const onSessionAdded = subscribe<SessionRow>("session-added");
 

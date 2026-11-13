@@ -359,7 +359,8 @@ impl Serve {
     }
 
     /// Whether `device` has a connection served now.
-    fn has_control(&self, device: &EndpointId) -> bool {
+    #[must_use]
+    pub fn has_control(&self, device: &EndpointId) -> bool {
         self.0.controls.lock().contains_key(device)
     }
 

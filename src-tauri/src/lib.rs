@@ -540,6 +540,7 @@ pub fn run() {
             remote_cmd::remote_devices,
             remote_cmd::remote_rename_device,
             remote_cmd::remote_remove_device,
+            remote_cmd::remote_let_device_type,
             remote_cmd::remote_set_device_role,
             remote_device_cmd::remote_host_pair,
             remote_device_cmd::remote_hosts,
