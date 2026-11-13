@@ -17,7 +17,7 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
 - **Pairing** — adding a [Remote device] to a [Host] in person: an expiring QR code on the host,
   a matching [Pairing code] confirmed on both screens. The only way a device is ever trusted; an
   account can't do it. _Avoid_: linking, login.
-- **Pairing code** — the 6-digit code both screens show during [Pairing], derived from the
+- **Pairing code** — the 6-digit code the [Remote device] shows during [Pairing] and the person types into the [Host], derived from the
   encrypted connection so a device in the middle can't make them match.
 - **Paired device** — a [Remote device] the [Host] has stored after [Pairing], with its name,
   [Device key] and role ([Viewer] or [Controller]). Removing it on the host cuts it off at once.

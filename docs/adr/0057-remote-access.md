@@ -33,8 +33,9 @@ freeze test). The full protocol is in
   relay (a [Relay pass] from a BisBig subscription). No "your own relay"
   option for now.
 - **Pairing is in person.** The host shows an expiring QR code; the other
-  device scans it; both show the same short code and the person confirms on
-  both. Only a [Paired device] may open a link. An account (BisBig) only pays
+  device scans it and shows a short [Pairing code]; the person types that
+  code into the host. Only then is the device stored, so a leaked QR used
+  first fails safe. Only a [Paired device] may open a link. An account (BisBig) only pays
   for the relay: it can never add a device or reset access, so a stolen
   account or a breach on our side can't reach anyone's sessions.
 - **Two roles: [Viewer] and [Controller].** Chosen at pairing, changed only on
@@ -66,8 +67,13 @@ freeze test). The full protocol is in
 - **What leaves the host:** screen bytes, session list and status, and
   readable-view entries, only to paired devices over the encrypted link; the
   sealed token and a signed wake-up to the push sender. Never credentials,
-  never the transcript file itself, never a file the person did not open
-  from the remote device.
+  never the transcript file itself. Version 1 has no file messages: a remote
+  device reaches files only by typing in a terminal it controls.
+- **The consent screen says a Viewer sees every session's screen**, including
+  anything secret printed there. Roles are per device, not per session.
+- **Local typing always wins.** Typing at the host takes control back at
+  once; a remote device takes it from the host only after the host has been
+  idle a few seconds or the person lets it.
 
 ## Consequences
 
