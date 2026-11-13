@@ -311,8 +311,22 @@ impl Shared {
 
     /// Attach `stream` as the live client and start its writer thread. The
     /// client starts with a [Skip ahead], so the first thing it gets is the
-    /// current screen and busy state.
+    /// current screen and busy state. `None` when no writer could start: the
+    /// client is then not kept, and the caller closes the connection.
     fn attach(self: &Arc<Self>, stream: &UnixStream) -> Option<std::thread::JoinHandle<()>> {
+        self.attach_with(stream, |write| {
+            std::thread::Builder::new()
+                .name("client-writer".into())
+                .spawn(write)
+        })
+    }
+
+    /// [`Self::attach`], starting the writer with `spawn`.
+    fn attach_with(
+        self: &Arc<Self>,
+        stream: &UnixStream,
+        spawn: impl FnOnce(Box<dyn FnOnce() + Send>) -> std::io::Result<std::thread::JoinHandle<()>>,
+    ) -> Option<std::thread::JoinHandle<()>> {
         let Ok(out) = stream.try_clone() else {
             return None;
         };
@@ -325,14 +339,19 @@ impl Shared {
         });
         let shared = Arc::clone(self);
         // A thread the OS refuses must not panic the daemon (and the session
-        // with it): the client just gets no output, and reconnects.
-        let writer = std::thread::Builder::new()
-            .name("client-writer".into())
-            .spawn(move || shared.write_to_client(id, out))
+        // with it).
+        let Ok(writer) = spawn(Box::new(move || shared.write_to_client(id, out)))
             .map_err(|e| eprintln!("kriyon-ptyd: no writer thread for the client: {e}"))
-            .ok();
+        else {
+            // Nothing would ever write to it: not a client at all.
+            let mut client = self.client.lock();
+            if client.as_ref().is_some_and(|attached| attached.id == id) {
+                *client = None;
+            }
+            return None;
+        };
         self.lease.lock().note_attached(Instant::now());
-        writer
+        Some(writer)
     }
 
     /// Give the client up to `within` to receive what is still queued for it.
@@ -556,7 +575,13 @@ pub fn run(
 
     for conn in listener.incoming() {
         let Ok(mut stream) = conn else { continue };
-        shared.attach(&stream);
+        if shared.attach(&stream).is_none() {
+            // No writer, so no output would ever reach it: close it, so the
+            // app hears the connection end instead of watching a blank pane,
+            // and can connect again.
+            shared.detach(&stream);
+            continue;
+        }
         let shutdown = serve_client(&mut stream, &engine, &shared);
         shared.detach(&stream);
         if shutdown || engine.child_has_exited() {
@@ -1250,6 +1275,23 @@ mod tests {
             std::thread::sleep(Duration::from_millis(10));
         }
         false
+    }
+
+    #[test]
+    fn a_client_whose_writer_thread_cannot_start_is_not_kept() {
+        // Kept, it would be a blank pane nothing ever writes to, and a shell
+        // that exits would wait out the whole final-send window for it.
+        let shared = std::sync::Arc::new(shared());
+        let (daemon_end, _client_end) = UnixStream::pair().expect("socket pair");
+        let writer = shared.attach_with(&daemon_end, |_| Err(io::Error::other("no threads left")));
+        assert!(writer.is_none());
+        assert!(
+            shared.client.lock().is_none(),
+            "no client to queue output for"
+        );
+        let start = Instant::now();
+        shared.finish_sending(Duration::from_secs(5));
+        assert!(start.elapsed() < Duration::from_secs(1));
     }
 
     #[test]
