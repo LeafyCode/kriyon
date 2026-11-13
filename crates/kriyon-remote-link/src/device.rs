@@ -160,6 +160,11 @@ impl DeviceLink {
         Ok((MessageWriter::new(send), MessageReader::new(recv)))
     }
 
+    /// Hang up: the host stopped answering, or the person left.
+    pub fn close(&self) {
+        self.connection.close(VarInt::from_u32(0), b"");
+    }
+
     /// Wait until the connection closes, and say why if the host said.
     pub async fn closed(&self) -> Option<CloseCode> {
         crate::endpoint::close_code(&self.connection.closed().await)

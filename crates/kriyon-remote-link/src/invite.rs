@@ -30,15 +30,27 @@ pub fn invite(host: &Host, secret: PairingSecret) -> PairingInvite {
 /// [`LinkError::Refused`] with `OutOfRange` for an invite whose id or
 /// addresses don't read.
 pub fn host_addr(invite: &PairingInvite) -> Result<EndpointAddr, LinkError> {
+    endpoint_addr(&invite.host_id, &invite.addrs, invite.relay_url.as_deref())
+}
+
+/// A host's address from what a device keeps of it: its id, the addresses
+/// (`ip:port`) and the relay it gave at pairing.
+///
+/// # Errors
+/// [`LinkError::Refused`] with `OutOfRange` for parts that don't read.
+pub fn endpoint_addr(
+    host_id: &[u8; 32],
+    addrs: &[String],
+    relay_url: Option<&str>,
+) -> Result<EndpointAddr, LinkError> {
     let unreadable = || LinkError::Refused(RefuseReason::OutOfRange);
-    let id = PublicKey::from_bytes(&invite.host_id).map_err(|_| unreadable())?;
-    let mut addrs = invite
-        .addrs
+    let id = PublicKey::from_bytes(host_id).map_err(|_| unreadable())?;
+    let mut addrs = addrs
         .iter()
         .map(|addr| addr.parse::<SocketAddr>().map(TransportAddr::Ip))
         .collect::<Result<Vec<_>, _>>()
         .map_err(|_| unreadable())?;
-    if let Some(relay) = &invite.relay_url {
+    if let Some(relay) = relay_url {
         addrs.push(TransportAddr::Relay(
             relay.parse::<RelayUrl>().map_err(|_| unreadable())?,
         ));
