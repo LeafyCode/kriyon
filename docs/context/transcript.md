@@ -52,8 +52,9 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
   (that's the user's message).
 - **Dialog generation** (`DialogWatch`, `DialogState`, `Frame::Dialog`) — a number the [PTY
   daemon] moves each time a [CLI dialog] appears, closes, or changes while it shows (another
-  option selected, another question), read off its own screen after every output read. Starts
-  from the daemon's start time, so it never repeats across a restart of the same session.
+  option selected, another question), read off its own screen at most every 50 ms while output
+  comes and once after it stops. Starts from a random number, so it never repeats across a
+  restart of the same session.
   Sent in order with the output, so whoever numbers the screen updates knows which update a
   dialog change came after; the remote host refuses input from a device that had not seen it.
   _Avoid_: dialog version, dialog id.

@@ -264,7 +264,9 @@ impl DaemonClient {
 
     /// The [CLI dialog] on the daemon's screen and its [Dialog generation], as
     /// the daemon last said; `None` before it said anything (an older daemon
-    /// never does).
+    /// never does). Stored by the reader thread in the order the frames came,
+    /// the order `on_read` sees output in, not the webview's gated delivery:
+    /// whoever numbers screen updates should do it at `on_read`.
     #[must_use]
     pub fn dialog(&self) -> Option<DialogState> {
         *self.dialog.lock()

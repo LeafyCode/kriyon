@@ -96,34 +96,44 @@ struct AttachedClient {
     history_requests: u32,
 }
 
+/// The text of one screen row, as the desktop's terminal reads it: the second
+/// half of a wide character is not a cell of its own.
+fn row_text(screen: &vt100::Screen, row: u16) -> String {
+    let (_, cols) = screen.size();
+    (0..cols)
+        .filter_map(|col| screen.cell(row, col))
+        .filter(|cell| !cell.is_wide_continuation())
+        .map(|cell| {
+            if cell.has_contents() {
+                cell.contents()
+            } else {
+                " "
+            }
+        })
+        .collect()
+}
+
+/// How many rows, ending at its key hint, a dialog's fingerprint covers when
+/// no pane rule marks where it starts.
+const DIALOG_ROWS: u16 = 15;
+
 /// Whether `screen` shows a [CLI dialog], and a fingerprint of it while it does.
 ///
-/// Runs after every output read with the client lock held, so it reads only
-/// the rows that can decide (see [`dialog_on_screen`]): those whose first cell
-/// is the pane rule's glyph, found one cell per row, and the last few
-/// non-blank rows. The whole screen is hashed only while a dialog shows.
+/// Runs with the client lock held, so it reads only the rows that can decide
+/// (see [`dialog_on_screen`]): those whose first cell is the pane rule's glyph,
+/// found one cell per row, and the last few non-blank rows. While a dialog
+/// shows, the fingerprint covers only the dialog (from its pane rule, or the
+/// [`DIALOG_ROWS`] rows ending at its hint), colours included, so a timer above
+/// it doesn't count as a change and a selection shown only by colour does.
 fn dialog_look(screen: &vt100::Screen) -> (bool, u64) {
     let (rows, cols) = screen.size();
-    let row_text = |row: u16| -> String {
-        (0..cols)
-            .filter_map(|col| screen.cell(row, col))
-            .map(|cell| {
-                if cell.has_contents() {
-                    cell.contents()
-                } else {
-                    " "
-                }
-            })
-            .collect()
-    };
     let rule = RULE_GLYPH.to_string();
-    let mut deciding: Vec<String> = (0..rows)
+    let rule_rows: Vec<u16> = (0..rows)
         .filter(|row| {
             screen
                 .cell(*row, 0)
                 .is_some_and(|cell| cell.contents() == rule)
         })
-        .map(row_text)
         .collect();
     let filled = |row: &u16| {
         (0..cols).any(|col| {
@@ -132,26 +142,48 @@ fn dialog_look(screen: &vt100::Screen) -> (bool, u64) {
                 .is_some_and(|cell| !cell.contents().trim().is_empty())
         })
     };
-    let mut bottom: Vec<String> = (0..rows)
-        .rev()
-        .filter(filled)
-        .take(HINT_ROWS)
-        .map(row_text)
-        .collect();
+    let mut bottom: Vec<u16> = (0..rows).rev().filter(filled).take(HINT_ROWS).collect();
     bottom.reverse();
-    deciding.extend(bottom);
+    let deciding: Vec<String> = rule_rows
+        .iter()
+        .chain(&bottom)
+        .map(|row| row_text(screen, *row))
+        .collect();
     if !dialog_on_screen(&deciding) {
         return (false, 0);
     }
+    let last = bottom.last().copied().unwrap_or(0);
+    let first = rule_rows
+        .first()
+        .copied()
+        .unwrap_or_else(|| last.saturating_sub(DIALOG_ROWS - 1));
     let mut hasher = std::hash::DefaultHasher::new();
-    std::hash::Hash::hash(&screen.contents(), &mut hasher);
+    for row in screen
+        .rows_formatted(0, cols)
+        .skip(usize::from(first))
+        .take(usize::from(last.max(first) - first) + 1)
+    {
+        std::hash::Hash::hash(&row, &mut hasher);
+    }
     (true, std::hash::Hasher::finish(&hasher))
 }
 
-/// The daemon's [`DialogWatch`] and when it last looked at the screen.
+/// Where a daemon's [Dialog generation]s start: a random number, so a restart
+/// of the same session never repeats one (a clock can be set back). `std`'s
+/// hasher keys are drawn from the OS's randomness once per process.
+fn dialog_generation_base() -> u64 {
+    use std::hash::{BuildHasher as _, Hasher as _};
+    std::collections::hash_map::RandomState::new()
+        .build_hasher()
+        .finish()
+}
+
+/// The daemon's [`DialogWatch`], when it last looked at the screen, and
+/// whether output came since.
 struct DialogSight {
     watch: DialogWatch,
     last_look: Option<Instant>,
+    pending: bool,
 }
 
 impl DialogSight {
@@ -159,20 +191,27 @@ impl DialogSight {
         Self {
             watch: DialogWatch::new(base),
             last_look: None,
+            pending: false,
         }
     }
 
-    /// After a read of `read_len` bytes: look at `screen` if one is due (see
-    /// [`look_due`]), and say the new state if the generation moved.
-    fn look(&mut self, read_len: usize, screen: &vt100::Screen) -> Option<DialogState> {
-        let now = Instant::now();
-        let since = self
-            .last_look
-            .map(|last| now.saturating_duration_since(last));
-        if !look_due(read_len, crate::pty::READ_BUF_LEN, since) {
-            return None;
+    /// After output: look at `screen` if a look is due (see [`look_due`]),
+    /// else leave it pending for [`Shared::look_if_pending`]. The new state
+    /// when the generation moved.
+    fn after_output(&mut self, screen: &vt100::Screen) -> Option<DialogState> {
+        let since = self.last_look.map(|last| last.elapsed());
+        if look_due(since) {
+            self.look(screen)
+        } else {
+            self.pending = true;
+            None
         }
-        self.last_look = Some(now);
+    }
+
+    /// Look at `screen` now. The new state when the generation moved.
+    fn look(&mut self, screen: &vt100::Screen) -> Option<DialogState> {
+        self.last_look = Some(Instant::now());
+        self.pending = false;
         let (open, fingerprint) = dialog_look(screen);
         self.watch.observe(open, fingerprint)
     }
@@ -185,16 +224,6 @@ fn dialog_frame(state: DialogState) -> Vec<u8> {
         generation: state.generation,
     }
     .encode()
-}
-
-/// Where a daemon's [Dialog generation]s start: its start time, so a restart
-/// of the same session never repeats one.
-fn dialog_generation_base() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |since| {
-            u64::try_from(since.as_nanos()).unwrap_or(u64::MAX)
-        })
 }
 
 /// State shared between the PTY reader thread (which produces output), the
@@ -240,7 +269,7 @@ impl Shared {
         let moved = {
             let mut emulator = self.emulator.lock();
             emulator.process(bytes);
-            self.dialog.lock().look(bytes.len(), emulator.screen())
+            self.dialog.lock().after_output(emulator.screen())
         };
         self.history.lock().push(bytes);
         let mut frames = output_frames(bytes);
@@ -250,6 +279,26 @@ impl Shared {
             frames.extend(dialog_frame(state));
         }
         self.queue_frame(&mut client, frames);
+    }
+
+    /// Look at the screen if output came since the last look and one is due,
+    /// and queue the state if it moved. The trailing look: a dialog drawn
+    /// just after a look is otherwise not seen until more output comes, and
+    /// the CLI is waiting for keys, so none will.
+    fn look_if_pending(&self) {
+        let mut client = self.client.lock();
+        let moved = {
+            let emulator = self.emulator.lock();
+            let mut dialog = self.dialog.lock();
+            let due = look_due(dialog.last_look.map(|last| last.elapsed()));
+            if !(dialog.pending && due) {
+                return;
+            }
+            dialog.look(emulator.screen())
+        };
+        if let Some(state) = moved {
+            self.queue_frame(&mut client, dialog_frame(state));
+        }
     }
 
     /// Queue encoded frames for the live client, if any, and wake its writer.
@@ -362,9 +411,14 @@ impl Shared {
     /// The current screen snapshot (the escape codes that reconstruct the
     /// contents, colours, cursor and modes) and busy state, as frames.
     fn screen_frames(&self) -> Vec<u8> {
-        let mut bytes = output_frames(&screen_snapshot(&self.emulator.lock()));
+        let emulator = self.emulator.lock();
+        let mut bytes = output_frames(&screen_snapshot(&emulator));
         bytes.extend(Frame::Busy(self.busy.load(Ordering::Relaxed)).encode());
-        bytes.extend(dialog_frame(self.dialog.lock().watch.state()));
+        // Looked at now, with the screen it goes with: a look left pending
+        // would pair this screen with an older state.
+        let mut dialog = self.dialog.lock();
+        dialog.look(emulator.screen());
+        bytes.extend(dialog_frame(dialog.watch.state()));
         bytes
     }
 
@@ -472,6 +526,20 @@ pub fn run(
         busy: AtomicBool::new(false),
         lease: Mutex::new(DetachedLease::new(detached_ttl, Instant::now())),
     });
+
+    // The trailing look at the screen for a [CLI dialog] (see
+    // `look_if_pending`). Holds the state weakly, so it ends with the daemon.
+    let look_shared = Arc::downgrade(&shared);
+    let _ = std::thread::Builder::new()
+        .name("dialog-look".into())
+        .spawn(move || loop {
+            std::thread::sleep(kriyon_core::cli_dialog::LOOK_EVERY);
+            match look_shared.upgrade() {
+                Some(shared) => shared.look_if_pending(),
+                None => return,
+            }
+        })
+        .map_err(|e| eprintln!("kriyon-ptyd: no dialog-look thread: {e}"));
 
     let out_shared = Arc::clone(&shared);
     let engine = PtyEngine::spawn(id, spec, move |bytes| out_shared.on_output(&bytes))
@@ -670,8 +738,8 @@ fn serve_client(stream: &mut UnixStream, engine: &Arc<PtyEngine>, shared: &Arc<S
 #[cfg(test)]
 mod tests {
     use super::{
-        deliver_stdin, dialog_look, screen_snapshot, AttachedClient, Shared, CLIENT_QUEUE_LIMIT,
-        ENTER_ALTERNATE_SCREEN, LEAVE_ALTERNATE_SCREEN, OUTPUT_HISTORY_LIMIT,
+        deliver_stdin, dialog_look, row_text, screen_snapshot, AttachedClient, Shared,
+        CLIENT_QUEUE_LIMIT, ENTER_ALTERNATE_SCREEN, LEAVE_ALTERNATE_SCREEN, OUTPUT_HISTORY_LIMIT,
     };
     use kriyon_core::lease::DetachedLease;
     use kriyon_core::output_history::OutputHistory;
@@ -879,14 +947,7 @@ mod tests {
     fn a_new_dialog_on_screen_queues_its_generation_after_the_output() {
         let shared = with_client(SkipAheadQueue::new(CLIENT_QUEUE_LIMIT));
         shared.on_output(b"Do you want to proceed?\r\n 1. Yes\r\n Esc to cancel");
-        let mut decoder = FrameDecoder::new();
-        while let Next::Frame(bytes) = shared.client.lock().as_mut().expect("client").queue.pop() {
-            decoder.push(&bytes);
-        }
-        let mut frames = Vec::new();
-        while let Ok(Some(frame)) = decoder.next_frame() {
-            frames.push(frame);
-        }
+        let frames = queued(&shared);
         let last = frames.last().expect("frames");
         assert!(
             matches!(last, Frame::Dialog { open: true, .. }),
@@ -1015,37 +1076,87 @@ mod tests {
         frames
     }
 
-    /// One full PTY read that ends showing `text`: filler first, then a
-    /// clear, so the filler never scrolls `text` away.
-    fn full_read(text: &str) -> Vec<u8> {
-        let tail = format!("\x1b[2J\x1b[H{text}");
-        let mut bytes = vec![b'.'; crate::pty::READ_BUF_LEN - tail.len()];
-        bytes.extend_from_slice(tail.as_bytes());
-        bytes
-    }
-
     #[test]
-    fn a_flood_of_full_reads_is_looked_at_once_per_interval() {
+    fn a_dialog_drawn_between_looks_is_seen_once_output_stops() {
+        // The read that draws it can come straight after a look; the CLI then
+        // waits, so no more output will bring another look.
         let shared = with_client(SkipAheadQueue::new(CLIENT_QUEUE_LIMIT));
-        let dialog = |n: u8| full_read(&format!("{n}\r\nEsc to cancel"));
-        shared.on_output(&dialog(1));
-        assert!(queued(&shared)
-            .iter()
-            .any(|f| matches!(f, Frame::Dialog { open: true, .. })));
-        shared.on_output(&dialog(2));
+        shared.on_output(b"working");
+        shared.on_output(b"\r\nDo you want to proceed?\r\n Esc to cancel");
         assert!(
             !queued(&shared)
                 .iter()
-                .any(|f| matches!(f, Frame::Dialog { .. })),
-            "a second full read straight after is not looked at"
+                .any(|f| matches!(f, Frame::Dialog { open: true, .. })),
+            "too soon after the last look"
         );
-        shared.on_output(b"\x1b[H3");
+        std::thread::sleep(kriyon_core::cli_dialog::LOOK_EVERY);
+        shared.look_if_pending();
+        assert!(queued(&shared)
+            .iter()
+            .any(|f| matches!(f, Frame::Dialog { open: true, .. })));
+        shared.look_if_pending();
+        assert!(queued(&shared).is_empty(), "nothing new to look at");
+    }
+
+    #[test]
+    fn an_attaching_client_gets_the_dialog_its_screen_shows() {
+        let shared = with_client(SkipAheadQueue::new(CLIENT_QUEUE_LIMIT));
+        shared.on_output(b"working");
+        shared.on_output(b"\r\nDo you want to proceed?\r\n Esc to cancel");
+        let mut decoder = FrameDecoder::new();
+        decoder.push(&shared.screen_frames());
+        let mut frames = Vec::new();
+        while let Ok(Some(frame)) = decoder.next_frame() {
+            frames.push(frame);
+        }
         assert!(
-            queued(&shared)
+            frames
                 .iter()
                 .any(|f| matches!(f, Frame::Dialog { open: true, .. })),
-            "the short read that ends the burst is looked at"
+            "the screen and the dialog state go together: {frames:?}"
         );
+    }
+
+    /// A screen with `top` on its first row and a question dialog at the
+    /// bottom, option `selected` marked by reverse video only.
+    fn dialog_under(top: &str, selected: usize) -> vt100::Parser {
+        let mut parser = vt100::Parser::new(24, 80, 0);
+        let mut bytes = format!("{top}\x1b[18;1HPick one\r\n");
+        for (i, option) in ["Red", "Blue"].iter().enumerate() {
+            if i == selected {
+                bytes.push_str("\x1b[7m");
+                bytes.push_str(option);
+                bytes.push_str("\x1b[0m\r\n");
+            } else {
+                bytes.push_str(option);
+                bytes.push_str("\r\n");
+            }
+        }
+        bytes.push_str("Enter to select \u{b7} Esc to cancel");
+        parser.process(bytes.as_bytes());
+        parser
+    }
+
+    #[test]
+    fn a_dialogs_fingerprint_ignores_the_screen_above_it() {
+        let (_, a) = dialog_look(dialog_under("\u{273b} Working 1s", 0).screen());
+        let (_, b) = dialog_look(dialog_under("\u{273b} Working 2s", 0).screen());
+        assert_eq!(a, b, "a timer above the dialog is not a change to it");
+    }
+
+    #[test]
+    fn a_selection_shown_only_by_colour_changes_the_fingerprint() {
+        let (open, a) = dialog_look(dialog_under("", 0).screen());
+        let (_, b) = dialog_look(dialog_under("", 1).screen());
+        assert!(open);
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn a_wide_character_reads_as_itself() {
+        let mut parser = vt100::Parser::new(5, 20, 0);
+        parser.process("\u{65e5}\u{672c}x".as_bytes());
+        assert_eq!(row_text(parser.screen(), 0).trim_end(), "\u{65e5}\u{672c}x");
     }
 
     #[test]

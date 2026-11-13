@@ -72,19 +72,13 @@ pub fn dialog_showing(on_screen: bool, ask: Option<&PendingAsk>) -> bool {
 /// How long a stream of full reads may go between looks at the screen.
 pub const LOOK_EVERY: std::time::Duration = std::time::Duration::from_millis(50);
 
-/// Whether the screen is due a look for a [CLI dialog] after a read of
-/// `read_len` bytes, when a full read is `full_read` and the last look was
-/// `since_last` ago (`None`: never). A short read ends a burst of output, and
-/// a dialog is drawn just before the CLI waits, so that read is always looked
-/// at; a stream of full reads (a flood) is looked at every [`LOOK_EVERY`], so
-/// for that long a change mid-flood goes unseen.
+/// Whether the screen is due a look for a [CLI dialog], the last look having
+/// been `since_last` ago (`None`: never). At most one look per [`LOOK_EVERY`],
+/// whatever the size of the reads; the caller looks again once output stops,
+/// so a dialog drawn between looks is still seen, at most that late.
 #[must_use]
-pub fn look_due(
-    read_len: usize,
-    full_read: usize,
-    since_last: Option<std::time::Duration>,
-) -> bool {
-    read_len < full_read || since_last.is_none_or(|since| since >= LOOK_EVERY)
+pub fn look_due(since_last: Option<std::time::Duration>) -> bool {
+    since_last.is_none_or(|since| since >= LOOK_EVERY)
 }
 
 /// What a [`DialogWatch`] says after a look at the screen.
@@ -226,18 +220,9 @@ mod tests {
     }
 
     #[test]
-    fn a_short_read_ends_a_burst_so_the_screen_is_looked_at() {
-        // A dialog is drawn, then the CLI waits: the read that draws it is
-        // the burst's last, and short.
-        let just = Some(std::time::Duration::ZERO);
-        assert!(look_due(300, 8192, just));
-    }
-
-    #[test]
-    fn a_flood_of_full_reads_is_looked_at_once_per_interval() {
-        let full = 8192;
-        assert!(look_due(full, full, None), "the first read is looked at");
-        assert!(!look_due(full, full, Some(LOOK_EVERY / 2)));
-        assert!(look_due(full, full, Some(LOOK_EVERY)));
+    fn the_screen_is_looked_at_once_per_interval() {
+        assert!(look_due(None), "the first read is looked at");
+        assert!(!look_due(Some(LOOK_EVERY / 2)));
+        assert!(look_due(Some(LOOK_EVERY)));
     }
 }
