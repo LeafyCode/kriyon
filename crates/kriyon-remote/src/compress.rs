@@ -39,24 +39,93 @@ pub enum CompressError {
     PartsMismatch,
 }
 
+/// One session's compressor, kept for the session's life so each update
+/// doesn't build a zstd context. Its frames are still independent.
+pub struct Packer {
+    inner: zstd::bulk::Compressor<'static>,
+}
+
+impl Packer {
+    /// # Errors
+    /// [`CompressError::Malformed`] if zstd can't make a context.
+    pub fn new() -> Result<Self, CompressError> {
+        use zstd::zstd_safe::CParameter;
+        let mut inner = zstd::bulk::Compressor::new(LEVEL).map_err(|_| CompressError::Malformed)?;
+        inner
+            .set_parameter(CParameter::ContentSizeFlag(true))
+            .map_err(|_| CompressError::Malformed)?;
+        Ok(Self { inner })
+    }
+
+    /// Compress `bytes` into one frame with its content size.
+    ///
+    /// # Errors
+    /// [`CompressError::TooBig`] over [`MAX_DECOMPRESSED`].
+    pub fn pack(&mut self, bytes: &[u8]) -> Result<Vec<u8>, CompressError> {
+        if bytes.len() > MAX_DECOMPRESSED {
+            return Err(CompressError::TooBig);
+        }
+        self.inner
+            .compress(bytes)
+            .map_err(|_| CompressError::Malformed)
+    }
+}
+
+/// A device's decompressor for one session, kept like [`Packer`].
+pub struct Unpacker {
+    inner: zstd::bulk::Decompressor<'static>,
+}
+
+impl Unpacker {
+    /// # Errors
+    /// [`CompressError::Malformed`] if zstd can't make a context.
+    pub fn new() -> Result<Self, CompressError> {
+        use zstd::zstd_safe::DParameter;
+        let mut inner = zstd::bulk::Decompressor::new().map_err(|_| CompressError::Malformed)?;
+        inner
+            .set_parameter(DParameter::WindowLogMax(WINDOW_LOG_MAX))
+            .map_err(|_| CompressError::Malformed)?;
+        Ok(Self { inner })
+    }
+
+    /// Decompress one frame, refusing anything a decoder shouldn't trust.
+    ///
+    /// # Errors
+    /// A [`CompressError`]; treat it as a protocol error and resync.
+    pub fn unpack(&mut self, frame: &[u8]) -> Result<Vec<u8>, CompressError> {
+        use zstd::zstd_safe;
+        let stated = zstd_safe::get_frame_content_size(frame)
+            .map_err(|_| CompressError::Malformed)?
+            .ok_or(CompressError::NoContentSize)?;
+        let size = usize::try_from(stated).map_err(|_| CompressError::TooBig)?;
+        if size > MAX_DECOMPRESSED {
+            return Err(CompressError::TooBig);
+        }
+        // Exactly one frame: a second one would go past the stated size.
+        let first_frame =
+            zstd_safe::find_frame_compressed_size(frame).map_err(|_| CompressError::Malformed)?;
+        if first_frame != frame.len() {
+            return Err(CompressError::Malformed);
+        }
+        let bytes = self
+            .inner
+            .decompress(frame, size)
+            .map_err(|_| CompressError::Malformed)?;
+        if bytes.len() == size {
+            Ok(bytes)
+        } else {
+            Err(CompressError::Malformed)
+        }
+    }
+}
+
 /// Compress `bytes` into one frame with its content size.
 ///
 /// # Errors
 /// [`CompressError::TooBig`] over [`MAX_DECOMPRESSED`], which no decoder would
 /// take.
 pub fn compress(bytes: &[u8]) -> Result<Vec<u8>, CompressError> {
-    use zstd::zstd_safe::CParameter;
-    if bytes.len() > MAX_DECOMPRESSED {
-        return Err(CompressError::TooBig);
-    }
-    let mut compressor =
-        zstd::bulk::Compressor::new(LEVEL).map_err(|_| CompressError::Malformed)?;
-    compressor
-        .set_parameter(CParameter::ContentSizeFlag(true))
-        .map_err(|_| CompressError::Malformed)?;
-    compressor
-        .compress(bytes)
-        .map_err(|_| CompressError::Malformed)
+    Packer::new()?.pack(bytes)
 }
 
 /// Decompress one frame, refusing anything a decoder shouldn't trust.
@@ -64,32 +133,7 @@ pub fn compress(bytes: &[u8]) -> Result<Vec<u8>, CompressError> {
 /// # Errors
 /// A [`CompressError`]; treat it as a protocol error and resync.
 pub fn decompress(frame: &[u8]) -> Result<Vec<u8>, CompressError> {
-    use zstd::zstd_safe::{self, DParameter};
-    let stated = zstd_safe::get_frame_content_size(frame)
-        .map_err(|_| CompressError::Malformed)?
-        .ok_or(CompressError::NoContentSize)?;
-    let size = usize::try_from(stated).map_err(|_| CompressError::TooBig)?;
-    if size > MAX_DECOMPRESSED {
-        return Err(CompressError::TooBig);
-    }
-    // Exactly one frame: a second one would go past the stated size.
-    let first_frame =
-        zstd_safe::find_frame_compressed_size(frame).map_err(|_| CompressError::Malformed)?;
-    if first_frame != frame.len() {
-        return Err(CompressError::Malformed);
-    }
-    let mut decompressor = zstd::bulk::Decompressor::new().map_err(|_| CompressError::Malformed)?;
-    decompressor
-        .set_parameter(DParameter::WindowLogMax(WINDOW_LOG_MAX))
-        .map_err(|_| CompressError::Malformed)?;
-    let bytes = decompressor
-        .decompress(frame, size)
-        .map_err(|_| CompressError::Malformed)?;
-    if bytes.len() == size {
-        Ok(bytes)
-    } else {
-        Err(CompressError::Malformed)
-    }
+    Unpacker::new()?.unpack(frame)
 }
 
 /// The fields every snapshot message carries.
@@ -369,5 +413,24 @@ mod tests {
             }
         }
         assert_eq!(result, Err(CompressError::TooBig));
+    }
+
+    #[test]
+    fn one_packer_and_unpacker_serve_a_whole_stream_of_independent_frames() {
+        let mut packer = Packer::new().expect("packer");
+        let mut unpacker = Unpacker::new().expect("unpacker");
+        let frames: Vec<Vec<u8>> = (1..5)
+            .map(|n| packer.pack(&screen(n * 1000)).expect("packs"))
+            .collect();
+        // Each frame stands alone: read out of order, or by a fresh decoder.
+        assert_eq!(decompress(&frames[2]), Ok(screen(3000)));
+        for (n, frame) in frames.iter().enumerate().rev() {
+            assert_eq!(unpacker.unpack(frame), Ok(screen((n + 1) * 1000)));
+        }
+        assert_eq!(
+            unpacker.unpack(&[0; 3]),
+            Err(CompressError::Malformed),
+            "a bad frame is still refused"
+        );
     }
 }

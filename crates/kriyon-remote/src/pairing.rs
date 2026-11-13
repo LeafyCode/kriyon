@@ -90,19 +90,13 @@ pub fn pairing_code(exported: &[u8; EXPORTED_LEN]) -> String {
 }
 
 /// Check the name a device gives itself: not empty, at most
-/// [`MAX_DEVICE_NAME`] bytes, no control characters (it is shown on the host
-/// as "named by the device", and must not be able to fake more text).
+/// [`MAX_DEVICE_NAME`] bytes, nothing that fakes or hides text (it is shown on
+/// the host as "named by the device"). See [`crate::text::check_shown_text`].
 ///
 /// # Errors
 /// [`RefuseReason::OutOfRange`].
 pub fn check_device_name(name: &str) -> Result<(), RefuseReason> {
-    let plain =
-        !name.is_empty() && name.len() <= MAX_DEVICE_NAME && !name.chars().any(char::is_control);
-    if plain {
-        Ok(())
-    } else {
-        Err(RefuseReason::OutOfRange)
-    }
+    crate::text::check_shown_text(name, MAX_DEVICE_NAME)
 }
 
 #[cfg(test)]
@@ -149,7 +143,17 @@ mod tests {
     fn a_device_name_must_be_short_plain_text() {
         assert_eq!(check_device_name("Pubudu's iPhone"), Ok(()));
         assert_eq!(check_device_name(&"é".repeat(32)), Ok(()), "64 bytes");
-        for bad in ["", &"a".repeat(65), "phone\nAllow everything", "a\u{1b}[2J"] {
+        for bad in [
+            "",
+            &"a".repeat(65),
+            "phone\nAllow everything",
+            "a\u{1b}[2J",
+            "iPhone\u{2028}Verified by Kriyon",
+            "iPhone\u{202e}gnorw",
+            "i\u{200b}Phone",
+            "\u{feff}iPhone",
+            "iPhone\u{2066}x",
+        ] {
             assert_eq!(
                 check_device_name(bad),
                 Err(RefuseReason::OutOfRange),

@@ -11,3 +11,4 @@ pub mod message;
 pub mod pairing;
 pub mod queue;
 pub mod screen;
+pub mod text;

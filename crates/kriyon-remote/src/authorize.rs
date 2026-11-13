@@ -21,6 +21,9 @@ pub type Verdict = Result<(), RefuseReason>;
 /// The narrowest a remote device may make a session (spec §7).
 pub const MIN_REMOTE_COLS: u16 = 80;
 
+/// The longest title a remote start may give, in bytes.
+pub const MAX_TITLE: usize = 200;
+
 /// The longest sealed push token the host keeps.
 pub const MAX_SEALED_PUSH_TOKEN: usize = 2 * 1024;
 
@@ -135,10 +138,12 @@ pub fn authorize(
     host: &impl HostState,
     now: Instant,
 ) -> Verdict {
+    // Paired first, whatever the message: a removed device must learn it was
+    // removed, so it stops retrying.
+    let role = host.role(device).ok_or(RefuseReason::NotPaired)?;
     let Decoded::Message(message) = message else {
         return Err(RefuseReason::UnknownMessage);
     };
-    let role = host.role(device).ok_or(RefuseReason::NotPaired)?;
     let controller = || {
         if role == Role::Controller {
             Ok(())
@@ -174,27 +179,35 @@ pub fn authorize(
                 Err(RefuseReason::NotInControl)
             }
         }
-        (FromDevice::Input { .. } | FromDevice::Compose { .. }, Stream::Session(id)) => {
-            let write = PendingWrite::of(message).ok_or(RefuseReason::NotAllowed)?;
-            recheck_at_write(device, id, &write, host)
-        }
-        (FromDevice::Resize { cols, rows, .. }, Stream::Session(id)) => {
-            let write = PendingWrite::of(message).ok_or(RefuseReason::NotAllowed)?;
+        (
+            FromDevice::Input { .. } | FromDevice::Compose { .. } | FromDevice::Resize { .. },
+            Stream::Session(id),
+        ) => {
+            // Always a write in this arm; refusing otherwise fails closed.
+            let Some(write) = PendingWrite::of(message) else {
+                return Err(RefuseReason::NotAllowed);
+            };
             recheck_at_write(device, id, &write, host)?;
-            if *cols < MIN_REMOTE_COLS || check_screen_size(*cols, *rows).is_err() {
-                return Err(RefuseReason::OutOfRange);
+            if let FromDevice::Resize { cols, rows, .. } = *message {
+                if cols < MIN_REMOTE_COLS || check_screen_size(cols, rows).is_err() {
+                    return Err(RefuseReason::OutOfRange);
+                }
             }
             Ok(())
         }
         (
             FromDevice::StartSession {
                 project_id,
+                title,
                 worktree,
                 ..
             },
             Stream::Control,
         ) => {
             controller()?;
+            if let Some(title) = title {
+                crate::text::check_shown_text(title, MAX_TITLE)?;
+            }
             // Worktree setup runs scripts, so a remote start never asks for it.
             if *worktree {
                 return Err(RefuseReason::NotAllowed);
@@ -205,6 +218,8 @@ pub fn authorize(
                 ProjectFolder::NoSuchProject => Err(RefuseReason::NoSuchProject),
             }
         }
+        // The codec already refuses a PushToken message over 2 KiB; this is
+        // the same bound on the token itself, so the check doesn't rely on it.
         (FromDevice::PushToken { sealed }, Stream::Control) => {
             if sealed.len() > MAX_SEALED_PUSH_TOKEN {
                 return Err(RefuseReason::OutOfRange);
@@ -395,6 +410,16 @@ mod tests {
                 Err(RefuseReason::NotPaired)
             );
         }
+    }
+
+    #[test]
+    fn an_unpaired_device_is_told_so_even_for_an_unknown_message() {
+        let (h, now) = host();
+        let unknown = Decoded::Unknown { tag: 99 };
+        assert_eq!(
+            authorize(&STRANGER, Stream::Control, &unknown, &h, now),
+            Err(RefuseReason::NotPaired)
+        );
     }
 
     #[test]
@@ -620,6 +645,33 @@ mod tests {
             check(&h, PHONE, Stream::Control, start(false)),
             Err(RefuseReason::NoSuchProject)
         );
+    }
+
+    #[test]
+    fn a_start_title_must_be_short_plain_text() {
+        let (h, _) = host();
+        let titled = |title: &str| FromDevice::StartSession {
+            request_id: [3; 16],
+            project_id: "p".into(),
+            title: Some(title.into()),
+            worktree: false,
+        };
+        assert_eq!(
+            check(&h, PHONE, Stream::Control, titled("Fix the login bug")),
+            Ok(())
+        );
+        for bad in [
+            "",
+            "x\u{1b}]0;evil\u{7}",
+            "two\nlines",
+            &"a".repeat(MAX_TITLE + 1),
+        ] {
+            assert_eq!(
+                check(&h, PHONE, Stream::Control, titled(bad)),
+                Err(RefuseReason::OutOfRange),
+                "{bad:?}"
+            );
+        }
     }
 
     #[test]

@@ -11,6 +11,7 @@
 
 use std::collections::VecDeque;
 
+use kriyon_core::skip_ahead::FRAME_UPKEEP;
 pub use kriyon_core::skip_ahead::{Next, SkipAheadQueue as SessionQueue};
 
 /// The most a device's session queue holds: room for two of the largest
@@ -19,10 +20,6 @@ pub const SESSION_QUEUE_LIMIT: usize = 2 * 1024 * 1024;
 
 /// The most a device's control queue holds before the connection is closed.
 pub const CONTROL_QUEUE_LIMIT: usize = 256 * 1024;
-
-/// What holding one message costs beyond its bytes, as in the session queue:
-/// a flood of tiny messages can't hold many times the limit.
-const MESSAGE_UPKEEP: usize = 64;
 
 /// The control queue is full: the device stopped reading. Close the
 /// connection.
@@ -52,7 +49,7 @@ impl ControlQueue {
     /// # Errors
     /// [`ControlQueueFull`] when it would pass the limit; nothing is queued.
     pub fn push(&mut self, message: Vec<u8>) -> Result<(), ControlQueueFull> {
-        let cost = message.len().saturating_add(MESSAGE_UPKEEP);
+        let cost = message.len().saturating_add(FRAME_UPKEEP);
         if self.bytes.saturating_add(cost) > self.limit {
             return Err(ControlQueueFull);
         }
@@ -64,7 +61,7 @@ impl ControlQueue {
     /// The next message to send, oldest first.
     pub fn pop(&mut self) -> Option<Vec<u8>> {
         let message = self.messages.pop_front()?;
-        self.bytes -= message.len() + MESSAGE_UPKEEP;
+        self.bytes -= message.len() + FRAME_UPKEEP;
         Some(message)
     }
 }

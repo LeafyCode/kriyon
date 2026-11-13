@@ -15,7 +15,7 @@ use std::collections::VecDeque;
 /// What holding one frame costs beyond its bytes: its own allocation and its
 /// slot in the queue. Counted against the limit, so a stream of tiny frames
 /// (a spinner, echoed keystrokes) can't hold many times the limit in memory.
-const FRAME_UPKEEP: usize = 64;
+pub const FRAME_UPKEEP: usize = 64;
 
 /// What the writer should send the client next.
 #[derive(Debug, PartialEq, Eq)]

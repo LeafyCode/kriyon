@@ -74,6 +74,28 @@ pub enum Follow {
     Resync,
 }
 
+/// The host's side of the once-a-second rule: a device that doesn't keep it
+/// would make the host rebuild and compress the screen as fast as it asks.
+/// One per device per session stream. A `Resync` it doesn't allow is dropped.
+#[derive(Clone, Debug, Default)]
+pub struct ResyncGate {
+    last: Option<Instant>,
+}
+
+impl ResyncGate {
+    /// Whether to answer a `Resync` that arrived at `now`.
+    pub fn allow(&mut self, now: Instant) -> bool {
+        let too_soon = self
+            .last
+            .is_some_and(|last| now.saturating_duration_since(last) < RESYNC_EVERY);
+        if too_soon {
+            return false;
+        }
+        self.last = Some(now);
+        true
+    }
+}
+
 /// A device's view of one session's numbering.
 #[derive(Clone, Debug, Default)]
 pub struct ScreenFollower {
@@ -111,14 +133,31 @@ impl ScreenFollower {
             }
         }
         self.lost = true;
+        if self.ask_resync(now) {
+            Follow::Resync
+        } else {
+            Follow::Ignore
+        }
+    }
+
+    /// Whether to send `Resync` now, with no update to prompt it: the
+    /// follower is lost and the last ask was [`RESYNC_EVERY`] ago. Call it on
+    /// a timer, or a quiet session leaves the device on a stale screen.
+    pub fn resync_due(&mut self, now: Instant) -> bool {
+        self.lost && self.ask_resync(now)
+    }
+
+    /// Record a `Resync` at `now`, unless one was sent within
+    /// [`RESYNC_EVERY`].
+    fn ask_resync(&mut self, now: Instant) -> bool {
         let asked_lately = self
             .last_resync
             .is_some_and(|asked| now.saturating_duration_since(asked) < RESYNC_EVERY);
         if asked_lately {
-            return Follow::Ignore;
+            return false;
         }
         self.last_resync = Some(now);
-        Follow::Resync
+        true
     }
 
     /// The last update drawn, for `seen_seq` on input. `None` before the
@@ -219,5 +258,29 @@ mod tests {
             Follow::Ignore
         );
         assert_eq!(f.update(9, 10, t + RESYNC_EVERY), Follow::Resync);
+    }
+
+    #[test]
+    fn a_lost_device_asks_again_once_the_second_is_up_even_with_no_output() {
+        let t = Instant::now();
+        let mut f = ScreenFollower::new();
+        f.snapshot(9, 4);
+        assert!(!f.resync_due(t), "nothing is lost");
+        assert_eq!(f.update(9, 6, t), Follow::Resync);
+        assert!(!f.resync_due(t + Duration::from_millis(500)));
+        // The snapshot never came and the session went quiet.
+        assert!(f.resync_due(t + RESYNC_EVERY));
+        assert!(!f.resync_due(t + RESYNC_EVERY), "and not twice at once");
+        f.snapshot(9, 9);
+        assert!(!f.resync_due(t + RESYNC_EVERY * 5));
+    }
+
+    #[test]
+    fn the_host_takes_at_most_one_resync_a_second_from_a_device() {
+        let t = Instant::now();
+        let mut gate = ResyncGate::default();
+        assert!(gate.allow(t));
+        assert!(!gate.allow(t + Duration::from_millis(999)));
+        assert!(gate.allow(t + RESYNC_EVERY));
     }
 }

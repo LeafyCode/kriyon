@@ -113,6 +113,10 @@ pub fn encode<M: Wire>(message: &M) -> Result<Vec<u8>, CodecError> {
 /// Reads messages of type `M` from a byte stream.
 pub struct Decoder<M> {
     buf: Vec<u8>,
+    /// Where the next message starts in `buf`. Read messages are dropped from
+    /// the front once per push, not once per message, so a read packed with
+    /// tiny messages costs one shift, not one per message.
+    start: usize,
     failed: Option<CodecError>,
     _message: PhantomData<M>,
 }
@@ -121,6 +125,7 @@ impl<M: Wire> Default for Decoder<M> {
     fn default() -> Self {
         Self {
             buf: Vec::new(),
+            start: 0,
             failed: None,
             _message: PhantomData,
         }
@@ -136,6 +141,8 @@ impl<M: Wire> Decoder<M> {
     /// Append freshly read bytes. After an error they are dropped.
     pub fn push(&mut self, bytes: &[u8]) {
         if self.failed.is_none() {
+            self.buf.drain(..self.start);
+            self.start = 0;
             self.buf.extend_from_slice(bytes);
         }
     }
@@ -152,12 +159,14 @@ impl<M: Wire> Decoder<M> {
         if let Err(failed) = read {
             self.failed = Some(failed);
             self.buf = Vec::new();
+            self.start = 0;
         }
         read
     }
 
     fn read(&mut self) -> Result<Option<Decoded<M>>, CodecError> {
-        let Some(prefix) = self.buf.first_chunk::<LEN_PREFIX>() else {
+        let pending = &self.buf[self.start..];
+        let Some(prefix) = pending.first_chunk::<LEN_PREFIX>() else {
             return Ok(None);
         };
         let len = usize::try_from(u32::from_be_bytes(*prefix)).unwrap_or(usize::MAX);
@@ -170,7 +179,7 @@ impl<M: Wire> Decoder<M> {
         if len == 0 {
             return Err(CodecError::Malformed);
         }
-        let arrived = &self.buf[LEN_PREFIX..];
+        let arrived = &pending[LEN_PREFIX..];
         let frame = &arrived[..arrived.len().min(len)];
         let tag = match postcard::take_from_bytes::<u32>(frame) {
             Ok((tag, _)) => tag,
@@ -192,14 +201,14 @@ impl<M: Wire> Decoder<M> {
         } else {
             Decoded::Unknown { tag }
         };
-        self.buf.drain(..LEN_PREFIX + len);
+        self.start += LEN_PREFIX + len;
         Ok(Some(decoded))
     }
 
     /// Bytes held, waiting for the rest of a message. For tests.
     #[must_use]
     pub fn buffered(&self) -> usize {
-        self.buf.len()
+        self.buf.len() - self.start
     }
 }
 
