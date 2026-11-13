@@ -24,20 +24,24 @@ struct Live {
     dialog_on_screen: bool,
 }
 
-/// Join the store's `rows` with what is known `live` about each.
-fn gather(rows: Vec<SessionRow>, live: &HashMap<SessionId, Live>) -> Vec<SessionFacts> {
+/// Join the store's `rows` with what is known `live` about each, and when
+/// the [Activity log] last saw each work (`last_active`, by session id).
+fn gather(
+    rows: Vec<SessionRow>,
+    live: &HashMap<SessionId, Live>,
+    last_active: &HashMap<String, i64>,
+) -> Vec<SessionFacts> {
     rows.into_iter()
         .map(|row| {
-            let known = live
-                .get(&SessionId(row.id.clone()))
-                .cloned()
-                .unwrap_or_default();
+            let known = live.get(&SessionId(row.id.clone()));
             SessionFacts {
                 put_away: row.archived_at.is_some() || row.parked_at.is_some(),
                 created_at_ms: row.created_at,
-                runtime: known.runtime.unwrap_or_default(),
-                last_seen_ms: known.last_seen_ms,
-                dialog_open: dialog_showing(known.dialog_on_screen, known.ask.as_ref()),
+                runtime: known.and_then(|k| k.runtime.clone()).unwrap_or_default(),
+                last_seen_ms: known.and_then(|k| k.last_seen_ms),
+                last_active_ms: last_active.get(&row.id).copied(),
+                dialog_open: known
+                    .is_some_and(|k| dialog_showing(k.dialog_on_screen, k.ask.as_ref())),
                 id: row.id,
                 title: row.title,
                 project_id: row.project_id,
@@ -71,7 +75,8 @@ pub fn current(state: &AppState, store: &StoreState) -> Result<Vec<SessionListEn
         live.entry(id.clone()).or_default().dialog_on_screen =
             session.engine.dialog().is_some_and(|d| d.open);
     }
-    Ok(session_list(gather(rows, &live), now_ms))
+    let last_active = crate::activity_rt::last_active_by_session();
+    Ok(session_list(gather(rows, &live, &last_active), now_ms))
 }
 
 #[cfg(test)]
@@ -146,6 +151,7 @@ mod tests {
                 },
             ],
             &live,
+            &HashMap::from([("not started".to_string(), 5)]),
         );
         let asking = by_id(&facts, "asking");
         assert!(asking.runtime.needs_you);
@@ -158,6 +164,8 @@ mod tests {
         assert_eq!(fresh.runtime, RuntimeFacts::default());
         assert!(!fresh.dialog_open);
         assert_eq!(fresh.last_seen_ms, None);
+        assert_eq!(fresh.last_active_ms, Some(5), "from the activity log");
+        assert_eq!(asking.last_active_ms, None);
         assert!(by_id(&facts, "archived").put_away);
         assert!(by_id(&facts, "parked").put_away);
         assert!(!asking.put_away);

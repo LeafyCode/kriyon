@@ -270,7 +270,7 @@ pub async fn create_session(
             let state = exit_app.state::<AppState>();
             let mut runtimes = state.runtimes.lock();
             if let Some(runtime) = runtimes.get_mut(&exit_id) {
-                runtime.note_exited();
+                runtime.note_exited(Instant::now());
             }
         }
         crate::refresh_needs_you_badge(&exit_app);

@@ -265,7 +265,9 @@ mod tests {
         let id = SessionId("s1".into());
 
         ensure_runtime(&state, &id);
-        with_runtime(&state, &id, SessionRuntime::note_exited);
+        with_runtime(&state, &id, |runtime| {
+            runtime.note_exited(std::time::Instant::now());
+        });
         ensure_runtime(&state, &id);
 
         assert!(

@@ -81,6 +81,9 @@ pub struct SessionFacts {
     pub runtime: RuntimeFacts,
     /// When its watcher was last heard from.
     pub last_seen_ms: Option<i64>,
+    /// When the [Activity log] last saw it work: the change time to fall back
+    /// on before its creation, after an app restart.
+    pub last_active_ms: Option<i64>,
     /// A [CLI dialog] shows (see `cli_dialog::dialog_showing`).
     pub dialog_open: bool,
 }
@@ -101,38 +104,47 @@ pub struct SessionListEntry {
 
 /// The host's [Session list] at `now_ms`: every session not put away, those
 /// that need the person first (the longest waiting first), then the rest (the
-/// most recently changed first).
+/// most recently changed first), the newest session first on a tie. A
+/// session's last change is its runtime's, else the [Activity log]'s last
+/// activity, else its creation, and a status change counts as its watcher
+/// heard from: both as the desktop's command center does.
 #[must_use]
 pub fn session_list(facts: Vec<SessionFacts>, now_ms: i64) -> Vec<SessionListEntry> {
-    let mut list: Vec<SessionListEntry> = facts
+    let mut list: Vec<(i64, SessionListEntry)> = facts
         .into_iter()
         .filter(|f| !f.put_away)
-        .map(|f| SessionListEntry {
-            standing: standing_state(
-                f.runtime.status,
-                f.runtime.hooks_off,
-                f.last_seen_ms,
-                now_ms,
-            ),
-            last_change_ms: f.runtime.last_change_ms.unwrap_or(f.created_at_ms),
-            id: f.id,
-            title: f.title,
-            project_id: f.project_id,
-            status: f.runtime.status,
-            needs_you: f.runtime.needs_you,
-            dialog_open: f.dialog_open,
+        .map(|f| {
+            // A status change is the watcher heard from, as on the desktop.
+            let seen = f.last_seen_ms.max(f.runtime.last_change_ms);
+            let entry = SessionListEntry {
+                standing: standing_state(f.runtime.status, f.runtime.hooks_off, seen, now_ms),
+                last_change_ms: f
+                    .runtime
+                    .last_change_ms
+                    .or(f.last_active_ms)
+                    .unwrap_or(f.created_at_ms),
+                id: f.id,
+                title: f.title,
+                project_id: f.project_id,
+                status: f.runtime.status,
+                needs_you: f.runtime.needs_you,
+                dialog_open: f.dialog_open,
+            };
+            (f.created_at_ms, entry)
         })
         .collect();
-    list.sort_by(|a, b| {
-        b.needs_you.cmp(&a.needs_you).then_with(|| {
-            if a.needs_you {
-                a.last_change_ms.cmp(&b.last_change_ms)
-            } else {
-                b.last_change_ms.cmp(&a.last_change_ms)
-            }
-        })
+    list.sort_by(|(a_made, a), (b_made, b)| {
+        let by_change = if a.needs_you {
+            a.last_change_ms.cmp(&b.last_change_ms)
+        } else {
+            b.last_change_ms.cmp(&a.last_change_ms)
+        };
+        b.needs_you
+            .cmp(&a.needs_you)
+            .then(by_change)
+            .then(b_made.cmp(a_made))
     });
-    list
+    list.into_iter().map(|(_, entry)| entry).collect()
 }
 
 #[cfg(test)]
@@ -174,6 +186,7 @@ mod tests {
             put_away: false,
             runtime: RuntimeFacts::default(),
             last_seen_ms: Some(50_000),
+            last_active_ms: None,
             dialog_open: false,
         }
     }
@@ -248,5 +261,62 @@ mod tests {
                 last_change_ms: 1_000,
             }]
         );
+    }
+
+    #[test]
+    fn after_a_restart_the_activity_log_says_when_it_last_changed() {
+        let list = session_list(
+            vec![SessionFacts {
+                last_active_ms: Some(30_000),
+                ..facts("worked an hour ago")
+            }],
+            50_000,
+        );
+        assert_eq!(list[0].last_change_ms, 30_000);
+        let live = session_list(
+            vec![SessionFacts {
+                last_active_ms: Some(30_000),
+                ..changed_at("changed since", 40_000, false)
+            }],
+            50_000,
+        );
+        assert_eq!(live[0].last_change_ms, 40_000, "a live change wins");
+    }
+
+    #[test]
+    fn a_fresh_status_change_counts_as_being_heard_from() {
+        let list = session_list(
+            vec![SessionFacts {
+                last_seen_ms: None,
+                runtime: RuntimeFacts {
+                    status: SessionStatus::Waiting,
+                    last_change_ms: Some(49_000),
+                    ..RuntimeFacts::default()
+                },
+                ..facts("s")
+            }],
+            50_000,
+        );
+        assert_eq!(list[0].standing, StandingState::AwaitingInput);
+    }
+
+    #[test]
+    fn equal_change_times_put_the_newest_session_first() {
+        let list = session_list(
+            vec![
+                SessionFacts {
+                    created_at_ms: 1_000,
+                    ..facts("older")
+                },
+                SessionFacts {
+                    created_at_ms: 2_000,
+                    last_active_ms: Some(1_000),
+                    ..facts("newer")
+                },
+            ],
+            50_000,
+        );
+        let ids: Vec<&str> = list.iter().map(|e| e.id.as_str()).collect();
+        assert_eq!(ids, ["newer", "older"]);
     }
 }

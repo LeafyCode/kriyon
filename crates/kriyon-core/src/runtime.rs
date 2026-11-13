@@ -121,6 +121,10 @@ pub struct SessionRuntime {
     /// [Session list]'s order and "waiting for 12m". A history seed has none:
     /// the replayed change happened at some unknown time before.
     last_change_at: Option<Instant>,
+    /// The open ask as of the last recompute. When it differs at the next,
+    /// that recompute stamps `last_change_at`: an ask can open or close while
+    /// the status stays put.
+    ask_at_recompute: Option<PendingAsk>,
 }
 
 impl SessionRuntime {
@@ -141,8 +145,9 @@ impl SessionRuntime {
         now: Instant,
     ) -> Self {
         let replayed = crate::status::replay_history(events, authoritative_main, now);
+        let replayed_ask = replayed.projection.current_ask();
         Self {
-            ask: replayed.projection.current_ask(),
+            ask: replayed_ask.clone(),
             tracker: replayed.tracker,
             // Never seeded: replayed turns finished long ago, and lighting the
             // badge for every old session on every launch is noise, not signal.
@@ -158,6 +163,7 @@ impl SessionRuntime {
             // Set by the shell at session start, never by a replay.
             hooks_off: false,
             last_change_at: None,
+            ask_at_recompute: replayed_ask,
         }
     }
 
@@ -186,7 +192,10 @@ impl SessionRuntime {
     }
 
     /// The session's processes died underneath the app. See [`Self::exited`].
-    pub fn note_exited(&mut self) {
+    pub fn note_exited(&mut self, now: Instant) {
+        if !self.exited {
+            self.last_change_at = Some(now);
+        }
         self.exited = true;
     }
 
@@ -239,8 +248,9 @@ impl SessionRuntime {
     /// their queued prompt) re-engaged the session.
     pub fn apply_recompute(&mut self, now: Instant) -> Option<StatusChange> {
         let change = self.tracker.apply_recompute(now);
-        if change.is_some() {
+        if change.is_some() || self.ask != self.ask_at_recompute {
             self.last_change_at = Some(now);
+            self.ask_at_recompute.clone_from(&self.ask);
         }
         if change
             .as_ref()
@@ -251,9 +261,10 @@ impl SessionRuntime {
         change
     }
 
-    /// What the [Session list] needs from this runtime, with the last status
-    /// change given in wall-clock milliseconds: `now` and `now_ms` are the same
-    /// moment on the two clocks.
+    /// What the [Session list] needs from this runtime, with the last change
+    /// (a committed status, an ask opening or closing, an exit) given in
+    /// wall-clock milliseconds: `now` and `now_ms` are the same moment on the
+    /// two clocks. An exited session is idle, whatever its frozen status says.
     #[must_use]
     pub fn list_facts(&self, now: Instant, now_ms: i64) -> crate::standing::RuntimeFacts {
         let last_change_ms = self.last_change_at.map(|at| {
@@ -261,8 +272,14 @@ impl SessionRuntime {
                 i64::try_from(now.saturating_duration_since(at).as_millis()).unwrap_or(i64::MAX);
             now_ms.saturating_sub(ago)
         });
+        // A dead session's last status is history: nothing runs in it.
+        let status = if self.exited {
+            SessionStatus::Idle
+        } else {
+            self.status()
+        };
         crate::standing::RuntimeFacts {
-            status: self.status(),
+            status,
             hooks_off: self.hooks_off,
             needs_you: self.needs_you(),
             last_change_ms,
@@ -531,6 +548,41 @@ mod tests {
     }
 
     #[test]
+    fn an_ask_opening_mid_turn_moves_the_change_time() {
+        // A permission prompt opens while the status stays Running: the
+        // session starts needing the person then, not when the turn began.
+        let start = Instant::now();
+        let mut rt = SessionRuntime::new();
+        rt.note_hook_event(&ev("UserPromptSubmit"));
+        let _ = rt.apply_recompute(start);
+        let asked = start + std::time::Duration::from_secs(600);
+        assert!(rt.set_ask(Some(ask())));
+        let _ = rt.apply_recompute(asked);
+        let facts = rt.list_facts(asked, 1_000_000);
+        assert_eq!(facts.status, SessionStatus::Running);
+        assert!(facts.needs_you);
+        assert_eq!(facts.last_change_ms, Some(1_000_000));
+    }
+
+    #[test]
+    fn an_exited_session_lists_as_idle_needing_nothing_from_when_it_died() {
+        let start = Instant::now();
+        let mut rt = SessionRuntime::new();
+        rt.note_hook_event(&ev("UserPromptSubmit"));
+        let _ = rt.apply_recompute(start);
+        let died = start + std::time::Duration::from_secs(60);
+        rt.note_exited(died);
+        let facts = rt.list_facts(died, 1_000_000);
+        assert_eq!(
+            facts.status,
+            SessionStatus::Idle,
+            "nothing runs in a dead session"
+        );
+        assert!(!facts.needs_you);
+        assert_eq!(facts.last_change_ms, Some(1_000_000));
+    }
+
+    #[test]
     fn a_runtime_rebuilt_from_history_has_no_change_time() {
         let rt = SessionRuntime::from_history(&[ev("Notification")], None, Instant::now());
         assert_eq!(rt.list_facts(Instant::now(), 1_000).last_change_ms, None);
@@ -550,7 +602,7 @@ mod tests {
         let _ = rt.apply_recompute(now);
         assert!(rt.needs_you(), "waiting on the user");
 
-        rt.note_exited();
+        rt.note_exited(Instant::now());
 
         assert!(rt.exited());
         assert!(!rt.needs_you(), "a dead session needs nothing");
@@ -566,7 +618,7 @@ mod tests {
         assert!(rt.is_running());
 
         // SIGKILL mid-turn: no `Stop` ever arrives, so the status stays put.
-        rt.note_exited();
+        rt.note_exited(Instant::now());
 
         assert_eq!(
             rt.status(),
@@ -581,7 +633,7 @@ mod tests {
         // Only a running claude fires a hook, so one is proof the session is
         // back — the resume path after a crash or a wake.
         let mut rt = SessionRuntime::new();
-        rt.note_exited();
+        rt.note_exited(Instant::now());
         assert!(rt.exited());
 
         rt.note_hook_event(&ev("SessionStart"));

@@ -463,6 +463,14 @@ pub fn activity_last_active(
     with_store(|s| s.last_active())
 }
 
+/// When each session last did work, per the [Activity log], without the
+/// spool pass [`activity_last_active`] makes at launch; empty when the log
+/// is unavailable.
+#[must_use]
+pub fn last_active_by_session() -> std::collections::HashMap<String, i64> {
+    with_store(|s| s.last_active()).unwrap_or_default()
+}
+
 /// Every file Claude changed in `session_id` (absolute paths): what the
 /// Files view's AI changes tab keeps to. See
 /// [`ActivityStore::changed_paths`](crate::activity_store::ActivityStore::changed_paths).
