@@ -693,6 +693,23 @@ impl Store {
             .optional()?)
     }
 
+    /// Forget `device`'s start `request_id`: it failed, so a resend starts
+    /// it afresh.
+    ///
+    /// # Errors
+    /// Returns [`StoreError::Sqlite`] if the statement fails.
+    pub fn forget_remote_start(
+        &self,
+        device: &[u8; 32],
+        request_id: &[u8; 16],
+    ) -> Result<(), StoreError> {
+        self.conn.execute(
+            "DELETE FROM remote_starts WHERE device_id = ?1 AND request_id = ?2",
+            rusqlite::params![hex(device), hex(request_id)],
+        )?;
+        Ok(())
+    }
+
     /// Drop starts older than [`REMOTE_START_KEPT_MS`]. Returns how many went.
     ///
     /// # Errors
@@ -1269,6 +1286,15 @@ mod tests {
                 s.remote_start(&PHONE, &[5; 16], DAY_MS).expect("reads"),
                 None
             );
+        }
+
+        #[test]
+        fn a_start_that_failed_is_forgotten_so_a_resend_tries_again() {
+            let s = store();
+            s.record_remote_start(&PHONE, &[5; 16], "s1", 0)
+                .expect("records");
+            s.forget_remote_start(&PHONE, &[5; 16]).expect("forgets");
+            assert_eq!(s.remote_start(&PHONE, &[5; 16], 1).expect("reads"), None);
         }
 
         fn studio() -> PairedHostRow {

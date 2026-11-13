@@ -142,6 +142,9 @@ pub enum RefuseReason {
     NoSuchProject,
     /// `Open` of a session whose screen is too big to send.
     ScreenTooLarge,
+    /// `StartSession` was allowed, but the session couldn't be started (its
+    /// shell didn't open).
+    StartFailed,
 }
 
 /// Device to host on `kriyon/remote/1`.
@@ -315,6 +318,12 @@ pub enum ToDevice {
         session_id: SessionId,
     },
     Refused {
+        reason: RefuseReason,
+    },
+    /// A `StartSession` refused, or that failed: named by its request, so a
+    /// device with several starts, or other refusals, under way can tell.
+    StartRefused {
+        request_id: RequestId,
         reason: RefuseReason,
     },
 }
@@ -507,7 +516,7 @@ mod tests {
     #[test]
     fn host_to_device_tags_are_fixed() {
         let s = || "s".to_string();
-        let cases: [(ToDevice, u8); 11] = [
+        let cases: [(ToDevice, u8); 12] = [
             (
                 ToDevice::Welcome {
                     host_name: s(),
@@ -580,6 +589,13 @@ mod tests {
                 },
                 10,
             ),
+            (
+                ToDevice::StartRefused {
+                    request_id: [0; 16],
+                    reason: RefuseReason::StartFailed,
+                },
+                11,
+            ),
         ];
         for (message, expected) in cases {
             assert_eq!(tag(&message), expected, "{message:?}");
@@ -620,6 +636,7 @@ mod tests {
             RefuseReason::TooOld { min_minor: 0 },
             RefuseReason::NoSuchProject,
             RefuseReason::ScreenTooLarge,
+            RefuseReason::StartFailed,
         ];
         for (n, reason) in reasons.iter().enumerate() {
             assert_eq!(usize::from(tag(reason)), n, "{reason:?}");

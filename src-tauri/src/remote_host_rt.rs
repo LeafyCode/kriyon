@@ -252,6 +252,41 @@ impl ServeHost for AppServeHost {
         let _ = state.writers.release_device(device, &engines);
     }
 
+    fn project_folder(&self, project_id: &str) -> kriyon_remote::authorize::ProjectFolder {
+        use kriyon_remote::authorize::ProjectFolder;
+        match crate::folder_cmd::project_folder(&self.0.state::<StoreState>(), project_id) {
+            Ok(crate::folder_cmd::ProjectFolderCheck::Approved(_)) => ProjectFolder::Approved,
+            Ok(crate::folder_cmd::ProjectFolderCheck::NotAllowed(_)) => ProjectFolder::NotAllowed,
+            // A store that can't be read approves nothing.
+            Ok(crate::folder_cmd::ProjectFolderCheck::NoSuchProject) | Err(_) => {
+                ProjectFolder::NoSuchProject
+            }
+        }
+    }
+
+    fn started(&self, device: &EndpointId, request_id: &[u8; 16]) -> Option<String> {
+        self.0
+            .state::<StoreState>()
+            .0
+            .lock()
+            .remote_start(device, request_id, crate::remote_rt::now_ms())
+            .ok()
+            .flatten()
+    }
+
+    fn start_session(
+        &self,
+        device: EndpointId,
+        start: crate::remote_serve::RemoteStart,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String, RefuseReason>> + Send>>
+    {
+        Box::pin(crate::session_start::start_remote(
+            self.0.clone(),
+            device,
+            start,
+        ))
+    }
+
     fn set_push_token(&self, device: &EndpointId, key_id: u32, sealed: Vec<u8>) {
         // A token that couldn't be kept is given again on the next connect.
         let _ = self

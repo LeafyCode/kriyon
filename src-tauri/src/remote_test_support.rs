@@ -23,7 +23,8 @@ use parking_lot::Mutex;
 use kriyon_remote::device_view::HostView;
 
 use crate::daemon_client::DaemonEvent;
-use crate::remote_serve::{LiveSession, Serve, ServeHost};
+use crate::remote_serve::{LiveSession, RemoteStart, Serve, ServeHost};
+use kriyon_remote::authorize::ProjectFolder;
 use kriyon_remote_link::device_runtime::{DeviceEvents, DeviceRuntime, LinkState};
 
 /// The app, faked: one session "s", paired devices in a map.
@@ -35,6 +36,13 @@ pub(crate) struct FakeHost {
     pub(crate) title: Mutex<String>,
     /// The push tokens devices gave, in order.
     pub(crate) push_tokens: Mutex<Vec<(EndpointId, u32, Vec<u8>)>>,
+    /// Each project's folder, as the check sees it; unknown ids have none.
+    pub(crate) folders: Mutex<HashMap<String, ProjectFolder>>,
+    /// The starts asked for, and what each one comes to.
+    pub(crate) starts: Mutex<Vec<(EndpointId, RemoteStart)>>,
+    pub(crate) start_result: Mutex<Result<String, RefuseReason>>,
+    /// Sessions earlier starts made, by request id.
+    pub(crate) started: Mutex<HashMap<[u8; 16], String>>,
     /// Told every change of control, as the app's writers tell it.
     pub(crate) serve: Mutex<Option<Serve>>,
 }
@@ -59,6 +67,10 @@ impl Default for FakeHost {
             onlooked: Mutex::default(),
             title: Mutex::default(),
             push_tokens: Mutex::default(),
+            folders: Mutex::default(),
+            starts: Mutex::default(),
+            start_result: Mutex::new(Ok("started".into())),
+            started: Mutex::default(),
             serve: Mutex::default(),
         }
     }
@@ -138,6 +150,29 @@ impl ServeHost for FakeHost {
         let change = self.gate.lock().release(*device).change;
         self.tell(change);
     }
+    fn project_folder(&self, project_id: &str) -> ProjectFolder {
+        self.folders
+            .lock()
+            .get(project_id)
+            .copied()
+            .unwrap_or(ProjectFolder::NoSuchProject)
+    }
+
+    fn started(&self, _device: &EndpointId, request_id: &[u8; 16]) -> Option<String> {
+        self.started.lock().get(request_id).cloned()
+    }
+
+    fn start_session(
+        &self,
+        device: EndpointId,
+        start: RemoteStart,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String, RefuseReason>> + Send>>
+    {
+        self.starts.lock().push((device, start));
+        let result = self.start_result.lock().clone();
+        Box::pin(async move { result })
+    }
+
     fn set_push_token(&self, device: &EndpointId, key_id: u32, sealed: Vec<u8>) {
         self.push_tokens.lock().push((*device, key_id, sealed));
     }

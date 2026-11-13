@@ -28,6 +28,7 @@ function noop(): void {
 }
 
 vi.mock("../ipc/bridge", () => ({
+  onSessionAdded: vi.fn(() => Promise.resolve(noop)),
   onSessionStatus: vi.fn(() => Promise.resolve(noop)),
   onSessionUsage: vi.fn(() => Promise.resolve(noop)),
   onSessionActivity: vi.fn(() => Promise.resolve(noop)),

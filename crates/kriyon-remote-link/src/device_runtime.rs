@@ -678,6 +678,7 @@ fn reason_number(reason: RefuseReason) -> u8 {
         RefuseReason::TooOld { .. } => 9,
         RefuseReason::NoSuchProject => 10,
         RefuseReason::ScreenTooLarge => 11,
+        RefuseReason::StartFailed => 12,
     }
 }
 

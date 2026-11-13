@@ -200,6 +200,191 @@ pub async fn start(
     })
 }
 
+/// The remote starts under way, one lock each by (device, request), so a
+/// resend that arrives while the first is still starting waits for it and
+/// finds the session it made, while other starts go ahead.
+static STARTING: std::sync::LazyLock<parking_lot::Mutex<Starting>> =
+    std::sync::LazyLock::new(Default::default);
+
+/// One lock for each (device, request) start under way.
+type Starting = std::collections::HashMap<([u8; 32], [u8; 16]), Arc<tokio::sync::Mutex<()>>>;
+
+/// The event that tells the window a session was started without it (by a
+/// [Remote device]): the session's row, for its sidebar.
+pub const SESSION_ADDED_EVENT: &str = "session-added";
+
+/// Start a session as paired `device` asked (`StartSession`, its check
+/// passed): in the project's folder, titled as asked or after the project,
+/// never in a worktree, with a fresh `claude`. A resend of the same
+/// `request_id` within a day returns the session the first one made (spec
+/// §4): the request is recorded before the shell opens, and forgotten, with
+/// the session's row, if it doesn't. The window hears of it
+/// ([`SESSION_ADDED_EVENT`]) and shows it in its sidebar; opening it there
+/// takes over its output.
+///
+/// # Errors
+/// [`RefuseReason::NoSuchProject`] or [`RefuseReason::FolderNotAllowed`]
+/// when the project changed since the check, or
+/// [`RefuseReason::StartFailed`] when the store couldn't be read or written
+/// or the shell didn't open.
+pub async fn start_remote(
+    app: tauri::AppHandle,
+    device: kriyon_remote::message::EndpointId,
+    request: crate::remote_serve::RemoteStart,
+) -> Result<String, kriyon_remote::message::RefuseReason> {
+    let key = (device, request.request_id);
+    let lock = Arc::clone(STARTING.lock().entry(key).or_default());
+    let started = {
+        let _this_request = lock.lock().await;
+        start_remote_once(&app, device, request).await
+    };
+    // Gone once no one else waits on it.
+    let mut starting = STARTING.lock();
+    if starting
+        .get(&key)
+        .is_some_and(|held| Arc::strong_count(held) <= 2)
+    {
+        starting.remove(&key);
+    }
+    started
+}
+
+async fn start_remote_once(
+    app: &tauri::AppHandle,
+    device: kriyon_remote::message::EndpointId,
+    request: crate::remote_serve::RemoteStart,
+) -> Result<String, kriyon_remote::message::RefuseReason> {
+    use crate::remote_serve::ServeHost as _;
+    use kriyon_remote::message::RefuseReason;
+    use tauri::{Emitter as _, Manager as _};
+    let now = crate::remote_rt::now_ms();
+    let request_id = request.request_id;
+    // The store and the folder check touch the disk: off the runtime.
+    let looking = (app.clone(), request.project_id.clone());
+    let (made, project) = tauri::async_runtime::spawn_blocking(move || {
+        let (app, project_id) = looking;
+        let host = crate::remote_host_rt::AppServeHost(app.clone());
+        if let Some(made) = host.started(&device, &request_id) {
+            return Ok((Some(made), None));
+        }
+        // Checked again here: the project may have changed since the check.
+        host.project_folder(&project_id).allows()?;
+        let project = app
+            .state::<crate::StoreState>()
+            .0
+            .lock()
+            .project_row(&project_id)
+            .map_err(|_| RefuseReason::StartFailed)?
+            .ok_or(RefuseReason::NoSuchProject)?;
+        Ok((None, Some(project)))
+    })
+    .await
+    .map_err(|_| RefuseReason::StartFailed)??;
+    if let Some(made) = made {
+        return Ok(made);
+    }
+    let Some(project) = project else {
+        return Err(RefuseReason::StartFailed);
+    };
+    let session = remote_session_row(&project, request.title, now);
+    let id = session.id.clone();
+    // Recorded first, so a resend while the shell opens, or after a crash,
+    // finds this session instead of starting a second.
+    let recording = (app.clone(), id.clone());
+    tauri::async_runtime::spawn_blocking(move || {
+        let (app, id) = recording;
+        let store = app.state::<crate::StoreState>();
+        let store = store.0.lock();
+        let _ = store.prune_remote_starts(now);
+        store.record_remote_start(&device, &request_id, &id, now)
+    })
+    .await
+    .map_err(|_| RefuseReason::StartFailed)?
+    .map_err(|_| RefuseReason::StartFailed)?;
+    let started = match start(app, None, session.clone(), true, Arc::new(NoViewer)).await {
+        Ok(started) => started,
+        Err(why) => {
+            eprintln!("kriyon: a remote start failed: {why}");
+            // Nothing started: neither the request nor a row stays behind.
+            let forgetting = (app.clone(), id.clone());
+            let _ = tauri::async_runtime::spawn_blocking(move || {
+                let (app, id) = forgetting;
+                let store = app.state::<crate::StoreState>();
+                let store = store.0.lock();
+                let _ = store.forget_remote_start(&device, &request_id);
+                let _ = store.delete_session(&id);
+            })
+            .await;
+            return Err(RefuseReason::StartFailed);
+        }
+    };
+    launch_remote_claude(app, &id).await;
+    let _ = app.emit(
+        SESSION_ADDED_EVENT,
+        crate::store::SessionRow {
+            baseline_oid: started.baseline_oid,
+            ..session
+        },
+    );
+    Ok(id)
+}
+
+/// Launch a fresh `claude` into a session a device started. Tried once more
+/// if the shell didn't take the command; if it still doesn't, the session
+/// stands as a shell, and opening it on the desktop launches `claude` then
+/// (the launch claim was given back).
+async fn launch_remote_claude(app: &tauri::AppHandle, id: &str) {
+    use crate::commands::LaunchOutcome;
+    use tauri::Manager as _;
+    for _ in 0..2 {
+        let launching = (app.clone(), id.to_string());
+        let outcome = tauri::async_runtime::spawn_blocking(move || {
+            let (app, id) = launching;
+            crate::commands::launch_claude_in(
+                &app,
+                &app.state::<crate::AppState>(),
+                &kriyon_core::session::SessionId(id),
+                None,
+                None,
+                None,
+            )
+        })
+        .await;
+        if !matches!(outcome, Ok(LaunchOutcome::WriteFailed)) {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+    eprintln!("kriyon: claude couldn't be launched into a session a device started");
+}
+
+/// The row of a session a device started in `project`: its folder, the
+/// asked title or the project's name, never a worktree.
+fn remote_session_row(
+    project: &crate::store::ProjectRow,
+    title: Option<String>,
+    now_ms: i64,
+) -> crate::store::SessionRow {
+    crate::store::SessionRow {
+        id: uuid::Uuid::new_v4().to_string(),
+        project_id: project.id.clone(),
+        title: title
+            .filter(|title| !title.trim().is_empty())
+            .unwrap_or_else(|| project.name.clone()),
+        cwd: project.path.clone(),
+        worktree_path: None,
+        created_at: now_ms,
+        claude_session_id: None,
+        archived_at: None,
+        baseline_oid: None,
+        title_locked: false,
+        parent_session_id: None,
+        nested_under: None,
+        parked_at: None,
+        pinned_at: None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use parking_lot::Mutex;
@@ -241,6 +426,36 @@ mod tests {
         slot.exited();
         assert!(slot.is_exited());
         assert_eq!(*window.exits.lock(), 1);
+    }
+
+    fn project() -> crate::store::ProjectRow {
+        crate::store::ProjectRow {
+            id: "/work/app".into(),
+            name: "app".into(),
+            path: "/work/app".into(),
+            color: None,
+            setup_command: Some("make".into()),
+            pinned_at: None,
+            folder_id: None,
+        }
+    }
+
+    #[test]
+    fn a_remote_session_runs_in_the_projects_folder_titled_as_asked_or_after_it() {
+        let titled = remote_session_row(&project(), Some("Fix login".into()), 5);
+        assert_eq!(titled.title, "Fix login");
+        assert_eq!(titled.cwd, "/work/app");
+        assert_eq!(titled.project_id, "/work/app");
+        assert_eq!(titled.worktree_path, None, "never a worktree");
+        assert_eq!(titled.created_at, 5);
+        assert!(kriyon_core::daemon::is_valid_session_id(&titled.id));
+        for untitled in [None, Some("  ".to_string())] {
+            assert_eq!(remote_session_row(&project(), untitled, 5).title, "app");
+        }
+        assert_ne!(
+            remote_session_row(&project(), None, 5).id,
+            remote_session_row(&project(), None, 5).id
+        );
     }
 
     #[test]

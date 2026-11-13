@@ -319,6 +319,9 @@ export interface HooksOffUpdate {
  */
 export const onSessionHooksOff = subscribe<HooksOffUpdate>("session-hooks-off");
 
+/** A session started without the window (by a remote device): its row. */
+export const onSessionAdded = subscribe<SessionRow>("session-added");
+
 /** What the user agreed Kriyon adds to Claude Code (mirrors Rust `IntegrationPrefs`). */
 export interface IntegrationPrefs {
   companion: boolean;

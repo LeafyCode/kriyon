@@ -52,6 +52,20 @@ pub enum ProjectFolder {
     NoSuchProject,
 }
 
+impl ProjectFolder {
+    /// Whether a session may start in it, or why not.
+    ///
+    /// # Errors
+    /// [`RefuseReason::FolderNotAllowed`] or [`RefuseReason::NoSuchProject`].
+    pub fn allows(self) -> Result<(), RefuseReason> {
+        match self {
+            Self::Approved => Ok(()),
+            Self::NotAllowed => Err(RefuseReason::FolderNotAllowed),
+            Self::NoSuchProject => Err(RefuseReason::NoSuchProject),
+        }
+    }
+}
+
 /// The CLI dialog of a session, as the host's dialog watch sees it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Dialog {
@@ -236,11 +250,7 @@ pub fn authorize(
             if *worktree {
                 return Err(RefuseReason::NotAllowed);
             }
-            match host.project_folder(project_id) {
-                ProjectFolder::Approved => Ok(()),
-                ProjectFolder::NotAllowed => Err(RefuseReason::FolderNotAllowed),
-                ProjectFolder::NoSuchProject => Err(RefuseReason::NoSuchProject),
-            }
+            host.project_folder(project_id).allows()
         }
         // The codec already refuses a PushToken message over 2 KiB; this is
         // the same bound on the token itself, so the check doesn't rely on it.

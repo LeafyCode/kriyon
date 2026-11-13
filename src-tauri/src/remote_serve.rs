@@ -57,6 +57,19 @@ pub trait ServeHost: Send + Sync + 'static {
     /// Keep paired `device`'s push token, sealed to the sender's key
     /// `key_id` (spec §10), in place of any it gave before.
     fn set_push_token(&self, device: &EndpointId, key_id: u32, sealed: Vec<u8>);
+    /// Saved project `project_id`'s folder, checked against the [Approved
+    /// root]s, for a remote start's check.
+    fn project_folder(&self, project_id: &str) -> ProjectFolder;
+    /// The session `device`'s start `request_id` already made, if any (kept a
+    /// day): a resend gets it back.
+    fn started(&self, device: &EndpointId, request_id: &[u8; 16]) -> Option<String>;
+    /// Start a session as `device` asked (its check already passed): the
+    /// new session's id, or the one this request already started.
+    fn start_session(
+        &self,
+        device: EndpointId,
+        start: RemoteStart,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String, RefuseReason>> + Send>>;
     /// A device's typing into session `id`, checked again atomically with
     /// the write: whether it reached the PTY.
     ///
@@ -165,12 +178,24 @@ struct Inner {
 #[derive(Clone)]
 pub struct Serve(Arc<Inner>);
 
+/// A remote start a device asked for, past its check. Never a worktree:
+/// worktree setup runs scripts, so a remote start doesn't ask for one.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RemoteStart {
+    /// The device's id for this start, so a resend returns the same session.
+    pub request_id: kriyon_remote::message::RequestId,
+    pub project_id: String,
+    pub title: Option<String>,
+}
+
 /// The facts one message is checked against, owned, so no lock is held
 /// across the check.
 struct Facts {
     device: EndpointId,
     role: Option<Role>,
     live: Option<(String, LiveSession)>,
+    /// The folder of the project a `StartSession` names.
+    folder: Option<(String, ProjectFolder)>,
 }
 
 impl HostState for Facts {
@@ -189,9 +214,11 @@ impl HostState for Facts {
         })
     }
 
-    fn project_folder(&self, _project_id: &str) -> ProjectFolder {
-        // Remote starts are not served yet (see `serve_control`).
-        ProjectFolder::NoSuchProject
+    fn project_folder(&self, project_id: &str) -> ProjectFolder {
+        self.folder
+            .as_ref()
+            .filter(|(id, _)| id == project_id)
+            .map_or(ProjectFolder::NoSuchProject, |(_, folder)| *folder)
     }
 
     fn min_protocol_minor(&self) -> u16 {
@@ -401,7 +428,12 @@ impl Serve {
         let paired = hello || self.0.controls.lock().contains_key(&device);
         let role = paired.then_some(role);
         let live = session.and_then(|id| Some((id.to_string(), self.0.host.session(id)?)));
-        Facts { device, role, live }
+        Facts {
+            device,
+            role,
+            live,
+            folder: None,
+        }
     }
 
     /// Serve one paired device's connection until it closes. Its role is the
@@ -520,7 +552,7 @@ impl Serve {
         let serve = self.clone();
         let reading_out = Arc::clone(&out);
         let reading = tokio::spawn(async move {
-            serve.read_control(device, role, reader, &reading_out).await;
+            serve.read_control(device, role, reader, reading_out).await;
         });
         Some((out, [writing, reading]))
     }
@@ -531,19 +563,27 @@ impl Serve {
         device: EndpointId,
         role: Role,
         mut reader: MessageReader<FromDevice>,
-        out: &ControlOut,
+        out: Arc<ControlOut>,
     ) {
         while let Ok(Some(message)) = reader.next().await {
+            if let Decoded::Message(FromDevice::StartSession { request_id, .. }) = &message {
+                let request_id = *request_id;
+                // On its own task: it reads the store, and a shell takes a
+                // moment to open; the control stream keeps being read.
+                tokio::spawn(self.clone().start(
+                    device,
+                    role,
+                    message,
+                    request_id,
+                    Arc::clone(&out),
+                ));
+                continue;
+            }
             let facts = self.facts(device, role, named_session(None, &message), false);
             let verdict = authorize(&device, Stream::Control, &message, &facts, Instant::now())
                 .and_then(|()| match &message {
                     Decoded::Message(FromDevice::TakeControl { session_id }) => {
                         self.0.host.take(session_id, device)
-                    }
-                    // Remote starts wait for `create_session` to run without
-                    // the webview (plan Step C).
-                    Decoded::Message(FromDevice::StartSession { .. }) => {
-                        Err(RefuseReason::NotAllowed)
                     }
                     Decoded::Message(FromDevice::PushToken { key_id, sealed }) => {
                         self.0.host.set_push_token(&device, *key_id, sealed.clone());
@@ -555,6 +595,79 @@ impl Serve {
                 out.send(&ToDevice::Refused { reason });
             }
         }
+    }
+
+    /// Answer one `StartSession`: the session this request already made (a
+    /// resend), else the check, then the start. Every answer names the
+    /// request: `StartResult`, or `StartRefused`.
+    async fn start(
+        self,
+        device: EndpointId,
+        role: Role,
+        message: Decoded<FromDevice>,
+        request_id: kriyon_remote::message::RequestId,
+        out: Arc<ControlOut>,
+    ) {
+        let Decoded::Message(FromDevice::StartSession {
+            project_id,
+            title,
+            worktree,
+            ..
+        }) = &message
+        else {
+            return;
+        };
+        let host = Arc::clone(&self.0.host);
+        let asked = (project_id.clone(), *worktree);
+        // The store and the folder check touch the disk: off the runtime.
+        let looked = tokio::task::spawn_blocking(move || {
+            let (project_id, worktree) = asked;
+            // Asked only of a Controller: what it already started is its own.
+            let made = (role == Role::Controller)
+                .then(|| host.started(&device, &request_id))
+                .flatten();
+            // Looked up only where the check gets that far.
+            let folder = (made.is_none() && role == Role::Controller && !worktree)
+                .then(|| (project_id.clone(), host.project_folder(&project_id)));
+            (made, folder)
+        })
+        .await;
+        let Ok((made, folder)) = looked else {
+            return;
+        };
+        let refused = |reason| ToDevice::StartRefused { request_id, reason };
+        if let Some(session_id) = made {
+            out.send(&ToDevice::StartResult {
+                request_id,
+                session_id,
+            });
+            return;
+        }
+        let mut facts = self.facts(device, role, None, false);
+        facts.folder = folder;
+        if let Err(reason) = authorize(&device, Stream::Control, &message, &facts, Instant::now()) {
+            out.send(&refused(reason));
+            return;
+        }
+        let started = self
+            .0
+            .host
+            .start_session(
+                device,
+                RemoteStart {
+                    request_id,
+                    project_id: project_id.clone(),
+                    title: title.clone(),
+                },
+            )
+            .await;
+        out.send(&match started {
+            Ok(session_id) => ToDevice::StartResult {
+                request_id,
+                session_id,
+            },
+            Err(reason) => refused(reason),
+        });
     }
 
     /// Serve one session stream: its `Open`, then the session's screen, until
@@ -1055,6 +1168,136 @@ mod tests {
                 next(&mut cr).await,
                 ToDevice::Heartbeat { at: 42, .. }
             ));
+        });
+    }
+
+    fn start(project_id: &str, worktree: bool) -> FromDevice {
+        FromDevice::StartSession {
+            request_id: [7; 16],
+            project_id: project_id.into(),
+            title: Some("From the phone".into()),
+            worktree,
+        }
+    }
+
+    #[test]
+    fn a_controller_starts_a_session_and_hears_its_id() {
+        run(async {
+            let world = world().await;
+            world
+                .fake
+                .folders
+                .lock()
+                .insert("p".into(), ProjectFolder::Approved);
+            let (phone, _link, mut cw, mut cr) = device(&world, 3, Role::Controller).await;
+            cw.send(&start("p", false)).await.expect("sent");
+            assert_eq!(
+                next(&mut cr).await,
+                ToDevice::StartResult {
+                    request_id: [7; 16],
+                    session_id: "started".into(),
+                }
+            );
+            assert_eq!(
+                world.fake.starts.lock().clone(),
+                vec![(
+                    phone.id(),
+                    RemoteStart {
+                        request_id: [7; 16],
+                        project_id: "p".into(),
+                        title: Some("From the phone".into()),
+                    }
+                )]
+            );
+        });
+    }
+
+    #[test]
+    fn a_start_the_host_may_not_make_is_refused_and_nothing_starts() {
+        run(async {
+            let world = world().await;
+            world
+                .fake
+                .folders
+                .lock()
+                .insert("outside".into(), ProjectFolder::NotAllowed);
+            world
+                .fake
+                .folders
+                .lock()
+                .insert("p".into(), ProjectFolder::Approved);
+            let (_c, _cl, mut cw, mut cr) = device(&world, 3, Role::Controller).await;
+            let (_v, _vl, mut vw, mut vr) = device(&world, 4, Role::Viewer).await;
+            for (message, reason) in [
+                (start("outside", false), RefuseReason::FolderNotAllowed),
+                (start("gone", false), RefuseReason::NoSuchProject),
+                (start("p", true), RefuseReason::NotAllowed),
+            ] {
+                cw.send(&message).await.expect("sent");
+                assert_eq!(
+                    next(&mut cr).await,
+                    ToDevice::StartRefused {
+                        request_id: [7; 16],
+                        reason
+                    },
+                    "{message:?}"
+                );
+            }
+            vw.send(&start("p", false)).await.expect("sent");
+            assert_eq!(
+                next(&mut vr).await,
+                ToDevice::StartRefused {
+                    request_id: [7; 16],
+                    reason: RefuseReason::NotAllowed
+                },
+                "a viewer may not start"
+            );
+            assert!(world.fake.starts.lock().is_empty(), "nothing started");
+        });
+    }
+
+    #[test]
+    fn a_start_that_fails_says_so() {
+        run(async {
+            let world = world().await;
+            world
+                .fake
+                .folders
+                .lock()
+                .insert("p".into(), ProjectFolder::Approved);
+            *world.fake.start_result.lock() = Err(RefuseReason::StartFailed);
+            let (_c, _cl, mut cw, mut cr) = device(&world, 3, Role::Controller).await;
+            cw.send(&start("p", false)).await.expect("sent");
+            assert_eq!(
+                next(&mut cr).await,
+                ToDevice::StartRefused {
+                    request_id: [7; 16],
+                    reason: RefuseReason::StartFailed
+                }
+            );
+        });
+    }
+
+    #[test]
+    fn a_resent_start_gets_the_session_it_made_even_if_the_project_changed_since() {
+        run(async {
+            let world = world().await;
+            // The project went (no folder now), but this request made a session.
+            world
+                .fake
+                .started
+                .lock()
+                .insert([7; 16], "made-before".into());
+            let (_c, _cl, mut cw, mut cr) = device(&world, 3, Role::Controller).await;
+            cw.send(&start("p", false)).await.expect("sent");
+            assert_eq!(
+                next(&mut cr).await,
+                ToDevice::StartResult {
+                    request_id: [7; 16],
+                    session_id: "made-before".into(),
+                }
+            );
+            assert!(world.fake.starts.lock().is_empty(), "nothing started again");
         });
     }
 

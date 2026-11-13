@@ -44,7 +44,7 @@ impl Wire for FromDevice {
 }
 
 impl Wire for ToDevice {
-    const KNOWN_TAGS: u32 = 11;
+    const KNOWN_TAGS: u32 = 12;
     const MAX_LEN: usize = 1024 * KIB;
     fn max_len(_tag: u32) -> usize {
         Self::MAX_LEN
@@ -369,6 +369,17 @@ mod tests {
         let mut d = decoder();
         d.push(&0_u32.to_be_bytes());
         assert_eq!(d.next_message(), Err(CodecError::Malformed));
+    }
+
+    #[test]
+    fn the_newest_host_message_is_known_not_skipped() {
+        let message = ToDevice::StartRefused {
+            request_id: [1; 16],
+            reason: RefuseReason::StartFailed,
+        };
+        let mut d = Decoder::<ToDevice>::new();
+        d.push(&encode(&message).expect("encodes"));
+        assert_eq!(d.next_message(), Ok(Some(Decoded::Message(message))));
     }
 
     #[test]
