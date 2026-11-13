@@ -113,11 +113,11 @@ test("pairing takes the pasted code and shows the digits to type there", async (
   await render(<PairScreen />);
   await fireEvent.changeText(
     screen.getByLabelText("Pairing code from the computer"),
-    "kriyon-pair:abc"
+    "kriyon-pair:1:abc"
   );
   await fireEvent.press(screen.getByRole("button", { name: "Connect" }));
   expect(await screen.findByText("123456")).toBeOnTheScreen();
-  expect(native.pair).toHaveBeenCalledWith("kriyon-pair:abc");
+  expect(native.pair).toHaveBeenCalledWith("kriyon-pair:1:abc");
   await fireEvent.press(screen.getByRole("button", { name: "Cancel" }));
   expect(native.cancelPairing).toHaveBeenCalled();
   expect(usePhone.getState().screen).toEqual({ kind: "home" });

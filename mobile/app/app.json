@@ -24,6 +24,17 @@
       "favicon": "./assets/favicon.png"
     },
     "scheme": "kriyon",
-    "plugins": ["expo-notifications"]
+    "plugins": [
+      "expo-notifications",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Kriyon uses the camera only to scan the pairing code your computer shows.",
+          "microphonePermission": false,
+          "recordAudioAndroid": false,
+          "barcodeScannerEnabled": true
+        }
+      ]
+    ]
   }
 }

@@ -96,12 +96,22 @@ export const usePhone = create<PhoneStore>((set) => ({
   openSession: (hostId, sessionId) =>
     inTurn(() => KriyonNative.openSession(hostId, sessionId)),
   pair: async (inviteText) => {
-    const text = inviteText.trim();
-    if (text === "") {
+    if (inviteText.trim() === "") {
       set({
         pairing: {
           phase: "failed",
           reason: "Paste the pairing code from the computer first.",
+        },
+      });
+      return;
+    }
+    // Scanned or pasted, the same check; Rust reads the rest of it.
+    const text = pairingCodeFrom(inviteText);
+    if (!text) {
+      set({
+        pairing: {
+          phase: "failed",
+          reason: "That isn't a Kriyon pairing code.",
         },
       });
       return;
@@ -212,4 +222,13 @@ export function toBase64(bytes: Uint8Array): string {
     text += String.fromCharCode(...bytes.subarray(at, at + CHUNK));
   }
   return btoa(text);
+}
+
+/** How every Kriyon pairing code begins (Rust's `INVITE_PREFIX`). */
+const PAIRING_CODE_PREFIX = "kriyon-pair:1:";
+
+/** The pairing code in scanned or pasted text, or `null` if there is none. */
+export function pairingCodeFrom(text: string): string | null {
+  const code = text.trim();
+  return code.startsWith(PAIRING_CODE_PREFIX) ? code : null;
 }

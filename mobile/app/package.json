@@ -19,6 +19,7 @@
     "@xterm/addon-unicode11": "0.10.0-beta.301",
     "@xterm/xterm": "6.1.0-beta.304",
     "expo": "~58.0.25",
+    "expo-camera": "~58.0.14",
     "expo-dev-client": "~58.0.20",
     "expo-device": "~58.0.5",
     "expo-notifications": "~58.1.9",

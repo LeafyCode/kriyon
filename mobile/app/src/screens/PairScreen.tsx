@@ -1,17 +1,21 @@
 /**
- * Pairing with a computer: paste the pairing code it shows (Remote access,
- * Pair a device, Copy pairing code), then type the six digits shown here
- * into it. Scanning the QR code comes later.
+ * Pairing with a computer: scan the QR code it shows (Remote access, Pair a
+ * device), or paste its pairing code (Copy pairing code), then type the six
+ * digits shown here into it.
  */
 import { useState } from "react";
 import { Pressable, Text, TextInput, View } from "react-native";
 import { usePhone } from "../state/phone.ts";
 import { colors, ui } from "../ui.ts";
+import { Scanner } from "./Scanner.tsx";
 
 export function PairScreen() {
   const [text, setText] = useState("");
+  const [scanning, setScanning] = useState(false);
   const pairing = usePhone((state) => state.pairing);
   const { cancelPairing, pair, show } = usePhone.getState();
+  // A new pairing only while none runs: a second would cancel the first.
+  const canStart = pairing.phase === "idle" || pairing.phase === "failed";
   const leave = () => {
     cancelPairing().catch(() => undefined);
     show({ kind: "home" });
@@ -20,34 +24,63 @@ export function PairScreen() {
     <View style={[ui.screen, { gap: 14, padding: 16 }]}>
       <Text style={ui.title}>Pair a computer</Text>
       <Text style={ui.hint}>
-        On the computer, open Remote access and Pair a device, then Copy pairing
-        code and paste it here.
+        On the computer, open Remote access and Pair a device. Scan the QR code
+        it shows, or Copy pairing code there and paste it here.
       </Text>
-      <TextInput
-        accessibilityLabel="Pairing code from the computer"
-        autoCapitalize="none"
-        autoCorrect={false}
-        onChangeText={setText}
-        placeholderTextColor={colors.inkFaint}
-        style={{
-          borderColor: colors.border,
-          borderRadius: 8,
-          borderWidth: 1,
-          color: colors.inkBright,
-          fontFamily: "Menlo",
-          padding: 10,
-        }}
-        value={text}
-      />
-      <Pressable
-        accessibilityRole="button"
-        onPress={() => {
-          pair(text).catch(() => undefined);
-        }}
-        style={ui.button}
-      >
-        <Text style={ui.buttonText}>Connect</Text>
-      </Pressable>
+      {canStart ? (
+        <>
+          {scanning ? (
+            <>
+              <Scanner
+                onCode={(code) => {
+                  setScanning(false);
+                  pair(code).catch(() => undefined);
+                }}
+              />
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => setScanning(false)}
+                style={ui.ghostButton}
+              >
+                <Text style={ui.ghostButtonText}>Stop scanning</Text>
+              </Pressable>
+            </>
+          ) : (
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => setScanning(true)}
+              style={ui.button}
+            >
+              <Text style={ui.buttonText}>Scan the QR code</Text>
+            </Pressable>
+          )}
+          <TextInput
+            accessibilityLabel="Pairing code from the computer"
+            autoCapitalize="none"
+            autoCorrect={false}
+            onChangeText={setText}
+            placeholderTextColor={colors.inkFaint}
+            style={{
+              borderColor: colors.border,
+              borderRadius: 8,
+              borderWidth: 1,
+              color: colors.inkBright,
+              fontFamily: "Menlo",
+              padding: 10,
+            }}
+            value={text}
+          />
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => {
+              pair(text).catch(() => undefined);
+            }}
+            style={ui.ghostButton}
+          >
+            <Text style={ui.ghostButtonText}>Connect</Text>
+          </Pressable>
+        </>
+      ) : null}
       {pairing.phase === "working" ? (
         <Text style={ui.hint}>Connecting…</Text>
       ) : null}

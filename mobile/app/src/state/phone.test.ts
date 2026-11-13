@@ -95,7 +95,7 @@ test("pairing shows the code, then the computer it paired with", async () => {
   native.pair.mockResolvedValue("123456");
   native.finishPairing.mockResolvedValue(paired(MAC, "Mac"));
   native.hosts.mockResolvedValue([paired(MAC, "Mac")]);
-  const done = usePhone.getState().pair("kriyon-pair:...");
+  const done = usePhone.getState().pair("kriyon-pair:1:ab");
   await Promise.resolve();
   await Promise.resolve();
   expect(usePhone.getState().pairing).toEqual({
@@ -115,7 +115,7 @@ test("an empty paste is refused before Rust", async () => {
 
 test("a pairing Rust refuses says why", async () => {
   native.pair.mockRejectedValue(new Error("that isn't a Kriyon pairing code"));
-  await usePhone.getState().pair("hello");
+  await usePhone.getState().pair("kriyon-pair:1:zz");
   expect(usePhone.getState().pairing).toEqual({
     phase: "failed",
     reason: "that isn't a Kriyon pairing code",
