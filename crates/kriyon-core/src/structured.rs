@@ -181,7 +181,7 @@ fn block(value: &Value) -> Block {
         "tool_result" => Block::ToolResult {
             id: field("tool_use_id").to_string(),
             is_error: value.get("is_error").and_then(Value::as_bool) == Some(true),
-            content: cap(&value.get("content").map(text_of).unwrap_or_default()),
+            content: cap(&value.get("content").map_or_else(String::new, text_of)),
         },
         _ => Block::Other,
     }
