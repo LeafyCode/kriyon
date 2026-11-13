@@ -3,7 +3,7 @@
 use std::net::SocketAddr;
 
 use iroh::endpoint::{presets, QuicTransportConfig, VarInt};
-use iroh::{Endpoint, RelayMode, RelayUrl, SecretKey};
+use iroh::{Endpoint, RelayConfig, RelayMode, RelayUrl, SecretKey};
 use kriyon_remote::codec::CodecError;
 use kriyon_remote::link_policy::CloseCode;
 use kriyon_remote::message::{EndpointId, RefuseReason};
@@ -26,8 +26,32 @@ pub struct LinkConfig {
     /// Where to listen: `0.0.0.0:0` by default, a fixed port for Tailscale,
     /// `127.0.0.1:0` in tests.
     pub bind: SocketAddr,
-    /// A relay to use, when the person subscribes; none otherwise.
-    pub relay_url: Option<RelayUrl>,
+    /// Our relay and this device's [Relay pass], when the person subscribes;
+    /// none otherwise.
+    pub relay: Option<RelayAccess>,
+}
+
+/// A relay and the pass that lets this device use it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RelayAccess {
+    pub url: RelayUrl,
+    /// Opaque: sent to the relay as it is, never read.
+    pub pass: String,
+}
+
+/// The relay setup for `config`: none, or our relay with the pass as its
+/// auth token.
+#[must_use]
+pub fn relay_mode(config: &LinkConfig) -> RelayMode {
+    config.relay.as_ref().map_or(RelayMode::Disabled, |relay| {
+        // iroh sends the token as `Authorization: Bearer <pass>`, and reads
+        // it once, when the endpoint starts: a new pass needs a new endpoint.
+        RelayMode::Custom(
+            RelayConfig::from(relay.url.clone())
+                .with_auth_token(relay.pass.clone())
+                .into(),
+        )
+    })
 }
 
 impl LinkConfig {
@@ -37,7 +61,7 @@ impl LinkConfig {
         Self {
             secret_key,
             bind: SocketAddr::from(([0, 0, 0, 0], 0)),
-            relay_url: None,
+            relay: None,
         }
     }
 }
@@ -81,9 +105,7 @@ pub async fn bind(config: &LinkConfig, alpns: Vec<Vec<u8>>) -> Result<Endpoint, 
         .max_concurrent_bidi_streams(VarInt::from_u32(MAX_STREAMS))
         .max_concurrent_uni_streams(VarInt::from_u32(0))
         .build();
-    let relay = config.relay_url.clone().map_or(RelayMode::Disabled, |url| {
-        RelayMode::Custom(iroh::RelayMap::from(url))
-    });
+    let relay = relay_mode(config);
     // The minimal preset: no address lookup of any kind. Devices learn the
     // host's addresses at pairing.
     let endpoint = Endpoint::builder(presets::Minimal)
@@ -138,5 +160,34 @@ pub(crate) fn gone(error: &iroh::endpoint::ConnectionError) -> LinkError {
     match close_code(error) {
         Some(code) => LinkError::Closed(Some(code)),
         None => LinkError::Connect(error.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod relay_tests {
+    use super::*;
+
+    #[test]
+    fn no_relay_unless_one_is_set() {
+        assert_eq!(relay_mode(&LinkConfig::new([1; 32])), RelayMode::Disabled);
+    }
+
+    #[test]
+    fn our_relay_carries_the_pass_untouched_as_its_auth_token() {
+        let url: RelayUrl = "https://relay.example.test/".parse().expect("url");
+        let pass = "kp1.AQ8eLTxLWml4h5altMPS4fCgmqX0emdZgC_5VfjcLSoUpcmdI76X-GQSf_k4NFWk8AAAAABq96SAAAAAAGsfMYA.vg7dZ8vaIGxbWpMVoOvTHz28Lbk9B9LnD9v15n4spiy5_rxih0c_gDHWoz9M5OnDnn3vuuPcF_qIBrPzSEvMDA";
+        let config = LinkConfig {
+            relay: Some(RelayAccess {
+                url: url.clone(),
+                pass: pass.into(),
+            }),
+            ..LinkConfig::new([1; 32])
+        };
+        let RelayMode::Custom(map) = relay_mode(&config) else {
+            panic!("a custom relay");
+        };
+        assert_eq!(map.len(), 1);
+        let relay = map.get(&url).expect("our relay");
+        assert_eq!(relay.auth_token.as_deref(), Some(pass));
     }
 }

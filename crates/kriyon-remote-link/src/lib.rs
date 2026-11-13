@@ -19,4 +19,4 @@ pub mod framed;
 pub mod host;
 pub mod invite;
 
-pub use endpoint::{LinkConfig, LinkError, ALPN_PAIR, ALPN_REMOTE};
+pub use endpoint::{LinkConfig, LinkError, RelayAccess, ALPN_PAIR, ALPN_REMOTE};
