@@ -1,0 +1,20 @@
+[package]
+name = "kriyon-remote-link"
+version.workspace = true
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+description = "The network link of Kriyon's remote access, over iroh: endpoints, accepting by paired id, pairing, streams and reconnects."
+
+[dependencies]
+iroh = { version = "1.4.1", default-features = false, features = ["tls-ring"] }
+kriyon-remote = { path = "../kriyon-remote" }
+tokio = { version = "1", default-features = false, features = ["sync", "time"] }
+
+[dev-dependencies]
+tokio = { version = "1", default-features = false, features = ["macros", "rt-multi-thread", "sync", "time"] }
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"
+correctness = "deny"

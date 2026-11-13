@@ -32,6 +32,12 @@ allow = [
 ]
 confidence-threshold = 0.9
 
+# Mozilla's CA root list, shipped as data under CDLA-Permissive-2.0; required by
+# iroh-relay (kriyon-remote-link). Allowed for this crate only.
+[[licenses.exceptions]]
+crate = "webpki-roots"
+allow = ["CDLA-Permissive-2.0"]
+
 [licenses.private]
 # Kriyon's own crates are not published to crates.io.
 ignore = true
