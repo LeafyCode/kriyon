@@ -1,0 +1,32 @@
+{
+  "name": "@kriyon/mobile",
+  "version": "0.16.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "main": "index.ts",
+  "scripts": {
+    "android": "expo run:android",
+    "ios": "expo run:ios",
+    "start": "expo start --dev-client",
+    "test": "jest",
+    "typecheck": "tsc --noEmit"
+  },
+  "jest": {
+    "preset": "jest-expo"
+  },
+  "dependencies": {
+    "expo": "~58.0.25",
+    "expo-dev-client": "~58.0.20",
+    "expo-status-bar": "~58.0.5",
+    "react": "19.3.0",
+    "react-native": "0.88.1"
+  },
+  "devDependencies": {
+    "@jest/globals": "~30.5.2",
+    "@testing-library/react-native": "^14.1.0",
+    "@types/react": "~19.3.0",
+    "jest": "~30.5.2",
+    "jest-expo": "~58.0.14",
+    "typescript": "~7.0.2"
+  }
+}

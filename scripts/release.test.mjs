@@ -126,11 +126,18 @@ const lock = (version, crates = ["kriyon", "kriyon-core", "kriyon-ptyd"]) =>
     '[[package]]\nname = "serde"\nversion = "1.0.0"\nsource = "registry+https://github.com/rust-lang/crates.io-index"\nchecksum = "00"\n',
   ].join("\n");
 
+const PHONE_PACKAGE_0_14 =
+  /"name": "@kriyon\/mobile",\n {2}"version": "0\.14\.0"/;
+const PHONE_APP_0_14 =
+  /"expo": \{\n {4}"name": "Kriyon",\n {4}"version": "0\.14\.0"/;
+
 const versionFiles = (version) => ({
   packageJson: `{\n  "name": "kriyon",\n  "version": "${version}",\n  "type": "module"\n}\n`,
   cargoToml: `[workspace]\nmembers = ["src-tauri", "crates/*"]\n\n[workspace.package]\nversion = "${version}"\n\n[profile.release]\nopt-level = "s"\n`,
   cargoLock: lock(version),
   site: `/* note */\nexport const APP_VERSION = "v${version}";\n`,
+  mobilePackageJson: `{\n  "name": "@kriyon/mobile",\n  "version": "${version}"\n}\n`,
+  mobileAppJson: `{\n  "expo": {\n    "name": "Kriyon",\n    "version": "${version}"\n  }\n}\n`,
 });
 
 describe("one version everywhere", () => {
@@ -140,7 +147,10 @@ describe("one version everywhere", () => {
       cargoToml: read("Cargo.toml"),
       cargoLock: read("Cargo.lock"),
       site: read("website/src/lib/site.ts"),
+      mobilePackageJson: read("mobile/app/package.json"),
+      mobileAppJson: read("mobile/app/app.json"),
     });
+    assert.ok(versions["mobile/app/app.json"], "the phone app is checked");
     const expected = versions["package.json"];
     for (const [file, version] of Object.entries(versions)) {
       assert.equal(
@@ -197,6 +207,12 @@ describe("one version everywhere", () => {
 });
 
 describe("setting the version", () => {
+  test("the phone app's package and app.json move with the rest", () => {
+    const updated = setVersions(versionFiles("0.13.0"), "0.14.0");
+    assert.match(updated.mobilePackageJson, PHONE_PACKAGE_0_14);
+    assert.match(updated.mobileAppJson, PHONE_APP_0_14);
+  });
+
   test("every file gets the version and keeps its formatting", () => {
     assert.deepEqual(
       setVersions(versionFiles("0.12.0"), "0.13.0-beta.1"),
@@ -695,6 +711,7 @@ describe("pnpm release, end to end", () => {
       const seed = join(root, "seed");
       mkdirSync(join(seed, "scripts"), { recursive: true });
       mkdirSync(join(seed, "website/src/lib"), { recursive: true });
+      mkdirSync(join(seed, "mobile/app"), { recursive: true });
       for (const file of [
         "scripts/release.mjs",
         "scripts/release-lib.mjs",
@@ -707,6 +724,11 @@ describe("pnpm release, end to end", () => {
       writeFileSync(join(seed, "Cargo.toml"), files.cargoToml);
       writeFileSync(join(seed, "Cargo.lock"), files.cargoLock);
       writeFileSync(join(seed, "website/src/lib/site.ts"), files.site);
+      writeFileSync(
+        join(seed, "mobile/app/package.json"),
+        files.mobilePackageJson
+      );
+      writeFileSync(join(seed, "mobile/app/app.json"), files.mobileAppJson);
       writeFileSync(
         join(seed, "CHANGELOG.md"),
         "# Changelog\n\nIntro.\n\n## 0.12.0 — 2026-10-11\n\nOld.\n"
@@ -780,6 +802,11 @@ describe("pnpm release, end to end", () => {
         cargoToml: readFileSync(join(work, "Cargo.toml"), "utf8"),
         cargoLock: readFileSync(join(work, "Cargo.lock"), "utf8"),
         site: readFileSync(join(work, "website/src/lib/site.ts"), "utf8"),
+        mobilePackageJson: readFileSync(
+          join(work, "mobile/app/package.json"),
+          "utf8"
+        ),
+        mobileAppJson: readFileSync(join(work, "mobile/app/app.json"), "utf8"),
       });
       assert.deepEqual(new Set(Object.values(versions)), new Set(["0.13.0"]));
       assert.equal(
