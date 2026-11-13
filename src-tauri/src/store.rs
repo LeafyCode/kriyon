@@ -31,6 +31,20 @@ pub struct PairedDeviceRow {
     pub paired_at: i64,
 }
 
+/// A [Host] this computer paired with as a [Remote device].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PairedHostRow {
+    /// The host's endpoint id.
+    pub host_id: [u8; 32],
+    /// The name the host gave in `Paired`.
+    pub name: String,
+    /// Where it listened when paired (`ip:port`).
+    pub addrs: Vec<String>,
+    pub relay_url: Option<String>,
+    /// When it was paired, ms since epoch.
+    pub paired_at: i64,
+}
+
 /// How long a remote start's id is kept, so a resend returns the same session.
 pub const REMOTE_START_KEPT_MS: i64 = 24 * 60 * 60 * 1000;
 
@@ -330,6 +344,13 @@ impl Store {
                  role        TEXT NOT NULL,
                  paired_at   INTEGER NOT NULL
              );
+             CREATE TABLE IF NOT EXISTS paired_hosts (
+                 host_id    TEXT PRIMARY KEY,
+                 name       TEXT NOT NULL,
+                 addrs_json TEXT NOT NULL,
+                 relay_url  TEXT,
+                 paired_at  INTEGER NOT NULL
+             );
              CREATE TABLE IF NOT EXISTS remote_starts (
                  device_id  TEXT NOT NULL,
                  request_id TEXT NOT NULL,
@@ -377,6 +398,77 @@ impl Store {
             }
             Err(e) => Err(StoreError::Sqlite(e)),
         }
+    }
+
+    /// Keep a host this computer paired with, replacing an earlier pairing
+    /// of the same host.
+    ///
+    /// # Errors
+    /// Returns [`StoreError::Sqlite`] if the statement fails.
+    pub fn add_paired_host(&self, row: &PairedHostRow) -> Result<(), StoreError> {
+        let addrs = serde_json::to_string(&row.addrs).unwrap_or_else(|_| "[]".into());
+        self.conn.execute(
+            "INSERT OR REPLACE INTO paired_hosts (host_id, name, addrs_json, relay_url, paired_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![
+                hex(&row.host_id),
+                row.name,
+                addrs,
+                row.relay_url,
+                row.paired_at
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Every host this computer paired with, oldest first. A row that doesn't
+    /// read back is skipped.
+    ///
+    /// # Errors
+    /// Returns [`StoreError::Sqlite`] if the query fails.
+    pub fn paired_hosts(&self) -> Result<Vec<PairedHostRow>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT host_id, name, addrs_json, relay_url, paired_at FROM paired_hosts
+             ORDER BY paired_at, host_id",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, Option<String>>(3)?,
+                r.get::<_, i64>(4)?,
+            ))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (id, name, addrs, relay_url, paired_at) = row?;
+            let (Some(host_id), Ok(addrs)) = (
+                endpoint_from_hex(&id),
+                serde_json::from_str::<Vec<String>>(&addrs),
+            ) else {
+                continue;
+            };
+            out.push(PairedHostRow {
+                host_id,
+                name,
+                addrs,
+                relay_url,
+                paired_at,
+            });
+        }
+        Ok(out)
+    }
+
+    /// Forget a host. Returns whether it was there.
+    ///
+    /// # Errors
+    /// Returns [`StoreError::Sqlite`] if the statement fails.
+    pub fn forget_paired_host(&self, host_id: &[u8; 32]) -> Result<bool, StoreError> {
+        Ok(self.conn.execute(
+            "DELETE FROM paired_hosts WHERE host_id = ?1",
+            [hex(host_id)],
+        )? > 0)
     }
 
     /// Keep a newly paired device, replacing an earlier pairing of the same
@@ -1077,6 +1169,39 @@ mod tests {
                 s.remote_start(&PHONE, &[5; 16], DAY_MS).expect("reads"),
                 None
             );
+        }
+
+        fn studio() -> PairedHostRow {
+            PairedHostRow {
+                host_id: LAPTOP,
+                name: "Studio".into(),
+                addrs: vec!["192.168.1.20:41641".into(), "100.64.0.7:41641".into()],
+                relay_url: None,
+                paired_at: 5,
+            }
+        }
+
+        #[test]
+        fn a_host_this_computer_paired_with_is_kept_with_how_to_reach_it() {
+            let s = store();
+            assert_eq!(s.paired_hosts().expect("lists"), vec![]);
+            s.add_paired_host(&studio()).expect("adds");
+            assert_eq!(s.paired_hosts().expect("lists"), vec![studio()]);
+            let again = PairedHostRow {
+                name: "Studio Mac".into(),
+                ..studio()
+            };
+            s.add_paired_host(&again).expect("replaces");
+            assert_eq!(s.paired_hosts().expect("lists"), vec![again]);
+        }
+
+        #[test]
+        fn a_host_can_be_forgotten() {
+            let s = store();
+            s.add_paired_host(&studio()).expect("adds");
+            assert!(s.forget_paired_host(&LAPTOP).expect("forgets"));
+            assert_eq!(s.paired_hosts().expect("lists"), vec![]);
+            assert!(!s.forget_paired_host(&LAPTOP).expect("already gone"));
         }
 
         #[test]
