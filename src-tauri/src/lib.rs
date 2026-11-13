@@ -100,9 +100,6 @@ pub struct AppState {
     /// but only while [`AppState::window_focused`] is also true — a session is
     /// only truly "on screen" when the Kriyon window itself is up front.
     pub focused: Mutex<Option<SessionId>>,
-    /// The sessions any remote device has open: [Onlooker]s for auto-sleep,
-    /// and woken like the focused session.
-    pub remote_onlooked: Mutex<std::collections::HashSet<SessionId>>,
     /// Whether the main Kriyon window is currently focused (frontmost). Tracked
     /// natively from `WindowEvent::Focused` so notifications fire for the active
     /// session once the user switches to another app. Defaults to `true` (the

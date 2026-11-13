@@ -126,27 +126,29 @@ impl Writers {
         if engine.resize(size.0, size.1).is_err() {
             return Ok(false);
         }
-        gate.device_write(device, role, write, Some(size))?;
+        gate.set_screen(size);
         Ok(true)
     }
 
-    /// `device` takes [Typing control] of session `id`.
-    ///
-    /// # Errors
-    /// [`HostIsTyping`] while the host typed in the last 10 s.
+    /// `device` takes [Typing control] of session `id`: `None` for a session
+    /// that closed, else whether the host let it ([`HostIsTyping`] while the
+    /// host typed in the last 10 s).
     pub fn take(
         &self,
         id: &SessionId,
         device: EndpointId,
         now: Instant,
-    ) -> Result<Option<Change>, HostIsTyping> {
+    ) -> Option<Result<Option<Change>, HostIsTyping>> {
         // Only a live session's gate: one closed meanwhile isn't made again.
-        let Some(gate) = self.gates.lock().get(id).cloned() else {
-            return Ok(None);
+        let gate = self.gates.lock().get(id).cloned()?;
+        let mut gate = gate.lock();
+        let change = match gate.take(device, now) {
+            Ok(change) => change,
+            Err(refused) => return Some(Err(refused)),
         };
-        let change = gate.lock().take(device, now)?;
+        // Under the gate's lock, in epoch order.
         self.tell(id, change);
-        Ok(change)
+        Some(Ok(change))
     }
 
     /// Call `hook` on every change of [Typing control] these writers make,
@@ -172,6 +174,15 @@ impl Writers {
     /// already sized the PTY.
     pub fn note_host_size(&self, id: &SessionId, size: (u16, u16)) {
         let _ = self.gate(id).lock().host_resize(size);
+    }
+
+    /// The PTY was just sized to `attached` (a client attaching): if a device
+    /// holds its own size, put that back, so the PTY and the gate agree.
+    pub fn sync_screen(&self, id: &SessionId, engine: &DaemonClient, attached: (u16, u16)) {
+        let screen = self.gate(id).lock().screen();
+        if screen != attached {
+            let _ = engine.resize(screen.0, screen.1);
+        }
     }
 
     /// The daemon named session `id`'s [Session run].
@@ -224,9 +235,10 @@ impl Writers {
             }
         }
         let written = engine.write_stdin(bytes).map_err(|e| e.to_string());
-        drop(gate);
-        // Told even when the write failed: control came back all the same.
+        // Told under the gate's lock, so devices hear changes in epoch order;
+        // told even when the write failed: control came back all the same.
         self.tell(id, took.change);
+        drop(gate);
         written?;
         Ok(took)
     }
@@ -271,9 +283,10 @@ impl Writers {
                 // Best effort: a session whose daemon is gone has no size.
                 let _ = engine.resize(cols, rows);
             }
+            // Under the gate's lock, in epoch order.
+            self.tell(id, took.change);
             drop(gate);
             if took.change.is_some() {
-                self.tell(id, took.change);
                 changed.push((id.clone(), took));
             }
         }
@@ -330,6 +343,7 @@ mod tests {
                 PHONE,
                 Instant::now() + std::time::Duration::from_secs(60),
             )
+            .expect("live")
             .expect("the host hasn't typed")
             .expect("a change");
         assert_eq!(change.holder, Holder::Device(PHONE));
@@ -372,6 +386,7 @@ mod tests {
                 PHONE,
                 Instant::now() + std::time::Duration::from_secs(60),
             )
+            .expect("live")
             .expect("taken");
         writers.host_write(&id, &engine, b"x").expect("typed");
         assert_eq!(
@@ -387,7 +402,7 @@ mod tests {
     fn taking_a_session_that_is_gone_makes_nothing() {
         let writers = Writers::default();
         let id = SessionId("gone".into());
-        assert_eq!(writers.take(&id, PHONE, Instant::now()).ok(), Some(None));
+        assert!(writers.take(&id, PHONE, Instant::now()).is_none());
         assert!(!writers.has_gate(&id));
     }
 

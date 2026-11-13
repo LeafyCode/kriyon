@@ -117,8 +117,8 @@ pub fn sleep_pass<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     }
     // The same for every session a remote device has open: it wakes the
     // session as desktop focus does (plan Step C item 7).
-    let remote: Vec<SessionId> = state.remote_onlooked.lock().iter().cloned().collect();
-    for session_id in remote {
+    let remote = remote_onlooked(app);
+    for session_id in &remote {
         if state.sleep.lock().state(&session_id.0) == SleepState::Asleep {
             attempt_wake(app, &session_id.0);
         }
@@ -129,7 +129,7 @@ pub fn sleep_pass<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
         &state,
         &ids,
         &tree,
-        &onlookers(focused.as_ref(), &state.remote_onlooked.lock().clone()),
+        &onlookers(focused.as_ref(), &remote),
         &policy,
     );
 }
@@ -150,7 +150,7 @@ pub fn sleep_idle_now<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> usize {
     };
     let tree = survey.tree();
     let focused = state.focused.lock().clone();
-    let looking = onlookers(focused.as_ref(), &state.remote_onlooked.lock());
+    let looking = onlookers(focused.as_ref(), &remote_onlooked(app));
     stop_candidates(
         app,
         &state,
@@ -159,6 +159,21 @@ pub fn sleep_idle_now<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> usize {
         &looking,
         &kriyon_core::sleep::AutoSleep::NOW,
     )
+}
+
+/// Every session a remote device has open.
+fn remote_onlooked<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+) -> std::collections::HashSet<SessionId> {
+    app.try_state::<crate::remote_serve::Serve>()
+        .map(|serve| {
+            serve
+                .onlooked_sessions()
+                .into_iter()
+                .map(SessionId)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Everyone looking at a session right now, for the "never sleep a session

@@ -224,17 +224,17 @@ impl ServeHost for AppServeHost {
         )
     }
 
-    fn take(&self, id: &str, device: EndpointId) -> Result<(), HostIsTyping> {
+    fn take(&self, id: &str, device: EndpointId) -> Result<(), RefuseReason> {
         // The writers tell every device (their change hook).
-        self.0
-            .state::<AppState>()
-            .writers
-            .take(
-                &SessionId(id.to_string()),
-                device,
-                std::time::Instant::now(),
-            )
-            .map(|_| ())
+        match self.0.state::<AppState>().writers.take(
+            &SessionId(id.to_string()),
+            device,
+            std::time::Instant::now(),
+        ) {
+            None => Err(RefuseReason::NoSuchSession),
+            Some(Err(HostIsTyping)) => Err(RefuseReason::NotInControl),
+            Some(Ok(_)) => Ok(()),
+        }
     }
 
     fn release(&self, device: &EndpointId) {
@@ -253,27 +253,10 @@ impl ServeHost for AppServeHost {
     }
 
     fn set_onlooked(&self, id: &str, onlooked: bool) {
-        let session = SessionId(id.to_string());
-        {
-            let state = self.0.state::<AppState>();
-            let mut remote = state.remote_onlooked.lock();
-            if onlooked {
-                remote.insert(session.clone());
-            } else {
-                remote.remove(&session);
-            }
-        }
-        // Opened while asleep: woken, as desktop focus wakes it. Off the
-        // async runtime: a wake types into the session.
+        // Opened while asleep (or stuck): woken, as desktop focus wakes it.
+        // The wake decides, and does its typing on its own thread.
         if onlooked {
-            let app = self.0.clone();
-            tauri::async_runtime::spawn_blocking(move || {
-                let asleep = app.state::<AppState>().sleep.lock().state(&session.0)
-                    == kriyon_core::sleep::SleepState::Asleep;
-                if asleep {
-                    crate::sleep_rt::attempt_wake(&app, &session.0);
-                }
-            });
+            crate::sleep_rt::attempt_wake(&self.0, id);
         }
         let engine = self
             .0

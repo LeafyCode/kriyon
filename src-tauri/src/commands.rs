@@ -400,6 +400,12 @@ pub async fn create_session(
         state
             .writers
             .note_host_size(&SessionId(id.clone()), (INITIAL_COLS, INITIAL_ROWS));
+        // A device that holds its own size keeps it across the reattach.
+        state.writers.sync_screen(
+            &SessionId(id.clone()),
+            &engine,
+            (INITIAL_COLS, INITIAL_ROWS),
+        );
         register_session(&app, &state, SessionId(id), engine, None)?;
         served.keep();
         return Ok(true);
@@ -504,6 +510,12 @@ pub async fn create_session(
     state
         .writers
         .note_host_size(&SessionId(id.clone()), (INITIAL_COLS, INITIAL_ROWS));
+    // A device that holds its own size keeps it across the reattach.
+    state.writers.sync_screen(
+        &SessionId(id.clone()),
+        &engine,
+        (INITIAL_COLS, INITIAL_ROWS),
+    );
     register_session(&app, &state, SessionId(id), engine, zdotdir)?;
     served.keep();
 

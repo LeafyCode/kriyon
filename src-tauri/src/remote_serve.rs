@@ -18,7 +18,7 @@ use kriyon_remote::authorize::{
     authorize, Dialog, HostState, PendingWrite, ProjectFolder, SessionView, Stream,
 };
 use kriyon_remote::codec::{encode, Decoded};
-use kriyon_remote::control::{Change, Control, HostIsTyping};
+use kriyon_remote::control::{Change, Control};
 use kriyon_remote::fanout::{Pop, RequesterId, SessionFanout};
 use kriyon_remote::link_policy::CloseCode;
 use kriyon_remote::message::{EndpointId, FromDevice, RefuseReason, Role, SessionInfo, ToDevice};
@@ -85,8 +85,9 @@ pub trait ServeHost: Send + Sync + 'static {
     /// ([`Serve::broadcast_control`]), whatever made it.
     ///
     /// # Errors
-    /// The host typed in the last 10 s.
-    fn take(&self, id: &str, device: EndpointId) -> Result<(), HostIsTyping>;
+    /// `NotInControl` while the host typed in the last 10 s; `NoSuchSession`
+    /// for one that closed.
+    fn take(&self, id: &str, device: EndpointId) -> Result<(), RefuseReason>;
     /// `device` went away: control of every session it held goes back to the
     /// host, which tells every device. May block.
     fn release(&self, device: &EndpointId);
@@ -256,6 +257,29 @@ impl Serve {
         }
     }
 
+    /// Every session a remote device has open: [Onlooker]s for auto-sleep,
+    /// and woken like the desktop's focused session.
+    #[must_use]
+    pub fn onlooked_sessions(&self) -> Vec<String> {
+        let sessions: Vec<(String, Arc<Served>)> = self
+            .0
+            .sessions
+            .lock()
+            .iter()
+            .map(|(id, served)| (id.clone(), Arc::clone(served)))
+            .collect();
+        sessions
+            .into_iter()
+            .filter(|(_, served)| served.fanout.lock().open_count() > 0)
+            .map(|(id, _)| id)
+            .collect()
+    }
+
+    /// Whether `device` has a connection served now.
+    fn has_control(&self, device: &EndpointId) -> bool {
+        self.0.controls.lock().contains_key(device)
+    }
+
     /// Whether a remote device has session `id` open.
     #[must_use]
     pub fn is_onlooked(&self, id: &str) -> bool {
@@ -410,8 +434,15 @@ impl Serve {
         // before the drop can never land. Not if it is already back on a new
         // connection.
         if ours {
-            let host = Arc::clone(&self.0.host);
-            let _ = tokio::task::spawn_blocking(move || host.release(&device)).await;
+            let serve = self.clone();
+            let _ = tokio::task::spawn_blocking(move || {
+                // Not if it is back already: a release now would take away
+                // control its new connection took.
+                if !serve.has_control(&device) {
+                    serve.0.host.release(&device);
+                }
+            })
+            .await;
         }
     }
 
@@ -489,11 +520,9 @@ impl Serve {
             let facts = self.facts(device, role, named_session(None, &message), false);
             let verdict = authorize(&device, Stream::Control, &message, &facts, Instant::now())
                 .and_then(|()| match &message {
-                    Decoded::Message(FromDevice::TakeControl { session_id }) => self
-                        .0
-                        .host
-                        .take(session_id, device)
-                        .map_err(|HostIsTyping| RefuseReason::NotInControl),
+                    Decoded::Message(FromDevice::TakeControl { session_id }) => {
+                        self.0.host.take(session_id, device)
+                    }
                     // Remote starts wait for `create_session` to run without
                     // the webview (plan Step C).
                     Decoded::Message(FromDevice::StartSession { .. }) => {
@@ -686,7 +715,9 @@ impl Serve {
             fanout.open_count()
         };
         served.wakers.lock().remove(device);
-        if open == 0 {
+        // Not if the session is served afresh and a device opened it there
+        // (a stream of the old one ending late).
+        if open == 0 && !self.is_onlooked(id) {
             self.0.host.set_onlooked(id, false);
         }
     }
@@ -764,6 +795,7 @@ mod tests {
     use kriyon_remote_link::host::{Accepted, Host, PairedDevices};
 
     use super::*;
+    use kriyon_remote::control::HostIsTyping;
 
     /// The app, faked: one session "s", paired devices in a map.
     struct FakeHost {
@@ -861,8 +893,12 @@ mod tests {
                 .device_write(device, Some(role), write, Some(size))?;
             Ok(true)
         }
-        fn take(&self, _id: &str, device: EndpointId) -> Result<(), HostIsTyping> {
-            let change = self.gate.lock().take(device, Instant::now())?;
+        fn take(&self, _id: &str, device: EndpointId) -> Result<(), RefuseReason> {
+            let change = self
+                .gate
+                .lock()
+                .take(device, Instant::now())
+                .map_err(|HostIsTyping| RefuseReason::NotInControl)?;
             self.tell(change);
             Ok(())
         }

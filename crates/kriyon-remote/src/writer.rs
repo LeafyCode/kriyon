@@ -166,6 +166,12 @@ impl SessionGate {
         Ok(())
     }
 
+    /// A device's resize took on the PTY: the session's size now. Only after
+    /// [`Self::device_write`] passed for it.
+    pub fn set_screen(&mut self, size: (u16, u16)) {
+        self.screen = size;
+    }
+
     /// The session's screen size now.
     #[must_use]
     pub fn screen(&self) -> (u16, u16) {
