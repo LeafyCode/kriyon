@@ -38,6 +38,7 @@ pub mod redact;
 pub mod runtime;
 pub mod session;
 pub mod shellinit;
+pub mod skip_ahead;
 pub mod sleep;
 pub mod status;
 pub mod structured;

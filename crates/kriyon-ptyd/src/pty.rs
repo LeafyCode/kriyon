@@ -152,12 +152,11 @@ impl PtyEngine {
         let writer = pair.master.take_writer().map_err(pty_err)?;
         let mut reader = pair.master.try_clone_reader().map_err(pty_err)?;
 
-        // No reader-side backpressure lives here: in the daemon, `on_output`
-        // writes to the client socket and a blocking socket write IS the
-        // backpressure (it stalls the read, stalling the child). When detached
-        // there is nothing to stall against, and nothing accumulates either —
-        // output is folded into the headless emulator's one screen grid
-        // (ADR-0004), which is bounded by construction.
+        // Nothing here ever makes the child wait on a client, by design. In
+        // the daemon, `on_output` folds output into the headless
+        // emulator's one screen grid (ADR-0004), bounded by construction, and
+        // queues it for the client in a bounded queue that skips ahead to a
+        // fresh screen when the client falls behind ([Skip ahead]).
         let reader_thread = std::thread::spawn(move || {
             loop {
                 // Read straight into a fresh Vec each iteration, so the chunk

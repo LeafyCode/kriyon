@@ -3,19 +3,21 @@
 //! headless VT emulator fed by *every* byte of child output, attached or not —
 //! so a reattaching client repaints the current screen even when the child has
 //! produced nothing since the last detach (ADR-0004). Live output still streams
-//! raw to the attached client.
+//! raw to the attached client, through a bounded queue and a writer thread of
+//! its own, so a slow or stuck client never stalls the session ([Skip ahead]).
 
 use std::io::{Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use kriyon_core::lease::DetachedLease;
 use kriyon_core::session::{check_screen_size, EngineError, SessionEngine, SessionId, SpawnSpec};
-use kriyon_core::wire::{Frame, FrameDecoder};
-use parking_lot::Mutex;
+use kriyon_core::skip_ahead::{Next, SkipAheadQueue};
+use kriyon_core::wire::{chunked, Frame, FrameDecoder};
+use parking_lot::{Condvar, Mutex};
 
 use crate::pty::PtyEngine;
 
@@ -27,6 +29,13 @@ const BUSY_POLL_INTERVAL: Duration = Duration::from_millis(250);
 /// the real terminal dimensions.
 const INITIAL_ROWS: u16 = 24;
 const INITIAL_COLS: u16 = 80;
+/// The most output a client may have waiting before it skips ahead to a fresh
+/// screen. Room for a large burst (a long `cat`) while the app is only busy,
+/// small enough that a stuck client costs little memory.
+const CLIENT_QUEUE_LIMIT: usize = 4 * 1024 * 1024;
+/// How long a daemon whose shell exited waits for its client to receive the
+/// output still queued, before it stops.
+const FINAL_SEND_WAIT: Duration = Duration::from_secs(1);
 
 /// DECSET 1049 — switch the client to the alternate screen buffer.
 const ENTER_ALTERNATE_SCREEN: &[u8] = b"\x1b[?1049h";
@@ -64,18 +73,33 @@ fn screen_snapshot(parser: &vt100::Parser) -> Vec<u8> {
     snapshot
 }
 
-/// State shared between the PTY reader thread (which produces output) and the
-/// accept loop (which attaches/detaches clients). Lock order is always
-/// `client` then `emulator` — never the reverse — so the two paths cannot
-/// deadlock.
+/// The attached client, as the daemon's output side sees it: the frames
+/// waiting for its writer thread.
+struct AttachedClient {
+    /// Tells this client's writer apart from a previous client's, which may
+    /// still be finishing a write after that client left.
+    id: u64,
+    queue: SkipAheadQueue,
+    /// The writer has taken bytes off the queue and not finished writing them.
+    sending: bool,
+}
+
+/// State shared between the PTY reader thread (which produces output), the
+/// accept loop (which attaches/detaches clients) and the client's writer
+/// thread. Lock order is always `client` then `emulator`, never the reverse,
+/// so no two paths can deadlock. No lock is ever held across a socket write.
 struct Shared {
-    client: Mutex<Option<UnixStream>>,
+    client: Mutex<Option<AttachedClient>>,
+    /// Wakes the writer when a frame is queued or its client leaves.
+    client_ready: Condvar,
+    next_client: AtomicU64,
     /// Headless terminal emulator consuming every output byte, so its screen is
     /// always the current one to repaint a reattaching client from.
     emulator: Mutex<vt100::Parser>,
-    /// Last-known foreground-busy state, updated by the busy poller and replayed
-    /// to each new client on attach. An atomic (not a lock) so `attach` can read
-    /// it while holding the client lock without any lock-ordering hazard.
+    /// Last-known foreground-busy state, updated by the busy poller and sent
+    /// with every screen snapshot, so a client that attaches or skips ahead
+    /// learns it at once. An atomic (not a lock) so the writer can read it
+    /// while holding the client lock without any lock-ordering hazard.
     busy: AtomicBool,
     /// The [Detached lease]: renewed by output and by a client arriving or
     /// leaving, read by the reaper. A leaf lock — taken alone, or last and
@@ -85,68 +109,140 @@ struct Shared {
 
 impl Shared {
     /// Route a chunk of PTY output: feed the server-side emulator (always, so
-    /// the screen snapshot stays current even while detached), then stream the
-    /// raw bytes to the live client if one is attached.
-    ///
-    /// Holding the `client` lock across the (possibly blocking) write is safe
-    /// because there is only ever one client at a time: `attach` for the next
-    /// client runs only after the current one disconnects and the accept loop
-    /// calls `detach`. While a client is alive but slow, the blocking write here
-    /// is the intended backpressure and no `attach`/`detach` competes for the
-    /// lock; when the client dies, the write fails fast (`AF_UNIX` delivers EOF
-    /// on peer close) and the lock is released.
+    /// the screen snapshot stays current even while detached), then queue the
+    /// raw bytes for the live client if one is attached. Never waits on the
+    /// client: a client that falls behind skips ahead instead, so the PTY
+    /// reader, and the child behind it, keep going.
     fn on_output(&self, bytes: &[u8]) {
         // Output is the proof of work that keeps a detached daemon alive.
         self.lease.lock().note_output(Instant::now());
         let mut client = self.client.lock();
         self.emulator.lock().process(bytes);
-        // The blocking write inside `write_or_drop` IS the backpressure: if the
-        // app has stopped draining the socket, it stalls, stalling the PTY read,
-        // which backpressures the child. A failed write drops the dead client.
-        write_or_drop(&mut client, &Frame::Output(bytes.to_vec()));
+        self.queue_frame(&mut client, output_frames(bytes));
     }
 
-    /// Attach `stream` as the live client: repaint it from the server-side
-    /// screen snapshot (the escape codes that reconstruct the current contents,
-    /// colours, cursor, and modes), then store the writer clone. Held under the
-    /// client lock so output produced mid-attach is serialized after the repaint.
-    fn attach(&self, stream: &mut UnixStream) {
-        let mut client = self.client.lock();
-        let snapshot = screen_snapshot(&self.emulator.lock());
-        if !snapshot.is_empty() {
-            let _ = stream.write_all(&Frame::Output(snapshot).encode());
-            let _ = stream.flush();
+    /// Queue encoded frames for the live client, if any, and wake its writer.
+    fn queue_frame(&self, client: &mut Option<AttachedClient>, frames: Vec<u8>) {
+        if let Some(attached) = client.as_mut() {
+            attached.queue.push(frames);
+            self.client_ready.notify_all();
         }
-        // Replay the current busy state so a reattaching client (post-reload)
-        // learns it immediately instead of waiting for the next transition.
-        let _ = stream.write_all(&Frame::Busy(self.busy.load(Ordering::Relaxed)).encode());
-        let _ = stream.flush();
-        if let Ok(clone) = stream.try_clone() {
-            *client = Some(clone);
-        }
+    }
+
+    /// Attach `stream` as the live client and start its writer thread. The
+    /// client starts with a [Skip ahead], so the first thing it gets is the
+    /// current screen and busy state.
+    fn attach(self: &Arc<Self>, stream: &UnixStream) -> Option<std::thread::JoinHandle<()>> {
+        let Ok(out) = stream.try_clone() else {
+            return None;
+        };
+        let id = self.next_client.fetch_add(1, Ordering::Relaxed);
+        *self.client.lock() = Some(AttachedClient {
+            id,
+            queue: SkipAheadQueue::starting_with_screen(CLIENT_QUEUE_LIMIT),
+            sending: false,
+        });
+        let shared = Arc::clone(self);
+        // A thread the OS refuses must not panic the daemon (and the session
+        // with it): the client just gets no output, and reconnects.
+        let writer = std::thread::Builder::new()
+            .name("client-writer".into())
+            .spawn(move || shared.write_to_client(id, out))
+            .map_err(|e| eprintln!("kriyon-ptyd: no writer thread for the client: {e}"))
+            .ok();
         self.lease.lock().note_attached(Instant::now());
+        writer
+    }
+
+    /// Give the client up to `within` to receive what is still queued for it.
+    /// Called when the shell has exited, so its last words (often why it
+    /// exited) reach the client before the daemon does.
+    fn finish_sending(&self, within: Duration) {
+        let deadline = Instant::now() + within;
+        while Instant::now() < deadline {
+            let done = self
+                .client
+                .lock()
+                .as_ref()
+                .is_none_or(|attached| attached.queue.is_empty() && !attached.sending);
+            if done {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// The client's writer thread: send what its queue holds, at the client's
+    /// pace, until the client leaves or a write fails. On a [Skip ahead] it
+    /// sends the current screen snapshot and busy state, taken under the
+    /// `client` lock so any output queued after them is newer than the screen.
+    fn write_to_client(&self, id: u64, mut out: impl Write) {
+        loop {
+            let bytes = {
+                let mut client = self.client.lock();
+                loop {
+                    let Some(attached) = client.as_mut().filter(|attached| attached.id == id)
+                    else {
+                        return;
+                    };
+                    let bytes = match attached.queue.pop() {
+                        Next::Frame(bytes) => bytes,
+                        Next::SkipAhead => self.screen_frames(),
+                        Next::Empty => {
+                            self.client_ready.wait(&mut client);
+                            continue;
+                        }
+                    };
+                    attached.sending = true;
+                    break bytes;
+                }
+            };
+            let sent = out.write_all(&bytes).is_ok() && out.flush().is_ok();
+            if let Some(attached) = self
+                .client
+                .lock()
+                .as_mut()
+                .filter(|attached| attached.id == id)
+            {
+                attached.sending = false;
+            }
+            if !sent {
+                // A dead client (an `AF_UNIX` peer close surfaces here): stop
+                // queueing for it. The accept loop detaches it when its read
+                // side ends.
+                let mut client = self.client.lock();
+                if client.as_ref().is_some_and(|attached| attached.id == id) {
+                    *client = None;
+                }
+                return;
+            }
+        }
+    }
+
+    /// The current screen snapshot (the escape codes that reconstruct the
+    /// contents, colours, cursor and modes) and busy state, as frames.
+    fn screen_frames(&self) -> Vec<u8> {
+        let mut bytes = output_frames(&screen_snapshot(&self.emulator.lock()));
+        bytes.extend(Frame::Busy(self.busy.load(Ordering::Relaxed)).encode());
+        bytes
     }
 
     /// Resend the screen snapshot to the live client, on request. A terminal
     /// component that (re)mounts against this already-connected session starts
     /// from a blank xterm; the snapshot (which begins with a clear) rebuilds
-    /// the current screen. Held under the `client` lock so it serializes with
-    /// [`Shared::on_output`] — output produced mid-repaint lands after it.
+    /// the current screen. It is a [Skip ahead]: output still queued is already
+    /// on the screen it gets.
     fn repaint(&self) {
-        let mut client = self.client.lock();
-        let snapshot = screen_snapshot(&self.emulator.lock());
-        if snapshot.is_empty() {
-            return;
+        if let Some(attached) = self.client.lock().as_mut() {
+            attached.queue.skip_ahead();
+            self.client_ready.notify_all();
         }
-        write_or_drop(&mut client, &Frame::Output(snapshot));
     }
 
-    /// Push a busy-state change to the live client, if one is attached. Held
-    /// under the same `client` lock as [`Shared::on_output`], so the two never
-    /// interleave a half-written frame.
+    /// Queue a busy-state change for the live client, if one is attached.
     fn push_busy(&self, busy: bool) {
         let mut client = self.client.lock();
-        write_or_drop(&mut client, &Frame::Busy(busy));
+        self.queue_frame(&mut client, Frame::Busy(busy).encode());
     }
 
     /// Resize the PTY, then the server-side emulator so its screen snapshot
@@ -168,8 +264,13 @@ impl Shared {
         Ok(())
     }
 
-    fn detach(&self) {
+    /// Let the client go: shut its socket down, so a writer blocked on a
+    /// client that stopped reading fails out instead of leaking, then wake
+    /// the writer so it sees its client is gone.
+    fn detach(&self, stream: &UnixStream) {
+        let _ = stream.shutdown(std::net::Shutdown::Both);
         *self.client.lock() = None;
+        self.client_ready.notify_all();
         // The lease runs from the moment the app goes away.
         self.lease.lock().note_detached(Instant::now());
     }
@@ -203,6 +304,8 @@ pub fn run(
 
     let shared = Arc::new(Shared {
         client: Mutex::new(None),
+        client_ready: Condvar::new(),
+        next_client: AtomicU64::new(0),
         emulator: Mutex::new(vt100::Parser::new(INITIAL_ROWS, INITIAL_COLS, 0)),
         busy: AtomicBool::new(false),
         lease: Mutex::new(DetachedLease::new(detached_ttl, Instant::now())),
@@ -223,9 +326,9 @@ pub fn run(
 
     for conn in listener.incoming() {
         let Ok(mut stream) = conn else { continue };
-        shared.attach(&mut stream);
+        shared.attach(&stream);
         let shutdown = serve_client(&mut stream, &engine, &shared);
-        shared.detach();
+        shared.detach(&stream);
         if shutdown || engine.child_has_exited() {
             break;
         }
@@ -260,6 +363,10 @@ fn spawn_reaper(engine: Arc<PtyEngine>, shared: Arc<Shared>, socket_path: PathBu
             eprintln!("kriyon-ptyd: detached and silent for the whole lease; stopping");
         }
         if lapsed || engine.child_has_exited() {
+            if !lapsed {
+                // The shell's last output often says why it exited.
+                shared.finish_sending(FINAL_SEND_WAIT);
+            }
             stop_and_clear(&engine, &socket_path);
             std::process::exit(0);
         }
@@ -328,22 +435,13 @@ fn remove_socket(path: &Path) {
     let _ = std::fs::remove_file(path);
 }
 
-/// Write one frame to the live client, dropping the client on any write or
-/// flush failure (an `AF_UNIX` peer close surfaces as an error here). A no-op
-/// when no client is attached. The single place the "write a frame or drop the
-/// dead client" rule lives — the app side has the same primitive in
-/// `daemon_client::DaemonClient::send`.
-///
-/// Generic over the writer so the drop-on-failure path is unit-testable without
-/// a real socket. Callers hold the `client` lock across this (see
-/// [`Shared::on_output`]'s safety note); the blocking write is the backpressure.
-fn write_or_drop<W: Write>(client: &mut Option<W>, frame: &Frame) {
-    if let Some(w) = client.as_mut() {
-        if w.write_all(&frame.encode()).is_ok() && w.flush().is_ok() {
-            return;
-        }
-        *client = None;
-    }
+/// `bytes` as encoded `Output` frames, split so none passes the wire's
+/// payload limit. A screen snapshot of a large, colourful screen can, and the
+/// app refuses a frame that does.
+fn output_frames(bytes: &[u8]) -> Vec<u8> {
+    chunked(bytes, Frame::Output)
+        .flat_map(|frame| frame.encode())
+        .collect()
 }
 
 /// Write the person's typing to the session. A failed write is never dropped
@@ -405,14 +503,16 @@ fn serve_client(stream: &mut UnixStream, engine: &Arc<PtyEngine>, shared: &Arc<S
 #[cfg(test)]
 mod tests {
     use super::{
-        deliver_stdin, screen_snapshot, write_or_drop, Shared, ENTER_ALTERNATE_SCREEN,
-        LEAVE_ALTERNATE_SCREEN,
+        deliver_stdin, screen_snapshot, AttachedClient, Shared, CLIENT_QUEUE_LIMIT,
+        ENTER_ALTERNATE_SCREEN, LEAVE_ALTERNATE_SCREEN,
     };
     use kriyon_core::lease::DetachedLease;
     use kriyon_core::session::{EngineError, SessionEngine, SessionId};
+    use kriyon_core::skip_ahead::SkipAheadQueue;
     use kriyon_core::wire::Frame;
     use parking_lot::Mutex;
     use std::io::{self, Write};
+    use std::os::unix::net::UnixStream;
     use std::sync::atomic::AtomicBool;
     use std::time::{Duration, Instant};
 
@@ -420,6 +520,8 @@ mod tests {
     fn shared() -> Shared {
         Shared {
             client: Mutex::new(None),
+            client_ready: parking_lot::Condvar::new(),
+            next_client: std::sync::atomic::AtomicU64::new(0),
             emulator: Mutex::new(vt100::Parser::new(24, 80, 0)),
             busy: AtomicBool::new(false),
             lease: Mutex::new(DetachedLease::new(Duration::from_secs(60), Instant::now())),
@@ -608,34 +710,167 @@ mod tests {
         }
     }
 
+    /// A writer that hands each write to the test, standing in for a live
+    /// client socket.
+    struct ChannelWriter(std::sync::mpsc::Sender<Vec<u8>>);
+    impl Write for ChannelWriter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            let _ = self.0.send(buf.to_vec());
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Shared state with a client (id 0) attached, its queue as given.
+    fn with_client(queue: SkipAheadQueue) -> Shared {
+        let shared = shared();
+        *shared.client.lock() = Some(AttachedClient {
+            id: 0,
+            queue,
+            sending: false,
+        });
+        shared
+    }
+
+    /// Run the client's writer until it has sent one write, then detach the
+    /// client so the writer ends. Returns that first write.
+    fn first_write(shared: &Shared) -> Vec<u8> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::scope(|scope| {
+            scope.spawn(|| shared.write_to_client(0, ChannelWriter(tx)));
+            let first = rx
+                .recv_timeout(Duration::from_secs(5))
+                .expect("the writer sent nothing");
+            shared.detach(&UnixStream::pair().expect("socket pair").0);
+            first
+        })
+    }
+
     #[test]
-    fn delivers_the_encoded_frame_to_a_live_client() {
-        let mut client: Option<Vec<u8>> = Some(Vec::new());
-        write_or_drop(&mut client, &Frame::Busy(true));
-        assert_eq!(
-            client.as_deref(),
-            Some(Frame::Busy(true).encode().as_slice())
-        );
+    fn the_writer_sends_what_is_queued() {
+        let mut queue = SkipAheadQueue::new(CLIENT_QUEUE_LIMIT);
+        queue.push(Frame::Busy(true).encode());
+        assert_eq!(first_write(&with_client(queue)), Frame::Busy(true).encode());
+    }
+
+    #[test]
+    fn a_skip_ahead_sends_the_current_screen() {
+        let shared = with_client(SkipAheadQueue::starting_with_screen(CLIENT_QUEUE_LIMIT));
+        shared.emulator.lock().process(b"on screen");
+        assert!(String::from_utf8_lossy(&first_write(&shared)).contains("on screen"));
+    }
+
+    #[test]
+    fn a_detached_clients_writer_ends() {
+        let shared = with_client(SkipAheadQueue::new(CLIENT_QUEUE_LIMIT));
+        std::thread::scope(|scope| {
+            let writer = scope
+                .spawn(|| shared.write_to_client(0, ChannelWriter(std::sync::mpsc::channel().0)));
+            std::thread::sleep(Duration::from_millis(50));
+            shared.detach(&UnixStream::pair().expect("socket pair").0);
+            writer.join().expect("the writer ended");
+        });
     }
 
     #[test]
     fn drops_a_client_whose_write_fails() {
-        let mut client = Some(FailingWriter);
-        write_or_drop(&mut client, &Frame::Output(vec![1, 2, 3]));
-        assert!(client.is_none(), "a dead client must be dropped");
+        let shared = with_client(SkipAheadQueue::starting_with_screen(CLIENT_QUEUE_LIMIT));
+        shared.write_to_client(0, FailingWriter);
+        assert!(
+            shared.client.lock().is_none(),
+            "a dead client must be dropped"
+        );
     }
 
     #[test]
     fn drops_a_client_whose_flush_fails() {
-        let mut client = Some(FlushFailsWriter);
-        write_or_drop(&mut client, &Frame::Output(vec![1, 2, 3]));
-        assert!(client.is_none(), "a flush failure must drop the client too");
+        let shared = with_client(SkipAheadQueue::starting_with_screen(CLIENT_QUEUE_LIMIT));
+        shared.write_to_client(0, FlushFailsWriter);
+        assert!(
+            shared.client.lock().is_none(),
+            "a flush failure must drop the client too"
+        );
     }
 
     #[test]
-    fn is_a_noop_when_no_client_is_attached() {
-        let mut client: Option<Vec<u8>> = None;
-        write_or_drop(&mut client, &Frame::Repaint);
-        assert!(client.is_none());
+    fn a_previous_clients_writer_leaves_the_new_client_alone() {
+        let shared = with_client(SkipAheadQueue::starting_with_screen(CLIENT_QUEUE_LIMIT));
+        shared.write_to_client(7, FailingWriter);
+        assert!(
+            shared.client.lock().is_some(),
+            "only the writer of the attached client may drop it"
+        );
+    }
+
+    /// Shared state in an `Arc`, as `run` holds it, with a client attached
+    /// over a socket pair. Returns the state, the daemon's end, the client's
+    /// end and the writer thread.
+    fn attached() -> (
+        std::sync::Arc<Shared>,
+        std::os::unix::net::UnixStream,
+        std::os::unix::net::UnixStream,
+        std::thread::JoinHandle<()>,
+    ) {
+        let shared = std::sync::Arc::new(shared());
+        let (daemon_end, client_end) = std::os::unix::net::UnixStream::pair().expect("socket pair");
+        let writer = shared.attach(&daemon_end).expect("writer started");
+        (shared, daemon_end, client_end, writer)
+    }
+
+    fn ends_within(writer: &std::thread::JoinHandle<()>, limit: Duration) -> bool {
+        let deadline = Instant::now() + limit;
+        while Instant::now() < deadline {
+            if writer.is_finished() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        false
+    }
+
+    #[test]
+    fn detaching_a_client_that_never_reads_frees_its_writer() {
+        let (shared, daemon_end, _client_end, writer) = attached();
+        // Far more than the socket buffer holds, so the writer blocks in a
+        // write the client will never read.
+        for _ in 0..64 {
+            shared.on_output(&[b'x'; 8192]);
+        }
+        shared.detach(&daemon_end);
+        assert!(
+            ends_within(&writer, Duration::from_secs(5)),
+            "a writer blocked on a gone client must end, not leak"
+        );
+    }
+
+    #[test]
+    fn the_last_output_reaches_the_client_before_the_daemon_exits() {
+        let (shared, _daemon_end, mut client_end, _writer) = attached();
+        shared.on_output(b"last words");
+        shared.finish_sending(Duration::from_secs(5));
+        client_end.set_nonblocking(true).expect("nonblocking");
+        let mut got = Vec::new();
+        let _ = io::Read::read_to_end(&mut client_end, &mut got);
+        assert!(
+            String::from_utf8_lossy(&got).contains("last words"),
+            "output still queued when the shell exits must be sent first"
+        );
+    }
+
+    #[test]
+    fn output_longer_than_one_frame_is_sent_in_frames_the_app_accepts() {
+        let bytes = vec![b'x'; kriyon_core::wire::MAX_PAYLOAD_LEN + 10];
+        let mut dec = kriyon_core::wire::FrameDecoder::new();
+        dec.push(&super::output_frames(&bytes));
+        let mut got = Vec::new();
+        while let Some(frame) = dec.next_frame().expect("every frame within the limit") {
+            let Frame::Output(chunk) = frame else {
+                panic!("only output frames")
+            };
+            got.extend(chunk);
+        }
+        assert_eq!(got, bytes);
     }
 }

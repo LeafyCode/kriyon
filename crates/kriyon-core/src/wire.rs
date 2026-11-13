@@ -19,9 +19,10 @@ const TAG_REPAINT: u8 = 6;
 
 const HEADER_LEN: usize = 5;
 
-/// The most payload one frame may carry. PTY output arrives in chunks of a few
-/// kilobytes and a screen snapshot is well under a megabyte, so this is far above
-/// anything real while still bounding what a bad header can make a process buffer.
+/// The most payload one frame may carry, bounding what a bad header can make a
+/// process buffer. PTY output arrives in chunks of a few kilobytes, but a screen
+/// snapshot of a large, colourful screen can pass this (tens of MB at the
+/// 1000x1000 size cap), so a sender splits anything long with [`chunked`].
 pub const MAX_PAYLOAD_LEN: usize = 16 * 1024 * 1024;
 
 /// A header announced more payload than [`MAX_PAYLOAD_LEN`]. The stream can't be
@@ -88,6 +89,11 @@ impl Frame {
             Frame::Busy(busy) => (TAG_BUSY, vec![u8::from(*busy)]),
             Frame::Repaint => (TAG_REPAINT, Vec::new()),
         };
+        debug_assert!(
+            payload.len() <= MAX_PAYLOAD_LEN,
+            "a {}-byte payload passes the frame limit; split it with `chunked`",
+            payload.len()
+        );
         let len = u32::try_from(payload.len()).unwrap_or(u32::MAX);
         let mut out = Vec::with_capacity(HEADER_LEN + payload.len());
         out.push(tag);
@@ -181,6 +187,13 @@ impl FrameDecoder {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "split it with `chunked`")]
+    fn encoding_a_frame_the_decoder_would_refuse_is_a_bug() {
+        let _ = Frame::Output(vec![0; MAX_PAYLOAD_LEN + 1]).encode();
+    }
 
     #[test]
     fn round_trip_each_frame() {
