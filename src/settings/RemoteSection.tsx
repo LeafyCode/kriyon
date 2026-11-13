@@ -17,12 +17,8 @@ import {
   type RemotePairing,
   type RemoteRole,
 } from "../ipc/bridge.ts";
-import {
-  CONSENT_LINES,
-  codeResultLine,
-  countdownText,
-  useRemote,
-} from "../state/remote.ts";
+import { consentLines, useRelay } from "../state/relay.ts";
+import { codeResultLine, countdownText, useRemote } from "../state/remote.ts";
 import { type HostPairing, useRemoteHosts } from "../state/remoteHosts.ts";
 import { button, inputBox } from "../theme/recipes.ts";
 import { tokens } from "../theme/tokens.ts";
@@ -34,6 +30,7 @@ import {
 import { Segmented } from "../ui/Segmented.tsx";
 import { Switch } from "../ui/Switch.tsx";
 import { showToast } from "../ui/Toast.tsx";
+import { RelaySection } from "./RelaySection.tsx";
 import {
   errorTextStyle,
   rowHintStyle,
@@ -171,6 +168,10 @@ function Countdown({ expiresAtMs }: { expiresAtMs: number }) {
 /** The consent screen: what changes, before anything does. */
 function ConsentDialog() {
   const { cancelConsent, turnOn } = useRemote.getState();
+  // Said only while our relay is on: then traffic can pass it.
+  const relayOn = useRelay(
+    (state) => state.view?.available === true && state.view.on
+  );
   return (
     <DialogPanel
       actions={
@@ -201,7 +202,7 @@ function ConsentDialog() {
       wide
     >
       <ul style={consentListStyle}>
-        {CONSENT_LINES.map((line) => (
+        {consentLines(relayOn).map((line) => (
           <li key={line}>{line}</li>
         ))}
       </ul>
@@ -643,6 +644,7 @@ export function RemoteSection() {
       </SettingGroup>
       {enabled && status ? <PairingGroup pairing={status.pairing} /> : null}
       {/* Always: a lost device must be removable without turning access on. */}
+      <RelaySection />
       <DevicesGroup devices={devices} />
       <OtherComputersGroup />
       {consentOpen ? <ConsentDialog /> : null}

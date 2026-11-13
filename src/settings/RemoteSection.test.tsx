@@ -1,7 +1,9 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, expect, test, vi } from "vitest";
 import {
+  type RelayView,
   type RemoteStatus,
+  relayView,
   remoteDevices,
   remoteEnterCode,
   remoteHostForget,
@@ -15,6 +17,7 @@ import {
   remoteStartPairing,
   remoteStatus,
 } from "../ipc/bridge.ts";
+import { RELAY_CONSENT_LINE } from "../state/relay.ts";
 import { CONSENT_LINES, useRemote } from "../state/remote.ts";
 import { useRemoteHosts } from "../state/remoteHosts.ts";
 import { RemoteSection } from "./RemoteSection.tsx";
@@ -35,6 +38,7 @@ vi.mock("../ipc/bridge.ts", async (importOriginal) => ({
   remoteStartPairing: vi.fn(),
   remoteStatus: vi.fn(),
   remoteStopPairing: vi.fn(),
+  relayView: vi.fn(),
 }));
 
 const EXPIRED = /QR code expired/;
@@ -66,6 +70,38 @@ beforeEach(() => {
   vi.mocked(remoteStatus).mockResolvedValue(off);
   vi.mocked(remoteDevices).mockResolvedValue([]);
   vi.mocked(remoteHosts).mockResolvedValue([]);
+  vi.mocked(relayView).mockResolvedValue(noRelay);
+});
+
+const noRelay: RelayView = {
+  available: false,
+  on: false,
+  passExpiresAt: null,
+  problem: null,
+  signedIn: false,
+  signIn: null,
+};
+
+test("the consent screen says nothing of our relay unless it is on", async () => {
+  render(<RemoteSection />);
+  fireEvent.click(await screen.findByRole("switch", { name: "Remote access" }));
+  expect((await screen.findByRole("dialog")).textContent).not.toContain(
+    RELAY_CONSENT_LINE
+  );
+});
+
+test("with our relay on, the consent screen says what passes through it", async () => {
+  vi.mocked(relayView).mockResolvedValue({
+    ...noRelay,
+    available: true,
+    on: true,
+  });
+  render(<RemoteSection />);
+  await screen.findByLabelText("Our relay (paid)");
+  fireEvent.click(screen.getByRole("switch", { name: "Remote access" }));
+  expect((await screen.findByRole("dialog")).textContent).toContain(
+    RELAY_CONSENT_LINE
+  );
 });
 
 test("turning on shows the consent screen, and Cancel leaves it off", async () => {

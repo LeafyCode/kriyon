@@ -1845,6 +1845,117 @@ export const onRemoteCodeWanted = subscribe<{ deviceName: string }>(
   "remote-pairing-code-wanted"
 );
 
+// Our relay (paid). Mirrors `src-tauri/src/relay_cmd.rs` and `relay_rt.rs`.
+
+/** A device sign-in in progress: the code to show and the page it opens. */
+export interface RelaySignIn {
+  userCode: string;
+  verificationUri: string;
+  verificationUriComplete: string;
+}
+
+/** Our relay as the settings show it. */
+export interface RelayView {
+  /** Whether this build has a relay at all; none: the relay is hidden. */
+  available: boolean;
+  on: boolean;
+  /** When the pass in hand expires, in Unix seconds. */
+  passExpiresAt: number | null;
+  /** What went wrong last, in the relay contract's words. */
+  problem: string | null;
+  signedIn: boolean;
+  signIn: RelaySignIn | null;
+}
+
+/** A subscription's state, as the relay account reports it. */
+export type RelaySubscriptionState =
+  | "pending"
+  | "active"
+  | "past_due"
+  | "canceled"
+  | "expired";
+
+/** A device on the relay account. */
+export interface RelayDevice {
+  deviceId: string;
+  deviceKey: string;
+  lastPassAt?: string | null;
+  name: string;
+  platform: string;
+}
+
+/** The relay account's status (`GET /status`). */
+export interface RelayAccount {
+  blocked: boolean;
+  deviceLimit: number;
+  devices: RelayDevice[];
+  subscription: {
+    paidUntil: string;
+    plan: string;
+    state: RelaySubscriptionState;
+  } | null;
+}
+
+const NO_RELAY: RelayView = {
+  available: false,
+  on: false,
+  passExpiresAt: null,
+  problem: null,
+  signedIn: false,
+  signIn: null,
+};
+
+/** Our relay's state. None outside the Tauri webview. */
+export function relayView(): Promise<RelayView> {
+  if (!hasTauri()) {
+    return Promise.resolve(NO_RELAY);
+  }
+  return invoke("relay_view");
+}
+
+/** Start a device sign-in: Rust opens the sign-in page and waits for it. */
+export function relaySignIn(): Promise<RelaySignIn> {
+  return invoke("relay_sign_in");
+}
+
+/** Stop the sign-in in progress. */
+export function relayCancelSignIn(): Promise<void> {
+  return invoke("relay_cancel_sign_in");
+}
+
+/** Sign out of the relay account on this computer; the relay goes off. */
+export function relaySignOut(): Promise<RelayView> {
+  return invoke("relay_sign_out");
+}
+
+/** Turn our relay on (this device's pass is fetched) or off. */
+export function relaySetEnabled(enabled: boolean): Promise<RelayView> {
+  return invoke("relay_set_enabled", { enabled });
+}
+
+/** The relay account's subscription and devices. */
+export function relayAccount(): Promise<RelayAccount> {
+  return invoke("relay_account");
+}
+
+/** Remove a device from the relay account; it stays paired. */
+export function relayRemoveDevice(deviceId: string): Promise<void> {
+  return invoke("relay_remove_device", { deviceId });
+}
+
+/** This computer's device key, to mark it in the relay account's list. */
+export function relayThisDevice(): Promise<{ deviceKey: string }> {
+  return invoke("relay_this_device");
+}
+
+/** Open the website's subscriptions page in the browser. */
+export function relayOpenSubscriptions(): Promise<void> {
+  return invoke("relay_open_subscriptions");
+}
+
+/** Subscribe to `relay-changed`: the relay's state changed in Rust. */
+export const onRelayChanged = subscribe<null>("relay-changed");
+
 // This computer as a remote device of another. Mirrors
 // `src-tauri/src/remote_device_cmd.rs`.
 
