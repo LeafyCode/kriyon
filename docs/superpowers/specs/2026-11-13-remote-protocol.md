@@ -243,6 +243,12 @@ the host without the payload.
   golden tests; so are the numbers of `RefuseReason`, `SessionStatus`, `Role`
   and `Holder`.
 
+**Projects.** Right after `Welcome`, and again whenever it changes, the host
+sends `ProjectList { projects: [ProjectInfo { id, name, parked }] }`, Viewers
+included: the store's projects whose folder passes the same check a remote
+start uses, in store order. `parked` follows the desktop's rule (every open
+session in it is parked).
+
 **Other messages:** `Control { session_id, holder, epoch }` on the control stream. host to device `StartResult { request_id, session_id }`
 and `SessionStatus { session: SessionInfo }`. On `kriyon/pair/1`:
 `PairRequest { device_name, proof }` (proof = the 32-byte HMAC of §4),
