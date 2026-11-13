@@ -43,6 +43,10 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
 - **Screen update** — a numbered, compressed chunk of a [Session]'s output sent to a [Remote
   device] after its first [Screen snapshot]. A gap in the numbers means "send the whole screen",
   never a guess. _Avoid_: delta, diff (taken by [File diff]).
+- **Session fan-out** (`kriyon_remote::fanout::SessionFanout`) — the [Host]'s one copy of a
+  [Session]'s screen stream for every [Remote device] that has it open: it numbers the output as
+  [Screen update]s once, asks the [PTY daemon] for each device's [Screen snapshot], and keeps a
+  bounded queue per device, so a slow device [Skip ahead]s alone. _Avoid_: broadcaster, mux.
 - **Skip ahead** — what a sender does when one receiver's queue of a [Session]'s output fills:
   drop the queue and send a fresh [Screen snapshot] instead, so a slow receiver never slows the
   session or anyone else. The [PTY daemon] does it for the app (ADR-0059), and the [Host] for each
