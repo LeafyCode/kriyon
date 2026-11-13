@@ -22,7 +22,7 @@ use kriyon_remote_link::framed::{MessageReader, MessageWriter};
 use kriyon_remote_link::host::{Accepted, Host, PairedDevices};
 use parking_lot::Mutex;
 
-use crate::daemon_client::DaemonEvent;
+use kriyon_core::daemon::DaemonEvent;
 pub(crate) use kriyon_remote_link::test_support::{
     loopback, on_loopback, wait_until, RecordingEvents,
 };

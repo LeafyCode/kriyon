@@ -270,10 +270,10 @@ pub(crate) async fn open_session(
     // Every frame from the daemon, in order, before the webview's pacing. A
     // repaint (`Screen`) is not output the session made, so neither the
     // "still painting" clock nor the refusal watch counts it.
-    let event_callback = move |event: crate::daemon_client::DaemonEvent<'_>| {
+    let event_callback = move |event: kriyon_core::daemon::DaemonEvent<'_>| {
         crate::remote_host_rt::on_event(&output_app, &output_id, event);
         match event {
-            crate::daemon_client::DaemonEvent::Output(bytes) => {
+            kriyon_core::daemon::DaemonEvent::Output(bytes) => {
                 {
                     use tauri::Manager as _;
                     let state = output_app.state::<AppState>();
@@ -287,7 +287,7 @@ pub(crate) async fn open_session(
                     std::thread::spawn(move || crate::integration::note_sideload_refused(&app));
                 }
             }
-            crate::daemon_client::DaemonEvent::Busy(busy) => busy_slot.busy(busy),
+            kriyon_core::daemon::DaemonEvent::Busy(busy) => busy_slot.busy(busy),
             _ => {}
         }
     };

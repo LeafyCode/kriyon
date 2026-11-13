@@ -7,9 +7,9 @@ use kriyon_remote::authorize::{Dialog, PendingWrite};
 use kriyon_remote::message::{EndpointId, RefuseReason, Role, SessionInfo};
 use tauri::Manager as _;
 
-use crate::daemon_client::DaemonEvent;
 use crate::remote_serve::{LiveSession, Serve, ServeHost};
 use crate::{AppState, StoreState};
+use kriyon_core::daemon::DaemonEvent;
 
 /// How many times a snapshot ask is tried, [`ASK_RETRY`] apart.
 const ASK_TRIES: u32 = 40;

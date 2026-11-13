@@ -19,10 +19,10 @@ use std::io::BufRead as _;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use kriyon_core::daemon::DaemonEvent;
 use kriyon_core::readable::{EntryKind, Keyed, StepState};
 use kriyon_core::session::SessionStatus;
 use kriyon_core::standing::StandingState;
-use kriyon_lib::daemon_client::DaemonEvent;
 use kriyon_lib::remote_rt::{CodeOutcome, HostSetup, RemoteRuntime};
 use kriyon_lib::remote_serve::{EntriesBuilt, LiveSession, RemoteStart, Serve, ServeHost};
 use kriyon_remote::authorize::{PendingWrite, ProjectFolder};

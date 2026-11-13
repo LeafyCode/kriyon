@@ -38,7 +38,7 @@ use kriyon_remote_link::host::RemoteLink;
 use parking_lot::Mutex;
 use tokio::sync::Notify;
 
-use crate::daemon_client::DaemonEvent;
+use kriyon_core::daemon::DaemonEvent;
 
 /// Whether `message` is a write (typing, compose, resize): its answer is
 /// what the device waits on, as it would on an `InputAck`.
