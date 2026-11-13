@@ -303,11 +303,13 @@ impl DaemonClient {
     }
 
     fn send(&self, frame: &Frame) -> Result<(), EngineError> {
+        self.send_encoded(&frame.encode())
+    }
+
+    /// Write already-encoded frames, as [`Self::send`] does one.
+    fn send_encoded(&self, frames: &[u8]) -> Result<(), EngineError> {
         let mut w = self.writer.lock();
-        let sent = w
-            .write_all(&frame.encode())
-            .and_then(|()| w.flush())
-            .map_err(io_err);
+        let sent = w.write_all(frames).and_then(|()| w.flush()).map_err(io_err);
         if sent.is_err() {
             // A write that failed or timed out may have left half a frame on
             // the wire; anything sent after it would be read as garbage. Sever
@@ -384,7 +386,7 @@ impl SessionEngine for DaemonClient {
     }
 
     fn write_stdin(&self, bytes: &[u8]) -> Result<(), EngineError> {
-        wire::chunked(bytes, Frame::Stdin).try_for_each(|frame| self.send(&frame))
+        self.send_encoded(&wire::ByteStream::Stdin.encode(bytes))
     }
 
     fn resize(&self, cols: u16, rows: u16) -> Result<(), EngineError> {

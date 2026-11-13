@@ -26,7 +26,7 @@ const HEADER_LEN: usize = 5;
 /// The most payload one frame may carry, bounding what a bad header can make a
 /// process buffer. PTY output arrives in chunks of a few kilobytes, but a screen
 /// snapshot of a large, colourful screen can pass this (tens of MB at the
-/// 1000x1000 size cap), so a sender splits anything long with [`chunked`].
+/// 1000x1000 size cap), so a sender splits anything long with [`ByteStream`].
 pub const MAX_PAYLOAD_LEN: usize = 16 * 1024 * 1024;
 
 /// A header announced more payload than [`MAX_PAYLOAD_LEN`]. The stream can't be
@@ -65,14 +65,15 @@ pub enum Frame {
     /// repaint only happens once per connection.
     Repaint,
     /// Ask the daemon for its [Output history], app → daemon. Answered with
-    /// zero or more `History` frames, then one `HistoryEnd`.
+    /// zero or more `History` frames, then one `HistoryEnd`. Requests made
+    /// before an answer goes out share it: ask again only after `HistoryEnd`.
     RequestHistory,
     /// Part of the [Output history], daemon → app, oldest first. Kept apart
     /// from `Output`, so earlier output is never drawn as if it were live. It
     /// can overlap the `Output` that follows it (ADR-0060).
     History(Vec<u8>),
     /// The last frame of an [Output history] answer, daemon → app: the
-    /// `History` frames before it, since the request, are all of it.
+    /// `History` frames before it, since the last `HistoryEnd`, are all of it.
     HistoryEnd,
     /// The [CLI dialog] on the daemon's screen, daemon → app: whether one
     /// shows, and its [Dialog generation]. Sent when the generation moves,
@@ -89,6 +90,8 @@ pub enum ByteStream {
     Output,
     /// [`Frame::History`].
     History,
+    /// [`Frame::Stdin`].
+    Stdin,
 }
 
 impl ByteStream {
@@ -98,29 +101,40 @@ impl ByteStream {
     /// No bytes, no frame.
     #[must_use]
     pub fn encode(self, bytes: &[u8]) -> Vec<u8> {
+        self.encode_parts(&[bytes])
+    }
+
+    /// [`Self::encode`] for a stream held in `parts`, in order: frames are
+    /// filled across their boundaries, written straight from each.
+    #[must_use]
+    pub fn encode_parts(self, parts: &[&[u8]]) -> Vec<u8> {
         let tag = match self {
             ByteStream::Output => TAG_OUTPUT,
             ByteStream::History => TAG_HISTORY,
+            ByteStream::Stdin => TAG_STDIN,
         };
-        let frames = bytes.len().div_ceil(MAX_PAYLOAD_LEN);
-        let mut out = Vec::with_capacity(bytes.len() + frames * HEADER_LEN);
-        for chunk in bytes.chunks(MAX_PAYLOAD_LEN) {
-            out.push(tag);
-            // A chunk is at most `MAX_PAYLOAD_LEN`, which fits in a `u32`.
-            out.extend_from_slice(&u32::try_from(chunk.len()).unwrap_or(u32::MAX).to_le_bytes());
-            out.extend_from_slice(chunk);
+        let total: usize = parts.iter().map(|part| part.len()).sum();
+        let mut out = Vec::with_capacity(total + total.div_ceil(MAX_PAYLOAD_LEN) * HEADER_LEN);
+        let mut left = total;
+        let mut room = 0;
+        for part in parts {
+            let mut part: &[u8] = part;
+            while !part.is_empty() {
+                if room == 0 {
+                    room = left.min(MAX_PAYLOAD_LEN);
+                    out.push(tag);
+                    // At most `MAX_PAYLOAD_LEN`, which fits in a `u32`.
+                    out.extend_from_slice(&u32::try_from(room).unwrap_or(u32::MAX).to_le_bytes());
+                }
+                let (now, rest) = part.split_at(part.len().min(room));
+                out.extend_from_slice(now);
+                room -= now.len();
+                left -= now.len();
+                part = rest;
+            }
         }
         out
     }
-}
-
-/// Split a byte stream into frames small enough for any decoder to accept. The
-/// two streams ([`Frame::Stdin`], [`Frame::Output`]) carry no message boundaries,
-/// so where a long one is cut doesn't matter.
-pub fn chunked(bytes: &[u8], wrap: fn(Vec<u8>) -> Frame) -> impl Iterator<Item = Frame> + '_ {
-    bytes
-        .chunks(MAX_PAYLOAD_LEN)
-        .map(move |chunk| wrap(chunk.to_vec()))
 }
 
 fn dims(cols: u16, rows: u16) -> Vec<u8> {
@@ -154,7 +168,7 @@ impl Frame {
         };
         debug_assert!(
             payload.len() <= MAX_PAYLOAD_LEN,
-            "a {}-byte payload passes the frame limit; split it with `chunked`",
+            "a {}-byte payload passes the frame limit; split it with `ByteStream`",
             payload.len()
         );
         let len = u32::try_from(payload.len()).unwrap_or(u32::MAX);
@@ -264,7 +278,7 @@ mod tests {
 
     #[test]
     #[cfg(debug_assertions)]
-    #[should_panic(expected = "split it with `chunked`")]
+    #[should_panic(expected = "split it with `ByteStream`")]
     fn encoding_a_frame_the_decoder_would_refuse_is_a_bug() {
         let _ = Frame::Output(vec![0; MAX_PAYLOAD_LEN + 1]).encode();
     }
@@ -330,6 +344,20 @@ mod tests {
                 Frame::History(bytes.to_vec()).encode()
             );
         }
+    }
+
+    #[test]
+    fn a_stream_in_parts_encodes_as_the_whole_would() {
+        let whole = vec![5u8; MAX_PAYLOAD_LEN + 7];
+        let (a, b) = whole.split_at(MAX_PAYLOAD_LEN - 3);
+        assert_eq!(
+            ByteStream::History.encode_parts(&[a, &[], b]),
+            ByteStream::History.encode(&whole)
+        );
+        assert_eq!(
+            ByteStream::Stdin.encode_parts(&[&[], &[]]),
+            Vec::<u8>::new()
+        );
     }
 
     #[test]
@@ -412,9 +440,7 @@ mod tests {
     fn a_long_stream_is_cut_into_frames_a_decoder_accepts() {
         let bytes = vec![3; MAX_PAYLOAD_LEN + 10];
         let mut dec = FrameDecoder::new();
-        for frame in chunked(&bytes, Frame::Stdin) {
-            dec.push(&frame.encode());
-        }
+        dec.push(&ByteStream::Stdin.encode(&bytes));
         let mut got = Vec::new();
         while let Ok(Some(Frame::Stdin(part))) = dec.next_frame() {
             got.push(part.len());

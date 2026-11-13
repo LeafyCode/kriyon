@@ -266,6 +266,11 @@ impl Shared {
     fn on_output(&self, bytes: &[u8]) {
         // Output is the proof of work that keeps a detached daemon alive.
         self.lease.lock().note_output(Instant::now());
+        // Into the history before any client can be sent it, so a history
+        // answer can repeat output a client drew but never miss it. Outside
+        // the client lock: the history is a leaf, and only this, the PTY
+        // reader's thread, adds to it.
+        self.history.lock().push(bytes);
         let mut client = self.client.lock();
         let moved = {
             let mut emulator = self.emulator.lock();
@@ -279,10 +284,6 @@ impl Shared {
             frames.extend(dialog_frame(state));
         }
         self.queue_frame(&mut client, frames);
-        drop(client);
-        // Outside the client lock: the history is a leaf, and only this, the
-        // PTY reader's thread, adds to it, so its order stays the output's.
-        self.history.lock().push(bytes);
     }
 
     /// Look at the screen if output came since the last look and one is due,
@@ -448,8 +449,8 @@ impl Shared {
     /// The [Output history] as `History` frames, split to the frame limit,
     /// then the `HistoryEnd` that tells the client it has all of it.
     fn history_frames(&self) -> Vec<u8> {
-        let history = self.history.lock().contents();
-        let mut bytes = ByteStream::History.encode(&history);
+        // One copy, straight from the history's own chunks.
+        let mut bytes = ByteStream::History.encode_parts(&self.history.lock().parts());
         bytes.extend(Frame::HistoryEnd.encode());
         bytes
     }
@@ -580,8 +581,9 @@ pub fn run(
         if shared.attach(&stream).is_none() {
             // No writer, so no output would ever reach it: close it, so the
             // app hears the connection end instead of watching a blank pane,
-            // and can connect again.
-            shared.detach(&stream);
+            // and can connect again. Never attached, so the detached lease
+            // runs on as it was.
+            let _ = stream.shutdown(std::net::Shutdown::Both);
             continue;
         }
         let shutdown = serve_client(&mut stream, &engine, &shared);
@@ -1092,19 +1094,23 @@ mod tests {
         shared.request_history();
         let (tx, rx) = std::sync::mpsc::channel();
         let mut decoder = FrameDecoder::new();
+        let mut ends = 0;
         std::thread::scope(|scope| {
             scope.spawn(|| shared.write_to_client(0, ChannelWriter(tx)));
-            while let Ok(bytes) = rx.recv_timeout(Duration::from_millis(300)) {
+            // The first answer comes however loaded the machine; a second,
+            // which must not come, would follow straight after it.
+            let mut wait = Duration::from_secs(30);
+            while let Ok(bytes) = rx.recv_timeout(wait) {
                 decoder.push(&bytes);
+                while let Ok(Some(frame)) = decoder.next_frame() {
+                    if frame == Frame::HistoryEnd {
+                        ends += 1;
+                        wait = Duration::from_millis(300);
+                    }
+                }
             }
             shared.detach(&UnixStream::pair().expect("socket pair").0);
         });
-        let mut ends = 0;
-        while let Ok(Some(frame)) = decoder.next_frame() {
-            if frame == Frame::HistoryEnd {
-                ends += 1;
-            }
-        }
         assert_eq!(ends, 1);
     }
 
@@ -1368,16 +1374,10 @@ mod tests {
     /// Read frames from `stream` until a `HistoryEnd`, returning the
     /// `History` bytes.
     fn read_history(stream: &mut UnixStream) -> Vec<u8> {
-        read_histories(stream, 1).remove(0)
-    }
-
-    /// Read `count` history answers, each closed by its `HistoryEnd`.
-    fn read_histories(stream: &mut UnixStream, count: usize) -> Vec<Vec<u8>> {
         stream
             .set_read_timeout(Some(Duration::from_secs(5)))
             .expect("timeout");
         let mut dec = kriyon_core::wire::FrameDecoder::new();
-        let mut answers = Vec::new();
         let mut history = Vec::new();
         let mut buf = vec![0u8; 65536];
         loop {
@@ -1387,12 +1387,7 @@ mod tests {
             while let Some(frame) = dec.next_frame().expect("frames within the limit") {
                 match frame {
                     Frame::History(bytes) => history.extend(bytes),
-                    Frame::HistoryEnd => {
-                        answers.push(std::mem::take(&mut history));
-                        if answers.len() == count {
-                            return answers;
-                        }
-                    }
+                    Frame::HistoryEnd => return history,
                     _ => {}
                 }
             }

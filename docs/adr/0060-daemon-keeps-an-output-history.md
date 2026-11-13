@@ -22,12 +22,14 @@ output." (ADR-0057). Neither can be met from the visible screen alone.
   `kriyon_core::output_history`. It is separate from the emulator, which keeps
   no scrollback, as before.
 - **4 MiB per session**, the same as a client's queue, so whatever a skip
-  ahead dropped is still there when the client asks soon after. That is about
-  40 MB across ten sessions.
+  ahead dropped is still there when the client asks soon after. Between
+  trims it keeps up to a sixteenth more, so about 42 MB across ten sessions.
 - **Raw bytes, not rendered lines.** That keeps the feed a copy on the output
-  path, with no second emulator. Trimmed oldest first, and to a line start
-  when one is within a few KB, so a replay usually doesn't open mid-line or
-  mid escape code. It can't restore colours or modes set before the cut.
+  path, with no second emulator. Trimmed oldest first, in steps, with no
+  search while output flows (changed 13 Nov: the search ran on every read
+  under the client lock). A read cuts to the limit and to a line start when
+  one is within a few KB, so a replay usually doesn't open mid-line or mid
+  escape code. It can't restore colours or modes set before the cut.
 - **Asked for, never pushed.** A client sends `RequestHistory` and gets
   `History` frames, split to the frame limit, closed by one `HistoryEnd`, so
   it knows when it has all of it and never draws it as live `Output`.
@@ -39,8 +41,8 @@ output." (ADR-0057). Neither can be met from the visible screen alone.
 
 ## Consequences
 
-- ADR-0004's "memory is bounded per session" still holds, at 4 MiB more per
-  session.
+- ADR-0004's "memory is bounded per session" still holds, at about 4.25 MiB
+  more per session.
 - The history can overlap the live output that follows it: bytes still queued
   for the client when it asked are in both. A reader shows the history apart
   from the live terminal, so the overlap is visible at most as a repeat.

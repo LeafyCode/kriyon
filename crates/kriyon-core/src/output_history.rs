@@ -5,10 +5,12 @@
 //! past is gone from it. The Output history keeps the raw output bytes, up to
 //! a byte limit, so a client can ask for them ("Show earlier output").
 //!
-//! The oldest bytes go first. After a trim the history starts at a line start
-//! when a line break is within a few KB, so a replay usually doesn't open with
-//! half a line or half an escape code. It can't restore the colours or modes
-//! set before the cut. Pure state: no threads, no IO.
+//! The oldest bytes go first. Adding output stays cheap: the front is dropped
+//! in steps, keeping up to a sixteenth over the limit, and nothing is searched.
+//! Reading cuts to the limit and to a line start when a line break is within a
+//! few KB, so a replay usually doesn't open with half a line or half an escape
+//! code. It can't restore the colours or modes set before the cut. Pure state:
+//! no threads, no IO.
 
 use std::collections::VecDeque;
 
@@ -16,11 +18,12 @@ use std::collections::VecDeque;
 /// (echoed keystrokes, a spinner) doesn't cost an allocation each.
 const CHUNK_LEN: usize = 64 * 1024;
 
-/// How far past a trim to look for a line break. Bounded, so a history that
-/// is one long line never makes each push scan all of it.
+/// How far past the cut a read looks for a line break. Bounded, so a history
+/// that is one long line is never scanned whole.
 const LINE_SEARCH_LEN: usize = 4096;
 
-/// The most recent output of a session, at most `limit` bytes.
+/// The most recent output of a session: reads give at most `limit` bytes;
+/// up to a sixteenth more is kept between trims.
 #[derive(Debug)]
 pub struct OutputHistory {
     chunks: VecDeque<Vec<u8>>,
@@ -65,26 +68,77 @@ impl OutputHistory {
 
     /// The most recent output, oldest first: at most the limit, and starting
     /// at a line start when one is within [`LINE_SEARCH_LEN`] bytes of where
-    /// the limit cuts.
+    /// the limit cuts (and output follows it).
     #[must_use]
     pub fn contents(&self) -> Vec<u8> {
-        let kept = || self.live_chunks().flat_map(<[u8]>::iter);
-        let mut skip = self.len.saturating_sub(self.limit);
-        let cut_mid_line = if skip > 0 {
-            kept().nth(skip - 1) != Some(&b'\n')
+        self.parts().concat()
+    }
+
+    /// [`Self::contents`] as the slices it is made of, for a caller that
+    /// copies them once straight into where they go.
+    #[must_use]
+    pub fn parts(&self) -> Vec<&[u8]> {
+        let mut skip = self.start();
+        let mut parts = Vec::new();
+        for chunk in self.live_chunks() {
+            if skip >= chunk.len() {
+                skip -= chunk.len();
+                continue;
+            }
+            parts.push(&chunk[skip..]);
+            skip = 0;
+        }
+        parts
+    }
+
+    /// How many of the kept bytes [`Self::contents`] leaves out: those past
+    /// the limit, then the rest of a line the cut fell in.
+    fn start(&self) -> usize {
+        let over = self.len.saturating_sub(self.limit);
+        let cut_mid_line = if over > 0 {
+            self.byte_at(over - 1) != Some(b'\n')
         } else {
             !self.front_at_line_start
         };
-        if cut_mid_line {
-            if let Some(line_end) = kept()
-                .skip(skip)
-                .take(LINE_SEARCH_LEN)
-                .position(|&byte| byte == b'\n')
-            {
-                skip += line_end + 1;
-            }
+        if !cut_mid_line {
+            return over;
         }
-        kept().skip(skip).copied().collect()
+        match self.line_break_from(over) {
+            // Only when output follows it: never an empty answer.
+            Some(at) if at + 1 < self.len => at + 1,
+            _ => over,
+        }
+    }
+
+    /// The kept byte at `index`.
+    fn byte_at(&self, mut index: usize) -> Option<u8> {
+        for chunk in self.live_chunks() {
+            if index < chunk.len() {
+                return Some(chunk[index]);
+            }
+            index -= chunk.len();
+        }
+        None
+    }
+
+    /// Where the first line break at or after `from` is, looking no further
+    /// than [`LINE_SEARCH_LEN`] bytes.
+    fn line_break_from(&self, from: usize) -> Option<usize> {
+        let mut offset = 0;
+        let mut budget = LINE_SEARCH_LEN;
+        for chunk in self.live_chunks() {
+            let end = offset + chunk.len();
+            if end > from && budget > 0 {
+                let start = from.saturating_sub(offset);
+                let window = &chunk[start..chunk.len().min(start + budget)];
+                if let Some(at) = window.iter().position(|&byte| byte == b'\n') {
+                    return Some(offset + start + at);
+                }
+                budget -= window.len();
+            }
+            offset = end;
+        }
+        None
     }
 
     /// The kept bytes, chunk by chunk, without the trimmed front.
@@ -189,5 +243,21 @@ mod tests {
         assert!(contents.len() <= 1600);
         assert!(contents.starts_with(b"line "), "starts at a line start");
         assert!(contents.ends_with(b"line 399\n"));
+    }
+
+    #[test]
+    fn a_cut_whose_only_line_break_ends_the_history_keeps_what_it_has() {
+        let mut history = OutputHistory::new(10);
+        history.push(b"aaaaaaaaaaaaaaa\n");
+        assert_eq!(history.contents(), b"aaaaaaaaa\n", "never an empty answer");
+    }
+
+    #[test]
+    fn its_parts_are_its_contents() {
+        let mut history = OutputHistory::new(1600);
+        for i in 0..400 {
+            history.push(format!("line {i:03}\n").as_bytes());
+        }
+        assert_eq!(history.parts().concat(), history.contents());
     }
 }
