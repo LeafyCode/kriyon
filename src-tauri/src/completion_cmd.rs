@@ -9,9 +9,10 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use kriyon_core::completion::{
-    merge_commands, parse_frontmatter, parse_plugin_manifest, path_within_roots, Frontmatter,
-    SlashCommand, BUILTIN_AGENTS, BUILTIN_COMMANDS,
+    merge_commands, parse_frontmatter, parse_plugin_manifest, Frontmatter, SlashCommand,
+    BUILTIN_AGENTS, BUILTIN_COMMANDS,
 };
+use kriyon_core::folder::{check_folder, CheckedFolder, FolderRefusal};
 
 use crate::StoreState;
 
@@ -259,26 +260,33 @@ pub fn prompt_history(
 }
 
 /// Validate a frontend-supplied `cwd` before any filesystem walk or process
-/// spawn: it must canonicalize to an existing directory that is (or sits inside)
-/// a known session/project root. Returns the canonical path so callers act on
-/// the resolved directory, never the raw string. This enforces the AGENTS.md
-/// IPC trust-boundary rule — never walk or spawn in a blindly-trusted path.
+/// spawn: it must be a [Checked folder] inside one of the [Approved root]s
+/// ([`known_roots`]). Returns the canonical path so callers act on the
+/// resolved directory, never the raw string. This enforces the AGENTS.md IPC
+/// trust-boundary rule — never walk or spawn in a blindly-trusted path.
 ///
 /// # Errors
-/// `cwd is not a directory` when the path does not resolve to a directory;
-/// `cwd is not a known session or project root` when it resolves but falls
-/// outside every registered root.
+/// `cwd is not absolute`; `cwd has a '.' or '..' part`; `cwd is not a
+/// directory` when the path does not resolve to a directory (or is not
+/// UTF-8); `cwd is not a known session or project root` when it resolves but
+/// falls outside every approved root.
 pub(crate) fn validate_cwd(store: &StoreState, cwd: &Path) -> Result<PathBuf, String> {
-    let canonical = cwd
-        .canonicalize()
-        .map_err(|_| "cwd is not a directory".to_string())?;
-    if !canonical.is_dir() {
-        return Err("cwd is not a directory".to_string());
-    }
-    if path_within_roots(&canonical, &known_roots(store)) {
-        Ok(canonical)
-    } else {
-        Err("cwd is not a known session or project root".to_string())
+    let raw = cwd
+        .to_str()
+        .ok_or_else(|| "cwd is not a directory".to_string())?;
+    check_folder(raw, &known_roots(store))
+        .map(CheckedFolder::into_canonical)
+        .map_err(|refusal| cwd_refusal_message(&refusal).to_string())
+}
+
+/// The `cwd`-worded message for each [`FolderRefusal`]. The last two are the
+/// strings these commands have always returned.
+fn cwd_refusal_message(refusal: &FolderRefusal) -> &'static str {
+    match refusal {
+        FolderRefusal::NotAbsolute => "cwd is not absolute",
+        FolderRefusal::NotNormal => "cwd has a '.' or '..' part",
+        FolderRefusal::NotADirectory => "cwd is not a directory",
+        FolderRefusal::OutsideApprovedRoots => "cwd is not a known session or project root",
     }
 }
 
@@ -527,6 +535,23 @@ mod tests {
         let state = store_with_project_root(&registered.path().to_string_lossy());
         let err = validate_cwd(&state, outside.path()).unwrap_err();
         assert_eq!(err, "cwd is not a known session or project root");
+    }
+
+    #[test]
+    fn validate_cwd_rejects_a_dot_dot_spelling_even_inside_a_known_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        std::fs::create_dir(root.join("sub")).unwrap();
+        let state = store_with_project_root(&root.to_string_lossy());
+        let err = validate_cwd(&state, &root.join("sub/..")).unwrap_err();
+        assert_eq!(err, "cwd has a '.' or '..' part");
+    }
+
+    #[test]
+    fn validate_cwd_rejects_a_relative_path() {
+        let state = store_with_project_root("/tmp");
+        let err = validate_cwd(&state, Path::new("tmp")).unwrap_err();
+        assert_eq!(err, "cwd is not absolute");
     }
 
     #[test]

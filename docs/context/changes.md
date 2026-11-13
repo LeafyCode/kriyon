@@ -263,6 +263,17 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
   `resolve_existing` is the same split turned on an entry that *does* exist, so a rename or a
   delete acts on the directory entry rather than on whatever a symlink points at — and so the
   root itself, having no leaf, cannot be named at all. _Avoid_: create path, unchecked path.
+- **Approved root** (`approved_roots`, `known_roots`) — a folder the person chose on this
+  computer, so Kriyon may start a session in it or under it: a [Project (Workspace)]'s folder or
+  one of its [Worktree]s. The store's project and session rows are the record of them. A folder
+  path from the webview is trusted only once it is a [Checked folder] inside one (ADR-0058).
+  _Avoid_: allowed root, whitelist, known root (the old name in comments).
+- **Checked folder** (`kriyon_core::folder::check_folder`, `CheckedFolder`, `FolderRefusal`) —
+  a folder path that passed the one shared check: absolute, no `.` or `..` parts, exists, is a
+  directory, and its canonical form (symlinks resolved) sits inside an [Approved root]'s
+  canonical form. The only way to build a `CheckedFolder`. Every command that takes a folder
+  from the webview — a [Sandbox root], `create_session`, and later remote starts — runs it.
+  _Avoid_: validated cwd, safe path.
 - **Sandbox root** (`SandboxRoot`, `SandboxRoot::validate`) — a frontend-supplied `cwd` that has
   passed the whole IPC trust-boundary preamble: not flag-like, canonicalizes to a real directory
   inside a known session/project root, valid UTF-8. `validate` is its only constructor, and the

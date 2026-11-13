@@ -23,7 +23,7 @@ Project terminal, Warm pane, Terminal scope, Terminal tab, Terminal pane, Termin
 
 The git-derived Changes view, the file viewer and editor, and the file sandbox behind them.
 
-Session diff, File diff, File change, Diff hunk, File kind, Visible files, Diff totals, Changes view, Transcript view, Session baseline, Git run, Working-tree budget, Command failure kind, Repo toplevel, Working-tree watch, Changes refresh coordinator, Changes view model, Touched files, Summary bar, Diff feed, File card, Jump rail, File tree pane, All-files browser, File viewer, File viewer notice, Code editor, File draft, File content, File sandbox, New-entry sandbox, Sandbox root, Save conflict guard, Details rail, Changed-files list, Highlighter.
+Session diff, File diff, File change, Diff hunk, File kind, Visible files, Diff totals, Changes view, Transcript view, Session baseline, Git run, Working-tree budget, Command failure kind, Repo toplevel, Working-tree watch, Changes refresh coordinator, Changes view model, Touched files, Summary bar, Diff feed, File card, Jump rail, File tree pane, All-files browser, File viewer, File viewer notice, Code editor, File draft, File content, Approved root, Checked folder, File sandbox, New-entry sandbox, Sandbox root, Save conflict guard, Details rail, Changed-files list, Highlighter.
 
 ## [Transcript and Claude's output](docs/context/transcript.md)
 

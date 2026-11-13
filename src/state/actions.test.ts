@@ -203,6 +203,40 @@ describe("createSessionInFolder", () => {
     expect(state.projects).toHaveLength(1);
     expect(Object.keys(state.sessions)).toHaveLength(2);
   });
+
+  it("starts the new session's shell only after its rows are saved", async () => {
+    // `create_session` refuses a folder that is not an approved root yet
+    // (ADR-0058), and the saved rows are what approves it.
+    let saved: () => void = () => undefined;
+    vi.mocked(upsertSession).mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        saved = resolve;
+      })
+    );
+    vi.mocked(ensureSession).mockClear();
+    createSessionInFolder("/work/proj");
+    const id = useSessions.getState().activeSessionId as string;
+    const launch = launchActiveSession(id);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(ensureSession).not.toHaveBeenCalled();
+    saved();
+    await launch;
+    expect(ensureSession).toHaveBeenCalledWith(
+      id,
+      "/work/proj",
+      expect.any(Function)
+    );
+  });
+
+  it("still starts the shell when saving the rows failed", async () => {
+    vi.mocked(upsertSession).mockRejectedValueOnce(new Error("disk full"));
+    vi.mocked(ensureSession).mockClear();
+    createSessionInFolder("/work/proj");
+    const id = useSessions.getState().activeSessionId as string;
+    await launchActiveSession(id);
+    expect(ensureSession).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("createSession baseline capture", () => {

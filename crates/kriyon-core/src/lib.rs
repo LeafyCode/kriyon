@@ -9,6 +9,7 @@ pub mod completion;
 pub mod daemon;
 pub mod failure;
 pub mod file_search;
+pub mod folder;
 pub mod git;
 pub mod handoff;
 pub mod history;

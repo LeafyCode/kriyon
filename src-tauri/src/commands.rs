@@ -177,6 +177,21 @@ fn note_hooks_off(
 /// tracker, and the pending-ask cache all key on the same id and
 /// `close_session(id)` tears them all down together.
 ///
+/// The folder a session's shell starts in: `cwd` from the webview (empty means
+/// HOME), refused unless it is a [Checked folder] inside an [Approved root]
+/// (ADR-0058). Returns the spelling as given, not the canonical form: Claude
+/// keys its transcripts by the folder it starts in, so resuming needs the same
+/// spelling. That is safe because the check refuses `.` and `..` parts, so the
+/// given spelling and the checked canonical form name the same directory.
+fn session_cwd(store: &StoreState, cwd: &str, home: &Path) -> Result<String, String> {
+    let cwd = kriyon_core::shellinit::SpawnPlan::new(cwd, home, None).cwd;
+    crate::completion_cmd::validate_cwd(store, Path::new(&cwd))?;
+    Ok(cwd)
+}
+
+/// Start (or reattach to) a session's shell in `cwd`, which must be a
+/// [Checked folder] inside an [Approved root] (see [`session_cwd`]).
+///
 /// Returns `true` if it reattached to a daemon that survived a previous app run
 /// (its shell — and the `claude` already launched into it — are still live), and
 /// `false` if it spawned a fresh daemon. The frontend uses this to avoid
@@ -184,7 +199,8 @@ fn note_hooks_off(
 ///
 /// # Errors
 /// Returns an error string if writing the temporary `ZDOTDIR` fails, the daemon
-/// cannot be spawned, or the session id is invalid.
+/// cannot be spawned, the session id is invalid, or `cwd` fails the
+/// folder check.
 // The reattach fast-path, the fresh-daemon path, and the full callback wiring
 // are one cohesive lifecycle; splitting them across helpers would scatter the
 // session-creation story rather than clarify it.
@@ -287,7 +303,10 @@ pub async fn create_session(
     // (ADR-0029). Only a scope name crosses back, never file contents. Read
     // from the folder the shell will really start in (an empty `cwd` means
     // HOME), and only once the id is known to be valid.
-    let shell_cwd = kriyon_core::shellinit::SpawnPlan::new(&cwd, &home, None).cwd;
+    let shell_cwd = {
+        use tauri::Manager as _;
+        session_cwd(&app.state::<StoreState>(), &cwd, &home)?
+    };
     let kriyon_off = {
         let integration = state.integration.lock();
         integration.prefs.consented
@@ -363,8 +382,11 @@ pub async fn create_session(
     // Fresh session: the pure launch policy (cwd, shell, zsh-ness) lives in
     // kriyon-core::shellinit, unit-tested without a Tauri runtime; the IO
     // (private ZDOTDIR tempdir, daemon spawn, connect) stays here.
-    let plan =
-        kriyon_core::shellinit::SpawnPlan::new(&cwd, &home, std::env::var("SHELL").ok().as_deref());
+    let plan = kriyon_core::shellinit::SpawnPlan::new(
+        &shell_cwd,
+        &home,
+        std::env::var("SHELL").ok().as_deref(),
+    );
 
     // zsh OSC 133 injection: point ZDOTDIR at a private temp dir whose .zshrc
     // sources the user's real config and adds shell-integration hooks. Because
@@ -1062,5 +1084,63 @@ mod tests {
         // A traversal id is rejected (same guard as the session socket).
         assert!(seed_prompt_path(run.path(), "../evil").is_none());
         assert!(seed_prompt_path(run.path(), "a/b").is_none());
+    }
+
+    fn store_with_project(path: &Path) -> StoreState {
+        let store = crate::store::Store::open_in_memory().unwrap();
+        store
+            .upsert_project(&crate::store::ProjectRow {
+                id: "p1".into(),
+                name: "proj".into(),
+                path: path.to_string_lossy().into_owned(),
+                color: None,
+                setup_command: None,
+                pinned_at: None,
+                folder_id: None,
+            })
+            .unwrap();
+        StoreState(parking_lot::Mutex::new(store))
+    }
+
+    #[test]
+    fn a_session_starts_in_a_folder_inside_a_project_as_given() {
+        let project = tempfile::tempdir().unwrap();
+        std::fs::create_dir(project.path().join("sub")).unwrap();
+        let store = store_with_project(project.path());
+        let given = project.path().join("sub").to_string_lossy().into_owned();
+        // The shell starts in the spelling the session was saved with: Claude
+        // keys its transcripts by that folder, so resuming depends on it.
+        assert_eq!(
+            session_cwd(&store, &given, Path::new("/nowhere")).unwrap(),
+            given
+        );
+    }
+
+    #[test]
+    fn an_empty_cwd_means_home_and_home_must_be_approved_too() {
+        let home = tempfile::tempdir().unwrap();
+        let home_str = home.path().to_string_lossy().into_owned();
+        assert_eq!(
+            session_cwd(&store_with_project(home.path()), "", home.path()).unwrap(),
+            home_str
+        );
+        let other = tempfile::tempdir().unwrap();
+        assert_eq!(
+            session_cwd(&store_with_project(other.path()), "", home.path()).unwrap_err(),
+            "cwd is not a known session or project root"
+        );
+    }
+
+    #[test]
+    fn a_session_in_an_unapproved_folder_is_refused() {
+        let project = tempfile::tempdir().unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+        let err = session_cwd(
+            &store_with_project(project.path()),
+            &elsewhere.path().to_string_lossy(),
+            Path::new("/nowhere"),
+        )
+        .unwrap_err();
+        assert_eq!(err, "cwd is not a known session or project root");
     }
 }
