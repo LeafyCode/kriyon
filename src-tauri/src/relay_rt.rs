@@ -11,8 +11,8 @@ use kriyon_remote_link::RelayAccess;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
-use crate::device_key::SecretVault;
 use crate::relay_api::{ApiError, PassReply, RelayApi, RelayStatus};
+use kriyon_remote_link::keys::SecretVault;
 
 /// Where the API and the website are, from build-time configuration.
 #[derive(Clone, Debug, PartialEq, Eq)]

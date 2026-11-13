@@ -298,8 +298,11 @@ pub(crate) fn device_key(app: &tauri::AppHandle) -> Result<[u8; 32], String> {
     #[cfg(target_os = "macos")]
     {
         let vault = crate::device_key::Keychain::for_app(&app.config().identifier);
-        crate::device_key::load_or_create(&vault, kriyon_remote_link::endpoint::generate_secret_key)
-            .map_err(|e| e.to_string())
+        kriyon_remote_link::keys::load_or_create(
+            &vault,
+            kriyon_remote_link::endpoint::generate_secret_key,
+        )
+        .map_err(|e| e.to_string())
     }
     #[cfg(not(target_os = "macos"))]
     {

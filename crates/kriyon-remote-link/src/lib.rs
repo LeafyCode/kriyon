@@ -19,5 +19,6 @@ pub mod endpoint;
 pub mod framed;
 pub mod host;
 pub mod invite;
+pub mod keys;
 
 pub use endpoint::{LinkConfig, LinkError, RelayAccess, ALPN_PAIR, ALPN_REMOTE};
