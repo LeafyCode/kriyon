@@ -217,8 +217,10 @@ impl Served {
                 continue;
             }
             for frame in messages.iter().filter_map(|message| encode(message).ok()) {
-                if let Some(ask) = fanout.send(device, frame) {
-                    asks.push(ask);
+                if let Err(ask) = fanout.send(device, frame) {
+                    // Its queue was dropped: what is left goes next round,
+                    // from a reset.
+                    asks.extend(ask);
                     fanout.dropped(device);
                     reader.start_over();
                     break;
@@ -248,7 +250,7 @@ impl Served {
         {
             let mut fanout = self.fanout.lock();
             for device in &readers {
-                asks.extend(fanout.send(device, frame.clone()));
+                asks.extend(fanout.send(device, frame.clone()).err().flatten());
             }
         }
         self.ask_all(asks);
@@ -307,6 +309,16 @@ fn reading(served: &std::sync::Weak<Served>, host: &Arc<dyn ServeHost>, id: &str
         drop(served);
         std::thread::sleep(ENTRIES_EVERY);
     }
+}
+
+/// What a session-stream request came to ([`Serve::stream_request`]).
+enum Request {
+    /// Done; nothing to answer.
+    Done,
+    /// Done; answer this.
+    Answer(ToDevice),
+    /// Not one: a write, for the session's writer.
+    Write,
 }
 
 /// What building a session's [Readable view] entries came to.
@@ -1198,10 +1210,10 @@ impl Serve {
             let answer = match (checked, message) {
                 (Err(reason), _) => Some(ToDevice::Refused { reason }),
                 (Ok(()), Decoded::Message(message)) => {
-                    if self.stream_request(&served, &id, device, &message) {
-                        None
-                    } else {
-                        self.write(&id, device, role, &message).await
+                    match self.stream_request(&served, &id, device, &message) {
+                        Request::Done => None,
+                        Request::Answer(answer) => Some(answer),
+                        Request::Write => self.write(&id, device, role, &message).await,
                     }
                 }
                 (Ok(()), Decoded::Unknown { .. }) => Some(ToDevice::Refused {
@@ -1309,14 +1321,15 @@ impl Serve {
 
     /// A device's `Resync` (a fresh snapshot), `Screen` (turn its screen on
     /// or off), `RequestEntries` (start reading entries) or `StopEntries` on
-    /// session `id`'s stream, done; `false` for any other message (a write).
+    /// session `id`'s stream: done, or what to answer; any other message is
+    /// a write.
     fn stream_request(
         &self,
         served: &Arc<Served>,
         id: &str,
         device: EndpointId,
         request: &FromDevice,
-    ) -> bool {
+    ) -> Request {
         match request {
             FromDevice::RequestEntries { .. } => {
                 served.readers.lock().insert(device, EntryReader::new());
@@ -1334,13 +1347,21 @@ impl Serve {
             }
             FromDevice::Screen { on } => {
                 let ask = served.fanout.lock().set_screen(&device, *on);
-                if let Some(ask) = ask {
-                    (served.ask)(ask);
+                match ask {
+                    Some(ask) => (served.ask)(ask),
+                    // An older daemon can't make a snapshot for one device,
+                    // as when opened with the screen.
+                    None if *on => {
+                        return Request::Answer(ToDevice::Refused {
+                            reason: RefuseReason::NotAllowed,
+                        });
+                    }
+                    None => {}
                 }
             }
-            _ => return false,
+            _ => return Request::Write,
         }
-        true
+        Request::Done
     }
 
     /// Start session `id`'s entries thread, unless it runs.

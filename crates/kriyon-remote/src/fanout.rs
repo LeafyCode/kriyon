@@ -36,6 +36,17 @@ pub enum Pop {
     Empty,
 }
 
+/// A fresh requester id from `counter`, never 0 or `u32::MAX` (the host's
+/// own window's).
+fn next_requester(counter: &mut u32) -> RequesterId {
+    let id = *counter;
+    *counter = match id.wrapping_add(1) {
+        0 | u32::MAX => 1,
+        next => next,
+    };
+    id
+}
+
 /// One device's place in the stream.
 struct DeviceStream {
     queue: SessionQueue,
@@ -120,23 +131,13 @@ impl SessionFanout {
         })
     }
 
-    /// A fresh requester id, never `u32::MAX` (the host's own window's).
-    fn requester(&mut self) -> RequesterId {
-        let id = self.next_requester;
-        self.next_requester = match id.wrapping_add(1) {
-            0 | u32::MAX => 1,
-            next => next,
-        };
-        id
-    }
-
     /// Start `device` over from a snapshot: the requester id to ask for.
     fn ask(&mut self, device: &EndpointId, skipped: bool) -> Option<RequesterId> {
-        if !self.devices.get(device)?.screen {
+        let stream = self.devices.get_mut(device)?;
+        if !stream.screen {
             return None;
         }
-        let requester = self.requester();
-        let stream = self.devices.get_mut(device)?;
+        let requester = next_requester(&mut self.next_requester);
         // A snapshot being packed for it is no longer wanted.
         stream.held = None;
         stream.awaiting = Some(Awaiting {
@@ -338,20 +339,24 @@ impl SessionFanout {
         self.insert(device, false);
     }
 
-    /// Turn `device`'s screen on (the requester id to ask for its
-    /// snapshot) or off (no more updates; a snapshot under way is dropped).
+    /// Turn `device`'s screen on: the requester id to ask for its snapshot,
+    /// asked again if it was on (a new screen needs the whole of it); `None`
+    /// before the daemon named its run (it can't answer). Or off: no more
+    /// updates, what was queued dropped (its entries start over,
+    /// [`Self::dropped`]) and a snapshot under way with it.
     pub fn set_screen(&mut self, device: &EndpointId, on: bool) -> Option<RequesterId> {
         let stream = self.devices.get_mut(device)?;
-        if stream.screen == on {
-            return None;
-        }
-        stream.screen = on;
+        let was = std::mem::replace(&mut stream.screen, on);
         if on {
             self.seq.as_ref()?;
             return self.ask(device, false);
         }
-        stream.awaiting = None;
-        stream.held = None;
+        if was {
+            stream.awaiting = None;
+            stream.held = None;
+            stream.queue = SessionQueue::new(self.limit);
+            stream.dropped = true;
+        }
         None
     }
 
@@ -372,7 +377,12 @@ impl SessionFanout {
     /// A device asked to resync: a requester id to ask for, at most once a
     /// second per device ([`ResyncGate`]).
     pub fn resync(&mut self, device: &EndpointId, now: Instant) -> Option<RequesterId> {
-        let allowed = self.devices.get_mut(device)?.resync.allow(now);
+        let stream = self.devices.get_mut(device)?;
+        // Screen off: nothing to ask for, and the gate is kept for later.
+        if !stream.screen {
+            return None;
+        }
+        let allowed = stream.resync.allow(now);
         if allowed {
             self.ask(device, false)
         } else {
@@ -414,18 +424,23 @@ impl SessionFanout {
     }
 
     /// Queue `frame`, an encoded message for `device` alone (readable-view
-    /// entries), behind what is queued for it. Too much for its queue, and
-    /// the device starts over from a fresh snapshot: the requester id to ask
-    /// for it, and [`Self::dropped`] says so.
-    pub fn send(&mut self, device: &EndpointId, frame: Vec<u8>) -> Option<RequesterId> {
-        let stream = self.devices.get_mut(device)?;
+    /// entries), behind what is queued for it.
+    ///
+    /// # Errors
+    /// Too much for its queue: the queue is dropped, and the device starts
+    /// over, from a fresh snapshot when its screen is on (the requester id to
+    /// ask for it).
+    pub fn send(&mut self, device: &EndpointId, frame: Vec<u8>) -> Result<(), Option<RequesterId>> {
+        let Some(stream) = self.devices.get_mut(device) else {
+            return Ok(());
+        };
         stream.queue.push(frame);
         if !stream.queue.is_skipping() {
-            return None;
+            return Ok(());
         }
         stream.queue = SessionQueue::new(self.limit);
         stream.dropped = true;
-        self.ask(device, true)
+        Err(self.ask(device, true))
     }
 
     /// Whether `device`'s queue was dropped since this last said so.
@@ -584,7 +599,7 @@ mod tests {
             reason: crate::message::RefuseReason::Stale,
         })
         .expect("encodes");
-        assert_eq!(fanout.send(&A, note.clone()), None);
+        assert_eq!(fanout.send(&A, note.clone()), Ok(()));
         assert!(!fanout.dropped(&A));
         let (messages, _) = drain(&mut fanout, &A);
         assert_eq!(messages.len(), 1);
@@ -593,7 +608,7 @@ mod tests {
         // caller hears that what it queued was dropped, once.
         let big = vec![0; 4096];
         assert!(
-            fanout.send(&A, big).is_some(),
+            matches!(fanout.send(&A, big), Err(Some(_))),
             "a fresh snapshot is asked for"
         );
         assert!(fanout.dropped(&A));
@@ -632,6 +647,42 @@ mod tests {
         fanout.output(b"unseen again");
         assert_eq!(drain(&mut fanout, &A).0, Vec::new());
         assert_eq!(fanout.resync(&A, Instant::now()), None);
+    }
+
+    #[test]
+    fn turning_the_screen_off_drops_what_was_queued_and_on_again_asks_afresh() {
+        let mut fanout = SessionFanout::new(1 << 20).expect("fanout");
+        fanout.hello(7);
+        following(&mut fanout, A, b"x");
+        fanout.output(b"queued");
+        fanout.set_screen(&A, false);
+        assert_eq!(drain(&mut fanout, &A).0, Vec::new(), "nothing stale");
+        assert!(fanout.dropped(&A), "its entries start over too");
+        // A resync while off doesn't use up the gate.
+        assert_eq!(fanout.resync(&A, Instant::now()), None);
+        assert!(fanout.set_screen(&A, true).is_some());
+        // On already, a new screen still gets a snapshot.
+        assert!(fanout.set_screen(&A, true).is_some(), "asked again");
+    }
+
+    #[test]
+    fn before_the_daemon_names_its_run_a_screen_cannot_be_turned_on() {
+        let mut fanout = SessionFanout::new(1024).expect("fanout");
+        fanout.open_without_screen(A);
+        assert_eq!(fanout.set_screen(&A, true), None);
+    }
+
+    #[test]
+    fn a_message_too_big_for_a_screen_off_queue_is_told_as_dropped() {
+        let mut fanout = SessionFanout::new(1024).expect("fanout");
+        fanout.hello(7);
+        fanout.open_without_screen(A);
+        assert_eq!(fanout.send(&A, vec![0; 16]), Ok(()));
+        assert_eq!(
+            fanout.send(&A, vec![0; 4096]),
+            Err(None),
+            "dropped, no snapshot"
+        );
     }
 
     #[test]

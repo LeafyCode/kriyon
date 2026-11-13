@@ -509,7 +509,16 @@ impl DeviceRuntime {
             let c = conn.conn.lock().await;
             let screen = c.wanted.get(session).ok_or(DeviceError::NotOpen)?;
             *shown(screen) = sink;
-            c.sessions.get(session).map(|open| Arc::clone(&open.writer))
+            c.sessions.get(session).map(|open| {
+                if on {
+                    // A new screen follows from the snapshot coming; what was
+                    // queued before it is not drawn.
+                    if let Ok(fresh) = SessionScreen::new() {
+                        *lock(&open.screen) = fresh;
+                    }
+                }
+                Arc::clone(&open.writer)
+            })
         };
         let Some(writer) = writer else {
             // The next link opens it as it is now.
@@ -773,7 +782,8 @@ async fn open_wanted(
         .get(session)
         .is_some_and(|wanted| Arc::ptr_eq(wanted, shown_in));
     let same_link = c.link.as_ref().is_some_and(|now| Arc::ptr_eq(now, link));
-    let (gone, read) = if still_wanted && same_link {
+    let kept = still_wanted && same_link;
+    let (gone, read) = if kept {
         let read = c.reading.get(session).cloned();
         (c.sessions.insert(session.to_string(), open), read)
     } else {
@@ -782,6 +792,16 @@ async fn open_wanted(
     drop(c);
     if let Some(gone) = gone {
         let_go(gone).await;
+    }
+    // The screen turned on or off while this stream opened: say so now.
+    let screen_now = shown(shown_in).is_some();
+    if kept && screen_now != screen_on {
+        writer
+            .lock()
+            .await
+            .send(&FromDevice::Screen { on: screen_now })
+            .await
+            .map_err(link_err)?;
     }
     if let Some(read) = read {
         // Read before this link: ask from what it has.
@@ -1022,8 +1042,16 @@ async fn read_session(
                     }
                 }
                 let events = lock(&screen).on_message(message, Instant::now());
-                // Screen off: nothing to show, nothing to ask for again.
+                // Screen off: nothing to show, nothing to ask for again; a
+                // refusal is told to the readable view, if it is read.
                 let Some(sink) = shown(&shown_in).clone() else {
+                    if let Some(read) = slot(&reading).clone() {
+                        for event in &events {
+                            if let ScreenEvent::Refused(reason) = event {
+                                (read.sink)(EntriesEvent::Refused(*reason));
+                            }
+                        }
+                    }
                     continue;
                 };
                 let mut resync = false;

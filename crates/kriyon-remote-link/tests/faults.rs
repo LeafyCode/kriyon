@@ -318,6 +318,38 @@ fn a_phone_reading_entries_turns_the_screen_on_and_off_without_closing_the_sessi
 }
 
 #[test]
+fn a_session_gone_says_so_in_the_readable_view_with_the_screen_off() {
+    use kriyon_remote::device_view::EntriesEvent;
+    run(async {
+        let world = world().await;
+        let _beats = Beats::start(&world);
+        let phone = Phone::connect(&world, 3, Role::Viewer).await;
+        let seen: Arc<Mutex<Vec<EntriesEvent>>> = Arc::default();
+        let into = Arc::clone(&seen);
+        phone
+            .rt
+            .open_session(&phone.host, "gone", None)
+            .await
+            .expect("asked");
+        phone
+            .rt
+            .read_entries(
+                &phone.host,
+                "gone",
+                Arc::new(move |event| into.lock().push(event)),
+            )
+            .await
+            .expect("reads");
+        wait_until("the refusal", || {
+            seen.lock()
+                .iter()
+                .any(|event| matches!(event, EntriesEvent::Refused(_)))
+        })
+        .await;
+    });
+}
+
+#[test]
 fn a_phone_reads_a_session_as_entries_across_a_dropped_link() {
     use kriyon_remote::device_view::EntriesEvent;
     run(async {

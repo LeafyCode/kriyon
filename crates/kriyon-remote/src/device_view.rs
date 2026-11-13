@@ -405,6 +405,9 @@ pub enum EntriesEvent {
     Entries(Vec<crate::message::Entry>),
     /// The host can't send entries: show the terminal, with a note.
     Unavailable(crate::message::EntriesUnavailable),
+    /// The host refused the session stream (the session went, say), with
+    /// its screen off: said here, as nothing else would say it.
+    Refused(RefuseReason),
 }
 
 impl ReadableEntries {
@@ -507,6 +510,10 @@ pub enum ShownKind {
 pub fn readable_summary(event: &EntriesEvent) -> ReadableSummary {
     use crate::message::{EntriesUnavailable, EntryKind, StepState};
     match event {
+        EntriesEvent::Refused(reason) => ReadableSummary {
+            entries: Vec::new(),
+            unavailable: Some(refusal_words(*reason).to_string()),
+        },
         EntriesEvent::Unavailable(reason) => ReadableSummary {
             entries: Vec::new(),
             unavailable: Some(
@@ -667,6 +674,15 @@ mod entries_tests {
                 ],
                 "unavailable": null,
             })
+        );
+        let gone = readable_summary(&EntriesEvent::Refused(
+            crate::message::RefuseReason::NoSuchSession,
+        ));
+        assert_eq!(
+            gone.unavailable.as_deref(),
+            Some(crate::device_view::refusal_words(
+                crate::message::RefuseReason::NoSuchSession
+            ))
         );
         let off = readable_summary(&EntriesEvent::Unavailable(EntriesUnavailable::CompanionOff));
         assert_eq!(off.entries, Vec::new());
