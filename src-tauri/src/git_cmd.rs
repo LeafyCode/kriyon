@@ -70,12 +70,16 @@ pub fn repo_status(repo_path: &str) -> Result<RepoStatus, String> {
 pub fn create_worktree(
     store: tauri::State<'_, StoreState>,
     chosen: tauri::State<'_, crate::folder_cmd::ChosenFolders>,
+    made: tauri::State<'_, crate::folder_cmd::MadeWorktrees>,
     repo_path: &str,
     branch: &str,
     path: &str,
 ) -> Result<(), String> {
     crate::folder_cmd::check_new_worktree(&store, &chosen, repo_path, path)?;
-    create_worktree_with(repo_path, branch, path, crate::shell_path::user_path())
+    create_worktree_with(repo_path, branch, path, crate::shell_path::user_path())?;
+    // Its first session then saves without asking git (`check_session_row`).
+    made.note(repo_path, Path::new(path));
+    Ok(())
 }
 
 /// [`create_worktree`] with git and its hooks run on `shell_path` (`None`

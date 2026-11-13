@@ -73,9 +73,10 @@ Where it runs:
   folder, so the resumed folder is that project's.
 - **`upsert_session`** saves a session only once its project is saved, and only when its `cwd`
   and `worktree_path` are each the value saved before, or exactly the project's folder or one of
-  the project repository's linked worktrees (`git worktree list`, without the main checkout,
-  asked only when the project folder does not settle it, since rows are re-saved on every title
-  change). Exactly again: every session starts in one of those, and "inside" would let a session
+  the project repository's linked worktrees (`git worktree list`, without the main checkout). Git is asked only when nothing else
+  knows the folder: not the project folder, not a worktree Kriyon made from it this run
+  (`MadeWorktrees`), not one another session of the project saved. The command runs on the main
+  thread, and is kept there so two saves of one row can't land out of order. Exactly again: every session starts in one of those, and "inside" would let a session
   of the Home project approve any folder under HOME. The main checkout is left out because it
   can sit above a project kept in a subfolder of a monorepo.
 - The frontend saves a new session's project before the session, and records the baseline only

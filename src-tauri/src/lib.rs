@@ -310,6 +310,7 @@ pub fn run() {
         .manage(remote_rt::RemoteRuntime::default())
         .manage(attachment_cmd::AttachmentRegistry::default())
         .manage(folder_cmd::ChosenFolders::default())
+        .manage(folder_cmd::MadeWorktrees::default())
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::DragDrop(drag) = event {
                 if window.label() == "main" {

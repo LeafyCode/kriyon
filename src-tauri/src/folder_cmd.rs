@@ -35,6 +35,31 @@ impl ChosenFolders {
     }
 }
 
+/// The worktrees Kriyon made this run, by the project folder they were made
+/// from: approved for that project's sessions without asking git (see
+/// `store_cmd::check_session_row`). In memory only: once a session is saved
+/// in one, its saved row approves it.
+#[derive(Default)]
+pub struct MadeWorktrees(Mutex<Vec<(String, PathBuf)>>);
+
+impl MadeWorktrees {
+    /// Record that a worktree was made at `path` from the repository `repo`.
+    pub fn note(&self, repo: &str, path: &Path) {
+        self.0.lock().push((repo.to_string(), path.to_path_buf()));
+    }
+
+    /// The worktrees made from `repo`.
+    #[must_use]
+    pub fn of(&self, repo: &str) -> Vec<PathBuf> {
+        self.0
+            .lock()
+            .iter()
+            .filter(|(from, _)| from == repo)
+            .map(|(_, path)| path.clone())
+            .collect()
+    }
+}
+
 /// Open the native folder picker and return what the person chose, recorded
 /// as a [Chosen folder]. `None` when they cancelled.
 ///

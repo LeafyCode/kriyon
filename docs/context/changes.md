@@ -263,7 +263,7 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
   `resolve_existing` is the same split turned on an entry that *does* exist, so a rename or a
   delete acts on the directory entry rather than on whatever a symlink points at — and so the
   root itself, having no leaf, cannot be named at all. _Avoid_: create path, unchecked path.
-- **Approved root** (`approved_roots`, `known_roots`) — a folder the person chose on this
+- **Approved root** (`approved_roots`, `known_roots`, `MadeWorktrees`) — a folder the person chose on this
   computer, so Kriyon may start a session in it or under it: a [Project (Workspace)]'s folder or
   one of its [Worktree]s. The store's project and session rows are the record of them, and a row
   is saved only when its folder is a [Chosen folder] (a project) or is exactly its project's
