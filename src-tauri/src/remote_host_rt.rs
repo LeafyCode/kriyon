@@ -1,4 +1,4 @@
-//! The app as [`crate::remote_serve`] sees it: its sessions, their gates, and
+//! The app as [`kriyon_remote_link::host_runtime`] sees it: its sessions, their gates, and
 //! whether a remote device looks on.
 
 use kriyon_core::cli_dialog::dialog_showing;
@@ -7,9 +7,9 @@ use kriyon_remote::authorize::{Dialog, PendingWrite};
 use kriyon_remote::message::{EndpointId, RefuseReason, Role, SessionInfo};
 use tauri::Manager as _;
 
-use crate::remote_serve::{LiveSession, Serve, ServeHost};
 use crate::{AppState, StoreState};
 use kriyon_core::daemon::DaemonEvent;
+use kriyon_remote_link::host_runtime::{LiveSession, Serve, ServeHost};
 
 /// How many times a snapshot ask is tried, [`ASK_RETRY`] apart.
 const ASK_TRIES: u32 = 40;
@@ -270,7 +270,11 @@ impl ServeHost for AppServeHost {
         }
     }
 
-    fn entries(&self, id: &str, stamp: Option<u64>) -> crate::remote_serve::EntriesBuilt {
+    fn entries(
+        &self,
+        id: &str,
+        stamp: Option<u64>,
+    ) -> kriyon_remote_link::host_runtime::EntriesBuilt {
         crate::readable_rt::entries(&self.0, id, stamp)
     }
 
@@ -353,7 +357,11 @@ impl ServeHost for AppServeHost {
             .state::<StoreState>()
             .0
             .lock()
-            .remote_start(device, request_id, crate::remote_rt::now_ms())
+            .remote_start(
+                device,
+                request_id,
+                kriyon_remote_link::host_runtime::now_ms(),
+            )
             .ok()
             .flatten()?;
         Some(match record {
@@ -365,7 +373,7 @@ impl ServeHost for AppServeHost {
     fn start_session(
         &self,
         device: EndpointId,
-        start: crate::remote_serve::RemoteStart,
+        start: kriyon_remote_link::host_runtime::RemoteStart,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String, RefuseReason>> + Send>>
     {
         Box::pin(crate::session_start::start_remote(

@@ -4,7 +4,7 @@
 //! device's input will be a second caller, rechecked here.
 //!
 //! Lock order, outermost first: a session's gate → `Serve`'s control map
-//! (`remote_serve`) → a device's `ControlOut` queue. A change of [Typing
+//! (`kriyon_remote_link::host_runtime`) → a device's `ControlOut` queue. A change of [Typing
 //! control] is told to the hook ([`Writers::on_change`]) under the gate's
 //! lock, so devices hear changes in epoch order; the hook only queues for
 //! the devices and never calls back into these writers (or the app), which
@@ -25,9 +25,7 @@ use parking_lot::Mutex;
 
 use crate::daemon_client::DaemonClient;
 
-/// The size a session's PTY has until its terminal says otherwise; the
-/// window sends its real size right after attaching.
-pub(crate) const DEFAULT_SCREEN: (u16, u16) = (80, 24);
+pub(crate) use kriyon_remote::writer::DEFAULT_SCREEN;
 
 /// Every live session's gate, made on first use and dropped with the session
 /// ([`crate::session_registry::forget`]).

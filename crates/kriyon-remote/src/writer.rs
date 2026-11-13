@@ -28,6 +28,10 @@ pub struct HostTook {
     pub restore: Option<(u16, u16)>,
 }
 
+/// The size a session's PTY has until its terminal says otherwise; the
+/// window sends its real size right after attaching.
+pub const DEFAULT_SCREEN: (u16, u16) = (80, 24);
+
 /// One session's gate.
 #[derive(Clone, Debug)]
 pub struct SessionGate {

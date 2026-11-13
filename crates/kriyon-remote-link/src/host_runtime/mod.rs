@@ -6,12 +6,15 @@
 
 use std::sync::Arc;
 
+use crate::host::{Accepted, Host, PairAttempt, RemoteLink};
 use kriyon_remote::link_policy::CodeCheck;
 use kriyon_remote::message::{EndpointId, Role};
 use kriyon_remote::pairing::PairingInvite;
-use kriyon_remote_link::host::{Accepted, Host, PairAttempt, RemoteLink};
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
+
+mod serve;
+pub use serve::*;
 
 /// What the host needs to come up.
 pub struct HostSetup {
@@ -46,7 +49,8 @@ pub enum PairingStatus {
 }
 
 /// Now, in ms since the epoch.
-pub(crate) fn now_ms() -> i64 {
+#[must_use]
+pub fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
@@ -57,7 +61,7 @@ pub(crate) fn now_ms() -> i64 {
 pub struct RemoteRuntime {
     running: Mutex<Option<Running>>,
     /// What serves paired devices' streams, set once at app start.
-    serve: std::sync::Mutex<Option<crate::remote_serve::Serve>>,
+    serve: std::sync::Mutex<Option<Serve>>,
 }
 
 struct Running {
@@ -96,7 +100,7 @@ pub enum CodeOutcome {
 impl RemoteRuntime {
     /// Serve paired devices with `serve` from the next `turn_on` on. Without
     /// it, their connections are held but not served.
-    pub fn serve_with(&self, serve: crate::remote_serve::Serve) {
+    pub fn serve_with(&self, serve: Serve) {
         if let Ok(mut slot) = self.serve.lock() {
             *slot = Some(serve);
         }
@@ -157,14 +161,14 @@ impl RemoteRuntime {
         let running = self.running.lock().await;
         let running = running.as_ref().ok_or("remote access is off")?;
         // A fresh secret each time, kept in memory only.
-        let secret = kriyon_remote_link::endpoint::generate_secret_key();
+        let secret = crate::endpoint::generate_secret_key();
         running.host.start_pairing(secret, role);
         *running.pairing.lock().await = Pairing {
             role: Some(role),
             attempt: None,
             burned: false,
         };
-        Ok(kriyon_remote_link::invite::invite(&running.host, secret))
+        Ok(crate::invite::invite(&running.host, secret))
     }
 
     /// Stop the pairing in progress, if any.
@@ -292,7 +296,7 @@ async fn accept_loop(
     host: Arc<Host>,
     pairing: Arc<Mutex<Pairing>>,
     links: Arc<Mutex<Vec<Arc<RemoteLink>>>>,
-    serve: Option<crate::remote_serve::Serve>,
+    serve: Option<Serve>,
     on_code_wanted: Arc<dyn Fn(String) + Send + Sync>,
     on_device_gone: Arc<dyn Fn(EndpointId) + Send + Sync>,
 ) {
@@ -334,10 +338,10 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Mutex as StdMutex;
 
-    use kriyon_remote_link::device::Device;
-    use kriyon_remote_link::host::PairedDevices;
-    use kriyon_remote_link::invite::host_addr;
-    use kriyon_remote_link::LinkConfig;
+    use crate::device::Device;
+    use crate::host::PairedDevices;
+    use crate::invite::host_addr;
+    use crate::LinkConfig;
     use std::net::SocketAddr;
 
     use super::*;
@@ -379,7 +383,7 @@ mod tests {
     }
 
     fn run<F: std::future::Future>(f: F) -> F::Output {
-        tauri::async_runtime::block_on(f)
+        crate::test_support::run(f)
     }
 
     #[test]

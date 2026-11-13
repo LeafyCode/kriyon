@@ -12,7 +12,9 @@ Read the root `AGENTS.md` first. These crates live here:
   host's one `authorize` check, typing control, screen fan-out, queues, compression, pairing and
   push crypto, relay rules. No network, no tokio, no IO; shared by the desktop and the phone.
 - **`kriyon-remote-link`**: the network side over iroh: the endpoint, the host's accept loop,
-  the device runtime, keys behind the `SecretVault` trait. The phone and the desktop both use it.
+  the host runtime (`host_runtime`: serving paired devices, the app behind `ServeHost`), the
+  device runtime, keys behind the `SecretVault` trait. The phone and the desktop both use it.
+  Shared loopback fakes for tests are behind its `test-support` feature.
 - **`kriyon-mobile`**: the phone's library: UniFFI bindings over the two remote crates. Thin: no
   rules of its own. Built for iOS by `scripts/mobile/build-ios.sh`, not in `pnpm check`.
 - **`kriyon-push`**: the push sender, a small open server that opens a sealed push token in

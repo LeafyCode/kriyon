@@ -30,14 +30,8 @@ pub mod relay_cmd;
 pub mod remote_cmd;
 pub mod remote_device_cmd;
 pub mod remote_endpoint;
-#[cfg(test)]
-mod remote_faults;
 pub mod remote_host_rt;
 pub mod remote_push_rt;
-pub mod remote_rt;
-pub mod remote_serve;
-#[cfg(test)]
-mod remote_test_support;
 pub mod sandbox;
 pub mod session_list_rt;
 pub mod session_registry;
@@ -302,7 +296,7 @@ fn background_tick<R: tauri::Runtime>(app: &tauri::AppHandle<R>, tick: u64) {
 
     // Remote devices hear the app is alive from here, the main loop, not
     // from the socket alone (spec §5), and hear sessions change.
-    if let Some(serve) = app.try_state::<crate::remote_serve::Serve>() {
+    if let Some(serve) = app.try_state::<kriyon_remote_link::host_runtime::Serve>() {
         serve.sessions_changed();
         if tick.is_multiple_of(REMOTE_HEARTBEAT_EVERY_N_TICKS) {
             let now_ms = std::time::SystemTime::now()
@@ -361,7 +355,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_positioner::init())
         .manage(AppState::default())
-        .manage(remote_rt::RemoteRuntime::default())
+        .manage(kriyon_remote_link::host_runtime::RemoteRuntime::default())
         .manage(kriyon_remote_link::device_runtime::DeviceRuntime::default())
         .manage(remote_push_rt::PushRt::from_build())
         .manage(remote_endpoint::RemoteEndpoint::new(
@@ -407,7 +401,7 @@ pub fn run() {
                 .map_err(|e| -> Box<dyn std::error::Error> { Box::new(e) })?;
             app.manage(StoreState(Mutex::new(store)));
             // Paired devices are served from the first `turn_on` on.
-            let serve = crate::remote_serve::Serve::new(std::sync::Arc::new(
+            let serve = kriyon_remote_link::host_runtime::Serve::new(std::sync::Arc::new(
                 crate::remote_host_rt::AppServeHost(app.handle().clone()),
             ));
             app.manage(serve.clone());
@@ -417,7 +411,7 @@ pub fn run() {
             app.state::<AppState>()
                 .writers
                 .on_change(move |id, change| teller.broadcast_control(&id.0, change));
-            app.state::<crate::remote_rt::RemoteRuntime>()
+            app.state::<kriyon_remote_link::host_runtime::RemoteRuntime>()
                 .serve_with(serve);
             // Our relay, before remote access comes back up: its pass is
             // set on the endpoint when it binds.

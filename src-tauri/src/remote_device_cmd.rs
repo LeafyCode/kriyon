@@ -162,7 +162,7 @@ pub async fn remote_host_pair(app: tauri::AppHandle, invite: String) -> Result<S
                     name: name.clone(),
                     addrs: invite.addrs,
                     relay_url: invite.relay_url,
-                    paired_at: crate::remote_rt::now_ms(),
+                    paired_at: kriyon_remote_link::host_runtime::now_ms(),
                 };
                 let kept = app
                     .state::<crate::StoreState>()

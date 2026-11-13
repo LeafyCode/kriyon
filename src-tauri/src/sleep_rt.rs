@@ -165,7 +165,7 @@ pub fn sleep_idle_now<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> usize {
 fn remote_onlooked<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
 ) -> std::collections::HashSet<SessionId> {
-    app.try_state::<crate::remote_serve::Serve>()
+    app.try_state::<kriyon_remote_link::host_runtime::Serve>()
         .map(|serve| {
             serve
                 .onlooked_sessions()

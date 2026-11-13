@@ -13,7 +13,7 @@ use kriyon_remote::message::EntriesUnavailable;
 use kriyon_core::structured::StructuredTurn;
 use parking_lot::Mutex;
 
-use crate::remote_serve::EntriesBuilt;
+use kriyon_remote_link::host_runtime::EntriesBuilt;
 
 /// The sessions whose turns are kept between builds: the newest read.
 const TURNS_KEPT: usize = 4;

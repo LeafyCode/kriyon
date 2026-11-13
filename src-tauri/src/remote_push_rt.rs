@@ -149,7 +149,11 @@ pub fn tick(app: &tauri::AppHandle) {
 async fn look(app: &tauri::AppHandle, sender: &Arc<PushSender>) {
     let rt = app.state::<PushRt>();
     // Never while Remote access is off: start over when it comes back.
-    if !app.state::<crate::remote_rt::RemoteRuntime>().is_on().await {
+    if !app
+        .state::<kriyon_remote_link::host_runtime::RemoteRuntime>()
+        .is_on()
+        .await
+    {
         rt.planner.lock().reset();
         return;
     }
@@ -177,7 +181,7 @@ async fn look(app: &tauri::AppHandle, sender: &Arc<PushSender>) {
         .filter(|session| session.needs_you)
         .map(|session| session.id);
     let connected = app
-        .try_state::<crate::remote_serve::Serve>()
+        .try_state::<kriyon_remote_link::host_runtime::Serve>()
         .is_some_and(|serve| serve.has_devices());
     let phones: Vec<[u8; 32]> = tokens.iter().map(|token| token.device).collect();
     let due = rt

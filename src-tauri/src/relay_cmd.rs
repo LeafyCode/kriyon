@@ -84,7 +84,7 @@ fn changed(app: &tauri::AppHandle) {
 /// session open, and this computer has no other computer open.
 async fn quiet(app: &tauri::AppHandle) -> bool {
     let watched = app
-        .try_state::<crate::remote_serve::Serve>()
+        .try_state::<kriyon_remote_link::host_runtime::Serve>()
         .is_some_and(|serve| !serve.onlooked_sessions().is_empty());
     !watched
         && !app
@@ -97,7 +97,7 @@ async fn quiet(app: &tauri::AppHandle) -> bool {
 /// access comes back up if it was on; the device side binds again when it
 /// next dials.
 async fn rebuild(app: &tauri::AppHandle) {
-    let remote = app.state::<crate::remote_rt::RemoteRuntime>();
+    let remote = app.state::<kriyon_remote_link::host_runtime::RemoteRuntime>();
     let was_on = remote.is_on().await;
     remote.turn_off().await;
     app.state::<RemoteEndpoint>().close_if(true).await;

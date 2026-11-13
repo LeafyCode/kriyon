@@ -2,11 +2,19 @@
 //! with one live session "s" whose daemon is the test, a real host endpoint
 //! serving it, and paired devices that dial it.
 
+// Test fakes: an `expect` failing is the test failing, which is what a
+// panic here means; documenting each would only repeat that.
+#![allow(clippy::missing_panics_doc)]
+
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use crate::device::{Device, DeviceLink};
+use crate::endpoint::LinkConfig;
+use crate::framed::{MessageReader, MessageWriter};
+use crate::host::{Accepted, Host, PairedDevices};
 use kriyon_core::session::SessionStatus;
 use kriyon_core::standing::StandingState;
 use kriyon_remote::authorize::PendingWrite;
@@ -16,57 +24,51 @@ use kriyon_remote::fanout::RequesterId;
 use kriyon_remote::message::{
     EndpointId, FromDevice, ProjectInfo, RefuseReason, Role, SessionInfo, ToDevice,
 };
-use kriyon_remote_link::device::{Device, DeviceLink};
-use kriyon_remote_link::endpoint::LinkConfig;
-use kriyon_remote_link::framed::{MessageReader, MessageWriter};
-use kriyon_remote_link::host::{Accepted, Host, PairedDevices};
 use parking_lot::Mutex;
 
+pub use super::{loopback, on_loopback, run, wait_until, RecordingEvents};
 use kriyon_core::daemon::DaemonEvent;
-pub(crate) use kriyon_remote_link::test_support::{
-    loopback, on_loopback, wait_until, RecordingEvents,
-};
 
-use crate::remote_serve::{EntriesBuilt, LiveSession, RemoteStart, Serve, ServeHost};
+use crate::host_runtime::{EntriesBuilt, LiveSession, RemoteStart, Serve, ServeHost};
 use kriyon_remote::authorize::ProjectFolder;
 use kriyon_remote::message::EntriesUnavailable;
 
 /// The app, faked: one session "s", paired devices in a map.
-pub(crate) struct FakeHost {
-    pub(crate) paired: Mutex<HashMap<EndpointId, Role>>,
-    pub(crate) gate: Mutex<kriyon_remote::writer::SessionGate>,
-    pub(crate) typed: Mutex<Vec<u8>>,
-    pub(crate) onlooked: Mutex<HashSet<String>>,
-    pub(crate) title: Mutex<String>,
+pub struct FakeHost {
+    pub paired: Mutex<HashMap<EndpointId, Role>>,
+    pub gate: Mutex<kriyon_remote::writer::SessionGate>,
+    pub typed: Mutex<Vec<u8>>,
+    pub onlooked: Mutex<HashSet<String>>,
+    pub title: Mutex<String>,
     /// The push tokens devices gave, in order.
-    pub(crate) push_tokens: Mutex<Vec<(EndpointId, u32, Vec<u8>)>>,
+    pub push_tokens: Mutex<Vec<(EndpointId, u32, Vec<u8>)>>,
     /// Each project's folder, as the check sees it; unknown ids have none.
-    pub(crate) folders: Mutex<HashMap<String, ProjectFolder>>,
+    pub folders: Mutex<HashMap<String, ProjectFolder>>,
     /// The starts asked for, and what each one comes to.
-    pub(crate) starts: Mutex<Vec<(EndpointId, RemoteStart)>>,
-    pub(crate) start_result: Mutex<Result<String, RefuseReason>>,
+    pub starts: Mutex<Vec<(EndpointId, RemoteStart)>>,
+    pub start_result: Mutex<Result<String, RefuseReason>>,
     /// The host's projects, as devices are told them.
-    pub(crate) projects: Mutex<Vec<ProjectInfo>>,
+    pub projects: Mutex<Vec<ProjectInfo>>,
     /// Asks for control the host's ten-second rule refused: (session, device).
-    pub(crate) control_asks: Mutex<Vec<(String, EndpointId)>>,
+    pub control_asks: Mutex<Vec<(String, EndpointId)>>,
     /// What the serving layer logged, in order.
-    pub(crate) logged: Mutex<Vec<String>>,
+    pub logged: Mutex<Vec<String>>,
     /// Session "s"'s readable-view entries as built now, and how often they
     /// were built.
-    pub(crate) entries: Mutex<Result<Vec<kriyon_core::readable::Keyed>, EntriesUnavailable>>,
-    pub(crate) builds: std::sync::atomic::AtomicUsize,
+    pub entries: Mutex<Result<Vec<kriyon_core::readable::Keyed>, EntriesUnavailable>>,
+    pub builds: std::sync::atomic::AtomicUsize,
     /// How many times the serving layer called the app.
-    pub(crate) calls: std::sync::atomic::AtomicUsize,
+    pub calls: std::sync::atomic::AtomicUsize,
     /// How long a start takes, so a test can drop the link mid-start.
-    pub(crate) start_delay: Mutex<Duration>,
+    pub start_delay: Mutex<Duration>,
     /// Sessions earlier starts made, by request id.
-    pub(crate) started: Mutex<HashMap<[u8; 16], Result<String, RefuseReason>>>,
+    pub started: Mutex<HashMap<[u8; 16], Result<String, RefuseReason>>>,
     /// Told every change of control, as the app's writers tell it.
-    pub(crate) serve: Mutex<Option<Serve>>,
+    pub serve: Mutex<Option<Serve>>,
 }
 
 impl FakeHost {
-    pub(crate) fn tell(&self, change: Option<Change>) {
+    pub fn tell(&self, change: Option<Change>) {
         let serve = self.serve.lock().clone();
         if let (Some(serve), Some(change)) = (serve, change) {
             serve.broadcast_control("s", change);
@@ -300,21 +302,21 @@ impl ServeHost for FakeHost {
     }
 }
 
-pub(crate) struct World {
-    pub(crate) host: Arc<Host>,
-    pub(crate) fake: Arc<FakeHost>,
-    pub(crate) serve: Serve,
-    pub(crate) asks: Arc<Mutex<Vec<RequesterId>>>,
+pub struct World {
+    pub host: Arc<Host>,
+    pub fake: Arc<FakeHost>,
+    pub serve: Serve,
+    pub asks: Arc<Mutex<Vec<RequesterId>>>,
 }
 
 /// A host serving one live session "s", whose daemon is the test.
-pub(crate) async fn world() -> World {
+pub async fn world() -> World {
     world_on(loopback()).await
 }
 
 /// [`world`], listening on `bind`: a fixed port lets a restarted host be
 /// dialed at the address its devices stored.
-pub(crate) async fn world_on(bind: SocketAddr) -> World {
+pub async fn world_on(bind: SocketAddr) -> World {
     let fake = Arc::new(FakeHost::default());
     *fake.title.lock() = "first".into();
     // A fixed port may still be held for a moment by the endpoint that had
@@ -358,7 +360,7 @@ pub(crate) async fn world_on(bind: SocketAddr) -> World {
 }
 
 /// A paired device of `role`, connected, past `Welcome`.
-pub(crate) async fn device(
+pub async fn device(
     world: &World,
     key: u8,
     role: Role,
@@ -400,7 +402,7 @@ pub(crate) async fn device(
     (phone, link, writer, reader)
 }
 
-pub(crate) async fn next(reader: &mut MessageReader<ToDevice>) -> ToDevice {
+pub async fn next(reader: &mut MessageReader<ToDevice>) -> ToDevice {
     match tokio::time::timeout(Duration::from_secs(10), reader.next()).await {
         Ok(Ok(Some(Decoded::Message(message)))) => message,
         other => panic!("no message: {other:?}"),
@@ -408,7 +410,7 @@ pub(crate) async fn next(reader: &mut MessageReader<ToDevice>) -> ToDevice {
 }
 
 /// The next requester id the daemon (the test) is asked a snapshot for.
-pub(crate) async fn asked(world: &World) -> RequesterId {
+pub async fn asked(world: &World) -> RequesterId {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         if let Some(id) = world.asks.lock().pop() {
@@ -420,16 +422,14 @@ pub(crate) async fn asked(world: &World) -> RequesterId {
 }
 
 /// The daemon (the test) answers snapshot `id` with `screen`.
-pub(crate) fn answer(world: &World, id: RequesterId, screen: &[u8]) {
+pub fn answer(world: &World, id: RequesterId, screen: &[u8]) {
     let _ = world
         .serve
         .on_event("s", DaemonEvent::Snapshot { id, bytes: screen });
     let _ = world.serve.on_event("s", DaemonEvent::SnapshotEnd { id });
 }
 
-pub(crate) async fn open(
-    link: &DeviceLink,
-) -> (MessageWriter<FromDevice>, MessageReader<ToDevice>) {
+pub async fn open(link: &DeviceLink) -> (MessageWriter<FromDevice>, MessageReader<ToDevice>) {
     let (mut writer, reader) = link.open_stream().await.expect("session stream");
     writer
         .send(&FromDevice::Open {
@@ -438,8 +438,4 @@ pub(crate) async fn open(
         .await
         .expect("open");
     (writer, reader)
-}
-
-pub(crate) fn run<F: std::future::Future>(f: F) -> F::Output {
-    tauri::async_runtime::block_on(f)
 }

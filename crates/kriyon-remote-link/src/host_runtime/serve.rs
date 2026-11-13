@@ -8,7 +8,7 @@
 //! it touches is a short lock or a wake-up, and the network writes happen on
 //! the streams' own tasks.
 //!
-//! Lock order, outermost first: a session's gate (`session_writer`) → the
+//! Lock order, outermost first: a session's gate (the app's session writers) → the
 //! control map (`Inner::controls`) → a device's `ControlOut` queue. The
 //! writers call [`Serve::broadcast_control`] under a gate's lock, so it only
 //! takes the two inner locks and never calls the app ([`ServeHost`]).
@@ -18,6 +18,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use crate::framed::{MessageReader, MessageWriter};
+use crate::host::RemoteLink;
 use kriyon_core::cli_dialog::DialogState;
 use kriyon_remote::authorize::{
     authorize, Dialog, HostFacts, PendingWrite, ProjectFolder, SessionView, Stream,
@@ -33,8 +35,6 @@ use kriyon_remote::message::{
     ToDevice,
 };
 use kriyon_remote::queue::{ControlQueue, CONTROL_QUEUE_LIMIT, SESSION_QUEUE_LIMIT};
-use kriyon_remote_link::framed::{MessageReader, MessageWriter};
-use kriyon_remote_link::host::RemoteLink;
 use parking_lot::Mutex;
 use tokio::sync::Notify;
 
@@ -607,7 +607,7 @@ impl Serve {
                     // Compressing a big screen takes a while: never on the
                     // daemon's reader, never under this lock.
                     let snapshot = fanout
-                        .snapshot_end(id, size.unwrap_or(crate::session_writer::DEFAULT_SCREEN));
+                        .snapshot_end(id, size.unwrap_or(kriyon_remote::writer::DEFAULT_SCREEN));
                     let unsent = snapshot.and_then(|snapshot| match served.packs.lock().as_ref() {
                         Some(packs) => packs.send(snapshot).err().map(|e| e.0),
                         None => Some(snapshot),
@@ -1397,14 +1397,14 @@ async fn write_session(
 mod tests {
     use std::time::Duration;
 
+    use crate::device::DeviceLink;
     use kriyon_remote::compress::{decompress, Kind};
     use kriyon_remote::message::{Epoch, Holder};
-    use kriyon_remote_link::device::DeviceLink;
 
     use super::*;
     use kriyon_remote::message::{Entry, EntryKind};
 
-    use crate::remote_test_support::*;
+    use crate::test_support::host_world::*;
 
     #[test]
     fn an_opened_session_shows_its_snapshot_then_its_updates() {

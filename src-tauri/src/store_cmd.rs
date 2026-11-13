@@ -150,7 +150,7 @@ pub fn upsert_project(
 /// thread (it checks every project's folder).
 fn projects_changed(app: &tauri::AppHandle) {
     use tauri::Manager as _;
-    if let Some(serve) = app.try_state::<crate::remote_serve::Serve>() {
+    if let Some(serve) = app.try_state::<kriyon_remote_link::host_runtime::Serve>() {
         let serve = serve.inner().clone();
         tauri::async_runtime::spawn_blocking(move || serve.projects_changed());
     }

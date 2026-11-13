@@ -1,6 +1,6 @@
 //! Commands for [Remote access]: the switch, pairing and the paired devices.
 //! Every argument comes from the webview and is checked here (trust boundary);
-//! what the host does lives in [`crate::remote_rt`].
+//! what the host does lives in [`kriyon_remote_link::host_runtime`].
 
 use serde::{Deserialize, Serialize};
 
@@ -321,7 +321,10 @@ pub(crate) async fn bound(app: &tauri::AppHandle) -> Result<crate::remote_endpoi
 /// paired computer is connected to.
 pub(crate) async fn release_endpoint_if_unused(app: &tauri::AppHandle) {
     use tauri::Manager as _;
-    let unused = !app.state::<crate::remote_rt::RemoteRuntime>().is_on().await
+    let unused = !app
+        .state::<kriyon_remote_link::host_runtime::RemoteRuntime>()
+        .is_on()
+        .await
         && !app
             .state::<kriyon_remote_link::device_runtime::DeviceRuntime>()
             .in_use()
@@ -336,7 +339,7 @@ pub(crate) async fn turn_on(app: &tauri::AppHandle) -> Result<(), String> {
     let host = bound(app).await?.host;
     let emitter = app.clone();
     let releaser = app.clone();
-    let setup = crate::remote_rt::HostSetup {
+    let setup = kriyon_remote_link::host_runtime::HostSetup {
         host,
         on_device_gone: std::sync::Arc::new(move |device| {
             let app = releaser.clone();
@@ -349,7 +352,7 @@ pub(crate) async fn turn_on(app: &tauri::AppHandle) -> Result<(), String> {
             );
         }),
     };
-    app.state::<crate::remote_rt::RemoteRuntime>()
+    app.state::<kriyon_remote_link::host_runtime::RemoteRuntime>()
         .turn_on(setup)
         .await
 }
@@ -403,8 +406,8 @@ pub enum PairingView {
     Burned,
 }
 
-async fn status(rt: &crate::remote_rt::RemoteRuntime) -> RemoteStatus {
-    use crate::remote_rt::PairingStatus;
+async fn status(rt: &kriyon_remote_link::host_runtime::RemoteRuntime) -> RemoteStatus {
+    use kriyon_remote_link::host_runtime::PairingStatus;
     let pairing = match rt.pairing_status().await {
         PairingStatus::Idle => PairingView::Idle,
         PairingStatus::Waiting {
@@ -439,7 +442,7 @@ async fn status(rt: &crate::remote_rt::RemoteRuntime) -> RemoteStatus {
 /// Never; `Result` for the command's async form.
 #[tauri::command]
 pub async fn remote_status(
-    rt: tauri::State<'_, crate::remote_rt::RemoteRuntime>,
+    rt: tauri::State<'_, kriyon_remote_link::host_runtime::RemoteRuntime>,
 ) -> Result<RemoteStatus, String> {
     Ok(status(&rt).await)
 }
@@ -458,7 +461,7 @@ pub async fn remote_set_enabled(
     if enabled {
         turn_on(&app).await?;
     } else {
-        app.state::<crate::remote_rt::RemoteRuntime>()
+        app.state::<kriyon_remote_link::host_runtime::RemoteRuntime>()
             .turn_off()
             .await;
         // Off means no endpoint, unless this computer is using another one.
@@ -469,7 +472,7 @@ pub async fn remote_set_enabled(
         .lock()
         .save_layout(SETTING, if enabled { "true" } else { "false" })
         .map_err(|e| e.to_string())?;
-    Ok(status(&app.state::<crate::remote_rt::RemoteRuntime>()).await)
+    Ok(status(&app.state::<kriyon_remote_link::host_runtime::RemoteRuntime>()).await)
 }
 
 /// Start pairing a device as `role`; returns the QR code's text.
@@ -478,7 +481,7 @@ pub async fn remote_set_enabled(
 /// When remote access is off.
 #[tauri::command]
 pub async fn remote_start_pairing(
-    rt: tauri::State<'_, crate::remote_rt::RemoteRuntime>,
+    rt: tauri::State<'_, kriyon_remote_link::host_runtime::RemoteRuntime>,
     endpoint: tauri::State<'_, crate::remote_endpoint::RemoteEndpoint>,
     role: RoleArg,
 ) -> Result<String, String> {
@@ -493,7 +496,7 @@ pub async fn remote_start_pairing(
 /// Never; `Result` for the command's async form.
 #[tauri::command]
 pub async fn remote_stop_pairing(
-    rt: tauri::State<'_, crate::remote_rt::RemoteRuntime>,
+    rt: tauri::State<'_, kriyon_remote_link::host_runtime::RemoteRuntime>,
 ) -> Result<(), String> {
     rt.stop_pairing().await;
     Ok(())
@@ -521,13 +524,13 @@ pub enum CodeResult {
 /// For text that isn't six digits, or when the device can't be told.
 #[tauri::command]
 pub async fn remote_enter_code(app: tauri::AppHandle, code: String) -> Result<CodeResult, String> {
-    use crate::remote_rt::CodeOutcome;
+    use kriyon_remote_link::host_runtime::CodeOutcome;
     use tauri::Manager as _;
     check_code_text(&code)?;
     let store_app = app.clone();
-    let now_ms = crate::remote_rt::now_ms();
+    let now_ms = kriyon_remote_link::host_runtime::now_ms();
     let outcome = app
-        .state::<crate::remote_rt::RemoteRuntime>()
+        .state::<kriyon_remote_link::host_runtime::RemoteRuntime>()
         .enter_code(&code, &host_name(), move |device, name, role| {
             let store = store_app.state::<crate::StoreState>();
             let row = crate::store::PairedDeviceRow {
@@ -647,7 +650,7 @@ pub async fn remote_remove_device(app: tauri::AppHandle, id: String) -> Result<(
             return Err(e.to_string());
         }
     }
-    app.state::<crate::remote_rt::RemoteRuntime>()
+    app.state::<kriyon_remote_link::host_runtime::RemoteRuntime>()
         .cut_off(&id)
         .await;
     release_everywhere(&app, id).await;
@@ -690,7 +693,7 @@ pub async fn remote_let_device_type(
     let device = parse_device_id(&device_id)?;
     crate::remote_device_cmd::check_session_id(&session_id)?;
     let connected = app
-        .try_state::<crate::remote_serve::Serve>()
+        .try_state::<kriyon_remote_link::host_runtime::Serve>()
         .is_some_and(|serve| serve.has_open(&session_id, &device));
     if !connected {
         return Err("That device isn't watching this session now.".to_string());
@@ -757,7 +760,7 @@ pub async fn remote_set_device_role(
     if !viewer {
         writers.unrevoke(&id);
     }
-    app.state::<crate::remote_rt::RemoteRuntime>()
+    app.state::<kriyon_remote_link::host_runtime::RemoteRuntime>()
         .reconnect(&id)
         .await;
     if viewer {

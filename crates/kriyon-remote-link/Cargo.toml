@@ -8,7 +8,9 @@ description = "The network link of Kriyon's remote access, over iroh: endpoints,
 
 [dependencies]
 iroh = { version = "1.4.1", default-features = false, features = ["tls-ring"] }
+kriyon-core = { path = "../kriyon-core" }
 kriyon-remote = { path = "../kriyon-remote" }
+parking_lot = "0.12"
 tokio = { version = "1", default-features = false, features = ["macros", "rt", "sync", "time"] }
 
 [features]
@@ -17,7 +19,6 @@ test-support = ["tokio/rt-multi-thread"]
 
 [dev-dependencies]
 kriyon-remote-link = { path = ".", features = ["test-support"] }
-kriyon-core = { path = "../kriyon-core" }
 tokio = { version = "1", default-features = false, features = ["macros", "rt-multi-thread", "sync", "time"] }
 
 [lints.clippy]

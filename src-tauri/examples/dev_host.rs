@@ -23,13 +23,13 @@ use kriyon_core::daemon::DaemonEvent;
 use kriyon_core::readable::{EntryKind, Keyed, StepState};
 use kriyon_core::session::SessionStatus;
 use kriyon_core::standing::StandingState;
-use kriyon_lib::remote_rt::{CodeOutcome, HostSetup, RemoteRuntime};
-use kriyon_lib::remote_serve::{EntriesBuilt, LiveSession, RemoteStart, Serve, ServeHost};
 use kriyon_remote::authorize::{PendingWrite, ProjectFolder};
 use kriyon_remote::control::{Change, HostIsTyping};
 use kriyon_remote::message::{EndpointId, ProjectInfo, RefuseReason, Role, SessionInfo};
 use kriyon_remote::writer::SessionGate;
 use kriyon_remote_link::host::{Host, PairedDevices};
+use kriyon_remote_link::host_runtime::{CodeOutcome, HostSetup, RemoteRuntime};
+use kriyon_remote_link::host_runtime::{EntriesBuilt, LiveSession, RemoteStart, Serve, ServeHost};
 use kriyon_remote_link::LinkConfig;
 use parking_lot::Mutex;
 

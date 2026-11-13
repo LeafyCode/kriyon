@@ -231,7 +231,7 @@ pub const SESSION_ADDED_EVENT: &str = "session-added";
 pub async fn start_remote(
     app: tauri::AppHandle,
     device: kriyon_remote::message::EndpointId,
-    request: crate::remote_serve::RemoteStart,
+    request: kriyon_remote_link::host_runtime::RemoteStart,
 ) -> Result<String, kriyon_remote::message::RefuseReason> {
     let key = (device, request.request_id);
     let lock = Arc::clone(STARTING.lock().entry(key).or_default());
@@ -253,12 +253,12 @@ pub async fn start_remote(
 async fn start_remote_once(
     app: &tauri::AppHandle,
     device: kriyon_remote::message::EndpointId,
-    request: crate::remote_serve::RemoteStart,
+    request: kriyon_remote_link::host_runtime::RemoteStart,
 ) -> Result<String, kriyon_remote::message::RefuseReason> {
-    use crate::remote_serve::ServeHost as _;
     use kriyon_remote::message::RefuseReason;
+    use kriyon_remote_link::host_runtime::ServeHost as _;
     use tauri::{Emitter as _, Manager as _};
-    let now = crate::remote_rt::now_ms();
+    let now = kriyon_remote_link::host_runtime::now_ms();
     let request_id = request.request_id;
     // The store and the folder check touch the disk: off the runtime.
     let looking = (app.clone(), request.project_id.clone());

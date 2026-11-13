@@ -3341,6 +3341,7 @@ dependencies = [
  "kriyon-core",
  "kriyon-remote",
  "kriyon-remote-link",
+ "parking_lot",
  "tokio",
 ]
 

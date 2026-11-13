@@ -1,7 +1,7 @@
 //! The fault tests of the remote protocol spec, §11: each fault ends in the
 //! behaviour the spec gives it, with no lost session and no replayed input.
 //!
-//! These run the real host side ([`crate::remote_serve`] on a real host
+//! These run the real host side ([`kriyon_remote_link::host_runtime`] on a real host
 //! endpoint, its daemon faked by the test) against the real device side
 //! ([`DeviceRuntime`]) over loopback, and assert what the person sees: the
 //! link's state, the screen, and what reached the PTY.
@@ -14,11 +14,11 @@
 //! | Sleep and wake the host | `a_host_asleep_past_the_heartbeat_shows_lost_then_recovers` |
 //! | Kill and restart the relay | not yet: there is no relay support (plan, later steps) |
 //! | Crash the host mid-write | `a_host_that_crashed_mid_write_comes_back_with_nothing_replayed` |
-//! | A slow device beside a fast one | `remote_serve::a_slow_device_skips_ahead_while_a_fast_one_follows`, `fanout::a_slow_device_skips_ahead_alone` |
+//! | A slow device beside a fast one | `host_runtime::a_slow_device_skips_ahead_while_a_fast_one_follows`, `fanout::a_slow_device_skips_ahead_alone` |
 //! | A device that never reads its control stream | `a_device_that_never_reads_its_control_stream_is_closed_too_slow` |
-//! | A stale epoch after a takeover | `remote_serve::typing_from_before_another_device_took_over_is_refused`, `authorize::input_for_an_old_run_or_epoch_is_stale` |
-//! | Input buffered across a reconnect | the cut, sleep and crash tests here, `remote_serve::a_device_that_drops_gives_control_back_to_the_host`, `remote_serve::a_device_that_reconnects_before_its_old_connection_goes_must_take_control_again` |
-//! | A dialog after `seen_seq` | `remote_serve::typing_from_before_a_dialog_appeared_is_refused`, `writer::a_dialog_that_appeared_before_the_write_makes_it_stale` |
+//! | A stale epoch after a takeover | `host_runtime::typing_from_before_another_device_took_over_is_refused`, `authorize::input_for_an_old_run_or_epoch_is_stale` |
+//! | Input buffered across a reconnect | the cut, sleep and crash tests here, `host_runtime::a_device_that_drops_gives_control_back_to_the_host`, `host_runtime::a_device_that_reconnects_before_its_old_connection_goes_must_take_control_again` |
+//! | A dialog after `seen_seq` | `host_runtime::typing_from_before_a_dialog_appeared_is_refused`, `writer::a_dialog_that_appeared_before_the_write_makes_it_stale` |
 //! | A resend of `StartSession` | not yet: remote starts are refused until `create_session` runs without the webview |
 //! | An oversize length prefix | `an_oversize_length_ends_that_stream_and_nothing_else`, `codec::a_length_over_the_direction_limit_fails_from_the_header_alone` |
 //! | A zstd bomb | `compress::a_small_frame_that_unpacks_past_the_cap_is_refused`, `device_view::a_frame_that_does_not_unpack_asks_for_a_snapshot` |
@@ -40,12 +40,12 @@ use kriyon_remote::link_policy::CloseCode;
 use kriyon_remote::message::{EndpointId, FromDevice, Holder, RefuseReason, Role, ToDevice};
 use parking_lot::Mutex;
 
-use crate::remote_test_support::{
-    answer, asked, device, next, on_loopback, run, wait_until, world, world_on, RecordingEvents,
-    World,
-};
 use kriyon_remote_link::device_runtime::{
     DeviceError, DeviceEvents, DeviceRuntime, HostEntry, ScreenSink, StartError, Timing,
+};
+use kriyon_remote_link::test_support::host_world::{
+    answer, asked, device, next, on_loopback, run, wait_until, world, world_on, RecordingEvents,
+    World,
 };
 
 /// How long the device here waits on a quiet host before it counts it lost.

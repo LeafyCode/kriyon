@@ -11,6 +11,10 @@
 //!   limited; `kriyon/pair/1` is served only while a pairing is pending.
 //! - [`device`]: pairing from the device's side, connecting, and staying
 //!   connected with backoff until the host says it is no longer paired.
+//! - [`host_runtime`]: [Remote access] on the host: the switch, the accept
+//!   loop and the one pairing in progress, and [`host_runtime::Serve`],
+//!   serving paired devices their control and session streams; the app
+//!   comes in through [`host_runtime::ServeHost`].
 //! - [`framed`]: messages over a QUIC stream, with the `kriyon-remote` codec.
 //! - `test_support` (the `test-support` feature): shared fakes for tests
 //!   over loopback.
@@ -20,6 +24,7 @@ pub mod device_runtime;
 pub mod endpoint;
 pub mod framed;
 pub mod host;
+pub mod host_runtime;
 pub mod invite;
 pub mod keys;
 #[cfg(any(test, feature = "test-support"))]

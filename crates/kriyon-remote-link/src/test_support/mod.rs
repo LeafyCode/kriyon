@@ -14,6 +14,8 @@ use crate::device_runtime::{DeviceEvents, DeviceRuntime};
 use crate::host::PairedDevices;
 use crate::LinkConfig;
 
+pub mod host_world;
+
 /// The [Paired device]s a host knows, in memory.
 #[derive(Debug, Default)]
 pub struct MemoryPaired(Mutex<HashMap<EndpointId, Role>>);
