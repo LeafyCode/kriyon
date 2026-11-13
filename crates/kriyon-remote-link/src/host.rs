@@ -147,13 +147,23 @@ impl Host {
     /// removing it from the store (or changing its role), so it can't stay
     /// connected with what it had.
     pub fn cut_off(&self, device: &EndpointId) {
+        self.close_device(device, CloseCode::NotPaired);
+    }
+
+    /// Close every live connection of `device` so it reconnects: after its
+    /// role changed, it comes back with the new one.
+    pub fn reconnect(&self, device: &EndpointId) {
+        self.close_device(device, CloseCode::HostClosing);
+    }
+
+    fn close_device(&self, device: &EndpointId, code: CloseCode) {
         let mut live = lock(&self.shared.live);
         live.retain(|(id, handle)| {
             let Some(connection) = handle.upgrade() else {
                 return false;
             };
             if id == device {
-                close(&connection, CloseCode::NotPaired);
+                close(&connection, code);
                 return false;
             }
             true
@@ -442,7 +452,9 @@ impl PairAttempt {
 
     /// The person typed `entered`. On the right code, `store` saves the
     /// device and its role, and only then is the device told `Paired`, so it
-    /// can dial in at once. When the pairing is burned, or this attempt's
+    /// can dial in at once. If `store` says it couldn't save, the device is
+    /// told `Refused` instead, and the check is `Burned`: a device told it is
+    /// paired but not stored would be refused, and stop trying, for good. When the pairing is burned, or this attempt's
     /// pairing has been replaced by a newer one, the device is told `Refused`
     /// and the connection closes; a newer pairing is left as it is.
     ///
@@ -452,7 +464,7 @@ impl PairAttempt {
         &mut self,
         entered: &str,
         host_name: &str,
-        store: impl FnOnce(EndpointId, Role),
+        store: impl FnOnce(EndpointId, Role) -> bool,
     ) -> Result<CodeCheck, LinkError> {
         let check = {
             let mut pairing = lock(&self.shared.pairing);
@@ -473,10 +485,13 @@ impl PairAttempt {
                 _ => CodeCheck::Burned,
             }
         };
+        let check = match check {
+            CodeCheck::Paired { device, role } if !store(device, role) => CodeCheck::Burned,
+            other => other,
+        };
         match check {
             CodeCheck::Wrong { .. } => {}
-            CodeCheck::Paired { device, role } => {
-                store(device, role);
+            CodeCheck::Paired { .. } => {
                 let paired = PairToDevice::Paired {
                     host_name: host_name.to_string(),
                 };

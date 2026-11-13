@@ -88,7 +88,10 @@ async fn pair(host: Arc<Host>, store: &Arc<Store>, device: &Device, role: Role) 
     // The person types the code the device shows, while the device waits.
     let code = pairing.code().to_string();
     let (check, answer) = tokio::join!(
-        attempt.confirm(&code, "Test Mac", |device, role| store.add(device, role)),
+        attempt.confirm(&code, "Test Mac", |device, role| {
+            store.add(device, role);
+            true
+        }),
         pairing.finish()
     );
     let check = check.expect("told");
@@ -129,7 +132,9 @@ async fn a_wrong_code_typed_three_times_burns_the_pairing() {
             for wrong in ["000000", "000001", "000002"] {
                 last = Some(
                     attempt
-                        .confirm(wrong, "Test Mac", |_, _| panic!("nothing is stored"))
+                        .confirm(wrong, "Test Mac", |_, _| -> bool {
+                            panic!("nothing is stored")
+                        })
                         .await
                         .expect("told"),
                 );
@@ -501,7 +506,10 @@ async fn a_device_that_dials_the_moment_it_is_paired_is_let_in() {
         let store = Arc::clone(&store);
         tokio::spawn(async move {
             attempt
-                .confirm(&code, "Test Mac", |device, role| store.add(device, role))
+                .confirm(&code, "Test Mac", |device, role| {
+                    store.add(device, role);
+                    true
+                })
                 .await
         })
     };
@@ -568,7 +576,9 @@ async fn an_attempt_from_an_earlier_pairing_cannot_confirm_a_newer_one() {
     // The first device's code typed into its stale attempt pairs nobody.
     let first_code = first_pairing.code().to_string();
     let (check, answer) = tokio::join!(
-        stale.confirm(&first_code, "Test Mac", |_, _| panic!("nothing is stored")),
+        stale.confirm(&first_code, "Test Mac", |_, _| -> bool {
+            panic!("nothing is stored")
+        }),
         first_pairing.finish()
     );
     assert_eq!(check.expect("told"), CodeCheck::Burned);
@@ -577,8 +587,10 @@ async fn an_attempt_from_an_earlier_pairing_cannot_confirm_a_newer_one() {
     // The newer pairing is untouched.
     let second_code = second_pairing.code().to_string();
     let (check, answer) = tokio::join!(
-        current.confirm(&second_code, "Test Mac", |device, role| store
-            .add(device, role)),
+        current.confirm(&second_code, "Test Mac", |device, role| {
+            store.add(device, role);
+            true
+        }),
         second_pairing.finish()
     );
     assert_eq!(
@@ -665,9 +677,96 @@ async fn a_device_pairs_from_the_qr_text_alone() {
     let mut attempt = host_side.await.expect("host task");
     let code = pairing.code().to_string();
     let (check, answer) = tokio::join!(
-        attempt.confirm(&code, "Test Mac", |device, role| store.add(device, role)),
+        attempt.confirm(&code, "Test Mac", |device, role| {
+            store.add(device, role);
+            true
+        }),
         pairing.finish()
     );
     assert!(matches!(check, Ok(CodeCheck::Paired { .. })));
     assert_eq!(answer, Ok("Test Mac".to_string()));
+}
+
+#[tokio::test]
+async fn a_device_whose_role_changed_reconnects_with_the_new_role() {
+    let store = Arc::new(Store::default());
+    let host = Arc::new(host(&store, 10).await);
+    let phone = device(2).await;
+    pair(Arc::clone(&host), &store, &phone, Role::Controller).await;
+    let host_side = {
+        let host = Arc::clone(&host);
+        let store = Arc::clone(&store);
+        let phone_id = phone.id();
+        tokio::spawn(async move {
+            let Accepted::Remote(first) = next_accepted(&host).await else {
+                panic!("a remote connection");
+            };
+            assert_eq!(first.role(), Role::Controller);
+            store.add(phone_id, Role::Viewer);
+            host.reconnect(&phone_id);
+            let Accepted::Remote(second) = next_accepted(&host).await else {
+                panic!("a remote connection");
+            };
+            second.role()
+        })
+    };
+    let connections = Arc::new(Mutex::new(0));
+    let counted = Arc::clone(&connections);
+    let ended = timeout(
+        WAIT,
+        stay_connected(&phone, reach(&host), move |link| {
+            let counted = Arc::clone(&counted);
+            async move {
+                let n = {
+                    let mut n = counted.lock().expect("lock");
+                    *n += 1;
+                    *n
+                };
+                if n == 1 {
+                    return (true, link.closed().await);
+                }
+                // Back, as the host's new view of it: done.
+                (true, Some(CloseCode::NotPaired))
+            }
+        }),
+    )
+    .await
+    .expect("in time");
+    assert_eq!(ended, LinkError::Closed(Some(CloseCode::NotPaired)));
+    assert_eq!(
+        timeout(WAIT, host_side)
+            .await
+            .expect("came back in time")
+            .expect("host task"),
+        Role::Viewer
+    );
+}
+
+#[tokio::test]
+async fn a_device_the_host_could_not_store_is_told_pairing_failed() {
+    let store = Arc::new(Store::default());
+    let host = Arc::new(host(&store, 10).await);
+    host.start_pairing(SECRET, Role::Viewer);
+    let host_side = {
+        let host = Arc::clone(&host);
+        tokio::spawn(async move {
+            let Accepted::Pair(link) = next_accepted(&host).await else {
+                panic!("a pairing connection");
+            };
+            link.request().await.expect("the right proof")
+        })
+    };
+    let phone = device(2).await;
+    let pairing = phone
+        .pair(reach(&host), &SECRET, "Test phone")
+        .await
+        .expect("proof accepted");
+    let mut attempt = host_side.await.expect("host task");
+    let code = pairing.code().to_string();
+    let (check, answer) = tokio::join!(
+        attempt.confirm(&code, "Test Mac", |_, _| false),
+        pairing.finish()
+    );
+    assert_eq!(check.expect("told"), CodeCheck::Burned);
+    assert_eq!(answer, Err(LinkError::Refused(RefuseReason::NotPaired)));
 }
