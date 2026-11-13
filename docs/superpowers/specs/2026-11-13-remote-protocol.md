@@ -127,8 +127,12 @@ never waits on a network write. A full session queue means [Skip ahead]
 
 ## 6. Sessions and screens
 
-- `SessionList` lists sessions with id, title, project, [Status] and whether
-  each needs the person (the Needs-you list), computed in Rust.
+- `SessionList` lists sessions as `SessionInfo { id, title, project_id, status,
+  standing, needs_you, dialog_open, last_change_ms }`, the host's Session list
+  computed in Rust (`kriyon_core::standing`). `standing` carries "unknown" when
+  hooks are off or status is stale, so a device never shows a confident "idle"
+  the desktop wouldn't. `SessionStatus { session }` sends one whole updated
+  entry.
 - `Open { session_id }` on a new session stream. Host checks the session
   exists, then sends `Snapshot { run, seq, cols, rows, bytes, skipped }`
   (the [Screen snapshot], ADR-0004) followed by `Update { run, seq, bytes }`
@@ -227,7 +231,7 @@ the host without the payload.
   and `Holder`.
 
 **Other messages:** `Control { session_id, holder, epoch }` on the control stream. host to device `StartResult { request_id, session_id }`
-and `SessionStatus { session_id, status, needs_you }`. On `kriyon/pair/1`:
+and `SessionStatus { session: SessionInfo }`. On `kriyon/pair/1`:
 `PairRequest { device_name, proof }` (proof = the 32-byte HMAC of §4),
 `Paired { host_name }` and `Refused`; a device name over 64 bytes is refused
 `OutOfRange`. Message tags are fixed numbers, numbered separately for each
