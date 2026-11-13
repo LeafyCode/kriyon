@@ -2947,6 +2947,7 @@ dependencies = [
  "arboard",
  "block2",
  "ignore",
+ "iroh",
  "kriyon-core",
  "kriyon-remote",
  "kriyon-remote-link",

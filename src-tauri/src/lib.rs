@@ -26,6 +26,7 @@ pub mod policy;
 pub mod prompt_cmd;
 pub mod quit;
 pub mod remote_cmd;
+pub mod remote_device_rt;
 pub mod remote_rt;
 pub mod sandbox;
 pub mod session_list_rt;
