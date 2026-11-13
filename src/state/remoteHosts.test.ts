@@ -228,21 +228,34 @@ test("the app wakes reconnects when its window comes back to the front", () => {
   expect(remoteHostsWake).toHaveBeenCalledTimes(1);
 });
 
-test("starting a session asks Rust and hands back its id", async () => {
-  vi.mocked(remoteHostStartSession).mockResolvedValue("new-session");
-  const started = await useRemoteHosts
+test("starting a session asks Rust, says it is under way, and keeps what it started", async () => {
+  let answer: (id: string) => void = () => undefined;
+  vi.mocked(remoteHostStartSession).mockReturnValue(
+    new Promise((resolve) => {
+      answer = resolve;
+    })
+  );
+  const starting = useRemoteHosts
     .getState()
     .startSession(HOST, "/work/app", "Fix login");
+  expect(useRemoteHosts.getState().starting[HOST]).toBe(true);
+  answer("new-session");
+  await expect(starting).resolves.toBe("new-session");
   expect(remoteHostStartSession).toHaveBeenCalledWith(
     HOST,
     "/work/app",
     "Fix login"
   );
-  expect(started).toBe("new-session");
-  expect(useRemoteHosts.getState().startError).toBeNull();
+  expect(useRemoteHosts.getState().starting[HOST]).toBeFalsy();
+  expect(useRemoteHosts.getState().started).toEqual({
+    hostId: HOST,
+    sessionId: "new-session",
+  });
+  useRemoteHosts.getState().takeStarted();
+  expect(useRemoteHosts.getState().started).toBeNull();
 });
 
-test("a refused start says why, in the host's words", async () => {
+test("a refused start says why for that computer only", async () => {
   vi.mocked(remoteHostStartSession).mockRejectedValue(
     "This device isn't allowed to do that."
   );
@@ -250,9 +263,14 @@ test("a refused start says why, in the host's words", async () => {
     .getState()
     .startSession(HOST, "/work/app", "");
   expect(started).toBeNull();
-  expect(useRemoteHosts.getState().startError).toBe(
+  expect(useRemoteHosts.getState().startErrors[HOST]).toBe(
     "This device isn't allowed to do that."
   );
+  expect(
+    useRemoteHosts.getState().startErrors["cd".repeat(32)]
+  ).toBeUndefined();
+  useRemoteHosts.getState().clearStartError(HOST);
+  expect(useRemoteHosts.getState().startErrors[HOST]).toBeUndefined();
 });
 
 test("a session can be started only as a connected Controller with a project to start in", () => {

@@ -18,12 +18,6 @@ use kriyon_remote_link::device_runtime::{
 /// The longest invite text taken: a QR code's worth, with room.
 const MAX_INVITE_TEXT: usize = 8 * 1024;
 
-/// The longest project id (its folder's path) sent to a host.
-const MAX_PROJECT_ID: usize = 4096;
-
-/// The longest title sent with a start: what the host allows.
-use kriyon_remote::authorize::MAX_TITLE;
-
 /// The most typed at once, as the protocol allows for one `Input`.
 const MAX_INPUT: usize = 60 * 1024;
 
@@ -362,23 +356,6 @@ pub async fn remote_host_close_session(
     Ok(())
 }
 
-/// A project id and title from the webview, checked before they go to a
-/// host: a project id is its folder's path, short and on one line; a title is
-/// short plain text.
-///
-/// # Errors
-/// Which one isn't.
-pub fn check_start(project_id: &str, title: Option<&str>) -> Result<(), String> {
-    let plain_line = |text: &str| !text.chars().any(char::is_control);
-    if project_id.is_empty() || project_id.len() > MAX_PROJECT_ID || !plain_line(project_id) {
-        return Err("invalid project id".to_string());
-    }
-    if title.is_some_and(|title| title.len() > MAX_TITLE || !plain_line(title)) {
-        return Err("a title is one short line".to_string());
-    }
-    Ok(())
-}
-
 /// Start a session on a paired host in project `project_id`, titled
 /// `title` or after the project: the new session's id, once the host
 /// answers. Sent again across reconnects until it does.
@@ -394,7 +371,11 @@ pub async fn remote_host_start_session(
 ) -> Result<String, String> {
     let id = parse_device_id(&host_id)?;
     let title = title.filter(|title| !title.trim().is_empty());
-    check_start(&project_id, title.as_deref())?;
+    if let Some(words) =
+        kriyon_remote::authorize::start_request_words(&project_id, title.as_deref())
+    {
+        return Err(words.to_string());
+    }
     runtime(&app)
         .start_session(&id, &project_id, title)
         .await
@@ -475,24 +456,6 @@ mod tests {
         for bad in ["", "../x", "a b", "a/b"] {
             assert!(check_session_id(bad).is_err(), "{bad:?}");
         }
-    }
-
-    #[test]
-    fn a_start_asks_for_a_real_project_and_a_one_line_title() {
-        assert_eq!(check_start("/work/app", Some("Fix login")), Ok(()));
-        assert_eq!(check_start("/work/app", None), Ok(()));
-        for (project, title) in [
-            ("", None),
-            ("/work/\napp", None),
-            ("/work/app", Some("two\nlines")),
-        ] {
-            assert!(
-                check_start(project, title).is_err(),
-                "{project:?} {title:?}"
-            );
-        }
-        assert!(check_start(&"x".repeat(MAX_PROJECT_ID + 1), None).is_err());
-        assert!(check_start("/work/app", Some(&"t".repeat(MAX_TITLE + 1))).is_err());
     }
 
     #[test]

@@ -1,4 +1,4 @@
-import { type CSSProperties, useState } from "react";
+import { type CSSProperties, useEffect, useState } from "react";
 import { standingMeta } from "../commandCenter/CommandCenter.tsx";
 import type { HostLink, HostSession, PairedHost } from "../ipc/bridge.ts";
 import { canStart, useRemoteHosts } from "../state/remoteHosts.ts";
@@ -19,6 +19,16 @@ export function RemoteView() {
     hostId: string;
     sessionId: string;
   } | null>(null);
+
+  // A session a start made is chosen, wherever the start was asked from: it
+  // shows as soon as that computer lists it.
+  const started = useRemoteHosts((state) => state.started);
+  useEffect(() => {
+    if (started) {
+      setChosen(started);
+      useRemoteHosts.getState().takeStarted();
+    }
+  }, [started]);
 
   // The chosen session may have ended there, or its computer been forgotten.
   const shown =
@@ -79,6 +89,9 @@ function HostCard({
   onChoose: (sessionId: string) => void;
 }) {
   const state = link?.state ?? "connecting";
+  const starting = useRemoteHosts((store) =>
+    Boolean(store.starting[host.hostId])
+  );
   return (
     <section aria-label={host.name} style={hostCardStyle}>
       <div style={hostHeadStyle}>
@@ -87,12 +100,9 @@ function HostCard({
           {linkLine(state)}
         </span>
       </div>
-      {link && canStart(link) ? (
-        <NewSession
-          link={link}
-          onStarted={(sessionId) => onChoose(sessionId)}
-        />
-      ) : null}
+      {/* Kept while a start is under way, even through a lost link: it is
+          sent again when the link is back, and its answer still comes. */}
+      {link && (canStart(link) || starting) ? <NewSession link={link} /> : null}
       {(link?.sessions ?? []).map((session) => (
         <SessionRow
           key={session.id}
@@ -112,30 +122,31 @@ function HostCard({
  * sessions are all parked, said so), titled as typed or after the project.
  * Once started it is chosen, and shows when that computer lists it.
  */
-function NewSession({
-  link,
-  onStarted,
-}: {
-  link: HostLink;
-  onStarted: (sessionId: string) => void;
-}) {
+function NewSession({ link }: { link: HostLink }) {
   const [open, setOpen] = useState(false);
   const [projectId, setProjectId] = useState("");
   const [title, setTitle] = useState("");
-  const [starting, setStarting] = useState(false);
-  const startError = useRemoteHosts((state) => state.startError);
+  const starting = useRemoteHosts((state) =>
+    Boolean(state.starting[link.hostId])
+  );
+  const startError = useRemoteHosts(
+    (state) => state.startErrors[link.hostId] ?? null
+  );
   // Projects in use first; parked ones after, marked.
   const projects = [...link.projects].sort(
     (a, b) => Number(a.parked) - Number(b.parked)
   );
-  const chosenProject = projectId || projects[0]?.id || "";
-  if (!open) {
+  // A pick the computer no longer lists falls back to the first project.
+  const chosenProject = projects.some((project) => project.id === projectId)
+    ? projectId
+    : (projects[0]?.id ?? "");
+  if (!(open || starting)) {
     return (
       <div style={newSessionStyle}>
         <button
           className="kr-hover-surface"
           onClick={() => {
-            useRemoteHosts.getState().clearStartError();
+            useRemoteHosts.getState().clearStartError(link.hostId);
             setOpen(true);
           }}
           style={button("secondary", "sm")}
@@ -150,19 +161,16 @@ function NewSession({
     <form
       onSubmit={(event) => {
         event.preventDefault();
-        setStarting(true);
         useRemoteHosts
           .getState()
           .startSession(link.hostId, chosenProject, title)
           .then((id) => {
-            setStarting(false);
             if (id) {
               setOpen(false);
               setTitle("");
-              onStarted(id);
             }
           })
-          .catch(() => setStarting(false));
+          .catch(() => undefined);
       }}
       style={newSessionStyle}
     >
@@ -196,8 +204,11 @@ function NewSession({
         >
           {starting ? "Starting…" : "Start"}
         </button>
+        {/* A start can't be called back once asked: the computer answers
+            it, and the session it makes opens. */}
         <button
           className="kr-hover-surface"
+          disabled={starting}
           onClick={() => setOpen(false)}
           style={button("ghost", "sm")}
           type="button"

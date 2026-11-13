@@ -122,7 +122,12 @@ test("a session that ended there stops showing here", () => {
 });
 
 test("a Controller starts a session in a project there, and it opens", async () => {
-  const startSession = vi.fn(() => Promise.resolve("new-one"));
+  const startSession = vi.fn(() => {
+    useRemoteHosts.setState({
+      started: { hostId: HOST, sessionId: "new-one" },
+    });
+    return Promise.resolve("new-one");
+  });
   useRemoteHosts.setState({
     hosts: [{ hostId: HOST, name: "Studio", pairedAt: 0 }],
     links: {
@@ -160,12 +165,61 @@ test("a Controller starts a session in a project there, and it opens", async () 
   expect(screen.getByTestId("remote-terminal").textContent).toBe("new-one");
 });
 
+test("a start under way stays shown through a lost link, and can't be cancelled", () => {
+  useRemoteHosts.setState({
+    hosts: [{ hostId: HOST, name: "Studio", pairedAt: 0 }],
+    links: { [HOST]: link() },
+    startSession: vi.fn(() => new Promise<string | null>(() => undefined)),
+  });
+  render(<RemoteView />);
+  fireEvent.click(screen.getByRole("button", { name: "New session" }));
+  fireEvent.click(screen.getByRole("button", { name: "Start" }));
+  act(() =>
+    useRemoteHosts.setState({
+      links: { [HOST]: link({ state: "lost" }) },
+      starting: { [HOST]: true },
+    })
+  );
+  expect(screen.getByRole("button", { name: "Starting…" })).toBeTruthy();
+  expect(
+    (screen.getByRole("button", { name: "Cancel" }) as HTMLButtonElement)
+      .disabled
+  ).toBe(true);
+});
+
+test("a project gone from the list is not the one sent", async () => {
+  const startSession = vi.fn(() => Promise.resolve(null));
+  useRemoteHosts.setState({
+    hosts: [{ hostId: HOST, name: "Studio", pairedAt: 0 }],
+    links: {
+      [HOST]: link({
+        projects: [
+          { id: "/work/app", name: "app", parked: false },
+          { id: "/work/old", name: "old", parked: false },
+        ],
+      }),
+    },
+    startSession,
+  });
+  render(<RemoteView />);
+  fireEvent.click(screen.getByRole("button", { name: "New session" }));
+  fireEvent.change(screen.getByRole("combobox", { name: "Project" }), {
+    target: { value: "/work/old" },
+  });
+  act(() => useRemoteHosts.getState().linkChanged(link()));
+  fireEvent.click(screen.getByRole("button", { name: "Start" }));
+  await act(() => Promise.resolve());
+  expect(startSession).toHaveBeenCalledWith(HOST, "/work/app", "");
+});
+
 test("a refused start says why", async () => {
   useRemoteHosts.setState({
     hosts: [{ hostId: HOST, name: "Studio", pairedAt: 0 }],
     links: { [HOST]: link() },
     startSession: vi.fn(() => {
-      useRemoteHosts.setState({ startError: "No, and here is why." });
+      useRemoteHosts.setState({
+        startErrors: { [HOST]: "No, and here is why." },
+      });
       return Promise.resolve(null);
     }),
   });

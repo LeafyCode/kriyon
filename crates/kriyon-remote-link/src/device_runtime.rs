@@ -151,6 +151,26 @@ struct PendingStart {
     answer: tokio::sync::oneshot::Sender<Result<SessionId, RefuseReason>>,
 }
 
+/// A start someone is waiting on; dropped, it is no longer asked for.
+struct Waiting {
+    conn: Arc<HostConn>,
+    request_id: RequestId,
+}
+
+impl Drop for Waiting {
+    fn drop(&mut self) {
+        let conn = Arc::clone(&self.conn);
+        let request_id = self.request_id;
+        // An answer already took it; otherwise it goes now. Off this drop,
+        // which can't wait for the lock.
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(async move {
+                conn.conn.lock().await.starting.remove(&request_id);
+            });
+        }
+    }
+}
+
 /// Why a session couldn't be started on a host.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StartError {
@@ -312,6 +332,7 @@ impl DeviceRuntime {
             })
             .await;
             // Only the host saying this device isn't paired ends it.
+            staying.conn.lock().await.starting.clear();
             set_state(&staying, host.id, LinkState::Removed, events.as_ref()).await;
         });
         *conn
@@ -342,6 +363,16 @@ impl DeviceRuntime {
             link.close();
         }
         c.control = None;
+        // Whoever waits on a start hears it's gone.
+        c.starting.clear();
+    }
+
+    /// How many starts on `host` wait for an answer.
+    pub async fn waiting_starts(&self, host: &EndpointId) -> usize {
+        match self.host(host).await {
+            Ok(conn) => conn.conn.lock().await.starting.len(),
+            Err(_) => 0,
+        }
     }
 
     /// Start a session on `host` in project `project_id`, titled `title` or
@@ -383,6 +414,12 @@ impl DeviceRuntime {
             c.control
                 .clone()
                 .filter(|_| c.state == Some(LinkState::Connected))
+        };
+        // If whoever asked stops waiting, the start goes with it: it is never
+        // sent again on a later link.
+        let _waiting = Waiting {
+            conn: Arc::clone(&conn),
+            request_id,
         };
         // Not connected now, or the send fails: the next link sends it.
         if let Some(control) = control {
@@ -812,7 +849,7 @@ async fn read_session(
 /// - `0` output: the bytes.
 /// - `1` screen: cols (u16 BE), rows (u16 BE), skipped (0/1), the bytes.
 /// - `2` receipt: written (0/1).
-/// - `3` refused: the reason's number.
+/// - `3` refused: the reason's number, then its words (UTF-8).
 #[must_use]
 pub fn screen_frame(event: &ScreenEvent) -> Option<Vec<u8>> {
     match event {
@@ -831,7 +868,14 @@ pub fn screen_frame(event: &ScreenEvent) -> Option<Vec<u8>> {
             Some(frame)
         }
         ScreenEvent::InputAck { written, .. } => Some(vec![2, u8::from(*written)]),
-        ScreenEvent::Refused(reason) => Some(vec![3, reason_number(*reason)]),
+        // Its words go with it, so the desktop and the phone say one thing.
+        ScreenEvent::Refused(reason) => Some(
+            [
+                &[3, reason_number(*reason)][..],
+                kriyon_remote::device_view::refusal_words(*reason).as_bytes(),
+            ]
+            .concat(),
+        ),
         ScreenEvent::Resync => None,
     }
 }
@@ -911,6 +955,15 @@ mod tests {
     }
 
     /// Wait until `check` holds, failing with `what` after ten seconds.
+    /// Wait until `rt` has `n` starts waiting on `host`.
+    async fn until_waiting(rt: &DeviceRuntime, host: &EndpointId, n: usize) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while rt.waiting_starts(host).await != n {
+            assert!(Instant::now() < deadline, "never {n} starts waiting");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+
     async fn wait_until(what: &str, mut check: impl FnMut() -> bool) {
         let deadline = Instant::now() + Duration::from_secs(10);
         while !check() {
@@ -1112,6 +1165,52 @@ mod tests {
     }
 
     #[test]
+    fn a_start_waiting_on_a_computer_that_is_forgotten_ends_gone() {
+        run(async {
+            let (rt, me) = device_runtime().await;
+            // This fake host never answers a start.
+            let (host, _serving) = fake_host(me, true).await;
+            let rt = Arc::new(rt);
+            rt.connect(entry(&host), Arc::new(DeviceSeen::default()))
+                .await
+                .expect("connects");
+            let starting = {
+                let rt = Arc::clone(&rt);
+                let host = host.id();
+                tokio::spawn(async move { rt.start_session(&host, "p", None).await })
+            };
+            until_waiting(&rt, &host.id(), 1).await;
+            rt.disconnect(&host.id()).await;
+            let ended = tokio::time::timeout(Duration::from_secs(5), starting)
+                .await
+                .expect("it ends")
+                .expect("task");
+            assert_eq!(ended, Err(StartError::Gone));
+        });
+    }
+
+    #[test]
+    fn a_start_its_asker_gave_up_on_is_never_sent_again() {
+        run(async {
+            let (rt, me) = device_runtime().await;
+            let (host, _serving) = fake_host(me, true).await;
+            let rt = Arc::new(rt);
+            rt.connect(entry(&host), Arc::new(DeviceSeen::default()))
+                .await
+                .expect("connects");
+            let starting = {
+                let rt = Arc::clone(&rt);
+                let host = host.id();
+                tokio::spawn(async move { rt.start_session(&host, "p", None).await })
+            };
+            until_waiting(&rt, &host.id(), 1).await;
+            starting.abort();
+            until_waiting(&rt, &host.id(), 0).await;
+            rt.disconnect(&host.id()).await;
+        });
+    }
+
+    #[test]
     fn a_session_streams_its_screen_then_takes_control_and_types() {
         run(async {
             let (rt, me) = device_runtime().await;
@@ -1244,7 +1343,13 @@ mod tests {
         );
         assert_eq!(
             screen_frame(&ScreenEvent::Refused(RefuseReason::Stale)),
-            Some(vec![3, 4])
+            Some(
+                [
+                    &[3, 4][..],
+                    b"The screen changed before that arrived. Look again, then try again."
+                ]
+                .concat()
+            )
         );
         assert_eq!(screen_frame(&ScreenEvent::Resync), None);
     }

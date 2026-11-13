@@ -19,7 +19,7 @@ export type ScreenFrame =
       skipped: boolean;
     }
   | { kind: "receipt"; written: boolean }
-  | { kind: "refused"; reason: number };
+  | { kind: "refused"; reason: number; words: string };
 
 /** Read one frame: a kind byte, then its fields. `null` for anything else. */
 export function decodeScreenFrame(frame: Uint8Array): ScreenFrame | null {
@@ -45,7 +45,15 @@ export function decodeScreenFrame(frame: Uint8Array): ScreenFrame | null {
         ? { kind: "receipt", written: frame[1] === 1 }
         : null;
     case 3:
-      return frame.length === 2 ? { kind: "refused", reason: frame[1] } : null;
+      // The reason's number, then its words from Rust: one wording for
+      // the desktop and the phone.
+      return frame.length >= 2
+        ? {
+            kind: "refused",
+            reason: frame[1],
+            words: new TextDecoder().decode(frame.subarray(2)),
+          }
+        : null;
     default:
       return null;
   }
@@ -62,7 +70,7 @@ export interface ScreenTerm {
 export type ScreenNote =
   | { kind: "skipped" }
   | { kind: "receipt"; written: boolean }
-  | { kind: "refused"; reason: number };
+  | { kind: "refused"; reason: number; words: string };
 
 /**
  * Draw one frame from the other computer. A new screen replaces what is
@@ -92,24 +100,6 @@ export function receiptLine(written: boolean): string {
   return written ? "Typed on the other computer." : "Not sure it arrived.";
 }
 
-/** Why the other computer refused, by the refusal's number on the wire. */
-export function refusalLine(reason: number): string {
-  switch (reason) {
-    case 2:
-      return "This computer may only watch there.";
-    case 3:
-      return "You don't have control of this session.";
-    case 4:
-      return "The screen changed before that arrived. Look again, then type.";
-    case 6:
-      return "A question is showing there. Answer it first.";
-    case 11:
-      return "That screen is too big to show here.";
-    default:
-      return "The other computer refused that.";
-  }
-}
-
 /** The line that says where a paired computer's link stands. */
 export function linkLine(state: LinkState): string {
   switch (state) {
@@ -132,7 +122,7 @@ export function noteLine(note: ScreenNote): string {
     case "receipt":
       return receiptLine(note.written);
     default:
-      return refusalLine(note.reason);
+      return note.words || "The other computer refused that.";
   }
 }
 

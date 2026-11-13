@@ -52,6 +52,40 @@ pub enum ProjectFolder {
     NoSuchProject,
 }
 
+/// The longest project id (its folder's path) a start may name.
+pub const MAX_PROJECT_ID: usize = 4096;
+
+/// A start's arguments, checked on the device before they are sent, by the
+/// same rules the host's check holds the title to: a project id is a short,
+/// one-line path; a title is short plain text (no characters that hide,
+/// join or reorder text).
+///
+/// # Errors
+/// [`RefuseReason::OutOfRange`] for either.
+pub fn check_start_request(project_id: &str, title: Option<&str>) -> Result<(), RefuseReason> {
+    if project_id.is_empty()
+        || project_id.len() > MAX_PROJECT_ID
+        || project_id.chars().any(char::is_control)
+    {
+        return Err(RefuseReason::OutOfRange);
+    }
+    if let Some(title) = title {
+        crate::text::check_shown_text(title, MAX_TITLE)?;
+    }
+    Ok(())
+}
+
+/// What a person reads when [`check_start_request`] refuses a start.
+#[must_use]
+pub fn start_request_words(project_id: &str, title: Option<&str>) -> Option<&'static str> {
+    check_start_request(project_id, title).err()?;
+    Some(if check_start_request(project_id, None).is_err() {
+        "That isn't a project that computer listed."
+    } else {
+        "Keep the title to one short line of plain text."
+    })
+}
+
 impl ProjectFolder {
     /// Whether a session may start in it, or why not.
     ///
@@ -697,6 +731,37 @@ mod tests {
         assert_eq!(check(&h, PHONE, SESSION, input(&h, 10)), Ok(()));
         h.dialog.showing = false;
         assert_eq!(check(&h, PHONE, SESSION, compose(&h)), Ok(()));
+    }
+
+    #[test]
+    fn a_start_is_checked_on_the_device_as_the_host_checks_it() {
+        assert_eq!(check_start_request("/work/app", Some("Fix login")), Ok(()));
+        assert_eq!(check_start_request("/work/app", None), Ok(()));
+        for (project, title) in [
+            ("", None),
+            ("/work/\napp", None),
+            ("/work/app", Some("two\nlines")),
+            // A family emoji is joined with zero-width joiners: the host
+            // refuses those in titles, so the device does too.
+            ("/work/app", Some("Fix \u{1F468}\u{200D}\u{1F469} bug")),
+        ] {
+            assert_eq!(
+                check_start_request(project, title),
+                Err(RefuseReason::OutOfRange),
+                "{project:?} {title:?}"
+            );
+        }
+        assert!(check_start_request(&"x".repeat(MAX_PROJECT_ID + 1), None).is_err());
+        assert_eq!(start_request_words("/work/app", Some("ok")), None);
+        assert_eq!(
+            start_request_words("/work/app", Some("a\nb")),
+            Some("Keep the title to one short line of plain text.")
+        );
+        assert_eq!(
+            start_request_words("", None),
+            Some("That isn't a project that computer listed.")
+        );
+        assert!(check_start_request("/work/app", Some(&"t".repeat(MAX_TITLE + 1))).is_err());
     }
 
     // Row: StartSession — role; project exists, folder approved.

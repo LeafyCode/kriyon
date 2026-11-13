@@ -37,8 +37,8 @@ export type HostPairing =
   | { phase: "failed"; reason: string };
 
 interface RemoteHostsStore {
-  /** A new start is being asked for: the last refusal no longer stands. */
-  clearStartError: () => void;
+  /** A new start is being asked for there: the last refusal no longer stands. */
+  clearStartError: (hostId: string) => void;
   /** Stop showing a session here; it keeps running there. */
   close: (hostId: string, sessionId: string) => Promise<void>;
   /** Why the last command failed, if it did. */
@@ -59,15 +59,23 @@ interface RemoteHostsStore {
   /** A pairing started here ended (`remote-host-pairing-ended`). */
   pairingEnded: (ended: HostPairingEnded) => Promise<void>;
   resetPairing: () => void;
-  /** Why the last start was refused, in that computer's words. */
-  startError: string | null;
-  /** Start a session there: its id, or `null` with `startError` saying why. */
+  /** Why the last start on each computer was refused, in its words. */
+  startErrors: Record<string, string>;
+  /** The session a start made, for the view to open; taken once. */
+  started: { hostId: string; sessionId: string } | null;
+  /** Computers a start is under way on. */
+  starting: Record<string, boolean>;
+  /**
+   * Start a session there: its id, also kept in `started`; or `null`, with
+   * `startErrors[hostId]` saying why.
+   */
   startSession: (
     hostId: string,
     projectId: string,
     title: string
   ) => Promise<string | null>;
   takeControl: (hostId: string, sessionId: string) => Promise<void>;
+  takeStarted: () => void;
   type: (hostId: string, sessionId: string, text: string) => Promise<void>;
 }
 
@@ -154,18 +162,41 @@ export const useRemoteHosts = create<RemoteHostsStore>((set, get) => {
       await get().load();
     },
     resetPairing: () => set({ pairing: { phase: "idle" } }),
-    clearStartError: () => set({ startError: null }),
-    startError: null,
+    clearStartError: (hostId) =>
+      set((state) => {
+        const { [hostId]: _gone, ...startErrors } = state.startErrors;
+        return { startErrors };
+      }),
+    startErrors: {},
     startSession: async (hostId, projectId, title) => {
+      set((state) => ({ starting: { ...state.starting, [hostId]: true } }));
+      const settle = (change: Partial<RemoteHostsStore>) =>
+        set((state) => {
+          const { [hostId]: _done, ...starting } = state.starting;
+          return { ...change, starting };
+        });
       try {
-        const id = await remoteHostStartSession(hostId, projectId, title);
-        set({ startError: null });
-        return id;
+        const sessionId = await remoteHostStartSession(
+          hostId,
+          projectId,
+          title
+        );
+        settle({ started: { hostId, sessionId } });
+        get().clearStartError(hostId);
+        return sessionId;
       } catch (error) {
-        set({ startError: failureMessage(error) });
+        settle({
+          startErrors: {
+            ...get().startErrors,
+            [hostId]: failureMessage(error),
+          },
+        });
         return null;
       }
     },
+    started: null,
+    starting: {},
+    takeStarted: () => set({ started: null }),
     takeControl: (hostId, sessionId) =>
       attempt(() => remoteHostTakeControl(hostId, sessionId)),
     type: async (hostId, sessionId, text) => {

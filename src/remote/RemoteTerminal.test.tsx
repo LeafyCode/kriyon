@@ -175,7 +175,15 @@ test("a lost link dims the screen and turns typing off", async () => {
 test("a refusal and a receipt are said in plain words", async () => {
   render(<RemoteTerminal hostId={HOST} sessionId="s1" />);
   await act(() => Promise.resolve());
-  act(() => frames()(new Uint8Array([3, 3])));
+  act(() =>
+    frames()(
+      new Uint8Array([
+        3,
+        3,
+        ...new TextEncoder().encode("You don't have control of this session."),
+      ])
+    )
+  );
   expect(
     screen.getByText("You don't have control of this session.")
   ).toBeTruthy();

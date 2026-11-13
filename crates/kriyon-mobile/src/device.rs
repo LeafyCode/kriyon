@@ -698,6 +698,13 @@ impl MobileDevice {
     ) -> Result<String, MobileError> {
         let host = parse_host_id(&host_id)?;
         let title = title.filter(|title| !title.trim().is_empty());
+        if let Some(words) =
+            kriyon_remote::authorize::start_request_words(&project_id, title.as_deref())
+        {
+            return Err(MobileError::Invalid {
+                reason: words.to_string(),
+            });
+        }
         let device = Arc::clone(&self.shared.device);
         Ok(self
             .shared

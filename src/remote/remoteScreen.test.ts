@@ -6,7 +6,6 @@ import {
   mayType,
   noteLine,
   receiptLine,
-  refusalLine,
 } from "./remoteScreen.ts";
 
 function fakeTerm() {
@@ -56,8 +55,11 @@ test("receipts and refusals draw nothing and come back as notes", () => {
     kind: "receipt",
     written: true,
   });
-  expect(applyScreenFrame(term, { kind: "refused", reason: 3 })).toEqual({
+  expect(
+    applyScreenFrame(term, { kind: "refused", reason: 3, words: "Not yours." })
+  ).toEqual({
     kind: "refused",
+    words: "Not yours.",
     reason: 3,
   });
   expect(term.write).not.toHaveBeenCalled();
@@ -68,13 +70,13 @@ test("receipts say only what is known", () => {
   expect(receiptLine(false)).toBe("Not sure it arrived.");
 });
 
-test("refusals say why in plain words", () => {
-  expect(refusalLine(3)).toBe("You don't have control of this session.");
-  expect(refusalLine(4)).toBe(
-    "The screen changed before that arrived. Look again, then type."
+test("a refusal says why in Rust's words, or plainly when it has none", () => {
+  expect(noteLine({ kind: "refused", reason: 3, words: "Not yours." })).toBe(
+    "Not yours."
   );
-  expect(refusalLine(6)).toBe("A question is showing there. Answer it first.");
-  expect(refusalLine(99)).toBe("The other computer refused that.");
+  expect(noteLine({ kind: "refused", reason: 99, words: "" })).toBe(
+    "The other computer refused that."
+  );
 });
 
 test("a screen frame says what to draw", () => {
@@ -93,9 +95,14 @@ test("a screen frame says what to draw", () => {
     kind: "receipt",
     written: true,
   });
-  expect(decodeScreenFrame(new Uint8Array([3, 4]))).toEqual({
+  expect(
+    decodeScreenFrame(
+      new Uint8Array([3, 3, ...new TextEncoder().encode("Not yours.")])
+    )
+  ).toEqual({
     kind: "refused",
-    reason: 4,
+    reason: 3,
+    words: "Not yours.",
   });
   for (const bad of [[], [1, 0, 80], [9, 1]]) {
     expect(decodeScreenFrame(new Uint8Array(bad))).toBeNull();
@@ -116,7 +123,9 @@ test("each note from the stream has its line", () => {
     "Skipped ahead: this computer fell behind, so it shows the screen as it is now."
   );
   expect(noteLine({ kind: "receipt", written: true })).toBe(receiptLine(true));
-  expect(noteLine({ kind: "refused", reason: 3 })).toBe(refusalLine(3));
+  expect(noteLine({ kind: "refused", reason: 3, words: "Not yours." })).toBe(
+    "Not yours."
+  );
 });
 
 test("typing is on only while connected, as a Controller, holding control", () => {
