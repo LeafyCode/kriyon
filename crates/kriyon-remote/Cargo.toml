@@ -1,0 +1,17 @@
+[package]
+name = "kriyon-remote"
+version.workspace = true
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+description = "Remote access protocol for Kriyon: messages, codec, control, authorize. Pure: no network, no IO."
+
+[dependencies]
+kriyon-core = { path = "../kriyon-core" }
+postcard = { version = "1", default-features = false, features = ["alloc"] }
+serde = { version = "1", features = ["derive"] }
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"
+correctness = "deny"
