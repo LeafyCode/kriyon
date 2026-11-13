@@ -381,6 +381,7 @@ impl PairLink {
                 return Err(LinkError::Refused(reason));
             }
         };
+        writer.send(&PairToDevice::ProofAccepted).await?;
         let mut exported = [0_u8; EXPORTED_LEN];
         let context = exporter_context(&self.shared.id, &self.device, &secret);
         self.connection

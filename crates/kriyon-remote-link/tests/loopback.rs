@@ -178,17 +178,18 @@ async fn a_wrong_secret_is_refused() {
         })
     };
     let phone = device(2).await;
-    // The device can't tell its secret is wrong until the host answers.
+    // The device hears the refusal before it would show a code.
     let pairing = timeout(WAIT, phone.pair(reach(&host), &[8; 32], "Test phone"))
         .await
-        .expect("in time")
-        .expect("connects");
-    let (host_result, answer) = tokio::join!(host_side, pairing.finish());
+        .expect("in time");
     assert_eq!(
-        host_result.expect("host task"),
+        pairing.err(),
         Some(LinkError::Refused(RefuseReason::NotPaired))
     );
-    assert_eq!(answer, Err(LinkError::Refused(RefuseReason::NotPaired)));
+    assert_eq!(
+        host_side.await.expect("host task"),
+        Some(LinkError::Refused(RefuseReason::NotPaired))
+    );
 }
 
 #[tokio::test]
@@ -589,4 +590,44 @@ async fn an_attempt_from_an_earlier_pairing_cannot_confirm_a_newer_one() {
     );
     assert_eq!(answer, Ok("Test Mac".to_string()));
     assert_eq!(store.role(&first.id()), None);
+}
+
+#[tokio::test]
+async fn a_phone_that_lost_the_race_to_a_leaked_qr_shows_no_code() {
+    let store = Arc::new(Store::default());
+    let host = Arc::new(host(&store, 10).await);
+    host.start_pairing(SECRET, Role::Controller);
+    let host_side = {
+        let host = Arc::clone(&host);
+        tokio::spawn(async move {
+            let mut attempts = Vec::new();
+            for _ in 0..2 {
+                let Accepted::Pair(link) = next_accepted(&host).await else {
+                    panic!("a pairing connection");
+                };
+                attempts.push(link.request().await);
+            }
+            attempts
+        })
+    };
+    // Someone with a photo of the QR gets there first.
+    let thief = device(9).await;
+    let stolen = thief
+        .pair(reach(&host), &SECRET, "Not your phone")
+        .await
+        .expect("the leaked QR works once");
+    assert_eq!(stolen.code().len(), 6);
+    // The real phone is told pairing failed, and shows no code to type.
+    let phone = device(2).await;
+    let real = phone.pair(reach(&host), &SECRET, "Test phone").await;
+    assert_eq!(
+        real.err(),
+        Some(LinkError::Refused(RefuseReason::NotPaired))
+    );
+    let attempts = host_side.await.expect("host task");
+    assert!(attempts[0].is_ok());
+    assert!(matches!(
+        attempts[1],
+        Err(LinkError::Refused(RefuseReason::NotPaired))
+    ));
 }

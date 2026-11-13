@@ -41,8 +41,8 @@ impl Device {
         crate::endpoint::id_bytes(&self.endpoint)
     }
 
-    /// Pair with the host in the QR code: prove the secret, then show the
-    /// code this connection derives.
+    /// Pair with the host in the QR code: prove the secret, wait for the host
+    /// to accept the proof, then show the code this connection derives.
     ///
     /// # Errors
     /// A [`LinkError`]: unreachable, no pairing pending, or refused.
@@ -63,6 +63,21 @@ impl Device {
                 proof: pair_proof(secret, &device_id, &host_id),
             })
             .await?;
+        // No code before the host has accepted the proof: a phone that lost
+        // the race to a leaked QR code says pairing failed instead.
+        let mut reader = MessageReader::new(recv);
+        let answer = match reader.next().await? {
+            Some(Decoded::Message(PairToDevice::ProofAccepted)) => Ok(()),
+            Some(Decoded::Message(PairToDevice::Refused { reason })) => {
+                Err(LinkError::Refused(reason))
+            }
+            Some(Decoded::Message(PairToDevice::Paired { .. }) | Decoded::Unknown { .. })
+            | None => Err(LinkError::Refused(RefuseReason::UnknownMessage)),
+        };
+        if let Err(refused) = answer {
+            connection.close(VarInt::from_u32(0), b"");
+            return Err(refused);
+        }
         let mut exported = [0_u8; EXPORTED_LEN];
         let context = exporter_context(&host_id, &device_id, secret);
         connection
@@ -71,7 +86,7 @@ impl Device {
         Ok(DevicePairing {
             connection,
             code: pairing_code(&exported),
-            reader: MessageReader::new(recv),
+            reader,
             _writer: writer,
         })
     }
@@ -118,9 +133,8 @@ impl DevicePairing {
             Some(Decoded::Message(PairToDevice::Refused { reason })) => {
                 Err(LinkError::Refused(reason))
             }
-            Some(Decoded::Unknown { .. }) | None => {
-                Err(LinkError::Refused(RefuseReason::UnknownMessage))
-            }
+            Some(Decoded::Message(PairToDevice::ProofAccepted) | Decoded::Unknown { .. })
+            | None => Err(LinkError::Refused(RefuseReason::UnknownMessage)),
         };
         // Done either way: hang up, which the host waits for.
         self.connection.close(VarInt::from_u32(0), b"");

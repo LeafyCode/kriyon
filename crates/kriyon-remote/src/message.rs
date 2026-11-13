@@ -304,8 +304,16 @@ pub enum PairFromDevice {
 /// Host to device on `kriyon/pair/1`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PairToDevice {
-    Paired { host_name: String },
-    Refused { reason: RefuseReason },
+    Paired {
+        host_name: String,
+    },
+    Refused {
+        reason: RefuseReason,
+    },
+    /// The proof is right and this device took the pairing: show the code.
+    /// A device shows no code before this, so one that lost the race to a
+    /// leaked QR code says pairing failed instead.
+    ProofAccepted,
 }
 
 #[cfg(test)]
@@ -540,6 +548,7 @@ mod tests {
             reason: RefuseReason::NotPaired,
         };
         assert_eq!(tag(&refused), 1);
+        assert_eq!(tag(&PairToDevice::ProofAccepted), 2);
     }
 
     /// Reasons and statuses are fields, so their order is on the wire too.

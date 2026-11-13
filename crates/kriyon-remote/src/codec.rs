@@ -60,7 +60,7 @@ impl Wire for PairFromDevice {
 }
 
 impl Wire for PairToDevice {
-    const KNOWN_TAGS: u32 = 2;
+    const KNOWN_TAGS: u32 = 3;
     const MAX_LEN: usize = 4 * KIB;
     fn max_len(_tag: u32) -> usize {
         Self::MAX_LEN
