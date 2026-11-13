@@ -9,7 +9,9 @@
 //! keychain, which is never synced either and is readable while the person is
 //! logged in, by this app only.
 
-use kriyon_remote_link::keys::{KeyVault, SecretVault};
+#[cfg(target_os = "macos")]
+use kriyon_remote_link::keys::KeyVault;
+use kriyon_remote_link::keys::SecretVault;
 
 /// The app's keychain item `account` (macOS); elsewhere, none yet: reads
 /// find nothing and writes fail.

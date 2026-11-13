@@ -54,6 +54,8 @@ ignore = "0.4"
 plist = "1"
 semver = "1"
 tauri-plugin-updater = "2"
+# Random ids for push wake-ups on every platform (also used by macOS notifications).
+uuid = { version = "1", features = ["v4"] }
 
 [features]
 # Lets a local test build read its update feed from `KRIYON_UPDATE_FEED`, to
@@ -76,7 +78,6 @@ objc2-user-notifications = { version = "0.3", features = [
     "UNNotificationTrigger",
 ] }
 block2 = "0.6"
-uuid = { version = "1", features = ["v4"] }
 libproc = "0.14"
 
 [target."cfg(unix)".dependencies]
