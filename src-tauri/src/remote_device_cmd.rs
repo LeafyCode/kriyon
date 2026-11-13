@@ -17,7 +17,7 @@ use kriyon_remote_link::device_runtime::{screen_frame, DeviceEvents, DeviceRunti
 const MAX_INVITE_TEXT: usize = 8 * 1024;
 
 /// The most typed at once, as the protocol allows for one `Input`.
-const MAX_INPUT: usize = 60 * 1024;
+use kriyon_remote::message::MAX_INPUT_BYTES as MAX_INPUT;
 
 /// Told when a host's link or view changes.
 pub const HOST_CHANGED_EVENT: &str = "remote-host-changed";

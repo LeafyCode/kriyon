@@ -147,6 +147,22 @@ pub enum RefuseReason {
     StartFailed,
 }
 
+/// The protocol minor this side speaks: the host sends it in `Welcome`,
+/// a device in `Hello`.
+pub const PROTOCOL_MINOR: u16 = 0;
+
+/// The oldest protocol minor a host accepts in `Hello`.
+pub const MIN_PROTOCOL_MINOR: u16 = 0;
+
+/// The longest an `Input` or `Compose` message may be, tag included (the
+/// codec's limit for them; spec §3).
+pub const MAX_INPUT_MESSAGE: usize = 64 * 1024;
+
+/// The most typing one `Input` carries: its message's limit less what its
+/// other fields can take (five varints of at most 10 bytes, the tag, and the
+/// bytes' length).
+pub const MAX_INPUT_BYTES: usize = MAX_INPUT_MESSAGE - 64;
+
 /// A project on the host, as a device's project picker shows it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProjectInfo {
@@ -689,6 +705,20 @@ mod tests {
         assert_eq!(tag(&Role::Controller), 1);
         assert_eq!(tag(&Holder::Host), 0);
         assert_eq!(tag(&Holder::Device([0; 32])), 1);
+    }
+
+    #[test]
+    fn the_most_typing_a_device_sends_fits_one_input_whatever_its_fields() {
+        let input = |len: usize| FromDevice::Input {
+            run: u64::MAX,
+            epoch: Epoch {
+                host_boot_id: u64::MAX,
+                counter: u64::MAX,
+            },
+            seen_seq: u64::MAX,
+            bytes: vec![0; len],
+        };
+        assert!(crate::codec::encode(&input(MAX_INPUT_BYTES)).is_ok());
     }
 
     #[test]

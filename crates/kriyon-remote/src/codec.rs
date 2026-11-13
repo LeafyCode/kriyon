@@ -36,7 +36,9 @@ impl Wire for FromDevice {
     const MAX_LEN: usize = 64 * KIB;
     fn max_len(tag: u32) -> usize {
         match FromDeviceKind::from_tag(tag) {
-            Some(FromDeviceKind::Input | FromDeviceKind::Compose) => 64 * KIB,
+            Some(FromDeviceKind::Input | FromDeviceKind::Compose) => {
+                crate::message::MAX_INPUT_MESSAGE
+            }
             Some(FromDeviceKind::PushToken) => 2 * KIB,
             _ => 4 * KIB,
         }

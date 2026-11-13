@@ -40,10 +40,7 @@ use crate::daemon_client::DaemonEvent;
 /// How often the main loop's tick looks at the project list.
 const PROJECTS_EVERY: std::time::Duration = std::time::Duration::from_secs(10);
 
-/// The protocol minor this host speaks, sent in `Welcome`.
-pub const PROTOCOL_MINOR: u16 = 0;
-/// The oldest protocol minor this host accepts in `Hello`.
-pub const MIN_PROTOCOL_MINOR: u16 = 0;
+pub use kriyon_remote::message::{MIN_PROTOCOL_MINOR, PROTOCOL_MINOR};
 
 /// One live session as the host's one check sees it.
 #[derive(Clone, Debug)]

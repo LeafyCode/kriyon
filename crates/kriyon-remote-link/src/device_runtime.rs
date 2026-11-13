@@ -25,9 +25,6 @@ use kriyon_remote::pairing::PairingInvite;
 use tokio::sync::{Mutex, Notify};
 use tokio::task::JoinHandle;
 
-/// The protocol minor this build speaks.
-pub const PROTOCOL_MINOR: u16 = 0;
-
 /// How often a link checks its heartbeat and a lost screen asks again.
 const TICK: Duration = Duration::from_secs(1);
 
@@ -759,7 +756,7 @@ async fn follow_control(
     };
     let hello = FromDevice::Hello {
         app_version: env!("CARGO_PKG_VERSION").to_string(),
-        protocol_minor: PROTOCOL_MINOR,
+        protocol_minor: kriyon_remote::message::PROTOCOL_MINOR,
     };
     if writer.send(&hello).await.is_err() {
         return (false, false);
