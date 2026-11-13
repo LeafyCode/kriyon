@@ -58,13 +58,24 @@ pub const MAX_BACKOFF: Duration = Duration::from_secs(30);
 #[derive(Clone, Copy, Debug)]
 pub struct HeartbeatWatch {
     last: Instant,
+    lost_after: Duration,
 }
 
 impl HeartbeatWatch {
     /// Start watching on connect.
     #[must_use]
     pub fn new(now: Instant) -> Self {
-        Self { last: now }
+        Self::with_window(now, HEARTBEAT_LOST_AFTER)
+    }
+
+    /// Start watching, counting the host lost after `lost_after` of quiet
+    /// instead of [`HEARTBEAT_LOST_AFTER`]: for tests that can't wait 40 s.
+    #[must_use]
+    pub fn with_window(now: Instant, lost_after: Duration) -> Self {
+        Self {
+            last: now,
+            lost_after,
+        }
     }
 
     /// A heartbeat arrived.
@@ -72,10 +83,10 @@ impl HeartbeatWatch {
         self.last = self.last.max(now);
     }
 
-    /// No heartbeat for [`HEARTBEAT_LOST_AFTER`].
+    /// No heartbeat for the window (normally [`HEARTBEAT_LOST_AFTER`]).
     #[must_use]
     pub fn lost(&self, now: Instant) -> bool {
-        now.saturating_duration_since(self.last) >= HEARTBEAT_LOST_AFTER
+        now.saturating_duration_since(self.last) >= self.lost_after
     }
 }
 

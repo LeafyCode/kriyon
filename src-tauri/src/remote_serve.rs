@@ -491,7 +491,14 @@ impl Serve {
             wake: Notify::new(),
             link: Arc::clone(link),
         });
-        self.0.controls.lock().insert(device, Arc::clone(&out));
+        let replaced = self.0.controls.lock().insert(device, Arc::clone(&out));
+        // A device that dialed again before the host saw its old connection
+        // end gives back what it held now (spec §5): the old connection's
+        // end won't, since it is no longer the device's entry.
+        if replaced.is_some() {
+            let host = Arc::clone(&self.0.host);
+            let _ = tokio::task::spawn_blocking(move || host.release(&device)).await;
+        }
         // A first device hears changes from the list it was just given.
         {
             let mut heard = self.0.heard.lock();
@@ -782,266 +789,15 @@ async fn write_session(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
-    use std::net::SocketAddr;
     use std::time::Duration;
 
-    use kriyon_core::session::SessionStatus;
-    use kriyon_core::standing::StandingState;
     use kriyon_remote::compress::{decompress, Kind};
-    use kriyon_remote::message::Epoch;
-    use kriyon_remote_link::device::{Device, DeviceLink};
-    use kriyon_remote_link::endpoint::LinkConfig;
-    use kriyon_remote_link::host::{Accepted, Host, PairedDevices};
+    use kriyon_remote::message::{Epoch, Holder};
+    use kriyon_remote_link::device::DeviceLink;
 
     use super::*;
-    use kriyon_remote::control::HostIsTyping;
 
-    /// The app, faked: one session "s", paired devices in a map.
-    struct FakeHost {
-        paired: Mutex<HashMap<EndpointId, Role>>,
-        gate: Mutex<kriyon_remote::writer::SessionGate>,
-        typed: Mutex<Vec<u8>>,
-        onlooked: Mutex<HashSet<String>>,
-        title: Mutex<String>,
-        /// Told every change of control, as the app's writers tell it.
-        serve: Mutex<Option<Serve>>,
-    }
-
-    impl FakeHost {
-        fn tell(&self, change: Option<Change>) {
-            let serve = self.serve.lock().clone();
-            if let (Some(serve), Some(change)) = (serve, change) {
-                serve.broadcast_control("s", change);
-            }
-        }
-    }
-
-    impl Default for FakeHost {
-        fn default() -> Self {
-            let mut gate = kriyon_remote::writer::SessionGate::new(5, (80, 24));
-            gate.set_run(1);
-            Self {
-                paired: Mutex::default(),
-                gate: Mutex::new(gate),
-                typed: Mutex::default(),
-                onlooked: Mutex::default(),
-                title: Mutex::default(),
-                serve: Mutex::default(),
-            }
-        }
-    }
-
-    impl PairedDevices for FakeHost {
-        fn role(&self, device: &EndpointId) -> Option<Role> {
-            self.paired.lock().get(device).copied()
-        }
-    }
-
-    impl ServeHost for FakeHost {
-        fn host_name(&self) -> String {
-            "Test Mac".into()
-        }
-        fn sessions(&self) -> Vec<SessionInfo> {
-            vec![SessionInfo {
-                id: "s".into(),
-                title: self.title.lock().clone(),
-                project_id: "p".into(),
-                status: SessionStatus::Idle,
-                standing: StandingState::Idle,
-                needs_you: false,
-                dialog_open: false,
-                last_change_ms: 0,
-            }]
-        }
-        fn session(&self, id: &str) -> Option<LiveSession> {
-            if id != "s" {
-                return None;
-            }
-            let gate = self.gate.lock();
-            Some(LiveSession {
-                run: gate.run()?,
-                control: gate.control().clone(),
-                dialog: gate.dialog(),
-                size: gate.screen(),
-            })
-        }
-        fn device_input(
-            &self,
-            _id: &str,
-            device: &EndpointId,
-            role: Role,
-            write: &PendingWrite,
-            bytes: &[u8],
-        ) -> Result<bool, RefuseReason> {
-            self.gate
-                .lock()
-                .device_write(device, Some(role), write, None)?;
-            self.typed.lock().extend_from_slice(bytes);
-            Ok(true)
-        }
-        fn device_resize(
-            &self,
-            _id: &str,
-            device: &EndpointId,
-            role: Role,
-            write: &PendingWrite,
-            size: (u16, u16),
-        ) -> Result<bool, RefuseReason> {
-            self.gate
-                .lock()
-                .device_write(device, Some(role), write, Some(size))?;
-            Ok(true)
-        }
-        fn take(&self, _id: &str, device: EndpointId) -> Result<(), RefuseReason> {
-            let change = self
-                .gate
-                .lock()
-                .take(device, Instant::now())
-                .map_err(|HostIsTyping| RefuseReason::NotInControl)?;
-            self.tell(change);
-            Ok(())
-        }
-        fn release(&self, device: &EndpointId) {
-            let change = self.gate.lock().release(*device).change;
-            self.tell(change);
-        }
-        fn set_onlooked(&self, id: &str, onlooked: bool) {
-            let mut set = self.onlooked.lock();
-            if onlooked {
-                set.insert(id.to_string());
-            } else {
-                set.remove(id);
-            }
-        }
-    }
-
-    fn loopback() -> SocketAddr {
-        SocketAddr::from(([127, 0, 0, 1], 0))
-    }
-
-    struct World {
-        host: Arc<Host>,
-        fake: Arc<FakeHost>,
-        serve: Serve,
-        asks: Arc<Mutex<Vec<RequesterId>>>,
-    }
-
-    /// A host serving one live session "s", whose daemon is the test.
-    async fn world() -> World {
-        let fake = Arc::new(FakeHost::default());
-        *fake.title.lock() = "first".into();
-        let host = Arc::new(
-            Host::bind(
-                &LinkConfig {
-                    bind: loopback(),
-                    ..LinkConfig::new([9; 32])
-                },
-                Arc::clone(&fake) as Arc<dyn PairedDevices>,
-                60,
-            )
-            .await
-            .expect("host"),
-        );
-        let serve = Serve::new(Arc::clone(&fake) as Arc<dyn ServeHost>);
-        *fake.serve.lock() = Some(serve.clone());
-        let asks = Arc::new(Mutex::new(Vec::new()));
-        let asked = Arc::clone(&asks);
-        serve.attach("s", move |id| asked.lock().push(id), || (80, 24));
-        let _ = serve.on_event("s", DaemonEvent::Hello { run: 1 });
-        let accepting = Arc::clone(&host);
-        let serving = serve.clone();
-        tokio::spawn(async move {
-            while let Some(accepted) = accepting.accept().await {
-                if let Accepted::Remote(link) = accepted {
-                    tokio::spawn(serving.clone().serve(Arc::new(link)));
-                }
-            }
-        });
-        World {
-            host,
-            fake,
-            serve,
-            asks,
-        }
-    }
-
-    /// A paired device of `role`, connected, past `Welcome`.
-    async fn device(
-        world: &World,
-        key: u8,
-        role: Role,
-    ) -> (
-        Device,
-        DeviceLink,
-        MessageWriter<FromDevice>,
-        MessageReader<ToDevice>,
-    ) {
-        let phone = Device::bind(&LinkConfig {
-            bind: loopback(),
-            ..LinkConfig::new([key; 32])
-        })
-        .await
-        .expect("device");
-        world.fake.paired.lock().insert(phone.id(), role);
-        let link = phone.connect(world.host.addr()).await.expect("connect");
-        let (mut writer, mut reader) = link.open_stream().await.expect("control");
-        writer
-            .send(&FromDevice::Hello {
-                app_version: "test".into(),
-                protocol_minor: 0,
-            })
-            .await
-            .expect("hello");
-        let welcome = next(&mut reader).await;
-        assert!(
-            matches!(&welcome, ToDevice::Welcome { role: r, sessions, .. } if *r == role && sessions.len() == 1),
-            "{welcome:?}"
-        );
-        (phone, link, writer, reader)
-    }
-
-    async fn next(reader: &mut MessageReader<ToDevice>) -> ToDevice {
-        match tokio::time::timeout(Duration::from_secs(10), reader.next()).await {
-            Ok(Ok(Some(Decoded::Message(message)))) => message,
-            other => panic!("no message: {other:?}"),
-        }
-    }
-
-    /// The next requester id the daemon (the test) is asked a snapshot for.
-    async fn asked(world: &World) -> RequesterId {
-        let deadline = Instant::now() + Duration::from_secs(10);
-        loop {
-            if let Some(id) = world.asks.lock().pop() {
-                return id;
-            }
-            assert!(Instant::now() < deadline, "no snapshot asked for");
-            tokio::time::sleep(Duration::from_millis(5)).await;
-        }
-    }
-
-    /// The daemon (the test) answers snapshot `id` with `screen`.
-    fn answer(world: &World, id: RequesterId, screen: &[u8]) {
-        let _ = world
-            .serve
-            .on_event("s", DaemonEvent::Snapshot { id, bytes: screen });
-        let _ = world.serve.on_event("s", DaemonEvent::SnapshotEnd { id });
-    }
-
-    async fn open(link: &DeviceLink) -> (MessageWriter<FromDevice>, MessageReader<ToDevice>) {
-        let (mut writer, reader) = link.open_stream().await.expect("session stream");
-        writer
-            .send(&FromDevice::Open {
-                session_id: "s".into(),
-            })
-            .await
-            .expect("open");
-        (writer, reader)
-    }
-
-    fn run<F: std::future::Future>(f: F) -> F::Output {
-        tauri::async_runtime::block_on(f)
-    }
+    use crate::remote_test_support::*;
 
     #[test]
     fn an_opened_session_shows_its_snapshot_then_its_updates() {
@@ -1288,6 +1044,35 @@ mod tests {
         });
     }
 
+    #[test]
+    fn a_device_that_reconnects_before_its_old_connection_goes_must_take_control_again() {
+        run(async {
+            let world = world().await;
+            let (phone, old, mut ocw, mut ocr) = device(&world, 3, Role::Controller).await;
+            let (_sw, _sr, _epoch) = in_control(&world, &old, &mut ocw, &mut ocr).await;
+            // The device gave up on the old link and dialed again; the host
+            // hasn't noticed the old one end yet.
+            let new = phone.connect(world.host.addr()).await.expect("reconnect");
+            let (mut cw, mut cr) = new.open_stream().await.expect("control");
+            cw.send(&FromDevice::Hello {
+                app_version: "test".into(),
+                protocol_minor: 0,
+            })
+            .await
+            .expect("hello");
+            assert!(matches!(next(&mut cr).await, ToDevice::Welcome { .. }));
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while world.fake.gate.lock().control().holder() != Holder::Host {
+                assert!(
+                    Instant::now() < deadline,
+                    "control never went back to the host"
+                );
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            drop(old);
+        });
+    }
+
     /// A controller that took control of "s" and has its screen open: the
     /// epoch it holds.
     async fn in_control(
@@ -1360,6 +1145,36 @@ mod tests {
                     ..
                 }
             ));
+            sw.send(&typing(epoch, 0, b"late")).await.expect("input");
+            assert!(matches!(next(&mut sr).await, ToDevice::Refused { .. }));
+            assert_eq!(world.fake.typed.lock().as_slice(), b"", "nothing written");
+        });
+    }
+
+    #[test]
+    fn typing_from_before_another_device_took_over_is_refused() {
+        run(async {
+            let world = world().await;
+            let (_a, link, mut cw, mut cr) = device(&world, 3, Role::Controller).await;
+            let (_b, _blink, mut bcw, mut bcr) = device(&world, 4, Role::Controller).await;
+            let (mut sw, mut sr, epoch) = in_control(&world, &link, &mut cw, &mut cr).await;
+            assert!(matches!(next(&mut bcr).await, ToDevice::Control { .. }));
+            // The other phone takes over before this one's typing arrives.
+            bcw.send(&FromDevice::TakeControl {
+                session_id: "s".into(),
+            })
+            .await
+            .expect("take");
+            let ToDevice::Control {
+                epoch: newer,
+                holder,
+                ..
+            } = next(&mut cr).await
+            else {
+                panic!("the takeover is heard")
+            };
+            assert_ne!(newer, epoch, "a takeover bumps the epoch");
+            assert!(matches!(holder, kriyon_remote::message::Holder::Device(_)));
             sw.send(&typing(epoch, 0, b"late")).await.expect("input");
             assert!(matches!(next(&mut sr).await, ToDevice::Refused { .. }));
             assert_eq!(world.fake.typed.lock().as_slice(), b"", "nothing written");

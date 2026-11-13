@@ -30,9 +30,13 @@ pub mod remote_cmd;
 pub mod remote_device_cmd;
 pub mod remote_device_rt;
 pub mod remote_endpoint;
+#[cfg(test)]
+mod remote_faults;
 pub mod remote_host_rt;
 pub mod remote_rt;
 pub mod remote_serve;
+#[cfg(test)]
+mod remote_test_support;
 pub mod sandbox;
 pub mod session_list_rt;
 pub mod session_registry;

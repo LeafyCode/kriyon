@@ -95,9 +95,29 @@ pub struct DevicePairingStart {
     pub finish: kriyon_remote_link::device::DevicePairing,
 }
 
+/// How long the device waits on the host's heartbeat, and how often it
+/// looks: the spec's timing, shortened only by tests.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Timing {
+    /// Quiet this long and the host counts as lost.
+    pub(crate) lost_after: Duration,
+    /// How often the heartbeat is checked.
+    pub(crate) tick: Duration,
+}
+
+impl Default for Timing {
+    fn default() -> Self {
+        Self {
+            lost_after: kriyon_remote::link_policy::HEARTBEAT_LOST_AFTER,
+            tick: TICK,
+        }
+    }
+}
+
 /// The device side, one per app.
 #[derive(Default)]
 pub struct DeviceRuntime {
+    timing: Timing,
     device: Mutex<Option<Arc<Device>>>,
     hosts: Mutex<HashMap<EndpointId, Arc<HostConn>>>,
     wake: Arc<Notify>,
@@ -115,6 +135,9 @@ struct Conn {
     link: Option<Arc<DeviceLink>>,
     control: Option<Arc<Mutex<MessageWriter<FromDevice>>>>,
     sessions: HashMap<SessionId, OpenSession>,
+    /// The sessions the person has open here, and where their screens go:
+    /// opened again on each new link, so a reconnect redraws them.
+    wanted: HashMap<SessionId, ScreenSink>,
 }
 
 struct OpenSession {
@@ -124,6 +147,17 @@ struct OpenSession {
 }
 
 impl DeviceRuntime {
+    /// A device side that counts a host lost on other than the spec's
+    /// timing: for tests that can't wait 40 s.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn with_timing(timing: Timing) -> Self {
+        Self {
+            timing,
+            ..Self::default()
+        }
+    }
+
     /// Dial from this computer's one endpoint ([`crate::remote_endpoint`]),
     /// which may also host. Replaces an endpoint that was closed.
     pub async fn attach(&self, endpoint: iroh::Endpoint) -> Arc<Device> {
@@ -213,11 +247,18 @@ impl DeviceRuntime {
         hosts.insert(host.id, Arc::clone(&conn));
         drop(hosts);
         let wake = Arc::clone(&self.wake);
+        let timing = self.timing;
         let staying = Arc::clone(&conn);
         let task = tokio::spawn(async move {
             set_state(&staying, host.id, LinkState::Connecting, events.as_ref()).await;
             stay_connected_waking(&device, host.addr, &wake, |link| {
-                run_link(Arc::clone(&staying), host.id, Arc::clone(&events), link)
+                run_link(
+                    Arc::clone(&staying),
+                    host.id,
+                    Arc::clone(&events),
+                    link,
+                    timing,
+                )
             })
             .await;
             // Only the host saying this device isn't paired ends it.
@@ -259,10 +300,13 @@ impl DeviceRuntime {
         self.wake.notify_waiters();
     }
 
-    /// Open `session` on `host`; its screen events go to `sink`.
+    /// Open `session` on `host`; its screen events go to `sink`. While the
+    /// link is down it opens once the host welcomes this device again, and
+    /// on every link after, until closed.
     ///
     /// # Errors
-    /// [`DeviceError::NotConnected`] or a link failure.
+    /// [`DeviceError::NotConnected`] for a host not paired here, or a link
+    /// failure.
     pub async fn open_session(
         &self,
         host: &EndpointId,
@@ -270,45 +314,17 @@ impl DeviceRuntime {
         sink: ScreenSink,
     ) -> Result<(), DeviceError> {
         let conn = self.host(host).await?;
-        let link = conn
-            .conn
-            .lock()
-            .await
-            .link
-            .clone()
-            .ok_or(DeviceError::NotConnected)?;
-        let link_err = |e: LinkError| DeviceError::Link(e.to_string());
-        let (mut writer, reader) = link.open_stream().await.map_err(link_err)?;
-        writer
-            .send(&FromDevice::Open {
-                session_id: session.to_string(),
-            })
-            .await
-            .map_err(link_err)?;
-        let screen = SessionScreen::new().map_err(|e| DeviceError::Link(format!("{e:?}")))?;
-        let writer = Arc::new(Mutex::new(writer));
-        let screen = Arc::new(std::sync::Mutex::new(screen));
-        let reader = tokio::spawn(read_session(
-            reader,
-            Arc::clone(&writer),
-            Arc::clone(&screen),
-            sink,
-        ));
-        let open = OpenSession {
-            writer,
-            screen,
-            reader,
+        let link = {
+            let mut c = conn.conn.lock().await;
+            c.wanted.insert(session.to_string(), Arc::clone(&sink));
+            c.link
+                .clone()
+                .filter(|_| c.state == Some(LinkState::Connected))
         };
-        if let Some(old) = conn
-            .conn
-            .lock()
-            .await
-            .sessions
-            .insert(session.to_string(), open)
-        {
-            old.reader.abort();
+        match link {
+            Some(link) => open_wanted(&conn, &link, session, &sink).await,
+            None => Ok(()),
         }
-        Ok(())
     }
 
     /// Close `session`'s stream; the session keeps running on the host.
@@ -316,10 +332,13 @@ impl DeviceRuntime {
         let Ok(conn) = self.host(host).await else {
             return;
         };
-        let open = conn.conn.lock().await.sessions.remove(session);
+        let open = {
+            let mut c = conn.conn.lock().await;
+            c.wanted.remove(session);
+            c.sessions.remove(session)
+        };
         if let Some(open) = open {
-            open.reader.abort();
-            open.writer.lock().await.finish();
+            let_go(open).await;
         }
     }
 
@@ -380,6 +399,83 @@ impl DeviceRuntime {
     }
 }
 
+/// Open `session` on `link` for the person, who asked for it with `sink`.
+/// Kept only if they still want it with that sink and `link` is still the
+/// host's link once the stream is open; otherwise let go at once.
+async fn open_wanted(
+    conn: &HostConn,
+    link: &Arc<DeviceLink>,
+    session: &str,
+    sink: &ScreenSink,
+) -> Result<(), DeviceError> {
+    let link_err = |e: LinkError| DeviceError::Link(e.to_string());
+    let (mut writer, reader) = link.open_stream().await.map_err(link_err)?;
+    writer
+        .send(&FromDevice::Open {
+            session_id: session.to_string(),
+        })
+        .await
+        .map_err(link_err)?;
+    let screen = SessionScreen::new().map_err(|e| DeviceError::Link(format!("{e:?}")))?;
+    let writer = Arc::new(Mutex::new(writer));
+    let screen = Arc::new(std::sync::Mutex::new(screen));
+    let reader = tokio::spawn(read_session(
+        reader,
+        Arc::clone(&writer),
+        Arc::clone(&screen),
+        Arc::clone(sink),
+    ));
+    let open = OpenSession {
+        writer,
+        screen,
+        reader,
+    };
+    let mut c = conn.conn.lock().await;
+    let still_wanted = c
+        .wanted
+        .get(session)
+        .is_some_and(|wanted| Arc::ptr_eq(wanted, sink));
+    let same_link = c.link.as_ref().is_some_and(|now| Arc::ptr_eq(now, link));
+    let gone = if still_wanted && same_link {
+        c.sessions.insert(session.to_string(), open)
+    } else {
+        Some(open)
+    };
+    drop(c);
+    if let Some(gone) = gone {
+        let_go(gone).await;
+    }
+    Ok(())
+}
+
+/// End a session stream here: the host stops sending it.
+async fn let_go(open: OpenSession) {
+    open.reader.abort();
+    open.writer.lock().await.finish();
+}
+
+/// Open again, on a new link, every session the person has open here.
+async fn reopen(conn: Arc<HostConn>, link: Arc<DeviceLink>) {
+    let wanted: Vec<(SessionId, ScreenSink)> = conn
+        .conn
+        .lock()
+        .await
+        .wanted
+        .iter()
+        .map(|(id, sink)| (id.clone(), Arc::clone(sink)))
+        .collect();
+    for (session, sink) in wanted {
+        if conn.conn.lock().await.sessions.contains_key(&session) {
+            continue;
+        }
+        // A session gone from the host is refused on its own stream, and the
+        // screen says so; a failed link is dialed again and reopens it.
+        if let Err(why) = open_wanted(&conn, &link, &session, &sink).await {
+            eprintln!("kriyon: couldn't reopen remote session {session}: {why}");
+        }
+    }
+}
+
 /// Record `state` and tell the app.
 async fn set_state(conn: &HostConn, host: EndpointId, state: LinkState, events: &dyn DeviceEvents) {
     let mut c = conn.conn.lock().await;
@@ -395,9 +491,10 @@ async fn run_link(
     host: EndpointId,
     events: Arc<dyn DeviceEvents>,
     link: DeviceLink,
+    timing: Timing,
 ) -> (bool, Option<CloseCode>) {
     let link = Arc::new(link);
-    let (welcomed, lost) = follow_control(&conn, host, events.as_ref(), &link).await;
+    let (welcomed, lost) = follow_control(&conn, host, events.as_ref(), &link, timing).await;
     {
         let mut c = conn.conn.lock().await;
         c.link = None;
@@ -405,6 +502,9 @@ async fn run_link(
         for (_, open) in c.sessions.drain() {
             open.reader.abort();
         }
+        // The host gives back whatever this device held when the link
+        // closes (spec §5): it must ask again on the next one.
+        c.view.control.clear();
         if c.state != Some(LinkState::Lost) {
             c.state = Some(LinkState::Connecting);
         }
@@ -429,10 +529,11 @@ async fn run_link(
 /// Returns whether the host welcomed this device, and whether the heartbeat
 /// was lost.
 async fn follow_control(
-    conn: &HostConn,
+    conn: &Arc<HostConn>,
     host: EndpointId,
     events: &dyn DeviceEvents,
     link: &Arc<DeviceLink>,
+    timing: Timing,
 ) -> (bool, bool) {
     let Ok((mut writer, mut reader)) = link.open_stream().await else {
         return (false, false);
@@ -449,9 +550,9 @@ async fn follow_control(
         c.link = Some(Arc::clone(link));
         c.control = Some(Arc::new(Mutex::new(writer)));
     }
-    let mut watch = HeartbeatWatch::new(Instant::now());
+    let mut watch = HeartbeatWatch::with_window(Instant::now(), timing.lost_after);
     let mut welcomed = false;
-    let mut tick = tokio::time::interval(TICK);
+    let mut tick = tokio::time::interval(timing.tick);
     loop {
         tokio::select! {
             message = reader.next() => {
@@ -466,10 +567,14 @@ async fn follow_control(
                 }
                 let mut c = conn.conn.lock().await;
                 let changed = c.view.apply(&message);
-                let now_connected = c.view.welcomed() && c.state != Some(LinkState::Connected);
+                // This link's own Welcome: the view keeps the last link's.
+                let now_connected = matches!(message, ToDevice::Welcome { .. })
+                    && c.state != Some(LinkState::Connected);
                 if now_connected {
                     c.state = Some(LinkState::Connected);
                     welcomed = true;
+                    // Redraw what the person had open before the link dropped.
+                    tokio::spawn(reopen(Arc::clone(conn), Arc::clone(link)));
                 }
                 if changed || now_connected {
                     let state = c.state.unwrap_or(LinkState::Connecting);
@@ -587,11 +692,10 @@ mod tests {
     use kriyon_remote::message::{Epoch, Role, SessionInfo};
     use kriyon_remote_link::host::{Accepted, Host, PairedDevices};
 
-    use std::net::SocketAddr;
-
     use kriyon_remote_link::LinkConfig;
 
     use super::*;
+    use crate::remote_test_support::{loopback, on_loopback, run, wait_until, DeviceSeen};
 
     const EPOCH: Epoch = Epoch {
         host_boot_id: 8,
@@ -599,47 +703,17 @@ mod tests {
     };
     const DEVICE_KEY: [u8; 32] = [2; 32];
 
-    fn run<F: std::future::Future>(f: F) -> F::Output {
-        tauri::async_runtime::block_on(f)
-    }
-
     /// A device runtime on its own loopback endpoint; returns its id.
     async fn device_runtime() -> (DeviceRuntime, EndpointId) {
         let rt = DeviceRuntime::default();
-        let endpoint = kriyon_remote_link::endpoint::bind(
-            &LinkConfig {
-                bind: loopback(),
-                ..LinkConfig::new(DEVICE_KEY)
-            },
-            Vec::new(),
-        )
-        .await
-        .expect("binds");
-        let me = rt.attach(endpoint).await.id();
+        let me = on_loopback(&rt, DEVICE_KEY).await;
         (rt, me)
-    }
-
-    fn loopback() -> SocketAddr {
-        SocketAddr::from(([127, 0, 0, 1], 0))
     }
 
     struct Paired(StdMutex<HashMap<EndpointId, Role>>);
     impl PairedDevices for Paired {
         fn role(&self, device: &EndpointId) -> Option<Role> {
             self.0.lock().expect("lock").get(device).copied()
-        }
-    }
-
-    #[derive(Default)]
-    struct Seen(StdMutex<Vec<(LinkState, HostView)>>);
-    impl DeviceEvents for Seen {
-        fn host_changed(&self, _host: EndpointId, state: LinkState, view: &HostView) {
-            self.0.lock().expect("lock").push((state, view.clone()));
-        }
-    }
-    impl Seen {
-        fn last(&self) -> Option<(LinkState, HostView)> {
-            self.0.lock().expect("lock").last().cloned()
         }
     }
 
@@ -787,14 +861,6 @@ mod tests {
         }
     }
 
-    async fn wait_until(what: &str, mut check: impl FnMut() -> bool) {
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while !check() {
-            assert!(Instant::now() < deadline, "{what}");
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-    }
-
     fn entry(host: &Host) -> HostEntry {
         HostEntry {
             id: host.id(),
@@ -807,7 +873,7 @@ mod tests {
         run(async {
             let (rt, me) = device_runtime().await;
             let (host, _serving) = fake_host(me, true).await;
-            let seen = Arc::new(Seen::default());
+            let seen = Arc::new(DeviceSeen::default());
             rt.connect(entry(&host), seen.clone())
                 .await
                 .expect("connects");
@@ -828,7 +894,7 @@ mod tests {
         run(async {
             let (rt, me) = device_runtime().await;
             let (host, serving) = fake_host(me, true).await;
-            let seen = Arc::new(Seen::default());
+            let seen = Arc::new(DeviceSeen::default());
             rt.connect(entry(&host), seen.clone())
                 .await
                 .expect("connects");
@@ -920,7 +986,7 @@ mod tests {
             let (rt, _me) = device_runtime().await;
             // A host that never paired this device.
             let (host, _serving) = fake_host([7; 32], true).await;
-            let seen = Arc::new(Seen::default());
+            let seen = Arc::new(DeviceSeen::default());
             rt.connect(entry(&host), seen.clone())
                 .await
                 .expect("connects");
