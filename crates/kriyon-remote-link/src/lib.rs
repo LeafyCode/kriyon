@@ -17,5 +17,6 @@ pub mod device;
 pub mod endpoint;
 pub mod framed;
 pub mod host;
+pub mod invite;
 
 pub use endpoint::{LinkConfig, LinkError, ALPN_PAIR, ALPN_REMOTE};

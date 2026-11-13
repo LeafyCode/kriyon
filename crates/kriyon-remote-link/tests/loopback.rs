@@ -631,3 +631,43 @@ async fn a_phone_that_lost_the_race_to_a_leaked_qr_shows_no_code() {
         Err(LinkError::Refused(RefuseReason::NotPaired))
     ));
 }
+
+#[tokio::test]
+async fn a_device_pairs_from_the_qr_text_alone() {
+    use kriyon_remote::pairing::PairingInvite;
+    use kriyon_remote_link::invite::{host_addr, invite};
+
+    let store = Arc::new(Store::default());
+    let host = Arc::new(host(&store, 10).await);
+    host.start_pairing(SECRET, Role::Viewer);
+    let qr = invite(&host, SECRET).to_qr_text();
+
+    let host_side = {
+        let host = Arc::clone(&host);
+        tokio::spawn(async move {
+            let Accepted::Pair(link) = next_accepted(&host).await else {
+                panic!("a pairing connection");
+            };
+            link.request().await.expect("the right proof")
+        })
+    };
+    // The device knows only what it scanned.
+    let scanned = PairingInvite::from_qr_text(&qr).expect("reads");
+    let phone = device(2).await;
+    let pairing = phone
+        .pair(
+            host_addr(&scanned).expect("an address"),
+            &scanned.secret,
+            "Test phone",
+        )
+        .await
+        .expect("pairs");
+    let mut attempt = host_side.await.expect("host task");
+    let code = pairing.code().to_string();
+    let (check, answer) = tokio::join!(
+        attempt.confirm(&code, "Test Mac", |device, role| store.add(device, role)),
+        pairing.finish()
+    );
+    assert!(matches!(check, Ok(CodeCheck::Paired { .. })));
+    assert_eq!(answer, Ok("Test Mac".to_string()));
+}

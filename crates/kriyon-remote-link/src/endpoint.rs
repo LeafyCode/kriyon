@@ -105,6 +105,12 @@ pub async fn bind(config: &LinkConfig, alpns: Vec<Vec<u8>>) -> Result<Endpoint, 
     Ok(endpoint)
 }
 
+/// A new [Device key] secret, from the OS's random source.
+#[must_use]
+pub fn generate_secret_key() -> [u8; 32] {
+    SecretKey::generate().to_bytes()
+}
+
 /// The 32 bytes of an endpoint's id.
 #[must_use]
 pub fn id_bytes(endpoint: &Endpoint) -> EndpointId {

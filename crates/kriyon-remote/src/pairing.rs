@@ -99,6 +99,53 @@ pub fn check_device_name(name: &str) -> Result<(), RefuseReason> {
     crate::text::check_shown_text(name, MAX_DEVICE_NAME)
 }
 
+/// What the pairing QR code carries: how to reach the host, and the secret.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct PairingInvite {
+    pub host_id: EndpointId,
+    /// Socket addresses the host listens on (`ip:port`), LAN and Tailscale.
+    pub addrs: Vec<String>,
+    /// The relay to use, when the person subscribes.
+    pub relay_url: Option<String>,
+    pub secret: PairingSecret,
+}
+
+/// What a pairing QR code's text starts with; the number is the format's
+/// version.
+pub const INVITE_PREFIX: &str = "kriyon-pair:1:";
+
+impl PairingInvite {
+    /// The QR code's text: [`INVITE_PREFIX`] then the invite's postcard bytes
+    /// in hex.
+    #[must_use]
+    pub fn to_qr_text(&self) -> String {
+        use std::fmt::Write as _;
+        // A struct of byte arrays, strings and an option always encodes.
+        let bytes = postcard::to_allocvec(self).unwrap_or_default();
+        bytes.iter().fold(INVITE_PREFIX.to_string(), |mut text, b| {
+            let _ = write!(text, "{b:02x}");
+            text
+        })
+    }
+
+    /// Read a QR code's text back.
+    ///
+    /// # Errors
+    /// [`RefuseReason::OutOfRange`] for text that isn't a pairing invite.
+    pub fn from_qr_text(text: &str) -> Result<Self, RefuseReason> {
+        let hex = text
+            .strip_prefix(INVITE_PREFIX)
+            .filter(|hex| hex.len() % 2 == 0 && hex.is_ascii())
+            .ok_or(RefuseReason::OutOfRange)?;
+        let bytes = (0..hex.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&hex[i..i + 2], 16))
+            .collect::<Result<Vec<u8>, _>>()
+            .map_err(|_| RefuseReason::OutOfRange)?;
+        postcard::from_bytes(&bytes).map_err(|_| RefuseReason::OutOfRange)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -106,6 +153,40 @@ mod tests {
     const SECRET: PairingSecret = [7; 32];
     const DEVICE: EndpointId = [1; 32];
     const HOST: EndpointId = [2; 32];
+
+    #[test]
+    fn an_invite_reads_back_from_its_qr_text() {
+        let invite = PairingInvite {
+            host_id: HOST,
+            addrs: vec!["192.168.1.20:41641".into(), "100.64.0.7:41641".into()],
+            relay_url: None,
+            secret: SECRET,
+        };
+        let text = invite.to_qr_text();
+        assert!(text.starts_with(INVITE_PREFIX));
+        assert!(text[INVITE_PREFIX.len()..]
+            .bytes()
+            .all(|b| b.is_ascii_hexdigit()));
+        assert_eq!(PairingInvite::from_qr_text(&text), Ok(invite));
+    }
+
+    #[test]
+    fn text_that_is_not_an_invite_is_refused() {
+        for bad in [
+            "",
+            "https://example.com",
+            "kriyon-pair:2:00",
+            "kriyon-pair:1:zz",
+            "kriyon-pair:1:0",
+            "kriyon-pair:1:00",
+        ] {
+            assert_eq!(
+                PairingInvite::from_qr_text(bad),
+                Err(RefuseReason::OutOfRange),
+                "{bad:?}"
+            );
+        }
+    }
 
     #[test]
     fn the_right_proof_matches() {
