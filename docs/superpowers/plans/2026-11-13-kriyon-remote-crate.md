@@ -97,6 +97,26 @@ epoch after takeover, input buffered across a reconnect, dialog after `seen_seq`
 `StartSession`, oversize length, zstd bomb, unknown message, device removed while connected,
 leaked pairing QR used first.
 
+## Built after Step E (14 Nov)
+
+- Relay pass support: device sign-in, pass and renewal, endpoint rebuild at a quiet moment,
+  refusal handling, the "Our relay (paid)" settings section. Contract:
+  `specs/2026-11-13-relay-pass-contract.md`.
+- Push: sealing and signing in `kriyon-remote::push`, the sender crate `kriyon-push`, host wakes,
+  key rotation by `key_id`.
+- Remote starts: session start moved into Rust (`session_start`), the device's start with the
+  host's Project list, on the desktop and the phone.
+- The phone: `kriyon-mobile` (UniFFI), the Expo app in `mobile/app` with its native module, Home,
+  Pair (paste and QR), the terminal view, push registration, a dev host example, and a CI job.
+
+## Next
+
+- The fixes from the phase 2 architecture review (plan folder: `phase2-architecture-review.md`).
+- The readable view: entry format, then host and phone.
+- The relay on the phone; one host summary record shared by desktop and phone.
+- Device tests by the person: Mac to Mac, iPhone, the hidden-app freeze, session start.
+- Windows as a host and a device (own plan).
+
 ## Later steps (own plans)
 
 Relay pass support (against the relay contract), the push sender crate, the Expo app shell,

@@ -68,3 +68,19 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
   server keeps it. _Avoid_: encrypted token, push id.
 - **Push sender** — the small open service that opens a [Sealed push token] and asks Apple or
   Google to show "A session needs you". Stores nothing.
+- **Session gate** — a [Session]'s one holder of [Typing control], its [Session run], dialog state
+  and sizes, kept by the host's per-session writer. Every write to the PTY, the desktop's and a
+  device's, goes through it, and a device's write is rechecked inside it, atomically with the
+  write. _Avoid_: lock, writer lock.
+- **Serve** — the host's side of [Remote link]s: it answers each [Paired device]'s control stream
+  and session streams, fans a session's screen out to every device that has it open, and passes
+  input to the [Session gate]. _Avoid_: server (the relay and push sender are servers).
+- **Link state** — what a [Remote device] shows about its [Remote link] to a [Host]: connecting,
+  connected, lost (no heartbeat for 40 s; typing off, reconnecting) or removed (refused as not
+  paired; it stops retrying). _Avoid_: online/offline.
+- **Remote start** — a new [Session] started from a [Remote device] in one of the [Host]'s
+  projects, answered once per request id, so a resend never starts two. It joins the desktop's
+  sidebar without taking the window. _Avoid_: remote launch.
+- **Project list** — the [Host]'s projects a [Remote start] would accept, sent to every [Paired
+  device] after it connects and whenever it changes.
+

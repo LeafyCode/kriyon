@@ -1,6 +1,6 @@
 # crates — agent rules
 
-Read the root `AGENTS.md` first. Two crates live here:
+Read the root `AGENTS.md` first. These crates live here:
 
 - **`kriyon-core`**: the pure logic the app is built on: parsing, status, diffs, sandbox rules,
   notifications. No Tauri. Most new behaviour belongs here, because here it can be unit-tested
@@ -8,9 +8,22 @@ Read the root `AGENTS.md` first. Two crates live here:
 - **`kriyon-ptyd`**: the per-session PTY daemon. One process owns one PTY and its shell and
   serves the app over a Unix socket, so a session survives an app crash. It ships as a Tauri
   sidecar.
+- **`kriyon-remote`**: the remote protocol as pure logic (ADR-0057): messages and codec, the
+  host's one `authorize` check, typing control, screen fan-out, queues, compression, pairing and
+  push crypto, relay rules. No network, no tokio, no IO; shared by the desktop and the phone.
+- **`kriyon-remote-link`**: the network side over iroh: the endpoint, the host's accept loop,
+  the device runtime, keys behind the `SecretVault` trait. The phone and the desktop both use it.
+- **`kriyon-mobile`**: the phone's library: UniFFI bindings over the two remote crates. Thin: no
+  rules of its own. Built for iOS by `scripts/mobile/build-ios.sh`, not in `pnpm check`.
+- **`kriyon-push`**: the push sender, a small open server that opens a sealed push token in
+  memory and sends one alert. Keeps nothing on disk and never logs addresses or tokens; a test
+  fails if one appears.
 
 ## Rules
 
+- **Keep the remote crates' layers.** `kriyon-remote` stays pure; anything that needs the
+  network goes in `kriyon-remote-link`; nothing BisBig-specific (hostnames, keys) goes anywhere
+  in this repo, only build-time config.
 - **Keep `kriyon-core` free of Tauri and app state.** Take inputs as arguments and return
   values. A function that needs the app to run can't be tested here.
 - **Parse defensively.** Anything read from Claude Code (transcript lines, hook payloads, the
