@@ -126,6 +126,39 @@ impl SignInPoll {
     }
 }
 
+/// An API time (`2026-12-14T00:00:00.000Z`: UTC, optional fraction) as Unix
+/// seconds; `None` for anything else.
+#[must_use]
+pub fn parse_utc(text: &str) -> Option<u64> {
+    let text = text.strip_suffix('Z')?;
+    let (date, time) = text.split_once('T')?;
+    let time = time.split_once('.').map_or(time, |(whole, _)| whole);
+    let mut date = date.split('-').map(str::parse::<u64>);
+    let mut time = time.split(':').map(str::parse::<u64>);
+    let (year, month, day) = (date.next()?.ok()?, date.next()?.ok()?, date.next()?.ok()?);
+    let (hour, minute, second) = (time.next()?.ok()?, time.next()?.ok()?, time.next()?.ok()?);
+    if date.next().is_some()
+        || time.next().is_some()
+        || !(1970..=9999).contains(&year)
+        || !(1..=12).contains(&month)
+        || !(1..=31).contains(&day)
+        || hour > 23
+        || minute > 59
+        || second > 60
+    {
+        return None;
+    }
+    // Days from 1970-01-01 (Howard Hinnant's days-from-civil).
+    let y = if month <= 2 { year - 1 } else { year };
+    let era = y / 400;
+    let yoe = y - era * 400;
+    let mp = (month + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = (era * 146_097 + doe).checked_sub(719_468)?;
+    Some(days * 86_400 + hour * 3600 + minute * 60 + second)
+}
+
 /// Whether to fetch a new pass: none yet, or `renew_after` has passed.
 #[must_use]
 pub fn pass_due(now_s: u64, renew_after_s: Option<u64>) -> bool {
@@ -270,5 +303,20 @@ mod tests {
             "under a week left"
         );
         assert!(rebuild_due(now, None, true, false), "no pass in use yet");
+    }
+
+    #[test]
+    fn the_apis_times_read_as_unix_seconds() {
+        assert_eq!(parse_utc("2026-12-14T00:00:00.000Z"), Some(1_797_206_400));
+        assert_eq!(parse_utc("2026-11-15T00:00:00.000Z"), Some(1_794_700_800));
+        assert_eq!(parse_utc("1970-01-01T00:00:00Z"), Some(0));
+        assert_eq!(parse_utc("2000-02-29T12:34:56Z"), Some(951_827_696));
+        assert_eq!(
+            parse_utc("2026-12-14 00:00:00"),
+            None,
+            "not the API's format"
+        );
+        assert_eq!(parse_utc("2026-13-01T00:00:00Z"), None);
+        assert_eq!(parse_utc(""), None);
     }
 }
