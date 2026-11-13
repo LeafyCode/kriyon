@@ -9,6 +9,7 @@ import { useEffect } from "react";
 import { AppState, SafeAreaView, Text, View } from "react-native";
 import { KriyonNative } from "../modules/kriyon-native/index.ts";
 import { HomeScreen } from "./screens/HomeScreen.tsx";
+import { NewSessionScreen } from "./screens/NewSessionScreen.tsx";
 import { PairScreen } from "./screens/PairScreen.tsx";
 import { SessionScreen } from "./screens/SessionScreen.tsx";
 import { usePhone } from "./state/phone.ts";
@@ -35,6 +36,8 @@ function Current() {
   switch (screen.kind) {
     case "pair":
       return <PairScreen />;
+    case "new":
+      return <NewSessionScreen hostId={screen.hostId} />;
     case "session":
       return (
         <SessionScreen hostId={screen.hostId} sessionId={screen.sessionId} />

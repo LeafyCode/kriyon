@@ -84,8 +84,10 @@ pub trait ScreenListener: Send + Sync {
     fn frame(&self, frame: Vec<u8>);
 }
 
-/// Why a phone action couldn't happen, in words the app can show.
+/// Why a phone action couldn't happen, in words the app can show. Its
+/// words (Display) cross to the app as they are.
 #[derive(Debug, PartialEq, Eq, uniffi::Error)]
+#[uniffi::export(Display)]
 pub enum MobileError {
     /// The store failed.
     Store { reason: String },

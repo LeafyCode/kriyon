@@ -108,6 +108,9 @@ enum Records {
       "hostName": orNull(state.hostName),
       "role": orNull(state.role),
       "refused": orNull(state.refused),
+      "projects": state.projects.map { project -> [String: Any] in
+        ["id": project.id, "name": project.name, "parked": project.parked]
+      },
       "sessions": state.sessions.map { session -> [String: Any] in
         [
           "id": session.id,
@@ -169,8 +172,22 @@ func rust<T>(_ call: () async throws -> T) async throws -> T {
   do {
     return try await call()
   } catch let error as MobileError {
-    let kind = "\(error)".split(separator: "(").first.map(String.init) ?? "MobileError"
-    throw Exception(name: "MobileError", description: error.localizedDescription, code: kind)
+    // The words are Rust's own (its Display, exported through UniFFI).
+    throw Exception(name: "MobileError", description: error.description, code: kind(error))
+  }
+}
+
+/// A Rust error's kind, the code JavaScript tells errors apart by.
+func kind(_ error: MobileError) -> String {
+  switch error {
+  case .Store: return "Store"
+  case .Invalid: return "Invalid"
+  case .Link: return "Link"
+  case .Refused: return "Refused"
+  case .NotConnected: return "NotConnected"
+  case .NotOpen: return "NotOpen"
+  case .NoControl: return "NoControl"
+  case .NoScreen: return "NoScreen"
   }
 }
 
@@ -294,6 +311,12 @@ public final class KriyonNativeModule: Module {
 
     AsyncFunction("closeSession") { (hostId: String, sessionId: String) in
       try await rust { try await self.started().closeSession(hostId: hostId, sessionId: sessionId) }
+    }
+
+    AsyncFunction("startSession") { (hostId: String, projectId: String, title: String?) -> String in
+      try await rust {
+        try await self.started().startSession(hostId: hostId, projectId: projectId, title: title)
+      }
     }
 
     AsyncFunction("takeControl") { (hostId: String, sessionId: String) in

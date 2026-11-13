@@ -32,6 +32,14 @@ export const ui = StyleSheet.create({
     color: colors.inkPrimary,
     fontSize: 15,
   },
+  /** A text field. */
+  input: {
+    borderColor: colors.border,
+    borderRadius: 8,
+    borderWidth: 1,
+    color: colors.inkBright,
+    padding: 10,
+  },
   hint: {
     color: colors.inkMuted,
     fontSize: 13,

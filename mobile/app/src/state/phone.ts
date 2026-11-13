@@ -13,6 +13,7 @@ import { type PushStatus, registerPush } from "./push.ts";
 export type Screen =
   | { kind: "home" }
   | { kind: "pair" }
+  | { hostId: string; kind: "new" }
   | { hostId: string; kind: "session"; sessionId: string };
 
 /** Where a pairing started here stands. */
@@ -31,6 +32,19 @@ interface PhoneStore {
   forget: (hostId: string) => Promise<void>;
   hostChanged: (state: HostState) => void;
   hosts: PairedHost[];
+  /**
+   * Start a session in `projectId` on `hostId`, titled `title` or after the
+   * project; once it starts, its screen shows.
+   */
+  newSession: (
+    hostId: string,
+    projectId: string,
+    title: string | null
+  ) => Promise<void>;
+  /** Why the last new session didn't start, in the computer's words. */
+  newSessionError: string | null;
+  /** A new session is being started. */
+  newSessionStarting: boolean;
   /** Open a session's stream, after any open or close asked before it. */
   openSession: (hostId: string, sessionId: string) => Promise<void>;
   pair: (inviteText: string) => Promise<void>;
@@ -67,7 +81,7 @@ function inTurn(call: () => Promise<void>): Promise<void> {
  * screen shows. Rust keeps the computers and decides; this keeps what it
  * said.
  */
-export const usePhone = create<PhoneStore>((set) => ({
+export const usePhone = create<PhoneStore>((set, get) => ({
   cancelPairing: async () => {
     set({ pairing: { phase: "idle" } });
     await KriyonNative.cancelPairing().catch(() => undefined);
@@ -93,6 +107,32 @@ export const usePhone = create<PhoneStore>((set) => ({
       states: { ...state.states, [hostState.hostId]: hostState },
     })),
   hosts: [],
+  newSession: async (hostId, projectId, title) => {
+    // One start at a time: a second tap would start a second session.
+    if (get().newSessionStarting) {
+      return;
+    }
+    set({ newSessionError: null, newSessionStarting: true });
+    try {
+      // A blank title is Rust's to name after the project.
+      const sessionId = await KriyonNative.startSession(
+        hostId,
+        projectId,
+        title || null
+      );
+      // Only if the person is still waiting for it here.
+      const { screen } = get();
+      if (screen.kind === "new" && screen.hostId === hostId) {
+        set({ screen: { hostId, kind: "session", sessionId } });
+      }
+    } catch (error) {
+      set({ newSessionError: reasonOf(error) });
+    } finally {
+      set({ newSessionStarting: false });
+    }
+  },
+  newSessionError: null,
+  newSessionStarting: false,
   openSession: (hostId, sessionId) =>
     inTurn(() => KriyonNative.openSession(hostId, sessionId)),
   pair: async (inviteText) => {
@@ -132,7 +172,7 @@ export const usePhone = create<PhoneStore>((set) => ({
   pairing: { phase: "idle" },
   push: null,
   screen: { kind: "home" },
-  show: (screen) => set({ screen }),
+  show: (screen) => set({ newSessionError: null, screen }),
   start: async (deviceName) => {
     try {
       const deviceId = await KriyonNative.start(deviceName);
@@ -231,4 +271,16 @@ const PAIRING_CODE_PREFIX = "kriyon-pair:1:";
 export function pairingCodeFrom(text: string): string | null {
   const code = text.trim();
   return code.startsWith(PAIRING_CODE_PREFIX) ? code : null;
+}
+
+/**
+ * Whether a new session may be started on a computer from here: connected,
+ * as a Controller, with a project to start it in. The computer checks again.
+ */
+export function canStartSession(host: HostState | undefined): boolean {
+  return (
+    host?.link === "connected" &&
+    host.role === "controller" &&
+    host.projects.length > 0
+  );
 }

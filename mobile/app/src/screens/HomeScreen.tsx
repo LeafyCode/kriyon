@@ -8,7 +8,12 @@ import type {
   HostSession,
   PairedHost,
 } from "../../modules/kriyon-native/index.ts";
-import { needsYou, standingMeta, usePhone } from "../state/phone.ts";
+import {
+  canStartSession,
+  needsYou,
+  standingMeta,
+  usePhone,
+} from "../state/phone.ts";
 import { colors, ui } from "../ui.ts";
 import { RelaySection } from "./RelaySection.tsx";
 
@@ -89,6 +94,16 @@ export function HomeScreen() {
               </Pressable>
             </View>
             <Text style={ui.hint}>{linkLine(state?.link ?? "connecting")}</Text>
+            {canStartSession(state) ? (
+              <Pressable
+                accessibilityLabel={`New session on ${host.name}`}
+                accessibilityRole="button"
+                onPress={() => show({ hostId: host.hostId, kind: "new" })}
+                style={ui.row}
+              >
+                <Text style={ui.ghostButtonText}>+ New session</Text>
+              </Pressable>
+            ) : null}
             {(state?.sessions ?? []).map((session) => (
               <SessionRow
                 host={host}

@@ -63,6 +63,7 @@ const host = (over: Partial<HostState>): HostState => ({
   hostId: MAC,
   hostName: "Mac",
   link: "connected",
+  projects: [],
   refused: null,
   role: "controller",
   sessions: [],

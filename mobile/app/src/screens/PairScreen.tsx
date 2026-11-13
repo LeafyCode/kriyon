@@ -60,14 +60,7 @@ export function PairScreen() {
             autoCorrect={false}
             onChangeText={setText}
             placeholderTextColor={colors.inkFaint}
-            style={{
-              borderColor: colors.border,
-              borderRadius: 8,
-              borderWidth: 1,
-              color: colors.inkBright,
-              fontFamily: "Menlo",
-              padding: 10,
-            }}
+            style={[ui.input, { fontFamily: "Menlo" }]}
             value={text}
           />
           <Pressable

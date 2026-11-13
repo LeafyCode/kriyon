@@ -58,6 +58,7 @@ const state = (
   hostId: MAC,
   hostName: "Mac",
   link: "connected",
+  projects: [],
   refused: null,
   role: "controller",
   sessions: [

@@ -26,11 +26,21 @@ export interface HostSession {
   typing: Typing | null;
 }
 
+/** A project on a computer, where a new session can start (Rust `HostProject`). */
+export interface HostProject {
+  id: string;
+  name: string;
+  /** Every session in it is parked there. */
+  parked: boolean;
+}
+
 /** A computer as the phone shows it (Rust `HostState`). */
 export interface HostState {
   hostId: string;
   hostName: string | null;
   link: HostLink;
+  /** Its projects, where a new session can start. */
+  projects: HostProject[];
   /** The last refusal the computer sent, by name (`NotInControl`). */
   refused: string | null;
   role: "viewer" | "controller" | null;
@@ -99,6 +109,7 @@ export type KriyonErrorCode =
   | "NoControl"
   | "NoScreen"
   | "Link"
+  | "Refused"
   | "NotStarted"
   | "NoPairing";
 
@@ -150,6 +161,16 @@ interface KriyonNativeModule {
    * device, under its first name); resolves to this phone's id.
    */
   start: (deviceName: string) => Promise<string>;
+  /**
+   * Starts a session in a project on a computer, titled `title` or after
+   * the project; resolves to its id once the computer answers. A refusal
+   * rejects with code `Refused` and the words to show.
+   */
+  startSession: (
+    hostId: string,
+    projectId: string,
+    title: string | null
+  ) => Promise<string>;
   takeControl: (hostId: string, sessionId: string) => Promise<void>;
   wake: () => void;
 }
