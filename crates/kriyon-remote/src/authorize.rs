@@ -234,7 +234,7 @@ pub fn authorize(
                 Err(RefuseReason::ScreenTooLarge)
             }
         }
-        (FromDevice::Resync | FromDevice::RequestEntries, Stream::Session(id)) => {
+        (FromDevice::Resync | FromDevice::RequestEntries { .. }, Stream::Session(id)) => {
             session_exists(id)
         }
         (FromDevice::TakeControl { session_id }, Stream::Control) => {
@@ -510,7 +510,7 @@ mod tests {
         assert_eq!(check(&h, VIEWER, Stream::Unopened, open), Ok(()));
         assert_eq!(check(&h, VIEWER, SESSION, FromDevice::Resync), Ok(()));
         assert_eq!(
-            check(&h, VIEWER, SESSION, FromDevice::RequestEntries),
+            check(&h, VIEWER, SESSION, FromDevice::RequestEntries { since: 0 }),
             Ok(())
         );
     }
@@ -526,7 +526,7 @@ mod tests {
             check(&h, VIEWER, Stream::Unopened, open),
             Err(RefuseReason::NoSuchSession)
         );
-        for message in [FromDevice::Resync, FromDevice::RequestEntries] {
+        for message in [FromDevice::Resync, FromDevice::RequestEntries { since: 0 }] {
             assert_eq!(
                 check(&h, VIEWER, SESSION, message),
                 Err(RefuseReason::NoSuchSession)

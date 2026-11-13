@@ -46,7 +46,7 @@ impl Wire for FromDevice {
 }
 
 impl Wire for ToDevice {
-    const KNOWN_TAGS: u32 = 13;
+    const KNOWN_TAGS: u32 = 15;
     const MAX_LEN: usize = 1024 * KIB;
     fn max_len(_tag: u32) -> usize {
         Self::MAX_LEN
@@ -375,12 +375,8 @@ mod tests {
 
     #[test]
     fn the_newest_host_message_is_known_not_skipped() {
-        let message = ToDevice::ProjectList {
-            projects: vec![crate::message::ProjectInfo {
-                id: "p".into(),
-                name: "app".into(),
-                parked: true,
-            }],
+        let message = ToDevice::EntriesUnavailable {
+            reason: crate::message::EntriesUnavailable::NoTranscript,
         };
         let mut d = Decoder::<ToDevice>::new();
         d.push(&encode(&message).expect("encodes"));

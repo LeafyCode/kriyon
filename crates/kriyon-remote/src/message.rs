@@ -184,8 +184,9 @@ pub enum FromDevice {
     Open { session_id: SessionId },
     /// Session stream: send a fresh snapshot.
     Resync,
-    /// Session stream: send readable-view entries (format to come).
-    RequestEntries,
+    /// Session stream: send [Readable view] entries, every one with a `seq`
+    /// above `since` (0: the whole window), and keep sending them (spec §6).
+    RequestEntries { since: u64 },
     /// Control stream.
     TakeControl { session_id: SessionId },
     /// Session stream.
@@ -268,7 +269,7 @@ impl FromDevice {
             Self::Hello { .. } => FromDeviceKind::Hello,
             Self::Open { .. } => FromDeviceKind::Open,
             Self::Resync => FromDeviceKind::Resync,
-            Self::RequestEntries => FromDeviceKind::RequestEntries,
+            Self::RequestEntries { .. } => FromDeviceKind::RequestEntries,
             Self::TakeControl { .. } => FromDeviceKind::TakeControl,
             Self::Input { .. } => FromDeviceKind::Input,
             Self::Compose { .. } => FromDeviceKind::Compose,
@@ -356,6 +357,38 @@ pub enum ToDevice {
     ProjectList {
         projects: Vec<ProjectInfo>,
     },
+    /// Session stream, after `RequestEntries`: [Readable view] entries, new
+    /// or changed. `reset`: drop every entry you have first (spec §6).
+    Entries {
+        entries: Vec<Entry>,
+        reset: bool,
+    },
+    /// Session stream: no entries can be sent for this session; show the
+    /// terminal.
+    EntriesUnavailable {
+        reason: EntriesUnavailable,
+    },
+}
+
+/// One [Readable view] entry. One that comes again with a `seq` the device
+/// has replaces it in place.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Entry {
+    /// The host's, per session, rising, never reused within a [Session run].
+    pub seq: u64,
+    pub kind: EntryKind,
+}
+
+pub use kriyon_core::readable::{EntryKind, StepState};
+
+/// Why a session has no [Readable view] entries.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum EntriesUnavailable {
+    /// The companion is off: the desktop shows no turns it can vouch for
+    /// (ADR 0035, exact or off).
+    CompanionOff,
+    /// The session has no transcript yet.
+    NoTranscript,
 }
 
 /// Device to host on `kriyon/pair/1`.
@@ -495,7 +528,7 @@ mod tests {
             ),
             (FromDevice::Open { session_id: s() }, 1),
             (FromDevice::Resync, 2),
-            (FromDevice::RequestEntries, 3),
+            (FromDevice::RequestEntries { since: 0 }, 3),
             (FromDevice::TakeControl { session_id: s() }, 4),
             (
                 FromDevice::Input {
@@ -640,6 +673,22 @@ mod tests {
         for (message, expected) in cases {
             assert_eq!(tag(&message), expected, "{message:?}");
         }
+    }
+
+    #[test]
+    fn readable_view_tags_are_fixed() {
+        let entries = ToDevice::Entries {
+            entries: vec![Entry {
+                seq: 1,
+                kind: EntryKind::Note { text: "n".into() },
+            }],
+            reset: true,
+        };
+        assert_eq!(tag(&entries), 13);
+        let unavailable = ToDevice::EntriesUnavailable {
+            reason: EntriesUnavailable::CompanionOff,
+        };
+        assert_eq!(tag(&unavailable), 14);
     }
 
     #[test]
