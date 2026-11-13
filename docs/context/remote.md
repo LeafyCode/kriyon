@@ -43,6 +43,10 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
 - **Screen update** — a numbered, compressed chunk of a [Session]'s output sent to a [Remote
   device] after its first [Screen snapshot]. A gap in the numbers means "send the whole screen",
   never a guess. _Avoid_: delta, diff (taken by [File diff]).
+- **Readable view** (`kriyon_core::readable`, `Entry`) — a [Remote device]'s view of a
+  [Session] as entries (the prompt, Claude's reply, steps, reports, a question showing) instead
+  of the terminal: what the [Structured view] shows, redacted and trimmed for a phone. Off with
+  the companion off ("exact or off"). _Avoid_: chat view, transcript view.
 - **Session fan-out** (`kriyon_remote::fanout::SessionFanout`) — the [Host]'s one copy of a
   [Session]'s screen stream for every [Remote device] that has it open: it numbers the output as
   [Screen update]s once, asks the [PTY daemon] for each device's [Screen snapshot], and keeps a

@@ -154,9 +154,87 @@ never waits on a network write. A full session queue means [Skip ahead]
 - When a device's session queue fills, the host drops it and sends a fresh
   `Snapshot` with `skipped: true`; the device shows "Skipped ahead". It never
   blocks the session or another device.
-- Readable view entries (`Entry { … }`, trimmed, from the Structured view's
-  data) come on the same stream when the device asks. Format in a later
-  revision.
+- Readable view entries come on the same stream when the device asks:
+  see "Readable view" below.
+
+### Readable view
+
+A [Remote device] can show a session as entries instead of the terminal: what
+the desktop's Structured view shows, trimmed for a phone. The terminal stays
+the source of truth; entries are best-effort and say so.
+
+**Messages** (session stream, after `Open`; tags append to the enums in
+`kriyon_remote::message`):
+
+- device → host `RequestEntries { since: u64 }`: start sending entries, and
+  send every entry with a `seq` above `since` (0: the whole window). Sent
+  again after a reconnect or a gap, with the highest `seq` the device has.
+- host → device `Entries { entries: Vec<Entry>, reset: bool }`. `reset`: drop
+  every entry you have; these start the window again.
+- host → device `EntriesUnavailable { reason }`, `reason` one of
+  `CompanionOff` or `NoTranscript`. The device shows the terminal view with a
+  one-line note and asks again when it reopens the readable view.
+- `Entry { seq: u64, kind: EntryKind }`. `seq` is the host's, per session,
+  rising, never reused within a [Session run]. An entry that comes again with
+  a `seq` the device has replaces it in place (a reply growing, a step
+  finishing).
+- `EntryKind`, one of:
+  - `You { text }`: the person's prompt.
+  - `Claude { text, done: bool }`: Claude's reply text, `done` once the turn
+    ended.
+  - `Step { name, target, state }`, `state` one of `Running`, `Done`,
+    `Failed`: one tool call.
+  - `Report { summary, outcome }`: a [Work report].
+  - `Asking { header, question, options: Vec<String> }`: Claude's question
+    dialog is showing. The device shows the question and its options, never
+    an answer button, only "Answer in the terminal", which opens the terminal
+    view (ADR 0040). When the dialog closes, the host sends the same `seq`
+    again as a `Note` ("Answered in the terminal").
+  - `Note { text }`: context compacted, turn interrupted, or "Older in the
+    terminal" at the window's start.
+
+**Who.** Viewers and Controllers alike: a Viewer sees the screen anyway.
+Answering stays a Controller's, in the terminal.
+
+**Where entries come from.** Only what the desktop shows: the Structured
+view's turns (`kriyon_core::structured::build_turns`) and its live partial
+reply, folded into entries by `kriyon_core::readable`. Thought items are
+left out. Every text in an entry passes [Redaction] (`kriyon_core::redact`)
+when the entry is built, whatever its source: the bridge spool is redacted
+at ingest, the transcript is not. The `Asking` entry comes from the CLI
+dialog being open and the hook's pending question, which keeps its options
+for this (at most 8, each at most 80 bytes).
+
+**Exact or off** (ADR 0035). With the companion off the desktop shows a
+notice instead of transcript-only turns; so the host answers
+`EntriesUnavailable { CompanionOff }`, never entries it can't vouch for.
+
+**Limits.**
+
+| What | At most |
+|---|---|
+| `You` text | 1 KiB |
+| `Claude` text | 4 KiB: the start kept, then "…"; the rest is in the terminal |
+| `Step` name and target | 160 bytes together |
+| `Report` summary and outcome | 512 bytes |
+| `Asking` header, question and options | 1 KiB |
+| The window | the newest 200 entries |
+| One `Entries` message | 64 KiB; a bigger batch goes in several |
+| Batches sent | 2 a second per device and session |
+
+Texts are cut on a UTF-8 boundary.
+
+**Sending.** The host builds entries only while some device has the
+readable view open (like an Onlooker), off the async runtime, again when the
+bridge ingests (about every 3 s) and when the partial reply changes (at most
+once a second). For each reading device it keeps what it last sent (entry
+key, `seq`, a hash of the kind) and sends only new or changed entries. Keys
+are stable across rebuilds: a step by its tool-use id, any other entry by
+its turn's start and its place in the turn. Entries share the device's
+session queue with screen updates; when it overflows, the device gets
+`reset: true` with the window once there is room, as a screen gets a fresh
+snapshot. A `RequestEntries { since }` with `since` still in the window gets
+what's newer; otherwise `reset: true` and the window.
 
 ## 7. Input and control
 

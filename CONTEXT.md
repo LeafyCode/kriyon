@@ -65,4 +65,4 @@ App tour, Stray caret, DOM weight, Collapsible section, Mascot, Wordmark, Nav ro
 
 Watching and typing into a host's sessions from a phone or another computer.
 
-Remote access, Host, Remote device, Device key, Pairing, Pairing code, Paired device, Viewer, Controller, Remote link, Typing control, Session run, Screen update, Session fan-out, Skip ahead, Relay pass, Relay account, Device sign-in, Sealed push token, Push sender.
+Remote access, Host, Remote device, Device key, Pairing, Pairing code, Paired device, Viewer, Controller, Remote link, Typing control, Session run, Screen update, Readable view, Session fan-out, Skip ahead, Relay pass, Relay account, Device sign-in, Sealed push token, Push sender.
