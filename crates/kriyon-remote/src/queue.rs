@@ -12,11 +12,14 @@
 use std::collections::VecDeque;
 
 use kriyon_core::skip_ahead::FRAME_UPKEEP;
+
+use crate::codec::Wire;
+use crate::message::ToDevice;
 pub use kriyon_core::skip_ahead::{Next, SkipAheadQueue as SessionQueue};
 
 /// The most a device's session queue holds: room for two of the largest
 /// messages (1 MiB).
-pub const SESSION_QUEUE_LIMIT: usize = 2 * 1024 * 1024;
+pub const SESSION_QUEUE_LIMIT: usize = 2 * <ToDevice as Wire>::MAX_LEN;
 
 /// The most a device's control queue holds before the connection is closed.
 pub const CONTROL_QUEUE_LIMIT: usize = 256 * 1024;
@@ -70,7 +73,6 @@ impl ControlQueue {
 mod tests {
     use super::*;
     use crate::codec::encode;
-    use crate::message::ToDevice;
 
     fn update(seq: u64, len: usize) -> Vec<u8> {
         encode(&ToDevice::Update {

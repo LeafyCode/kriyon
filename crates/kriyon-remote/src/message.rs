@@ -7,6 +7,8 @@
 //! variant (spec §3). The golden tests below pin every tag.
 
 use kriyon_core::session::SessionStatus;
+use kriyon_core::standing::SessionListEntry;
+pub use kriyon_core::standing::StandingState;
 use serde::{Deserialize, Serialize};
 
 /// A [Session]'s id, as the host names it.
@@ -44,15 +46,47 @@ pub enum Holder {
     Device(EndpointId),
 }
 
-/// One session as a device sees it in a list.
+/// One session as a device sees it: the host's [Session list] entry, field
+/// for field, so a device shows the same standing as the desktop (never
+/// "Idle" where the desktop says "Unknown").
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionInfo {
     pub id: SessionId,
     pub title: String,
-    pub project: String,
+    pub project_id: String,
     pub status: SessionStatus,
+    pub standing: StandingState,
     /// On the Needs-you list.
     pub needs_you: bool,
+    /// A CLI dialog shows.
+    pub dialog_open: bool,
+    /// Unix milliseconds.
+    pub last_change_ms: i64,
+}
+
+impl From<SessionListEntry> for SessionInfo {
+    fn from(entry: SessionListEntry) -> Self {
+        let SessionListEntry {
+            id,
+            title,
+            project_id,
+            status,
+            standing,
+            needs_you,
+            dialog_open,
+            last_change_ms,
+        } = entry;
+        Self {
+            id,
+            title,
+            project_id,
+            status,
+            standing,
+            needs_you,
+            dialog_open,
+            last_change_ms,
+        }
+    }
 }
 
 /// Why the host refused a message (spec §8).
@@ -131,6 +165,64 @@ pub enum FromDevice {
     PushToken { sealed: Vec<u8> },
 }
 
+/// The kind of a [`FromDevice`] message; its number is the message's tag on
+/// the wire (pinned by test), so limits can name kinds, not numbers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FromDeviceKind {
+    Hello = 0,
+    Open = 1,
+    Resync = 2,
+    RequestEntries = 3,
+    TakeControl = 4,
+    Input = 5,
+    Compose = 6,
+    Resize = 7,
+    StartSession = 8,
+    PushToken = 9,
+}
+
+impl FromDeviceKind {
+    const ALL: [Self; 10] = [
+        Self::Hello,
+        Self::Open,
+        Self::Resync,
+        Self::RequestEntries,
+        Self::TakeControl,
+        Self::Input,
+        Self::Compose,
+        Self::Resize,
+        Self::StartSession,
+        Self::PushToken,
+    ];
+
+    /// The kind with wire tag `tag`, if this side knows it.
+    #[must_use]
+    pub fn from_tag(tag: u32) -> Option<Self> {
+        usize::try_from(tag)
+            .ok()
+            .and_then(|i| Self::ALL.get(i).copied())
+    }
+}
+
+impl FromDevice {
+    /// This message's kind.
+    #[must_use]
+    pub fn kind(&self) -> FromDeviceKind {
+        match self {
+            Self::Hello { .. } => FromDeviceKind::Hello,
+            Self::Open { .. } => FromDeviceKind::Open,
+            Self::Resync => FromDeviceKind::Resync,
+            Self::RequestEntries => FromDeviceKind::RequestEntries,
+            Self::TakeControl { .. } => FromDeviceKind::TakeControl,
+            Self::Input { .. } => FromDeviceKind::Input,
+            Self::Compose { .. } => FromDeviceKind::Compose,
+            Self::Resize { .. } => FromDeviceKind::Resize,
+            Self::StartSession { .. } => FromDeviceKind::StartSession,
+            Self::PushToken { .. } => FromDeviceKind::PushToken,
+        }
+    }
+}
+
 /// Host to device on `kriyon/remote/1`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ToDevice {
@@ -148,10 +240,9 @@ pub enum ToDevice {
     SessionList {
         sessions: Vec<SessionInfo>,
     },
+    /// One session's entry changed.
     SessionStatus {
-        session_id: SessionId,
-        status: SessionStatus,
-        needs_you: bool,
+        session: SessionInfo,
     },
     Control {
         session_id: SessionId,
@@ -230,12 +321,77 @@ mod tests {
         counter: 2,
     };
 
+    fn info() -> SessionInfo {
+        SessionInfo {
+            id: "s".into(),
+            title: "t".into(),
+            project_id: "p".into(),
+            status: SessionStatus::Idle,
+            standing: StandingState::Unknown,
+            needs_you: false,
+            dialog_open: false,
+            last_change_ms: 0,
+        }
+    }
+
+    /// A device shows what the desktop's list shows, field for field.
+    #[test]
+    fn a_session_entry_reaches_the_device_whole() {
+        let entry = SessionListEntry {
+            id: "s1".into(),
+            title: "Fix login".into(),
+            project_id: "p1".into(),
+            status: SessionStatus::Waiting,
+            standing: StandingState::AwaitingInput,
+            needs_you: true,
+            dialog_open: true,
+            last_change_ms: 1_700_000_000_000,
+        };
+        let sent = SessionInfo::from(entry);
+        assert_eq!(
+            sent,
+            SessionInfo {
+                id: "s1".into(),
+                title: "Fix login".into(),
+                project_id: "p1".into(),
+                status: SessionStatus::Waiting,
+                standing: StandingState::AwaitingInput,
+                needs_you: true,
+                dialog_open: true,
+                last_change_ms: 1_700_000_000_000,
+            }
+        );
+    }
+
+    /// The codec's limits name message kinds; each kind is the tag on the wire.
+    #[test]
+    fn every_device_message_kind_is_its_tag() {
+        for (message, _) in device_samples() {
+            assert_eq!(
+                u32::from(tag(&message)),
+                message.kind() as u32,
+                "{message:?}"
+            );
+            assert_eq!(
+                FromDeviceKind::from_tag(message.kind() as u32),
+                Some(message.kind())
+            );
+        }
+        assert_eq!(FromDeviceKind::from_tag(99), None);
+    }
+
     /// The tag of every message is part of the protocol: a reorder must fail
     /// here, not on a phone.
     #[test]
     fn device_to_host_tags_are_fixed() {
+        for (message, expected) in device_samples() {
+            assert_eq!(tag(&message), expected, "{message:?}");
+        }
+    }
+
+    fn device_samples() -> [(FromDevice, u8); 10] {
         let s = || "s".to_string();
-        let cases: [(FromDevice, u8); 10] = [
+        [
             (
                 FromDevice::Hello {
                     app_version: s(),
@@ -284,10 +440,7 @@ mod tests {
                 8,
             ),
             (FromDevice::PushToken { sealed: vec![] }, 9),
-        ];
-        for (message, expected) in cases {
-            assert_eq!(tag(&message), expected, "{message:?}");
-        }
+        ]
     }
 
     #[test]
@@ -305,14 +458,7 @@ mod tests {
             ),
             (ToDevice::Heartbeat { seq: 0, at: 0 }, 1),
             (ToDevice::SessionList { sessions: vec![] }, 2),
-            (
-                ToDevice::SessionStatus {
-                    session_id: s(),
-                    status: SessionStatus::Idle,
-                    needs_you: false,
-                },
-                3,
-            ),
+            (ToDevice::SessionStatus { session: info() }, 3),
             (
                 ToDevice::Control {
                     session_id: s(),
@@ -425,6 +571,16 @@ mod tests {
         ];
         for (n, status) in statuses.iter().enumerate() {
             assert_eq!(usize::from(tag(status)), n, "{status:?}");
+        }
+        let standings = [
+            StandingState::Running,
+            StandingState::AwaitingInput,
+            StandingState::Changed,
+            StandingState::Idle,
+            StandingState::Unknown,
+        ];
+        for (n, standing) in standings.iter().enumerate() {
+            assert_eq!(usize::from(tag(standing)), n, "{standing:?}");
         }
         assert_eq!(tag(&Role::Viewer), 0);
         assert_eq!(tag(&Role::Controller), 1);

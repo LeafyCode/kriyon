@@ -15,7 +15,7 @@ use std::marker::PhantomData;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
-use crate::message::{FromDevice, PairFromDevice, PairToDevice, ToDevice};
+use crate::message::{FromDevice, FromDeviceKind, PairFromDevice, PairToDevice, ToDevice};
 
 const KIB: usize = 1024;
 const LEN_PREFIX: usize = 4;
@@ -35,9 +35,9 @@ impl Wire for FromDevice {
     const KNOWN_TAGS: u32 = 10;
     const MAX_LEN: usize = 64 * KIB;
     fn max_len(tag: u32) -> usize {
-        match tag {
-            5 | 6 => 64 * KIB, // Input, Compose
-            9 => 2 * KIB,      // PushToken
+        match FromDeviceKind::from_tag(tag) {
+            Some(FromDeviceKind::Input | FromDeviceKind::Compose) => 64 * KIB,
+            Some(FromDeviceKind::PushToken) => 2 * KIB,
             _ => 4 * KIB,
         }
     }

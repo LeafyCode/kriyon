@@ -15,6 +15,7 @@
 //! `SnapshotPart`s; [`snapshot_messages`] splits it and [`SnapshotParts`]
 //! joins it back.
 
+use crate::codec::Wire;
 use crate::message::ToDevice;
 
 /// The most an update frame may decompress to.
@@ -49,7 +50,7 @@ pub const WINDOW_LOG_MAX: u32 = 23;
 
 /// The most compressed bytes one snapshot message carries, leaving room in a
 /// 1 MiB message for its other fields.
-pub const SNAPSHOT_PART_LEN: usize = 1024 * 1024 - 1024;
+pub const SNAPSHOT_PART_LEN: usize = <ToDevice as Wire>::MAX_LEN - 1024;
 
 /// zstd's default level: fast, and plenty for terminal output.
 const LEVEL: i32 = 3;
