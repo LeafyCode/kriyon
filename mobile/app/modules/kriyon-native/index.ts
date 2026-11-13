@@ -46,6 +46,40 @@ export interface PairedHost {
   relayUrl: string | null;
 }
 
+/** A relay sign-in in progress (Rust `RelaySignIn`). */
+export interface RelaySignIn {
+  userCode: string;
+  verificationUri: string;
+  verificationUriComplete: string;
+}
+
+/** Our relay as the phone shows it (Rust `PhoneRelay`). */
+export interface PhoneRelay {
+  /** Whether this build has a relay at all; none: it is hidden. */
+  available: boolean;
+  on: boolean;
+  passExpiresAt: number | null;
+  /** What went wrong last, in the relay contract's words. */
+  problem: string | null;
+  signedIn: boolean;
+  signIn: RelaySignIn | null;
+}
+
+/** The relay account, status only (Rust `RelayAccount`). */
+export interface RelayAccount {
+  blocked: boolean;
+  deviceLimit: number;
+  devices: {
+    deviceId: string;
+    name: string;
+    platform: string;
+    thisPhone: boolean;
+  }[];
+  paidUntil: string | null;
+  /** `pending | active | past_due | canceled | expired`; null: never subscribed. */
+  state: string | null;
+}
+
 /** One frame of an open session's screen, as the desktop reads them. */
 export interface ScreenFrameEvent {
   frame: Uint8Array;
@@ -93,6 +127,18 @@ interface KriyonNativeModule {
   openSession: (hostId: string, sessionId: string) => Promise<void>;
   /** Starts pairing; resolves to the code to type into the computer. */
   pair: (inviteText: string) => Promise<string>;
+  /** Our relay as it stands. */
+  relay: () => Promise<PhoneRelay>;
+  /** The relay account's subscription and devices: status only. */
+  relayAccount: () => Promise<RelayAccount>;
+  relayCancelSignIn: () => Promise<void>;
+  /** Turns our relay on (this phone's pass is fetched) or off. */
+  relaySetOn: (on: boolean) => Promise<PhoneRelay>;
+  /** Starts a device sign-in: the code to show and the page to open. */
+  relaySignIn: () => Promise<RelaySignIn>;
+  relaySignOut: () => Promise<PhoneRelay>;
+  /** Waits for the sign-in started last; whether it signed in. */
+  relayWaitSignIn: () => Promise<boolean>;
   /**
    * Gives Rust this phone's raw push token (`apns` or `fcm`); each paired
    * computer gets it sealed for itself. Resolves to whether push is on (a

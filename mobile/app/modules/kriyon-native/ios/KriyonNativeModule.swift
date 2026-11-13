@@ -125,6 +125,44 @@ enum Records {
   }
 }
 
+extension Records {
+  static func relay(_ view: PhoneRelay) -> [String: Any] {
+    [
+      "available": view.available,
+      "signedIn": view.signedIn,
+      "on": view.on,
+      "signIn": orNull(view.signIn.map(signIn)),
+      "problem": orNull(view.problem),
+      "passExpiresAt": orNull(view.passExpiresAt.map { Double($0) }),
+    ]
+  }
+
+  static func signIn(_ signIn: RelaySignIn) -> [String: Any] {
+    [
+      "userCode": signIn.userCode,
+      "verificationUri": signIn.verificationUri,
+      "verificationUriComplete": signIn.verificationUriComplete,
+    ]
+  }
+
+  static func account(_ account: RelayAccount) -> [String: Any] {
+    [
+      "state": orNull(account.state),
+      "paidUntil": orNull(account.paidUntil),
+      "blocked": account.blocked,
+      "deviceLimit": Double(account.deviceLimit),
+      "devices": account.devices.map { device -> [String: Any] in
+        [
+          "deviceId": device.deviceId,
+          "name": device.name,
+          "platform": device.platform,
+          "thisPhone": device.thisPhone,
+        ]
+      },
+    ]
+  }
+}
+
 /// A Rust error as a JavaScript one, its kind as the code (`NotConnected`,
 /// `NoControl`, …), so the screens never read the wording.
 func rust<T>(_ call: () async throws -> T) async throws -> T {
@@ -213,6 +251,34 @@ public final class KriyonNativeModule: Module {
 
     AsyncFunction("setPushToken") { (token: String, platform: String) -> Bool in
       try await rust { try await self.started().setPushToken(token: token, platform: platform) }
+    }
+
+    AsyncFunction("relay") { () -> [String: Any] in
+      Records.relay(try await self.started().relay())
+    }
+
+    AsyncFunction("relaySignIn") { () -> [String: Any] in
+      Records.signIn(try await rust { try await self.started().relaySignIn() })
+    }
+
+    AsyncFunction("relayWaitSignIn") { () -> Bool in
+      try await self.started().relayWaitSignIn()
+    }
+
+    AsyncFunction("relayCancelSignIn") {
+      try await self.started().relayCancelSignIn()
+    }
+
+    AsyncFunction("relaySignOut") { () -> [String: Any] in
+      Records.relay(try await rust { try await self.started().relaySignOut() })
+    }
+
+    AsyncFunction("relaySetOn") { (on: Bool) -> [String: Any] in
+      Records.relay(try await rust { try await self.started().relaySetOn(on: on) })
+    }
+
+    AsyncFunction("relayAccount") { () -> [String: Any] in
+      Records.account(try await rust { try await self.started().relayAccount() })
     }
 
     Function("wake") {

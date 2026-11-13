@@ -10,6 +10,7 @@ import type {
 } from "../../modules/kriyon-native/index.ts";
 import { needsYou, standingMeta, usePhone } from "../state/phone.ts";
 import { colors, ui } from "../ui.ts";
+import { RelaySection } from "./RelaySection.tsx";
 
 function SessionRow({
   host,
@@ -99,6 +100,7 @@ export function HomeScreen() {
           </View>
         );
       })}
+      <RelaySection />
       {push ? (
         <Text style={[ui.hint, { marginTop: 16 }]}>Alerts: {push}</Text>
       ) : null}

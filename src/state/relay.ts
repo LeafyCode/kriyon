@@ -13,6 +13,7 @@ import {
   relayView,
 } from "../ipc/bridge.ts";
 import { failureMessage } from "../ipc/failures.ts";
+import { subscriptionWords } from "../remote/relayWords.ts";
 import { CONSENT_LINES } from "./remote.ts";
 
 /**
@@ -118,34 +119,13 @@ export function consentLines(relayOn: boolean): readonly string[] {
 export const SAME_ACCOUNT_NOTE =
   "Sign in with the same account on both computers: our relay only joins devices of one account.";
 
-function day(iso: string): string {
-  const at = new Date(iso);
-  return Number.isNaN(at.getTime()) ? iso : at.toLocaleDateString();
-}
-
 /** The subscription's state, in plain words. */
 export function subscriptionLine(account: RelayAccount): string {
-  if (account.blocked) {
-    return "Relay access is suspended for this account.";
-  }
-  const { subscription } = account;
-  if (!subscription) {
-    return "No subscription yet.";
-  }
-  switch (subscription.state) {
-    case "pending":
-      return "A first payment is waiting to be confirmed.";
-    case "active":
-      return `Active, renews automatically. Paid until ${day(subscription.paidUntil)}.`;
-    case "past_due":
-      return "A renewal payment was declined. It is tried again for a few days.";
-    case "canceled":
-      return `Canceled. Paid time until ${day(subscription.paidUntil)} still counts.`;
-    case "expired":
-      return "Expired: the renewal failed.";
-    default:
-      return "";
-  }
+  return subscriptionWords({
+    blocked: account.blocked,
+    paidUntil: account.subscription?.paidUntil ?? null,
+    state: account.subscription?.state ?? null,
+  });
 }
 
 /** The website button: subscribe while there is nothing to manage. */

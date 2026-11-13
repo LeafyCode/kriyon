@@ -26,6 +26,7 @@ bindgen = ["uniffi/cli"]
 iroh = { version = "1.4.1", default-features = false, features = ["tls-ring"] }
 kriyon-remote = { path = "../kriyon-remote" }
 kriyon-remote-link = { path = "../kriyon-remote-link" }
+kriyon-relay-client = { path = "../kriyon-relay-client" }
 # Held at 0.2.189: from 0.2.190 libc keeps the routing constants iroh's
 # netwatch uses (and netdev's in6_ifreq) to macOS, so iroh no longer builds
 # for iOS. One libc for the workspace, so the desktop uses it too. Lift once
@@ -42,6 +43,7 @@ tokio = { version = "1", default-features = false, features = ["macros", "rt-mul
 uniffi = "0.32.2"
 
 [dev-dependencies]
+kriyon-relay-client = { path = "../kriyon-relay-client", features = ["test-support"] }
 kriyon-core = { path = "../kriyon-core" }
 
 [lints.clippy]
