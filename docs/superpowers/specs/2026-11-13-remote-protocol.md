@@ -39,7 +39,9 @@ makes no push calls.
   addresses, an optional Tailscale address with the host's fixed port, and the
   relay URL when the person subscribes.
 - The host checks the peer's endpoint id at accept time, before it opens or
-  accepts any stream. Handshakes from unpaired ids are rate-limited.
+  accepts any stream. Handshakes from unpaired ids are rate-limited by source
+  address (the id is only known after the handshake), so during an attack from
+  a shared address a paired device behind it can be ignored for that minute.
 - One QUIC connection per device per host. Inside it, at most 16 concurrent
   bidirectional streams:
   - **Control stream** (first bidirectional stream): hello, heartbeats,
@@ -91,7 +93,9 @@ makes no push calls.
    exported keying material: label `EXPERIMENTAL kriyon pairing v1`, context
    `host_id || device_id || SHA-256(secret)`, 8 bytes read as a big-endian
    u64, mod 10^6, zero-padded.
-4. **The device shows the code; the person types it into the host.** Three
+4. The host answers the proof with `ProofAccepted` or `Refused`. **Only after
+   `ProofAccepted` does the device show the code; the person types it into the
+   host.** Three
    wrong tries burn the secret. If someone with a leaked QR connected first,
    the real phone shows no code and pairing fails safe.
 5. The host stores the device (endpoint id, name, role from step 1, paired at)
@@ -114,8 +118,8 @@ shows "Removed from this computer".
    the app's main loop so it proves the app is alive, not just the socket. A
    device with no heartbeat for 40 s shows "Disconnected, reconnecting" and
    turns typing off.
-4. Reconnect backs off to at most 30 s and retries at once on a network change
-   or when the app comes to the front. It stops only on `NotPaired`.
+4. Reconnect backs off from 1 s to at most 30 s. The app wakes it at once on a
+   network change or when it comes to the front. It stops only on `NotPaired`.
 5. **When a connection closes,** the host releases any typing control that
    device held and bumps the epoch. A reconnected device must send
    `TakeControl` again, so input buffered before the drop can never land.
