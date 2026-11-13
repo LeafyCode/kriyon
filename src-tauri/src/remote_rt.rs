@@ -38,10 +38,31 @@ pub struct HostSetup {
 pub enum PairingStatus {
     /// No pairing pending.
     Idle,
-    /// The QR code is up; no device has taken it yet.
-    Waiting { role: Role },
-    /// A device took it; the person should type its code.
-    CodeWanted { role: Role, device_name: String },
+    /// The QR code is up until `expires_at_ms`; no device has taken it yet.
+    Waiting { role: Role, expires_at_ms: i64 },
+    /// A device took it; the person should type its code before
+    /// `expires_at_ms`.
+    CodeWanted {
+        role: Role,
+        device_name: String,
+        expires_at_ms: i64,
+    },
+    /// Five minutes passed: start again with a new QR code.
+    Expired,
+    /// Three wrong codes: start again with a new QR code.
+    Burned,
+}
+
+/// Now, in ms since the epoch.
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+}
+
+/// How long a pairing's QR code is good, in ms (spec section 4).
+fn pairing_valid_for_ms() -> i64 {
+    i64::try_from(kriyon_remote::link_policy::PAIRING_VALID_FOR.as_millis()).unwrap_or(i64::MAX)
 }
 
 /// The host side of [Remote access], one per app.
@@ -62,6 +83,9 @@ struct Running {
 struct Pairing {
     role: Option<Role>,
     attempt: Option<PairAttempt>,
+    expires_at_ms: i64,
+    /// Three wrong codes ended it; shown until the person starts again.
+    burned: bool,
 }
 
 /// What typing a code did.
@@ -146,6 +170,8 @@ impl RemoteRuntime {
         *running.pairing.lock().await = Pairing {
             role: Some(role),
             attempt: None,
+            expires_at_ms: now_ms() + pairing_valid_for_ms(),
+            burned: false,
         };
         Ok(kriyon_remote_link::invite::invite(&running.host, secret))
     }
@@ -159,17 +185,35 @@ impl RemoteRuntime {
     }
 
     pub async fn pairing_status(&self) -> PairingStatus {
+        self.pairing_status_at(now_ms()).await
+    }
+
+    /// The pairing state as it stands at `now_ms`.
+    pub async fn pairing_status_at(&self, now_ms: i64) -> PairingStatus {
         let running = self.running.lock().await;
         let Some(running) = running.as_ref() else {
             return PairingStatus::Idle;
         };
         let pairing = running.pairing.lock().await;
-        match (pairing.role, &pairing.attempt) {
-            (None, _) => PairingStatus::Idle,
-            (Some(role), None) => PairingStatus::Waiting { role },
-            (Some(role), Some(attempt)) => PairingStatus::CodeWanted {
+        if pairing.burned {
+            return PairingStatus::Burned;
+        }
+        let Some(role) = pairing.role else {
+            return PairingStatus::Idle;
+        };
+        let expires_at_ms = pairing.expires_at_ms;
+        if now_ms >= expires_at_ms {
+            return PairingStatus::Expired;
+        }
+        match &pairing.attempt {
+            None => PairingStatus::Waiting {
+                role,
+                expires_at_ms,
+            },
+            Some(attempt) => PairingStatus::CodeWanted {
                 role,
                 device_name: attempt.name().to_string(),
+                expires_at_ms,
             },
         }
     }
@@ -209,7 +253,10 @@ impl RemoteRuntime {
                 CodeOutcome::Paired { device, name, role }
             }
             CodeCheck::Burned => {
-                *pairing = Pairing::default();
+                *pairing = Pairing {
+                    burned: true,
+                    ..Pairing::default()
+                };
                 CodeOutcome::Burned
             }
         })
@@ -361,12 +408,13 @@ mod tests {
                 .await
                 .expect("pairing")
                 .to_qr_text();
-            assert_eq!(
+            assert!(matches!(
                 rt.pairing_status().await,
                 PairingStatus::Waiting {
-                    role: Role::Controller
+                    role: Role::Controller,
+                    ..
                 }
-            );
+            ));
             let scanned = PairingInvite::from_qr_text(&qr).expect("reads");
             let phone = Device::bind(&LinkConfig {
                 bind: loopback(),
@@ -385,12 +433,14 @@ mod tests {
 
             // The person is asked for the code once the device took it.
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-            while rt.pairing_status().await
-                != (PairingStatus::CodeWanted {
+            while !matches!(
+                rt.pairing_status().await,
+                PairingStatus::CodeWanted {
                     role: Role::Controller,
-                    device_name: "Test phone".into(),
-                })
-            {
+                    ref device_name,
+                    ..
+                } if device_name == "Test phone"
+            ) {
                 assert!(std::time::Instant::now() < deadline, "no code asked for");
                 tokio::time::sleep(std::time::Duration::from_millis(20)).await;
             }
@@ -473,6 +523,99 @@ mod tests {
                 tokio::time::sleep(std::time::Duration::from_millis(20)).await;
             }
             assert_eq!(*gone.lock().expect("lock"), vec![phone.id()]);
+        });
+    }
+
+    #[test]
+    fn a_pairing_shows_its_deadline_and_expires_after_five_minutes() {
+        run(async {
+            let rt = RemoteRuntime::default();
+            let store = Arc::new(Store::default());
+            let names = Arc::new(StdMutex::new(Vec::new()));
+            rt.turn_on(setup(&store, &names)).await.expect("on");
+            let before = now_ms();
+            rt.start_pairing(Role::Viewer).await.expect("pairing");
+            let PairingStatus::Waiting { expires_at_ms, .. } = rt.pairing_status().await else {
+                panic!("waiting");
+            };
+            let five_min = 5 * 60 * 1000;
+            assert!((before + five_min..=now_ms() + five_min).contains(&expires_at_ms));
+            assert!(matches!(
+                rt.pairing_status_at(expires_at_ms - 1).await,
+                PairingStatus::Waiting { .. }
+            ));
+            assert_eq!(
+                rt.pairing_status_at(expires_at_ms).await,
+                PairingStatus::Expired
+            );
+            rt.stop_pairing().await;
+            assert_eq!(rt.pairing_status().await, PairingStatus::Idle);
+        });
+    }
+
+    #[test]
+    fn three_wrong_codes_leave_the_pairing_burned_until_the_person_starts_again() {
+        run(async {
+            let rt = Arc::new(RemoteRuntime::default());
+            let store = Arc::new(Store::default());
+            let names = Arc::new(StdMutex::new(Vec::new()));
+            rt.turn_on(setup(&store, &names)).await.expect("on");
+            let qr = rt
+                .start_pairing(Role::Viewer)
+                .await
+                .expect("pairing")
+                .to_qr_text();
+            let scanned = PairingInvite::from_qr_text(&qr).expect("reads");
+            let phone = Device::bind(&LinkConfig {
+                bind: loopback(),
+                ..LinkConfig::new([2; 32])
+            })
+            .await
+            .expect("binds");
+            let pairing = phone
+                .pair(
+                    host_addr(&scanned).expect("addr"),
+                    &scanned.secret,
+                    "Test phone",
+                )
+                .await
+                .expect("proof accepted");
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while !matches!(rt.pairing_status().await, PairingStatus::CodeWanted { .. }) {
+                assert!(std::time::Instant::now() < deadline, "no code asked for");
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+            let rt_for = Arc::clone(&rt);
+            let (outcomes, _answer) = tokio::join!(
+                async move {
+                    let mut outcomes = Vec::new();
+                    for wrong in ["000000", "000001", "000002"] {
+                        outcomes.push(
+                            rt_for
+                                .enter_code(wrong, "Test Mac", |_, _, _| -> bool {
+                                    panic!("nothing stored")
+                                })
+                                .await,
+                        );
+                    }
+                    outcomes
+                },
+                pairing.finish()
+            );
+            assert_eq!(
+                outcomes,
+                [
+                    Ok(CodeOutcome::Wrong { tries_left: 2 }),
+                    Ok(CodeOutcome::Wrong { tries_left: 1 }),
+                    Ok(CodeOutcome::Burned),
+                ]
+            );
+            assert_eq!(rt.pairing_status().await, PairingStatus::Burned);
+            rt.start_pairing(Role::Viewer).await.expect("again");
+            assert!(matches!(
+                rt.pairing_status().await,
+                PairingStatus::Waiting { .. }
+            ));
         });
     }
 

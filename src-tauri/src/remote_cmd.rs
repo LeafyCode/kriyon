@@ -84,9 +84,88 @@ pub fn check_device_name_text(name: &str) -> Result<(), String> {
         .map_err(|_| format!("a device name is 1 to {MAX_DEVICE_NAME} bytes of plain text"))
 }
 
+/// A QR code as a grid of modules, for the UI to draw.
+#[derive(Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QrGrid {
+    /// Modules per side.
+    pub size: usize,
+    /// `size * size` characters, row by row: `1` dark, `0` light.
+    pub dark: String,
+}
+
+/// The QR code for a pairing invite's text. Only invites are drawn, so the
+/// command can't be used to make arbitrary codes.
+///
+/// # Errors
+/// For text that isn't a pairing invite.
+pub fn qr_grid(text: &str) -> Result<QrGrid, String> {
+    kriyon_remote::pairing::PairingInvite::from_qr_text(text)
+        .map_err(|_| "not a pairing invite".to_string())?;
+    let code = qrcode::QrCode::with_error_correction_level(text, qrcode::EcLevel::M)
+        .map_err(|e| e.to_string())?;
+    let dark = code
+        .to_colors()
+        .into_iter()
+        .map(|color| {
+            if color == qrcode::Color::Dark {
+                '1'
+            } else {
+                '0'
+            }
+        })
+        .collect();
+    Ok(QrGrid {
+        size: code.width(),
+        dark,
+    })
+}
+
+/// The QR code to show for a pairing invite's text.
+///
+/// # Errors
+/// For text that isn't a pairing invite.
+#[allow(clippy::needless_pass_by_value)]
+#[tauri::command]
+pub fn remote_pairing_qr(text: String) -> Result<QrGrid, String> {
+    qr_grid(&text)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn invite_text() -> String {
+        kriyon_remote::pairing::PairingInvite {
+            host_id: [2; 32],
+            addrs: vec!["192.168.1.20:41641".into()],
+            relay_url: None,
+            secret: [7; 32],
+        }
+        .to_qr_text()
+    }
+
+    #[test]
+    fn an_invite_becomes_a_square_grid_of_modules() {
+        let grid = qr_grid(&invite_text()).expect("a code");
+        assert!(grid.size >= 21, "version 1 is 21 modules");
+        assert_eq!(grid.dark.len(), grid.size * grid.size);
+        assert!(grid.dark.bytes().all(|b| b == b'0' || b == b'1'));
+        // The top-left finder pattern: its outer ring is dark.
+        let at = |row: usize, col: usize| grid.dark.as_bytes()[row * grid.size + col];
+        for i in 0..7 {
+            assert_eq!(at(0, i), b'1');
+            assert_eq!(at(i, 0), b'1');
+            assert_eq!(at(6, i), b'1');
+        }
+        assert_eq!(at(1, 1), b'0');
+    }
+
+    #[test]
+    fn only_a_pairing_invite_is_drawn() {
+        assert!(qr_grid("https://example.com").is_err());
+        assert!(qr_grid("").is_err());
+    }
 
     #[test]
     fn a_device_id_is_sixty_four_lowercase_hex_digits() {
@@ -247,19 +326,41 @@ pub struct RemoteStatus {
 #[serde(rename_all = "camelCase", tag = "state")]
 pub enum PairingView {
     Idle,
-    Waiting { role: RoleArg },
-    CodeWanted { role: RoleArg, device_name: String },
+    Waiting {
+        role: RoleArg,
+        expires_at_ms: i64,
+    },
+    CodeWanted {
+        role: RoleArg,
+        device_name: String,
+        expires_at_ms: i64,
+    },
+    Expired,
+    Burned,
 }
 
 async fn status(rt: &crate::remote_rt::RemoteRuntime) -> RemoteStatus {
     use crate::remote_rt::PairingStatus;
     let pairing = match rt.pairing_status().await {
         PairingStatus::Idle => PairingView::Idle,
-        PairingStatus::Waiting { role } => PairingView::Waiting { role: role.into() },
-        PairingStatus::CodeWanted { role, device_name } => PairingView::CodeWanted {
+        PairingStatus::Waiting {
+            role,
+            expires_at_ms,
+        } => PairingView::Waiting {
+            role: role.into(),
+            expires_at_ms,
+        },
+        PairingStatus::CodeWanted {
+            role,
+            device_name,
+            expires_at_ms,
+        } => PairingView::CodeWanted {
             role: role.into(),
             device_name,
+            expires_at_ms,
         },
+        PairingStatus::Expired => PairingView::Expired,
+        PairingStatus::Burned => PairingView::Burned,
     };
     RemoteStatus {
         enabled: rt.is_on().await,

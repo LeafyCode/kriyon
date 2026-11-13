@@ -29,6 +29,7 @@ serde_json = "1"
 kriyon-core = { path = "../crates/kriyon-core" }
 kriyon-remote = { path = "../crates/kriyon-remote" }
 kriyon-remote-link = { path = "../crates/kriyon-remote-link" }
+qrcode = { version = "0.14.1", default-features = false }
 tokio = { version = "1", default-features = false, features = ["rt", "sync", "time"] }
 tauri-plugin-notification = "2"
 tauri-plugin-fs = "2"

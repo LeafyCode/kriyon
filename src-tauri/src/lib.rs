@@ -436,6 +436,7 @@ pub fn run() {
             remote_cmd::remote_status,
             remote_cmd::remote_set_enabled,
             remote_cmd::remote_start_pairing,
+            remote_cmd::remote_pairing_qr,
             remote_cmd::remote_stop_pairing,
             remote_cmd::remote_enter_code,
             remote_cmd::remote_devices,
