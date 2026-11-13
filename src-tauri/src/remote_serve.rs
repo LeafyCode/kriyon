@@ -20,7 +20,7 @@ use std::time::Instant;
 
 use kriyon_core::cli_dialog::DialogState;
 use kriyon_remote::authorize::{
-    authorize, Dialog, HostState, PendingWrite, ProjectFolder, SessionView, Stream,
+    authorize, Dialog, HostFacts, PendingWrite, ProjectFolder, SessionView, Stream,
 };
 use kriyon_remote::codec::{encode, Decoded};
 use kriyon_remote::control::{Change, Control};
@@ -238,7 +238,7 @@ struct Facts {
     folder: Option<(String, ProjectFolder)>,
 }
 
-impl HostState for Facts {
+impl HostFacts for Facts {
     fn role(&self, device: &EndpointId) -> Option<Role> {
         self.role.filter(|_| *device == self.device)
     }

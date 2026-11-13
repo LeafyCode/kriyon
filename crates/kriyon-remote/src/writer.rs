@@ -14,7 +14,7 @@
 use std::time::Instant;
 
 use crate::authorize::{
-    recheck_at_write, Dialog, HostState, PendingWrite, ProjectFolder, SessionView,
+    recheck_at_write, Dialog, HostFacts, PendingWrite, ProjectFolder, SessionView,
 };
 use crate::control::{Change, Control, HostIsTyping};
 use crate::message::{EndpointId, Holder, RefuseReason, Role};
@@ -187,7 +187,7 @@ struct OneSession<'a> {
     view: SessionView<'a>,
 }
 
-impl HostState for OneSession<'_> {
+impl HostFacts for OneSession<'_> {
     fn role(&self, device: &EndpointId) -> Option<Role> {
         (*device == self.device).then_some(self.role).flatten()
     }

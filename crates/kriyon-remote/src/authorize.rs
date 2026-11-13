@@ -128,7 +128,7 @@ fn viewable(cols: u16, rows: u16) -> bool {
 }
 
 /// What the host knows, looked up as the check needs it.
-pub trait HostState {
+pub trait HostFacts {
     /// The role of `device` if it is paired.
     fn role(&self, device: &EndpointId) -> Option<Role>;
     fn session(&self, id: &str) -> Option<SessionView<'_>>;
@@ -195,7 +195,7 @@ pub fn authorize(
     device: &EndpointId,
     stream: Stream<'_>,
     message: &Decoded<FromDevice>,
-    host: &impl HostState,
+    host: &impl HostFacts,
     now: Instant,
 ) -> Verdict {
     // Paired first, whatever the message: a removed device must learn it was
@@ -308,7 +308,7 @@ pub fn recheck_at_write(
     device: &EndpointId,
     session_id: &str,
     write: &PendingWrite,
-    host: &impl HostState,
+    host: &impl HostFacts,
 ) -> Verdict {
     if host.role(device).ok_or(RefuseReason::NotPaired)? != Role::Controller {
         return Err(RefuseReason::NotAllowed);
@@ -362,7 +362,7 @@ mod tests {
         screen: (u16, u16),
     }
 
-    impl HostState for Host {
+    impl HostFacts for Host {
         fn role(&self, device: &EndpointId) -> Option<Role> {
             self.devices.get(device).copied()
         }
