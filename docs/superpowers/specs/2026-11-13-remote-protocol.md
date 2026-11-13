@@ -183,6 +183,32 @@ removal or new dialog between the check and the write still wins.
 Refusals are answered with `Refused { reason }`, rate-limited, and logged on
 the host without the payload.
 
+**Rules the table implies:**
+
+- Session-stream messages (`Input`, `Compose`, `Resize`, `Resync`,
+  `RequestEntries`) carry no session id: the stream names it. `Open
+  { session_id }` is the first message on a new session stream. `authorize`
+  takes the stream (`Control` or `Session(id)`) as input.
+- A message on the wrong stream is refused `NotAllowed`.
+- A Viewer sending a Controller-only message gets `NotAllowed`; a Controller
+  that doesn't hold control gets `NotInControl`. A `TakeControl` that can't
+  take from the host yet (host typed less than 10 s ago) is `NotInControl` too.
+- A remote `Resize` must be 80..=1000 columns and 1..=1000 rows, else
+  `OutOfRange`. Never clamped.
+- `authorize` is pure. The host resolves the facts that need IO or other
+  modules first and passes them in: the project's folder status (Approved /
+  NotAllowed / NoSuchProject, from `kriyon_core::folder::check_folder`) and the
+  dialog state (open, generation).
+- An app below the host's minimum version gets `Refused { TooOld { min_minor } }`
+  and the connection closes.
+
+**Other messages:** host to device `StartResult { request_id, session_id }`
+and `SessionStatus { session_id, status, needs_you }`. On `kriyon/pair/1`:
+`PairRequest { device_name, proof }` (proof = the 32-byte HMAC of §4),
+`Paired { host_name }` and `Refused`; a device name over 64 bytes is refused
+`OutOfRange`. Message tags are fixed numbers, numbered separately for each
+direction.
+
 There are no file messages in version 1: a remote device can't read or
 write files except by typing in a terminal it controls.
 
