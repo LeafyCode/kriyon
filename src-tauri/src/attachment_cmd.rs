@@ -405,10 +405,9 @@ pub async fn submit_prompt(
                 // Through the session's writer, as the host typing.
                 let state = handle.state::<AppState>();
                 let engine = crate::commands::engine_of(&state, &id)?;
-                let took = state
+                state
                     .writers
                     .host_write(&id, &engine, key.text.as_bytes())?;
-                crate::remote_host_rt::host_took(&handle, &id, &took);
             }
             if key.wait_ms > 0 {
                 std::thread::sleep(Duration::from_millis(key.wait_ms));

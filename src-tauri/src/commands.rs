@@ -283,6 +283,9 @@ pub async fn create_session(
             }
         }
         crate::refresh_needs_you_badge(&exit_app);
+        // Devices watching it hear its stream end; a revived session is served
+        // afresh, and they open it again.
+        crate::remote_host_rt::detach(&exit_app, &exit_id);
         if let Ok(home) = crate::commands::resolve_home(&exit_app) {
             crate::activity_rt::note_session_exited(&exit_app, &home, &exit_id.0);
         }
@@ -394,11 +397,9 @@ pub async fn create_session(
             .map_err(|e| e.to_string())?;
         // The writer keeps the host's size, to give it back when a device
         // that resized the session lets go.
-        state.writers.host_resize(
-            &SessionId(id.clone()),
-            &engine,
-            (INITIAL_COLS, INITIAL_ROWS),
-        )?;
+        state
+            .writers
+            .note_host_size(&SessionId(id.clone()), (INITIAL_COLS, INITIAL_ROWS));
         register_session(&app, &state, SessionId(id), engine, None)?;
         served.keep();
         return Ok(true);
@@ -500,11 +501,9 @@ pub async fn create_session(
         .attach(INITIAL_COLS, INITIAL_ROWS)
         .map_err(|e| e.to_string())?;
     // The writer keeps the host's size (see the reattach path).
-    state.writers.host_resize(
-        &SessionId(id.clone()),
-        &engine,
-        (INITIAL_COLS, INITIAL_ROWS),
-    )?;
+    state
+        .writers
+        .note_host_size(&SessionId(id.clone()), (INITIAL_COLS, INITIAL_ROWS));
     register_session(&app, &state, SessionId(id), engine, zdotdir)?;
     served.keep();
 
@@ -575,7 +574,6 @@ pub fn seed_prompt(app: tauri::AppHandle, id: String, text: String) -> Result<St
 #[allow(clippy::needless_pass_by_value)]
 #[tauri::command]
 pub fn write_stdin(
-    app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
     request: tauri::ipc::Request<'_>,
 ) -> Result<(), String> {
@@ -590,9 +588,7 @@ pub fn write_stdin(
     let id = SessionId(id.to_owned());
     // Cloned out, so the write happens with the sessions lock released.
     let engine = engine_of(&state, &id)?;
-    let took = state.writers.host_write(&id, &engine, data)?;
-    crate::remote_host_rt::host_took(&app, &id, &took);
-    Ok(())
+    state.writers.host_write(&id, &engine, data).map(|_took| ())
 }
 
 /// The engine of session `id`, cloned out from under the sessions lock.

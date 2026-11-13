@@ -67,7 +67,8 @@ pub trait ServeHost: Send + Sync + 'static {
         write: &PendingWrite,
         bytes: &[u8],
     ) -> Result<bool, RefuseReason>;
-    /// A device's resize of session `id`, checked again likewise.
+    /// A device's resize of session `id`, checked again likewise: whether
+    /// the PTY took it.
     ///
     /// # Errors
     /// Why it was refused.
@@ -78,15 +79,17 @@ pub trait ServeHost: Send + Sync + 'static {
         role: Role,
         write: &PendingWrite,
         size: (u16, u16),
-    ) -> Result<(), RefuseReason>;
-    /// `device` takes [Typing control] of session `id`.
+    ) -> Result<bool, RefuseReason>;
+    /// `device` takes [Typing control] of session `id`. Every change of
+    /// control, this one included, is the host's to tell every device
+    /// ([`Serve::broadcast_control`]), whatever made it.
     ///
     /// # Errors
     /// The host typed in the last 10 s.
-    fn take(&self, id: &str, device: EndpointId) -> Result<Option<Change>, HostIsTyping>;
+    fn take(&self, id: &str, device: EndpointId) -> Result<(), HostIsTyping>;
     /// `device` went away: control of every session it held goes back to the
-    /// host.
-    fn release(&self, device: &EndpointId) -> Vec<(String, Change)>;
+    /// host, which tells every device. May block.
+    fn release(&self, device: &EndpointId);
 }
 
 /// What a daemon event changed that the session's gate must hear.
@@ -407,9 +410,8 @@ impl Serve {
         // before the drop can never land. Not if it is already back on a new
         // connection.
         if ours {
-            for (id, change) in self.0.host.release(&device) {
-                self.broadcast_control(&id, change);
-            }
+            let host = Arc::clone(&self.0.host);
+            let _ = tokio::task::spawn_blocking(move || host.release(&device)).await;
         }
     }
 
@@ -487,16 +489,11 @@ impl Serve {
             let facts = self.facts(device, role, named_session(None, &message), false);
             let verdict = authorize(&device, Stream::Control, &message, &facts, Instant::now())
                 .and_then(|()| match &message {
-                    Decoded::Message(FromDevice::TakeControl { session_id }) => {
-                        match self.0.host.take(session_id, device) {
-                            Ok(Some(change)) => {
-                                self.broadcast_control(session_id, change);
-                                Ok(())
-                            }
-                            Ok(None) => Ok(()),
-                            Err(HostIsTyping) => Err(RefuseReason::NotInControl),
-                        }
-                    }
+                    Decoded::Message(FromDevice::TakeControl { session_id }) => self
+                        .0
+                        .host
+                        .take(session_id, device)
+                        .map_err(|HostIsTyping| RefuseReason::NotInControl),
                     // Remote starts wait for `create_session` to run without
                     // the webview (plan Step C).
                     Decoded::Message(FromDevice::StartSession { .. }) => {
@@ -633,15 +630,34 @@ impl Serve {
                 reason: RefuseReason::NotAllowed,
             });
         };
-        let host = &self.0.host;
+        // The writer's lock and the PTY write can wait: off the async runtime.
+        let call = |bytes: Vec<u8>, size: Option<(u16, u16)>| {
+            let host = Arc::clone(&self.0.host);
+            let id = id.to_string();
+            async move {
+                tokio::task::spawn_blocking(move || match size {
+                    Some(size) => host.device_resize(&id, &device, role, &write, size),
+                    None => host.device_input(&id, &device, role, &write, &bytes),
+                })
+                .await
+                .unwrap_or(Err(RefuseReason::NotAllowed))
+            }
+        };
         let outcome = match message {
-            FromDevice::Input { bytes, .. } => host.device_input(id, &device, role, &write, bytes),
+            FromDevice::Input { bytes, .. } => call(bytes.clone(), None).await,
             FromDevice::Compose { text, .. } => {
                 // The same keys the desktop's composer sends, with its waits.
+                // A key that didn't reach the PTY ends it: what follows (the
+                // Enter) must not go in without it. A compose cut off partway
+                // leaves the keys before the cut typed.
                 let mut written = true;
                 for key in kriyon_core::attachment::keystrokes(text, &[]) {
-                    match host.device_input(id, &device, role, &write, key.text.as_bytes()) {
-                        Ok(this) => written &= this,
+                    match call(key.text.into_bytes(), None).await {
+                        Ok(true) => {}
+                        Ok(false) => {
+                            written = false;
+                            break;
+                        }
                         Err(reason) => return Some(ToDevice::Refused { reason }),
                     }
                     if key.wait_ms > 0 {
@@ -650,12 +666,8 @@ impl Serve {
                 }
                 Ok(written)
             }
-            FromDevice::Resize { cols, rows, .. } => {
-                return host
-                    .device_resize(id, &device, role, &write, (*cols, *rows))
-                    .err()
-                    .map(|reason| ToDevice::Refused { reason });
-            }
+            // Acked like typing: whether the PTY took the size.
+            FromDevice::Resize { cols, rows, .. } => call(Vec::new(), Some((*cols, *rows))).await,
             _ => Err(RefuseReason::NotAllowed),
         };
         Some(match outcome {
@@ -760,6 +772,17 @@ mod tests {
         typed: Mutex<Vec<u8>>,
         onlooked: Mutex<HashSet<String>>,
         title: Mutex<String>,
+        /// Told every change of control, as the app's writers tell it.
+        serve: Mutex<Option<Serve>>,
+    }
+
+    impl FakeHost {
+        fn tell(&self, change: Option<Change>) {
+            let serve = self.serve.lock().clone();
+            if let (Some(serve), Some(change)) = (serve, change) {
+                serve.broadcast_control("s", change);
+            }
+        }
     }
 
     impl Default for FakeHost {
@@ -772,6 +795,7 @@ mod tests {
                 typed: Mutex::default(),
                 onlooked: Mutex::default(),
                 title: Mutex::default(),
+                serve: Mutex::default(),
             }
         }
     }
@@ -831,22 +855,20 @@ mod tests {
             role: Role,
             write: &PendingWrite,
             size: (u16, u16),
-        ) -> Result<(), RefuseReason> {
+        ) -> Result<bool, RefuseReason> {
             self.gate
                 .lock()
-                .device_write(device, Some(role), write, Some(size))
+                .device_write(device, Some(role), write, Some(size))?;
+            Ok(true)
         }
-        fn take(&self, _id: &str, device: EndpointId) -> Result<Option<Change>, HostIsTyping> {
-            self.gate.lock().take(device, Instant::now())
+        fn take(&self, _id: &str, device: EndpointId) -> Result<(), HostIsTyping> {
+            let change = self.gate.lock().take(device, Instant::now())?;
+            self.tell(change);
+            Ok(())
         }
-        fn release(&self, device: &EndpointId) -> Vec<(String, Change)> {
-            self.gate
-                .lock()
-                .release(*device)
-                .change
-                .map(|change| ("s".to_string(), change))
-                .into_iter()
-                .collect()
+        fn release(&self, device: &EndpointId) {
+            let change = self.gate.lock().release(*device).change;
+            self.tell(change);
         }
         fn set_onlooked(&self, id: &str, onlooked: bool) {
             let mut set = self.onlooked.lock();
@@ -886,6 +908,7 @@ mod tests {
             .expect("host"),
         );
         let serve = Serve::new(Arc::clone(&fake) as Arc<dyn ServeHost>);
+        *fake.serve.lock() = Some(serve.clone());
         let asks = Arc::new(Mutex::new(Vec::new()));
         let asked = Arc::clone(&asks);
         serve.attach("s", move |id| asked.lock().push(id), || (80, 24));
@@ -1291,10 +1314,9 @@ mod tests {
             let world = world().await;
             let (_a, link, mut cw, mut cr) = device(&world, 3, Role::Controller).await;
             let (mut sw, mut sr, epoch) = in_control(&world, &link, &mut cw, &mut cr).await;
+            // The person types at the host: the app's writer tells everyone.
             let took = world.fake.gate.lock().host_input(Instant::now());
-            world
-                .serve
-                .broadcast_control("s", took.change.expect("the host took it"));
+            world.fake.tell(took.change);
             assert!(matches!(
                 next(&mut cr).await,
                 ToDevice::Control {

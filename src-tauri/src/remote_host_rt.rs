@@ -4,7 +4,7 @@
 use kriyon_core::cli_dialog::dialog_showing;
 use kriyon_core::session::SessionId;
 use kriyon_remote::authorize::{Dialog, PendingWrite};
-use kriyon_remote::control::{Change, HostIsTyping};
+use kriyon_remote::control::HostIsTyping;
 use kriyon_remote::message::{EndpointId, RefuseReason, Role, SessionInfo};
 use tauri::Manager as _;
 
@@ -135,18 +135,6 @@ pub fn on_event(app: &tauri::AppHandle, id: &SessionId, event: DaemonEvent<'_>) 
     }
 }
 
-/// The person typed at the host into session `id`: if that took typing
-/// control back from a device, every device hears it.
-pub fn host_took<R: tauri::Runtime>(
-    app: &tauri::AppHandle<R>,
-    id: &SessionId,
-    took: &kriyon_remote::writer::HostTook,
-) {
-    if let (Some(change), Some(serve)) = (took.change, app.try_state::<Serve>()) {
-        serve.broadcast_control(&id.0, change);
-    }
-}
-
 /// Stop serving session `id`: it closed.
 pub fn detach(app: &tauri::AppHandle, id: &SessionId) {
     if let Some(serve) = app.try_state::<Serve>() {
@@ -223,7 +211,7 @@ impl ServeHost for AppServeHost {
         role: Role,
         write: &PendingWrite,
         size: (u16, u16),
-    ) -> Result<(), RefuseReason> {
+    ) -> Result<bool, RefuseReason> {
         let id = SessionId(id.to_string());
         let engine = self.engine(&id).ok_or(RefuseReason::NoSuchSession)?;
         self.0.state::<AppState>().writers.device_resize(
@@ -236,15 +224,20 @@ impl ServeHost for AppServeHost {
         )
     }
 
-    fn take(&self, id: &str, device: EndpointId) -> Result<Option<Change>, HostIsTyping> {
-        self.0.state::<AppState>().writers.take(
-            &SessionId(id.to_string()),
-            device,
-            std::time::Instant::now(),
-        )
+    fn take(&self, id: &str, device: EndpointId) -> Result<(), HostIsTyping> {
+        // The writers tell every device (their change hook).
+        self.0
+            .state::<AppState>()
+            .writers
+            .take(
+                &SessionId(id.to_string()),
+                device,
+                std::time::Instant::now(),
+            )
+            .map(|_| ())
     }
 
-    fn release(&self, device: &EndpointId) -> Vec<(String, Change)> {
+    fn release(&self, device: &EndpointId) {
         let state = self.0.state::<AppState>();
         let engines: Vec<(
             SessionId,
@@ -255,12 +248,8 @@ impl ServeHost for AppServeHost {
             .iter()
             .map(|(id, session)| (id.clone(), std::sync::Arc::clone(&session.engine)))
             .collect();
-        state
-            .writers
-            .release_device(device, &engines)
-            .into_iter()
-            .filter_map(|(id, took)| Some((id.0, took.change?)))
-            .collect()
+        // The writers tell every device (their change hook).
+        let _ = state.writers.release_device(device, &engines);
     }
 
     fn set_onlooked(&self, id: &str, onlooked: bool) {

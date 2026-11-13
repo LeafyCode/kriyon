@@ -29,7 +29,12 @@ pub struct Writers {
     /// Random per app start, so a control epoch never repeats across starts.
     host_boot_id: u64,
     gates: Mutex<HashMap<SessionId, Arc<Mutex<SessionGate>>>>,
+    /// Told every change of [Typing control] (see [`Writers::on_change`]).
+    on_change: Mutex<Option<OnChange>>,
 }
+
+/// What hears a change of [Typing control].
+type OnChange = Arc<dyn Fn(&SessionId, Change) + Send + Sync>;
 
 /// One session's gate as the host's one check sees it, copied out from under
 /// its lock.
@@ -51,6 +56,7 @@ impl Default for Writers {
         Self {
             host_boot_id: u64::from_le_bytes(boot),
             gates: Mutex::new(HashMap::new()),
+            on_change: Mutex::new(None),
         }
     }
 }
@@ -99,6 +105,7 @@ impl Writers {
     }
 
     /// A device's resize of session `id`, checked again like its typing.
+    /// `Ok(resized)` says whether the PTY took it.
     ///
     /// # Errors
     /// Why it was refused; nothing is resized.
@@ -110,13 +117,17 @@ impl Writers {
         role: Option<Role>,
         write: &PendingWrite,
         size: (u16, u16),
-    ) -> Result<(), RefuseReason> {
+    ) -> Result<bool, RefuseReason> {
         let gate = self.gate(id);
         let mut gate = gate.lock();
+        // Checked first, and the size made the session's only once the PTY
+        // took it, all under the one lock.
+        gate.device_write(device, role, write, None)?;
+        if engine.resize(size.0, size.1).is_err() {
+            return Ok(false);
+        }
         gate.device_write(device, role, write, Some(size))?;
-        // Checked and the session's size now; a daemon that's gone has none.
-        let _ = engine.resize(size.0, size.1);
-        Ok(())
+        Ok(true)
     }
 
     /// `device` takes [Typing control] of session `id`.
@@ -129,7 +140,38 @@ impl Writers {
         device: EndpointId,
         now: Instant,
     ) -> Result<Option<Change>, HostIsTyping> {
-        self.gate(id).lock().take(device, now)
+        // Only a live session's gate: one closed meanwhile isn't made again.
+        let Some(gate) = self.gates.lock().get(id).cloned() else {
+            return Ok(None);
+        };
+        let change = gate.lock().take(device, now)?;
+        self.tell(id, change);
+        Ok(change)
+    }
+
+    /// Call `hook` on every change of [Typing control] these writers make,
+    /// so every device hears it: the host typing, a device taking control,
+    /// a device let go. Set once at app start.
+    pub fn on_change(&self, hook: impl Fn(&SessionId, Change) + Send + Sync + 'static) {
+        *self.on_change.lock() = Some(Arc::new(hook));
+    }
+
+    /// Tell the hook about `change`, with no gate lock held.
+    fn tell(&self, id: &SessionId, change: Option<Change>) {
+        let Some(change) = change else {
+            return;
+        };
+        let hook = self.on_change.lock().clone();
+        if let Some(hook) = hook {
+            hook(id, change);
+        }
+    }
+
+    /// Record the host's own size for session `id` (its window's), to give
+    /// back when a device that resized lets go. Sends nothing: the attach
+    /// already sized the PTY.
+    pub fn note_host_size(&self, id: &SessionId, size: (u16, u16)) {
+        let _ = self.gate(id).lock().host_resize(size);
     }
 
     /// The daemon named session `id`'s [Session run].
@@ -181,7 +223,11 @@ impl Writers {
                 eprintln!("kriyon: couldn't give the session back its size: {e}");
             }
         }
-        engine.write_stdin(bytes).map_err(|e| e.to_string())?;
+        let written = engine.write_stdin(bytes).map_err(|e| e.to_string());
+        drop(gate);
+        // Told even when the write failed: control came back all the same.
+        self.tell(id, took.change);
+        written?;
         Ok(took)
     }
 
@@ -225,7 +271,9 @@ impl Writers {
                 // Best effort: a session whose daemon is gone has no size.
                 let _ = engine.resize(cols, rows);
             }
+            drop(gate);
             if took.change.is_some() {
+                self.tell(id, took.change);
                 changed.push((id.clone(), took));
             }
         }
@@ -309,6 +357,49 @@ mod tests {
         let n = daemon.read(&mut buf).expect("the bytes reached the daemon");
         assert!(buf[..n].ends_with(b"ok"));
     }
+    #[test]
+    fn every_change_of_control_is_told_to_the_hook() {
+        let writers = Writers::default();
+        let heard = Arc::new(Mutex::new(Vec::new()));
+        let hook = Arc::clone(&heard);
+        writers.on_change(move |id, change| hook.lock().push((id.0.clone(), change.holder)));
+        let id = SessionId("s".into());
+        let (engine, _daemon) = engine();
+        writers.set_run(&id, 1);
+        writers
+            .take(
+                &id,
+                PHONE,
+                Instant::now() + std::time::Duration::from_secs(60),
+            )
+            .expect("taken");
+        writers.host_write(&id, &engine, b"x").expect("typed");
+        assert_eq!(
+            heard.lock().as_slice(),
+            [
+                ("s".to_string(), Holder::Device(PHONE)),
+                ("s".to_string(), Holder::Host)
+            ]
+        );
+    }
+
+    #[test]
+    fn taking_a_session_that_is_gone_makes_nothing() {
+        let writers = Writers::default();
+        let id = SessionId("gone".into());
+        assert_eq!(writers.take(&id, PHONE, Instant::now()).ok(), Some(None));
+        assert!(!writers.has_gate(&id));
+    }
+
+    #[test]
+    fn noting_the_hosts_size_sends_nothing() {
+        let writers = Writers::default();
+        let id = SessionId("s".into());
+        writers.note_host_size(&id, (100, 30));
+        writers.set_run(&id, 1);
+        assert_eq!(writers.facts(&id).expect("facts").size, (100, 30));
+    }
+
     #[test]
     fn a_session_has_facts_for_the_check_once_its_run_is_known() {
         let writers = Writers::default();

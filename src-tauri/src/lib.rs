@@ -376,6 +376,12 @@ pub fn run() {
                 crate::remote_host_rt::AppServeHost(app.handle().clone()),
             ));
             app.manage(serve.clone());
+            // Every change of typing control the session writers make (the
+            // host typing, a device taking or letting go) reaches every device.
+            let teller = serve.clone();
+            app.state::<AppState>()
+                .writers
+                .on_change(move |id, change| teller.broadcast_control(&id.0, change));
             app.state::<crate::remote_rt::RemoteRuntime>()
                 .serve_with(serve);
             // Remote access comes back up only if the person left it on.
