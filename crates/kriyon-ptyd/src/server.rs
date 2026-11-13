@@ -13,9 +13,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use kriyon_core::cli_dialog::{
-    dialog_on_screen, look_due, DialogState, DialogWatch, HINT_ROWS, RULE_GLYPH,
-};
+use kriyon_core::cli_dialog::{look_due, DialogState, DialogWatch, ScreenRows};
 use kriyon_core::lease::DetachedLease;
 use kriyon_core::output_history::OutputHistory;
 use kriyon_core::session::{check_screen_size, EngineError, SessionEngine, SessionId, SpawnSpec};
@@ -119,59 +117,48 @@ fn row_text(screen: &vt100::Screen, row: u16) -> String {
         .collect()
 }
 
-/// How many rows, ending at its key hint, a dialog's fingerprint covers when
-/// no pane rule marks where it starts.
-const DIALOG_ROWS: u16 = 15;
+/// The emulator's screen as [`kriyon_core::cli_dialog::dialog_look`] reads it.
+struct VtRows<'a>(&'a vt100::Screen);
 
-/// Whether `screen` shows a [CLI dialog], and a fingerprint of it while it does.
-///
-/// Runs with the client lock held, so it reads only the rows that can decide
-/// (see [`dialog_on_screen`]): those whose first cell is the pane rule's glyph,
-/// found one cell per row, and the last few non-blank rows. While a dialog
-/// shows, the fingerprint covers only the dialog (from its pane rule, or the
-/// [`DIALOG_ROWS`] rows ending at its hint), colours included, so a timer above
-/// it doesn't count as a change and a selection shown only by colour does.
-fn dialog_look(screen: &vt100::Screen) -> (bool, u64) {
-    let (rows, cols) = screen.size();
-    let rule = RULE_GLYPH.to_string();
-    let rule_rows: Vec<u16> = (0..rows)
-        .filter(|row| {
-            screen
-                .cell(*row, 0)
-                .is_some_and(|cell| cell.contents() == rule)
-        })
-        .collect();
-    let filled = |row: &u16| {
+impl ScreenRows for VtRows<'_> {
+    fn size(&self) -> (u16, u16) {
+        self.0.size()
+    }
+
+    fn starts_with(&self, row: u16, glyph: char) -> bool {
+        self.0
+            .cell(row, 0)
+            .is_some_and(|cell| cell.contents().chars().eq(std::iter::once(glyph)))
+    }
+
+    fn filled(&self, row: u16) -> bool {
+        let (_, cols) = self.0.size();
         (0..cols).any(|col| {
-            screen
-                .cell(*row, col)
+            self.0
+                .cell(row, col)
                 .is_some_and(|cell| !cell.contents().trim().is_empty())
         })
-    };
-    let mut bottom: Vec<u16> = (0..rows).rev().filter(filled).take(HINT_ROWS).collect();
-    bottom.reverse();
-    let deciding: Vec<String> = rule_rows
-        .iter()
-        .chain(&bottom)
-        .map(|row| row_text(screen, *row))
-        .collect();
-    if !dialog_on_screen(&deciding) {
-        return (false, 0);
     }
-    let last = bottom.last().copied().unwrap_or(0);
-    let first = rule_rows
-        .first()
-        .copied()
-        .unwrap_or_else(|| last.saturating_sub(DIALOG_ROWS - 1));
-    let mut hasher = std::hash::DefaultHasher::new();
-    for row in screen
-        .rows_formatted(0, cols)
-        .skip(usize::from(first))
-        .take(usize::from(last.max(first) - first) + 1)
-    {
-        std::hash::Hash::hash(&row, &mut hasher);
+
+    fn text(&self, row: u16) -> String {
+        row_text(self.0, row)
     }
-    (true, std::hash::Hasher::finish(&hasher))
+
+    fn formatted(&self, first: u16, count: u16) -> Vec<Vec<u8>> {
+        let (_, cols) = self.0.size();
+        self.0
+            .rows_formatted(0, cols)
+            .skip(usize::from(first))
+            .take(usize::from(count))
+            .collect()
+    }
+}
+
+/// Whether `screen` shows a [CLI dialog], and a fingerprint of it while it
+/// does ([`kriyon_core::cli_dialog::dialog_look`]). Runs with the client lock
+/// held.
+fn dialog_look(screen: &vt100::Screen) -> (bool, u64) {
+    kriyon_core::cli_dialog::dialog_look(&VtRows(screen))
 }
 
 /// A random number: where a daemon's [Dialog generation]s start, so a restart

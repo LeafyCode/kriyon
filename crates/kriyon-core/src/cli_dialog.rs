@@ -135,9 +135,132 @@ impl DialogWatch {
     }
 }
 
+/// How many rows, ending at its key hint, a dialog's fingerprint covers when
+/// no pane rule marks where it starts.
+pub const DIALOG_ROWS: u16 = 15;
+
+/// A terminal screen, as [`dialog_look`] reads it: the daemon's emulator
+/// implements it.
+pub trait ScreenRows {
+    /// Rows, then columns.
+    fn size(&self) -> (u16, u16);
+    /// Whether `row`'s first cell is `glyph`.
+    fn starts_with(&self, row: u16, glyph: char) -> bool;
+    /// Whether `row` has a cell that isn't blank.
+    fn filled(&self, row: u16) -> bool;
+    /// `row`'s text, as the desktop's terminal reads it.
+    fn text(&self, row: u16) -> String;
+    /// `count` rows from `first`, with their colours and attributes, as the
+    /// terminal would draw them.
+    fn formatted(&self, first: u16, count: u16) -> Vec<Vec<u8>>;
+}
+
+/// Whether `screen` shows a [CLI dialog], and a fingerprint of it while it
+/// does.
+///
+/// It reads only the rows that can decide (see [`dialog_on_screen`]): those
+/// that start with the pane rule's glyph, and the last few non-blank rows, as
+/// the daemon runs it with its client lock held. While a dialog shows, the
+/// fingerprint covers only the dialog (from its pane rule, or the
+/// [`DIALOG_ROWS`] rows ending at its hint), colours included, so a timer
+/// above it doesn't count as a change and a selection shown only by colour
+/// does.
+pub fn dialog_look(screen: &impl ScreenRows) -> (bool, u64) {
+    let (rows, _) = screen.size();
+    let rule_rows: Vec<u16> = (0..rows)
+        .filter(|row| screen.starts_with(*row, RULE_GLYPH))
+        .collect();
+    let mut bottom: Vec<u16> = (0..rows)
+        .rev()
+        .filter(|row| screen.filled(*row))
+        .take(HINT_ROWS)
+        .collect();
+    bottom.reverse();
+    let deciding: Vec<String> = rule_rows
+        .iter()
+        .chain(&bottom)
+        .map(|row| screen.text(*row))
+        .collect();
+    if !dialog_on_screen(&deciding) {
+        return (false, 0);
+    }
+    let last = bottom.last().copied().unwrap_or(0);
+    let first = rule_rows
+        .first()
+        .copied()
+        .unwrap_or_else(|| last.saturating_sub(DIALOG_ROWS - 1));
+    let mut hasher = std::hash::DefaultHasher::new();
+    for row in screen.formatted(first, last.max(first) - first + 1) {
+        std::hash::Hash::hash(&row, &mut hasher);
+    }
+    (true, std::hash::Hasher::finish(&hasher))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A screen as plain rows, its "colours" a per-row mark.
+    struct Plain(Vec<String>, Vec<u8>);
+
+    impl ScreenRows for Plain {
+        fn size(&self) -> (u16, u16) {
+            (u16::try_from(self.0.len()).expect("small"), 80)
+        }
+        fn starts_with(&self, row: u16, glyph: char) -> bool {
+            self.0[usize::from(row)].starts_with(glyph)
+        }
+        fn filled(&self, row: u16) -> bool {
+            !self.0[usize::from(row)].trim().is_empty()
+        }
+        fn text(&self, row: u16) -> String {
+            self.0[usize::from(row)].clone()
+        }
+        fn formatted(&self, first: u16, count: u16) -> Vec<Vec<u8>> {
+            (first..first + count)
+                .map(|row| {
+                    let mut bytes = self.0[usize::from(row)].clone().into_bytes();
+                    bytes.push(self.1[usize::from(row)]);
+                    bytes
+                })
+                .collect()
+        }
+    }
+
+    fn plain(rows: &[&str]) -> Plain {
+        Plain(
+            rows.iter().map(|row| (*row).to_string()).collect(),
+            vec![0; rows.len()],
+        )
+    }
+
+    #[test]
+    fn a_dialog_is_seen_and_fingerprinted_without_what_is_above_it() {
+        let mut rows = vec!["\u{273b} Working 1s"];
+        rows.extend(std::iter::repeat_n("", 20));
+        rows.extend([
+            "Pick one",
+            "> Yes",
+            "  No",
+            "Enter to confirm · Esc to cancel",
+        ]);
+        let (open, first) = dialog_look(&plain(&rows));
+        assert!(open);
+        rows[0] = "\u{273b} Working 2s";
+        assert_eq!(
+            dialog_look(&plain(&rows)).1,
+            first,
+            "a timer above doesn't count"
+        );
+        let mut coloured = plain(&rows);
+        coloured.1[22] = 1;
+        assert_ne!(
+            dialog_look(&coloured).1,
+            first,
+            "a selection shown by colour does"
+        );
+        assert_eq!(dialog_look(&plain(&["$ ls", "file"])), (false, 0));
+    }
 
     #[derive(serde::Deserialize)]
     struct Case {
