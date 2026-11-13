@@ -658,13 +658,14 @@ impl Store {
     /// Returns [`StoreError::Sqlite`] if a statement fails.
     pub fn remove_paired_device(&self, endpoint_id: &[u8; 32]) -> Result<bool, StoreError> {
         let id = hex(endpoint_id);
-        self.conn
-            .execute("DELETE FROM remote_starts WHERE device_id = ?1", [&id])?;
-        self.conn
-            .execute("DELETE FROM sealed_push_tokens WHERE device_id = ?1", [&id])?;
-        let removed = self
-            .conn
-            .execute("DELETE FROM paired_devices WHERE endpoint_id = ?1", [&id])?;
+        // One transaction: a device is never left half removed, its token or
+        // starts kept with no device, or the device kept without them.
+        let removing = self.conn.unchecked_transaction()?;
+        removing.execute("DELETE FROM remote_starts WHERE device_id = ?1", [&id])?;
+        removing.execute("DELETE FROM sealed_push_tokens WHERE device_id = ?1", [&id])?;
+        let removed =
+            removing.execute("DELETE FROM paired_devices WHERE endpoint_id = ?1", [&id])?;
+        removing.commit()?;
         Ok(removed > 0)
     }
 

@@ -149,7 +149,17 @@ impl ServeHost for FakeHost {
             .device_write(device, Some(role), write, Some(size))?;
         Ok(true)
     }
-    fn take(&self, _id: &str, device: EndpointId) -> Result<(), RefuseReason> {
+    fn role_now(&self, device: &EndpointId, connected: Role) -> Option<Role> {
+        // Removed from the paired map: not paired; demoted there: at most that.
+        let paired = *self.paired.lock().get(device)?;
+        Some(if paired == Role::Viewer || connected == Role::Viewer {
+            Role::Viewer
+        } else {
+            Role::Controller
+        })
+    }
+
+    fn take(&self, _id: &str, device: EndpointId, _role: Role) -> Result<(), RefuseReason> {
         let change = self
             .gate
             .lock()

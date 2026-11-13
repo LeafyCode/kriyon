@@ -111,7 +111,12 @@ pub trait ServeHost: Send + Sync + 'static {
     /// # Errors
     /// `NotInControl` while the host typed in the last 10 s; `NoSuchSession`
     /// for one that closed.
-    fn take(&self, id: &str, device: EndpointId) -> Result<(), RefuseReason>;
+    fn take(&self, id: &str, device: EndpointId, role: Role) -> Result<(), RefuseReason>;
+    /// `device`'s role now: the one its connection was made with, never
+    /// more than the person has left it since (removed: `None`). Read by
+    /// every check, so a removal or demotion counts at once, before its
+    /// connection closes.
+    fn role_now(&self, device: &EndpointId, connected: Role) -> Option<Role>;
     /// `device` went away: control of every session it held goes back to the
     /// host, which tells every device. May block.
     fn release(&self, device: &EndpointId);
@@ -451,7 +456,9 @@ impl Serve {
     /// stream that is being opened).
     fn facts(&self, device: EndpointId, role: Role, session: Option<&str>, hello: bool) -> Facts {
         let paired = hello || self.0.controls.lock().contains_key(&device);
-        let role = paired.then_some(role);
+        let role = paired
+            .then_some(role)
+            .and_then(|role| self.0.host.role_now(&device, role));
         let live = session.and_then(|id| Some((id.to_string(), self.0.host.session(id)?)));
         Facts {
             device,
@@ -617,7 +624,7 @@ impl Serve {
             let verdict = authorize(&device, Stream::Control, &message, &facts, Instant::now())
                 .and_then(|()| match &message {
                     Decoded::Message(FromDevice::TakeControl { session_id }) => {
-                        self.0.host.take(session_id, device)
+                        self.0.host.take(session_id, device, role)
                     }
                     Decoded::Message(FromDevice::PushToken { key_id, sealed }) => {
                         self.0.host.set_push_token(&device, *key_id, sealed.clone());
@@ -1559,6 +1566,54 @@ mod tests {
             assert_ne!(newer, epoch, "a takeover bumps the epoch");
             assert!(matches!(holder, kriyon_remote::message::Holder::Device(_)));
             sw.send(&typing(epoch, 0, b"late")).await.expect("input");
+            assert!(matches!(next(&mut sr).await, ToDevice::Refused { .. }));
+            assert_eq!(world.fake.typed.lock().as_slice(), b"", "nothing written");
+        });
+    }
+
+    #[test]
+    fn a_device_removed_while_typing_is_refused_at_once_before_its_link_closes() {
+        run(async {
+            let world = world().await;
+            let (phone, link, mut cw, mut cr) = device(&world, 3, Role::Controller).await;
+            let (mut sw, mut sr, epoch) = in_control(&world, &link, &mut cw, &mut cr).await;
+            sw.send(&typing(epoch, 0, b"a")).await.expect("input");
+            assert!(matches!(
+                next(&mut sr).await,
+                ToDevice::InputAck { written: true, .. }
+            ));
+            // Removed: its connection is still open, and says Controller.
+            world.fake.paired.lock().remove(&phone.id());
+            sw.send(&typing(epoch, 0, b"b")).await.expect("input");
+            assert_eq!(
+                next(&mut sr).await,
+                ToDevice::Refused {
+                    reason: RefuseReason::NotPaired
+                }
+            );
+            cw.send(&FromDevice::TakeControl {
+                session_id: "s".into(),
+            })
+            .await
+            .expect("take");
+            assert!(matches!(
+                next(&mut cr).await,
+                ToDevice::Refused {
+                    reason: RefuseReason::NotPaired
+                }
+            ));
+            assert_eq!(world.fake.typed.lock().as_slice(), b"a", "nothing after");
+        });
+    }
+
+    #[test]
+    fn a_device_made_a_viewer_while_typing_is_refused_at_once() {
+        run(async {
+            let world = world().await;
+            let (phone, link, mut cw, mut cr) = device(&world, 3, Role::Controller).await;
+            let (mut sw, mut sr, epoch) = in_control(&world, &link, &mut cw, &mut cr).await;
+            world.fake.paired.lock().insert(phone.id(), Role::Viewer);
+            sw.send(&typing(epoch, 0, b"b")).await.expect("input");
             assert!(matches!(next(&mut sr).await, ToDevice::Refused { .. }));
             assert_eq!(world.fake.typed.lock().as_slice(), b"", "nothing written");
         });

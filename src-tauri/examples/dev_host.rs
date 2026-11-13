@@ -192,7 +192,11 @@ impl ServeHost for DevApp {
         Ok(true)
     }
 
-    fn take(&self, _id: &str, device: EndpointId) -> Result<(), RefuseReason> {
+    fn role_now(&self, _device: &EndpointId, connected: Role) -> Option<Role> {
+        Some(connected)
+    }
+
+    fn take(&self, _id: &str, device: EndpointId, _role: Role) -> Result<(), RefuseReason> {
         let change = self
             .gate
             .lock()

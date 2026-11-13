@@ -31,6 +31,19 @@ pub struct Writers {
     gates: Mutex<HashMap<SessionId, Arc<Mutex<SessionGate>>>>,
     /// Told every change of [Typing control] (see [`Writers::on_change`]).
     on_change: Mutex<Option<OnChange>>,
+    /// Devices removed or made Viewers since they connected: what every
+    /// check reads, so a connection's role never outlives the person's
+    /// change (spec §4, §8).
+    revoked: Mutex<HashMap<EndpointId, Revoked>>,
+}
+
+/// What the person changed about a paired device while it may be connected.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Revoked {
+    /// No longer paired.
+    Removed,
+    /// Its role is now this, at most.
+    Demoted(Role),
 }
 
 /// What hears a change of [Typing control].
@@ -57,6 +70,7 @@ impl Default for Writers {
             host_boot_id: u64::from_le_bytes(boot),
             gates: Mutex::new(HashMap::new()),
             on_change: Mutex::new(None),
+            revoked: Mutex::new(HashMap::new()),
         }
     }
 }
@@ -69,6 +83,46 @@ impl Writers {
                 DEFAULT_SCREEN,
             )))
         }))
+    }
+
+    /// `device`'s role now: what its connection was made with, never more
+    /// than the person has left it since. `None`: not paired.
+    #[must_use]
+    pub fn role_now(&self, device: &EndpointId, connected: Option<Role>) -> Option<Role> {
+        let rank = |role: Role| match role {
+            Role::Viewer => 0,
+            Role::Controller => 1,
+        };
+        match self.revoked.lock().get(device) {
+            None => connected,
+            Some(Revoked::Removed) => None,
+            Some(Revoked::Demoted(to)) => connected.map(|connected| {
+                if rank(*to) < rank(connected) {
+                    *to
+                } else {
+                    connected
+                }
+            }),
+        }
+    }
+
+    /// The person removed `device`, or lowered its role: from now on every
+    /// check sees it, and no write that began before this one returns can
+    /// still land (each gate is passed through once, so a write holding one
+    /// finishes first). Then close its connection, then release its
+    /// control (spec §4).
+    pub fn revoke(&self, device: EndpointId, revoked: Revoked) {
+        self.revoked.lock().insert(device, revoked);
+        let gates: Vec<_> = self.gates.lock().values().map(Arc::clone).collect();
+        for gate in gates {
+            drop(gate.lock());
+        }
+    }
+
+    /// `device` was paired again, or given back its role: its connections
+    /// are trusted with the role they are made with.
+    pub fn unrevoke(&self, device: &EndpointId) {
+        self.revoked.lock().remove(device);
     }
 
     /// Make sure session `id` has a gate. For tests.
@@ -100,7 +154,10 @@ impl Writers {
     ) -> Result<bool, RefuseReason> {
         let gate = self.gate(id);
         let mut gate = gate.lock();
-        gate.device_write(device, role, write, None)?;
+        // The role now, read under the gate's lock: a revoke passes through
+        // this lock, so it lands before or after this whole write.
+        let role = self.role_now(device, role).ok_or(RefuseReason::NotPaired)?;
+        gate.device_write(device, Some(role), write, None)?;
         Ok(engine.write_stdin(bytes).is_ok())
     }
 
@@ -122,7 +179,8 @@ impl Writers {
         let mut gate = gate.lock();
         // Checked first, and the size made the session's only once the PTY
         // took it, all under the one lock.
-        gate.device_write(device, role, write, None)?;
+        let role = self.role_now(device, role).ok_or(RefuseReason::NotPaired)?;
+        gate.device_write(device, Some(role), write, None)?;
         if engine.resize(size.0, size.1).is_err() {
             return Ok(false);
         }
@@ -130,21 +188,28 @@ impl Writers {
         Ok(true)
     }
 
-    /// `device` takes [Typing control] of session `id`: `None` for a session
-    /// that closed, else whether the host let it ([`HostIsTyping`] while the
-    /// host typed in the last 10 s).
+    /// `device`, connected as `role`, takes [Typing control] of session
+    /// `id`: `None` for a session that closed, else whether it may
+    /// ([`RefuseReason::NotPaired`] once removed, `NotAllowed` once only a
+    /// Viewer, `NotInControl` while the host typed in the last 10 s).
     pub fn take(
         &self,
         id: &SessionId,
         device: EndpointId,
+        role: Option<Role>,
         now: Instant,
-    ) -> Option<Result<Option<Change>, HostIsTyping>> {
+    ) -> Option<Result<Option<Change>, RefuseReason>> {
         // Only a live session's gate: one closed meanwhile isn't made again.
         let gate = self.gates.lock().get(id).cloned()?;
         let mut gate = gate.lock();
+        match self.role_now(&device, role) {
+            None => return Some(Err(RefuseReason::NotPaired)),
+            Some(Role::Viewer) => return Some(Err(RefuseReason::NotAllowed)),
+            Some(Role::Controller) => {}
+        }
         let change = match gate.take(device, now) {
             Ok(change) => change,
-            Err(refused) => return Some(Err(refused)),
+            Err(HostIsTyping) => return Some(Err(RefuseReason::NotInControl)),
         };
         // Under the gate's lock, in epoch order.
         self.tell(id, change);
@@ -326,6 +391,124 @@ mod tests {
         }
     }
 
+    /// A phone in control of session "s", typing "a"; the daemon's end.
+    fn typing_phone(writers: &Writers, id: &SessionId) -> (DaemonClient, UnixStream, PendingWrite) {
+        let (engine, daemon) = engine();
+        writers.set_run(id, 1);
+        let change = writers
+            .take(
+                id,
+                PHONE,
+                Some(Role::Controller),
+                Instant::now() + std::time::Duration::from_secs(60),
+            )
+            .expect("live")
+            .expect("allowed")
+            .expect("a change");
+        let write = input(writers, id, change.epoch.counter, 0);
+        assert_eq!(
+            writers.device_input(id, &engine, &PHONE, Some(Role::Controller), &write, b"a"),
+            Ok(true)
+        );
+        (engine, daemon, write)
+    }
+
+    /// Everything the daemon was asked to type, within half a second.
+    fn typed(daemon: &mut UnixStream) -> Vec<u8> {
+        use kriyon_core::wire::{Frame, FrameDecoder};
+        daemon
+            .set_read_timeout(Some(std::time::Duration::from_millis(500)))
+            .expect("timeout");
+        let mut decoder = FrameDecoder::new();
+        let mut out = Vec::new();
+        let mut buf = [0_u8; 4096];
+        while let Ok(n) = daemon.read(&mut buf) {
+            if n == 0 {
+                break;
+            }
+            decoder.push(&buf[..n]);
+            while let Ok(Some(frame)) = decoder.next_frame() {
+                if let Frame::Stdin(bytes) = frame {
+                    out.extend(bytes);
+                }
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn nothing_a_removed_device_types_after_the_revoke_reaches_the_pty() {
+        let writers = Writers::default();
+        let id = SessionId("s".into());
+        let (engine, mut daemon, write) = typing_phone(&writers, &id);
+        // Removed while typing: its connection still says Controller.
+        writers.revoke(PHONE, Revoked::Removed);
+        assert_eq!(
+            writers.device_input(&id, &engine, &PHONE, Some(Role::Controller), &write, b"b"),
+            Err(RefuseReason::NotPaired)
+        );
+        assert_eq!(
+            writers.device_resize(
+                &id,
+                &engine,
+                &PHONE,
+                Some(Role::Controller),
+                &write,
+                (90, 30)
+            ),
+            Err(RefuseReason::NotPaired)
+        );
+        assert!(
+            matches!(
+                writers.take(&id, PHONE, Some(Role::Controller), Instant::now()),
+                Some(Err(RefuseReason::NotPaired))
+            ),
+            "nor takes control again"
+        );
+        assert_eq!(typed(&mut daemon), b"a");
+    }
+
+    #[test]
+    fn nothing_a_device_made_a_viewer_types_after_the_revoke_reaches_the_pty() {
+        let writers = Writers::default();
+        let id = SessionId("s".into());
+        let (engine, mut daemon, write) = typing_phone(&writers, &id);
+        writers.revoke(PHONE, Revoked::Demoted(Role::Viewer));
+        assert!(writers
+            .device_input(&id, &engine, &PHONE, Some(Role::Controller), &write, b"b")
+            .is_err());
+        assert!(matches!(
+            writers.take(&id, PHONE, Some(Role::Controller), Instant::now()),
+            Some(Err(_))
+        ));
+        assert_eq!(
+            writers.role_now(&PHONE, Some(Role::Controller)),
+            Some(Role::Viewer)
+        );
+        assert_eq!(typed(&mut daemon), b"a");
+    }
+
+    #[test]
+    fn a_revoke_never_grants_more_than_the_connection_has_and_pairing_again_clears_it() {
+        let writers = Writers::default();
+        assert_eq!(
+            writers.role_now(&PHONE, Some(Role::Viewer)),
+            Some(Role::Viewer)
+        );
+        writers.revoke(PHONE, Revoked::Demoted(Role::Controller));
+        assert_eq!(
+            writers.role_now(&PHONE, Some(Role::Viewer)),
+            Some(Role::Viewer)
+        );
+        writers.revoke(PHONE, Revoked::Removed);
+        assert_eq!(writers.role_now(&PHONE, Some(Role::Controller)), None);
+        writers.unrevoke(&PHONE);
+        assert_eq!(
+            writers.role_now(&PHONE, Some(Role::Controller)),
+            Some(Role::Controller)
+        );
+    }
+
     #[test]
     fn a_device_types_only_once_it_holds_control_and_with_the_current_epoch() {
         let writers = Writers::default();
@@ -341,6 +524,7 @@ mod tests {
             .take(
                 &id,
                 PHONE,
+                Some(Role::Controller),
                 Instant::now() + std::time::Duration::from_secs(60),
             )
             .expect("live")
@@ -384,6 +568,7 @@ mod tests {
             .take(
                 &id,
                 PHONE,
+                Some(Role::Controller),
                 Instant::now() + std::time::Duration::from_secs(60),
             )
             .expect("live")
@@ -402,7 +587,9 @@ mod tests {
     fn taking_a_session_that_is_gone_makes_nothing() {
         let writers = Writers::default();
         let id = SessionId("gone".into());
-        assert!(writers.take(&id, PHONE, Instant::now()).is_none());
+        assert!(writers
+            .take(&id, PHONE, Some(Role::Controller), Instant::now())
+            .is_none());
         assert!(!writers.has_gate(&id));
     }
 

@@ -4,7 +4,6 @@
 use kriyon_core::cli_dialog::dialog_showing;
 use kriyon_core::session::SessionId;
 use kriyon_remote::authorize::{Dialog, PendingWrite};
-use kriyon_remote::control::HostIsTyping;
 use kriyon_remote::message::{EndpointId, RefuseReason, Role, SessionInfo};
 use tauri::Manager as _;
 
@@ -224,17 +223,25 @@ impl ServeHost for AppServeHost {
         )
     }
 
-    fn take(&self, id: &str, device: EndpointId) -> Result<(), RefuseReason> {
+    fn take(&self, id: &str, device: EndpointId, role: Role) -> Result<(), RefuseReason> {
         // The writers tell every device (their change hook).
         match self.0.state::<AppState>().writers.take(
             &SessionId(id.to_string()),
             device,
+            Some(role),
             std::time::Instant::now(),
         ) {
             None => Err(RefuseReason::NoSuchSession),
-            Some(Err(HostIsTyping)) => Err(RefuseReason::NotInControl),
+            Some(Err(reason)) => Err(reason),
             Some(Ok(_)) => Ok(()),
         }
+    }
+
+    fn role_now(&self, device: &EndpointId, connected: Role) -> Option<Role> {
+        self.0
+            .state::<AppState>()
+            .writers
+            .role_now(device, Some(connected))
     }
 
     fn release(&self, device: &EndpointId) {

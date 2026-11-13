@@ -537,6 +537,13 @@ pub async fn remote_enter_code(app: tauri::AppHandle, code: String) -> Result<Co
             if let Err(e) = &kept {
                 eprintln!("kriyon: couldn't keep the paired device: {e}");
             }
+            // Paired again: an earlier removal no longer stands.
+            if kept.is_ok() {
+                store_app
+                    .state::<crate::AppState>()
+                    .writers
+                    .unrevoke(&device);
+            }
             kept.is_ok()
         })
         .await?;
@@ -608,7 +615,9 @@ pub fn remote_rename_device(
     }
 }
 
-/// Remove a paired device: forget it, and cut it off at once.
+/// Remove a paired device, in the spec's order (§4): every check refuses
+/// it from now on (even on a connection still open), it is forgotten, its
+/// connection closes, and control it held goes back to the host.
 ///
 /// # Errors
 /// For a bad id, an unknown device, or a store failure.
@@ -616,19 +625,29 @@ pub fn remote_rename_device(
 pub async fn remote_remove_device(app: tauri::AppHandle, id: String) -> Result<(), String> {
     use tauri::Manager as _;
     let id = parse_device_id(&id)?;
+    let writers = &app.state::<crate::AppState>().writers;
+    writers.revoke(id, crate::session_writer::Revoked::Removed);
     let removed = app
         .state::<crate::StoreState>()
         .0
         .lock()
-        .remove_paired_device(&id)
-        .map_err(|e| e.to_string())?;
-    if !removed {
-        return Err("no such device".to_string());
+        .remove_paired_device(&id);
+    match removed {
+        Ok(true) => {}
+        // Nothing removed: the device stands as it was.
+        Ok(false) => {
+            writers.unrevoke(&id);
+            return Err("no such device".to_string());
+        }
+        Err(e) => {
+            writers.unrevoke(&id);
+            return Err(e.to_string());
+        }
     }
-    release_everywhere(&app, id).await;
     app.state::<crate::remote_rt::RemoteRuntime>()
         .cut_off(&id)
         .await;
+    release_everywhere(&app, id).await;
     Ok(())
 }
 
@@ -664,20 +683,38 @@ pub async fn remote_set_device_role(
 ) -> Result<(), String> {
     use tauri::Manager as _;
     let id = parse_device_id(&id)?;
+    let writers = &app.state::<crate::AppState>().writers;
+    // Made a Viewer: every check sees it at once, before its connection
+    // closes (spec §4). Made a Controller: its next connection is.
+    let viewer = role == RoleArg::Viewer;
+    if viewer {
+        writers.revoke(
+            id,
+            crate::session_writer::Revoked::Demoted(kriyon_remote::message::Role::Viewer),
+        );
+    }
     let changed = app
         .state::<crate::StoreState>()
         .0
         .lock()
-        .set_paired_device_role(&id, role.into())
-        .map_err(|e| e.to_string())?;
-    if !changed {
-        return Err("no such device".to_string());
+        .set_paired_device_role(&id, role.into());
+    // Nothing changed: a demotion that didn't happen doesn't stand.
+    if viewer && !matches!(changed, Ok(true)) {
+        writers.unrevoke(&id);
     }
-    if role == RoleArg::Viewer {
-        release_everywhere(&app, id).await;
+    match changed {
+        Ok(true) => {}
+        Ok(false) => return Err("no such device".to_string()),
+        Err(e) => return Err(e.to_string()),
+    }
+    if !viewer {
+        writers.unrevoke(&id);
     }
     app.state::<crate::remote_rt::RemoteRuntime>()
         .reconnect(&id)
         .await;
+    if viewer {
+        release_everywhere(&app, id).await;
+    }
     Ok(())
 }
