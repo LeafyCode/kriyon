@@ -7,6 +7,11 @@
 //! session's [Daemon client] reader, which must never wait here: everything
 //! it touches is a short lock or a wake-up, and the network writes happen on
 //! the streams' own tasks.
+//!
+//! Lock order, outermost first: a session's gate (`session_writer`) → the
+//! control map (`Inner::controls`) → a device's `ControlOut` queue. The
+//! writers call [`Serve::broadcast_control`] under a gate's lock, so it only
+//! takes the two inner locks and never calls the app ([`ServeHost`]).
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -1666,6 +1671,31 @@ mod tests {
             sw.send(&typing(epoch, 0, b"late")).await.expect("input");
             assert!(matches!(next(&mut sr).await, ToDevice::Refused { .. }));
             assert_eq!(world.fake.typed.lock().as_slice(), b"", "nothing written");
+        });
+    }
+
+    #[test]
+    fn telling_devices_of_a_change_of_control_never_calls_the_app() {
+        // The writers tell this under a session's gate lock (in epoch
+        // order): a call back into the app could take that lock again.
+        run(async {
+            let world = world().await;
+            let (_a, _link, _cw, mut cr) = device(&world, 3, Role::Viewer).await;
+            let change = world
+                .fake
+                .gate
+                .lock()
+                .take([9; 32], Instant::now())
+                .expect("taken")
+                .expect("a change");
+            let before = world.fake.calls.load(std::sync::atomic::Ordering::Relaxed);
+            world.serve.broadcast_control("s", change);
+            assert_eq!(
+                world.fake.calls.load(std::sync::atomic::Ordering::Relaxed),
+                before,
+                "no call back into the app"
+            );
+            assert!(matches!(next(&mut cr).await, ToDevice::Control { .. }));
         });
     }
 

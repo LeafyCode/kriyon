@@ -46,6 +46,8 @@ pub(crate) struct FakeHost {
     pub(crate) start_result: Mutex<Result<String, RefuseReason>>,
     /// The host's projects, as devices are told them.
     pub(crate) projects: Mutex<Vec<ProjectInfo>>,
+    /// How many times the serving layer called the app.
+    pub(crate) calls: std::sync::atomic::AtomicUsize,
     /// How long a start takes, so a test can drop the link mid-start.
     pub(crate) start_delay: Mutex<Duration>,
     /// Sessions earlier starts made, by request id.
@@ -79,6 +81,7 @@ impl Default for FakeHost {
             start_result: Mutex::new(Ok("started".into())),
             started: Mutex::default(),
             start_delay: Mutex::new(Duration::ZERO),
+            calls: std::sync::atomic::AtomicUsize::new(0),
             projects: Mutex::new(vec![ProjectInfo {
                 id: "p".into(),
                 name: "app".into(),
@@ -97,9 +100,13 @@ impl PairedDevices for FakeHost {
 
 impl ServeHost for FakeHost {
     fn host_name(&self) -> String {
+        self.calls
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         "Test Mac".into()
     }
     fn sessions(&self) -> Vec<SessionInfo> {
+        self.calls
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         vec![SessionInfo {
             id: "s".into(),
             title: self.title.lock().clone(),
@@ -112,6 +119,8 @@ impl ServeHost for FakeHost {
         }]
     }
     fn session(&self, id: &str) -> Option<LiveSession> {
+        self.calls
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         if id != "s" {
             return None;
         }
@@ -131,6 +140,8 @@ impl ServeHost for FakeHost {
         write: &PendingWrite,
         bytes: &[u8],
     ) -> Result<bool, RefuseReason> {
+        self.calls
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         self.gate
             .lock()
             .device_write(device, Some(role), write, None)?;
@@ -145,12 +156,16 @@ impl ServeHost for FakeHost {
         write: &PendingWrite,
         size: (u16, u16),
     ) -> Result<bool, RefuseReason> {
+        self.calls
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         self.gate
             .lock()
             .device_write(device, Some(role), write, Some(size))?;
         Ok(true)
     }
     fn role_now(&self, device: &EndpointId, connected: Role) -> Option<Role> {
+        self.calls
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         // Removed from the paired map: not paired; demoted there: at most that.
         let paired = *self.paired.lock().get(device)?;
         Some(if paired == Role::Viewer || connected == Role::Viewer {
@@ -161,6 +176,8 @@ impl ServeHost for FakeHost {
     }
 
     fn take(&self, _id: &str, device: EndpointId, _role: Role) -> Result<(), RefuseReason> {
+        self.calls
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let change = self
             .gate
             .lock()
@@ -170,10 +187,14 @@ impl ServeHost for FakeHost {
         Ok(())
     }
     fn release(&self, device: &EndpointId) {
+        self.calls
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let change = self.gate.lock().release(*device).change;
         self.tell(change);
     }
     fn project_folder(&self, project_id: &str) -> ProjectFolder {
+        self.calls
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         self.folders
             .lock()
             .get(project_id)
@@ -182,6 +203,8 @@ impl ServeHost for FakeHost {
     }
 
     fn projects(&self) -> Vec<ProjectInfo> {
+        self.calls
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         self.projects.lock().clone()
     }
 
@@ -190,6 +213,8 @@ impl ServeHost for FakeHost {
         _device: &EndpointId,
         request_id: &[u8; 16],
     ) -> Option<Result<String, RefuseReason>> {
+        self.calls
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         self.started.lock().get(request_id).cloned()
     }
 
@@ -199,6 +224,8 @@ impl ServeHost for FakeHost {
         start: RemoteStart,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String, RefuseReason>> + Send>>
     {
+        self.calls
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         // Recorded as soon as it is asked, as the app records a start before
         // its shell opens: a resend finds it.
         let result = self.start_result.lock().clone();
@@ -214,9 +241,13 @@ impl ServeHost for FakeHost {
     }
 
     fn set_push_token(&self, device: &EndpointId, key_id: u32, sealed: Vec<u8>) {
+        self.calls
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         self.push_tokens.lock().push((*device, key_id, sealed));
     }
     fn set_onlooked(&self, id: &str, onlooked: bool) {
+        self.calls
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let mut set = self.onlooked.lock();
         if onlooked {
             set.insert(id.to_string());

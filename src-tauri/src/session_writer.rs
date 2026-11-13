@@ -3,8 +3,14 @@
 //! check and the write are one step. The desktop writes as the host; a remote
 //! device's input will be a second caller, rechecked here.
 //!
-//! Lock order: a gate's lock is never held while taking the sessions lock,
-//! and the gates map's lock is held only to find or drop a gate.
+//! Lock order, outermost first: a session's gate → `Serve`'s control map
+//! (`remote_serve`) → a device's `ControlOut` queue. A change of [Typing
+//! control] is told to the hook ([`Writers::on_change`]) under the gate's
+//! lock, so devices hear changes in epoch order; the hook only queues for
+//! the devices and never calls back into these writers (or the app), which
+//! would take a gate lock again. A gate's lock is never held while taking
+//! the sessions lock, and the gates map's lock is held only to find or drop
+//! a gate.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -223,7 +229,9 @@ impl Writers {
         *self.on_change.lock() = Some(Arc::new(hook));
     }
 
-    /// Tell the hook about `change`, with no gate lock held.
+    /// Tell the hook about `change`. Called with the session's gate lock
+    /// held (epoch order), so the hook must not call back into the writers:
+    /// see the lock order in the module's header.
     fn tell(&self, id: &SessionId, change: Option<Change>) {
         let Some(change) = change else {
             return;
