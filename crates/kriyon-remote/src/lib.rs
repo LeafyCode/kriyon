@@ -3,6 +3,7 @@
 //! per-device queues, pairing crypto and compression. Pure: no network, no IO,
 //! shared by the desktop host and the phone library.
 
+pub mod authorize;
 pub mod codec;
 pub mod control;
 pub mod message;

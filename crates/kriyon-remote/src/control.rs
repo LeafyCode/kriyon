@@ -86,14 +86,20 @@ impl Control {
         device: EndpointId,
         now: Instant,
     ) -> Result<Option<Change>, HostIsTyping> {
-        let host_busy = self.holder == Holder::Host
-            && self.host_typed_at.is_some_and(|typed| {
-                now.saturating_duration_since(typed) < HOST_IDLE_BEFORE_TAKEOVER
-            });
-        if host_busy {
+        if !self.may_take(now) {
             return Err(HostIsTyping);
         }
         Ok(self.hand_to(Holder::Device(device)))
+    }
+
+    /// Whether a device's `TakeControl` would succeed at `now`: the host
+    /// doesn't hold control, or hasn't typed for [`HOST_IDLE_BEFORE_TAKEOVER`].
+    #[must_use]
+    pub fn may_take(&self, now: Instant) -> bool {
+        self.holder != Holder::Host
+            || self.host_typed_at.is_none_or(|typed| {
+                now.saturating_duration_since(typed) >= HOST_IDLE_BEFORE_TAKEOVER
+            })
     }
 
     /// `device` disconnected, was removed or became a Viewer: control goes
