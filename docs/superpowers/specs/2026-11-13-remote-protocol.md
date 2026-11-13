@@ -220,6 +220,8 @@ the host without the payload.
   modules first and passes them in: the project's folder status (Approved /
   NotAllowed / NoSuchProject, from `kriyon_core::folder::check_folder`) and the
   dialog state (open, generation).
+- Until the first release, the protocol stays at major 1, minor 0, and
+  messages may still change shape; from the first release on, only appends.
 - An app below the host's minimum version gets `Refused { TooOld { min_minor } }`
   and the connection closes.
 
@@ -256,7 +258,12 @@ write files except by typing in a terminal it controls.
 `StartSession { request_id, project_id, title?, worktree: false }`. No args,
 env or flags from the device. Existing projects only at first. The host keeps
 `(device_id, request_id)` with the result for 24 hours, on disk, so a resend
-returns the same session instead of starting two. Worktree setup stays off
+returns the same session instead of starting two; a resend is answered from
+that record before any folder re-check. Every answer names the request:
+`StartResult { request_id, session_id }` or
+`StartRefused { request_id, reason }` (not the plain `Refused`). The new
+session joins the desktop's sidebar without taking its window, with claude
+already running. Worktree setup stays off
 for remote starts, because it runs scripts.
 
 ## 10. Push
