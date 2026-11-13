@@ -372,7 +372,14 @@ fn serve_client(stream: &mut UnixStream, engine: &Arc<PtyEngine>, shared: &Arc<S
             Ok(0) | Err(_) => return false, // client disconnected
             Ok(n) => {
                 dec.push(&buf[..n]);
-                while let Some(frame) = dec.next_frame() {
+                loop {
+                    let frame = match dec.next_frame() {
+                        Ok(Some(frame)) => frame,
+                        Ok(None) => break,
+                        // Nothing after a frame that long can be read, so this
+                        // client is finished. The session carries on without it.
+                        Err(_) => return false,
+                    };
                     match frame {
                         Frame::Stdin(bytes) => {
                             deliver_stdin(engine.as_ref(), &bytes, &mut std::io::stderr());

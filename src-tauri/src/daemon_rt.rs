@@ -844,7 +844,7 @@ mod tests {
         });
 
         assert!(shutdown_detached(&socket));
-        assert_eq!(daemon.join().expect("join"), Some(Frame::Shutdown));
+        assert_eq!(daemon.join().expect("join"), Ok(Some(Frame::Shutdown)));
     }
 
     #[test]

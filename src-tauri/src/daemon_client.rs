@@ -14,7 +14,7 @@ use std::time::Instant;
 
 use kriyon_core::output_gate::{CatchUp, OutputGate};
 use kriyon_core::session::{EngineError, SessionEngine, SessionId};
-use kriyon_core::wire::{Frame, FrameDecoder};
+use kriyon_core::wire::{self, Frame, FrameDecoder};
 use parking_lot::{Condvar, Mutex};
 
 /// Hold output for the webview once this many bytes are delivered but not drained.
@@ -192,12 +192,23 @@ impl DaemonClient {
         let reader_thread = std::thread::spawn(move || {
             let mut dec = FrameDecoder::new();
             let mut buf = [0u8; READ_BUF_LEN];
-            loop {
+            'connection: loop {
                 match reader.read(&mut buf) {
                     Ok(0) | Err(_) => break,
                     Ok(n) => {
                         dec.push(&buf[..n]);
-                        while let Some(frame) = dec.next_frame() {
+                        loop {
+                            let frame = match dec.next_frame() {
+                                Ok(Some(frame)) => frame,
+                                Ok(None) => break,
+                                // Nothing after a frame that long can be read.
+                                // Close the socket too, or the daemon would
+                                // block writing to a reader that has stopped.
+                                Err(_) => {
+                                    let _ = reader.shutdown(std::net::Shutdown::Both);
+                                    break 'connection;
+                                }
+                            };
                             reader_accepted.store(true, Ordering::Relaxed);
                             match frame {
                                 Frame::Output(bytes) => {
@@ -349,7 +360,7 @@ impl SessionEngine for DaemonClient {
     }
 
     fn write_stdin(&self, bytes: &[u8]) -> Result<(), EngineError> {
-        self.send(&Frame::Stdin(bytes.to_vec()))
+        wire::chunked(bytes, Frame::Stdin).try_for_each(|frame| self.send(&frame))
     }
 
     fn resize(&self, cols: u16, rows: u16) -> Result<(), EngineError> {
@@ -392,7 +403,7 @@ pub(crate) mod test_support {
                         break;
                     }
                     dec.push(&buf[..n]);
-                    while let Some(frame) = dec.next_frame() {
+                    while let Ok(Some(frame)) = dec.next_frame() {
                         if frame == Frame::Shutdown {
                             *seen.lock().expect("lock") += 1;
                         }
@@ -430,7 +441,7 @@ mod tests {
                     Ok(0) | Err(_) => break,
                     Ok(n) => {
                         dec.push(&buf[..n]);
-                        while let Some(frame) = dec.next_frame() {
+                        while let Ok(Some(frame)) = dec.next_frame() {
                             match frame {
                                 Frame::Stdin(bytes) => {
                                     let _ = writer.write_all(&Frame::Output(bytes).encode());
@@ -687,7 +698,7 @@ mod tests {
                     return;
                 }
                 dec.push(&buf[..n]);
-                while let Some(frame) = dec.next_frame() {
+                while let Ok(Some(frame)) = dec.next_frame() {
                     if frame == Frame::Repaint {
                         *repaint.lock().expect("lock") = true;
                     }
@@ -887,6 +898,104 @@ mod tests {
             std::thread::sleep(Duration::from_millis(20));
         }
         assert_eq!(got, Some(true), "on_busy should receive the Busy frame");
+    }
+
+    /// A daemon that announces a frame longer than the protocol allows can't be
+    /// read any further. The client must say the session is gone and let go of
+    /// the socket; it used to wait for the whole frame, buffering as it went.
+    #[test]
+    fn an_oversized_frame_from_the_daemon_ends_the_connection() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let socket = dir.path().join("s.sock");
+        let listener = UnixListener::bind(&socket).expect("bind");
+        let hung_up = Arc::new(StdMutex::new(false));
+        let saw_hang_up = Arc::clone(&hung_up);
+        std::thread::spawn(move || {
+            let Ok((mut stream, _)) = listener.accept() else {
+                return;
+            };
+            // An Output header (tag 0) announcing 4 GiB that never comes.
+            let _ = stream.write_all(&[0, 0xFF, 0xFF, 0xFF, 0xFF]);
+            let mut buf = [0u8; 64];
+            while matches!(stream.read(&mut buf), Ok(n) if n > 0) {}
+            *saw_hang_up.lock().expect("lock") = true;
+        });
+
+        let exited = Arc::new(StdMutex::new(false));
+        let flag = Arc::clone(&exited);
+        let client = DaemonClient::connect(
+            &socket,
+            SessionId("s1".to_string()),
+            |_| {},
+            |_| {},
+            |_| {},
+            move || {
+                *flag.lock().expect("lock") = true;
+            },
+        )
+        .expect("connect");
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline
+            && !(*exited.lock().expect("lock") && *hung_up.lock().expect("lock"))
+        {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(*exited.lock().expect("lock"), "on_exit must fire");
+        assert!(
+            *hung_up.lock().expect("lock"),
+            "the client must close the socket, or the daemon blocks writing to it"
+        );
+        drop(client);
+    }
+
+    /// Typed or pasted input has no size limit, but one frame does. Input longer
+    /// than a frame must arrive whole, in several frames, not get the connection
+    /// refused by the daemon's decoder.
+    #[test]
+    fn stdin_longer_than_one_frame_is_sent_in_several() {
+        use kriyon_core::wire::MAX_PAYLOAD_LEN;
+
+        let dir = tempfile::tempdir().expect("tmp");
+        let socket = dir.path().join("s.sock");
+        let listener = UnixListener::bind(&socket).expect("bind");
+        let total = MAX_PAYLOAD_LEN + 10;
+        let daemon = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let mut dec = FrameDecoder::new();
+            let mut buf = vec![0u8; 64 * 1024];
+            let mut sizes = Vec::new();
+            while sizes.iter().sum::<usize>() < total {
+                match stream.read(&mut buf) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => dec.push(&buf[..n]),
+                }
+                loop {
+                    match dec.next_frame() {
+                        Ok(Some(Frame::Stdin(bytes))) => sizes.push(bytes.len()),
+                        Ok(Some(_)) => {}
+                        Ok(None) => break,
+                        // Refused: report what arrived instead of waiting forever.
+                        Err(_) => return sizes,
+                    }
+                }
+            }
+            sizes
+        });
+
+        let client = DaemonClient::connect(
+            &socket,
+            SessionId("s1".to_string()),
+            |_| {},
+            |_| {},
+            |_| {},
+            || {},
+        )
+        .expect("connect");
+        client.write_stdin(&vec![b'x'; total]).expect("write");
+
+        assert_eq!(daemon.join().expect("join"), vec![MAX_PAYLOAD_LEN, 10]);
+        drop(client);
     }
 
     /// The shell dying (daemon closes the socket) must surface as an exit

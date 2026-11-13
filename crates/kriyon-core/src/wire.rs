@@ -4,6 +4,10 @@
 //! encode/decode — no IO. The decoder tolerates partial reads (Unix-stream
 //! boundaries are arbitrary) and skips unknown/malformed tags without panicking,
 //! so a protocol-version skew degrades instead of crashing the daemon.
+//!
+//! One thing it cannot skip is a frame longer than [`MAX_PAYLOAD_LEN`]: the
+//! bytes after such a header can't be told apart from the next frame, so the
+//! decoder refuses it with [`FrameTooLarge`] and the caller drops the connection.
 
 const TAG_OUTPUT: u8 = 0;
 const TAG_STDIN: u8 = 1;
@@ -14,6 +18,20 @@ const TAG_BUSY: u8 = 5;
 const TAG_REPAINT: u8 = 6;
 
 const HEADER_LEN: usize = 5;
+
+/// The most payload one frame may carry. PTY output arrives in chunks of a few
+/// kilobytes and a screen snapshot is well under a megabyte, so this is far above
+/// anything real while still bounding what a bad header can make a process buffer.
+pub const MAX_PAYLOAD_LEN: usize = 16 * 1024 * 1024;
+
+/// A header announced more payload than [`MAX_PAYLOAD_LEN`]. The stream can't be
+/// read past it, so the connection it arrived on is finished.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("a frame announced {len} payload bytes; the limit is {MAX_PAYLOAD_LEN}")]
+pub struct FrameTooLarge {
+    /// The payload length the header claimed.
+    pub len: u32,
+}
 const DIMS_LEN: usize = 4;
 const BUSY_LEN: usize = 1;
 
@@ -39,6 +57,15 @@ pub enum Frame {
     /// session — a remounted xterm starts blank and the socket-level attach
     /// repaint only happens once per connection.
     Repaint,
+}
+
+/// Split a byte stream into frames small enough for any decoder to accept. The
+/// two streams ([`Frame::Stdin`], [`Frame::Output`]) carry no message boundaries,
+/// so where a long one is cut doesn't matter.
+pub fn chunked(bytes: &[u8], wrap: fn(Vec<u8>) -> Frame) -> impl Iterator<Item = Frame> + '_ {
+    bytes
+        .chunks(MAX_PAYLOAD_LEN)
+        .map(move |chunk| wrap(chunk.to_vec()))
 }
 
 fn dims(cols: u16, rows: u16) -> Vec<u8> {
@@ -74,54 +101,76 @@ impl Frame {
 #[derive(Default)]
 pub struct FrameDecoder {
     buf: Vec<u8>,
+    /// Set once a frame was refused. Nothing after it can be decoded, so the
+    /// decoder stops keeping bytes and repeats the refusal.
+    refused: Option<FrameTooLarge>,
 }
 
 impl FrameDecoder {
     #[must_use]
     pub fn new() -> Self {
-        Self { buf: Vec::new() }
+        Self::default()
     }
 
-    /// Append freshly-read bytes.
+    /// Append freshly-read bytes. After a refused frame they are dropped.
     pub fn push(&mut self, bytes: &[u8]) {
-        self.buf.extend_from_slice(bytes);
+        if self.refused.is_none() {
+            self.buf.extend_from_slice(bytes);
+        }
     }
 
     /// Pop the next complete frame, if one is fully buffered. Unknown or
     /// malformed (e.g. wrong-length dims) frames are consumed and skipped.
-    pub fn next_frame(&mut self) -> Option<Frame> {
+    ///
+    /// # Errors
+    ///
+    /// [`FrameTooLarge`] when a header announces more than [`MAX_PAYLOAD_LEN`]
+    /// bytes, and on every call after that: drop the connection.
+    pub fn next_frame(&mut self) -> Result<Option<Frame>, FrameTooLarge> {
+        if let Some(refused) = self.refused {
+            return Err(refused);
+        }
         loop {
             if self.buf.len() < HEADER_LEN {
-                return None;
+                return Ok(None);
             }
             let tag = self.buf[0];
-            let len = u32::from_le_bytes([self.buf[1], self.buf[2], self.buf[3], self.buf[4]]);
-            let len = usize::try_from(len).unwrap_or(usize::MAX);
+            let announced =
+                u32::from_le_bytes([self.buf[1], self.buf[2], self.buf[3], self.buf[4]]);
+            let len = match usize::try_from(announced) {
+                Ok(len) if len <= MAX_PAYLOAD_LEN => len,
+                _ => {
+                    let refused = FrameTooLarge { len: announced };
+                    self.refused = Some(refused);
+                    self.buf = Vec::new();
+                    return Err(refused);
+                }
+            };
             if self.buf.len() < HEADER_LEN + len {
-                return None;
+                return Ok(None);
             }
             let payload = self.buf[HEADER_LEN..HEADER_LEN + len].to_vec();
             self.buf.drain(..HEADER_LEN + len);
             match tag {
-                TAG_OUTPUT => return Some(Frame::Output(payload)),
-                TAG_STDIN => return Some(Frame::Stdin(payload)),
+                TAG_OUTPUT => return Ok(Some(Frame::Output(payload))),
+                TAG_STDIN => return Ok(Some(Frame::Stdin(payload))),
                 TAG_RESIZE if payload.len() == DIMS_LEN => {
-                    return Some(Frame::Resize {
+                    return Ok(Some(Frame::Resize {
                         cols: u16::from_le_bytes([payload[0], payload[1]]),
                         rows: u16::from_le_bytes([payload[2], payload[3]]),
-                    });
+                    }));
                 }
                 TAG_ATTACH if payload.len() == DIMS_LEN => {
-                    return Some(Frame::Attach {
+                    return Ok(Some(Frame::Attach {
                         cols: u16::from_le_bytes([payload[0], payload[1]]),
                         rows: u16::from_le_bytes([payload[2], payload[3]]),
-                    });
+                    }));
                 }
-                TAG_SHUTDOWN => return Some(Frame::Shutdown),
+                TAG_SHUTDOWN => return Ok(Some(Frame::Shutdown)),
                 TAG_BUSY if payload.len() == BUSY_LEN => {
-                    return Some(Frame::Busy(payload[0] != 0));
+                    return Ok(Some(Frame::Busy(payload[0] != 0)));
                 }
-                TAG_REPAINT => return Some(Frame::Repaint),
+                TAG_REPAINT => return Ok(Some(Frame::Repaint)),
                 // Unknown tag, or a Resize/Attach/Busy with bad length: skip.
                 _ => {}
             }
@@ -153,7 +202,7 @@ mod tests {
             dec.push(&f.encode());
         }
         let mut got = Vec::new();
-        while let Some(f) = dec.next_frame() {
+        while let Ok(Some(f)) = dec.next_frame() {
             got.push(f);
         }
         assert_eq!(got, frames);
@@ -168,11 +217,11 @@ mod tests {
         for (i, b) in bytes.iter().enumerate() {
             dec.push(&[*b]);
             if i + 1 < bytes.len() {
-                assert!(dec.next_frame().is_none(), "no full frame yet at byte {i}");
+                assert_eq!(dec.next_frame(), Ok(None), "no full frame yet at byte {i}");
             }
         }
-        assert_eq!(dec.next_frame(), Some(f));
-        assert_eq!(dec.next_frame(), None);
+        assert_eq!(dec.next_frame(), Ok(Some(f)));
+        assert_eq!(dec.next_frame(), Ok(None));
     }
 
     #[test]
@@ -180,15 +229,66 @@ mod tests {
         let mut dec = FrameDecoder::new();
         // tag 99 (unknown), len 1, one payload byte — must be consumed, no panic.
         dec.push(&[99, 1, 0, 0, 0, 7]);
-        assert_eq!(dec.next_frame(), None);
+        assert_eq!(dec.next_frame(), Ok(None));
         // A valid frame after the bad one still decodes.
         dec.push(&Frame::Shutdown.encode());
-        assert_eq!(dec.next_frame(), Some(Frame::Shutdown));
+        assert_eq!(dec.next_frame(), Ok(Some(Frame::Shutdown)));
+    }
+
+    /// The bug this guards: a header may announce up to 4 GiB of payload. The
+    /// decoder used to wait for all of it, keeping every byte pushed meanwhile,
+    /// so one bad header from the other end of the socket grew the process
+    /// without bound.
+    #[test]
+    fn a_header_announcing_a_huge_payload_is_not_buffered() {
+        let mut dec = FrameDecoder::new();
+        dec.push(&[TAG_OUTPUT, 0xFF, 0xFF, 0xFF, 0xFF]);
+        let refused = Err(FrameTooLarge { len: u32::MAX });
+        assert_eq!(dec.next_frame(), refused);
+        dec.push(&vec![0u8; 1024 * 1024]);
+        assert_eq!(dec.next_frame(), refused, "the refusal is final");
+        assert!(
+            dec.buf.is_empty(),
+            "the decoder kept {} bytes of a frame it can never finish",
+            dec.buf.len()
+        );
+    }
+
+    #[test]
+    fn a_frame_one_byte_over_the_limit_is_refused() {
+        let over = u32::try_from(MAX_PAYLOAD_LEN + 1).expect("the limit fits a u32");
+        let mut dec = FrameDecoder::new();
+        dec.push(&[TAG_STDIN]);
+        dec.push(&over.to_le_bytes());
+        assert_eq!(dec.next_frame(), Err(FrameTooLarge { len: over }));
+    }
+
+    #[test]
+    fn a_frame_at_the_limit_still_decodes() {
+        let frame = Frame::Output(vec![7; MAX_PAYLOAD_LEN]);
+        let mut dec = FrameDecoder::new();
+        dec.push(&frame.encode());
+        assert_eq!(dec.next_frame(), Ok(Some(frame)));
+    }
+
+    #[test]
+    fn a_long_stream_is_cut_into_frames_a_decoder_accepts() {
+        let bytes = vec![3; MAX_PAYLOAD_LEN + 10];
+        let mut dec = FrameDecoder::new();
+        for frame in chunked(&bytes, Frame::Stdin) {
+            dec.push(&frame.encode());
+        }
+        let mut got = Vec::new();
+        while let Ok(Some(Frame::Stdin(part))) = dec.next_frame() {
+            got.push(part.len());
+        }
+        assert_eq!(got, vec![MAX_PAYLOAD_LEN, 10]);
+        assert_eq!(dec.next_frame(), Ok(None));
     }
 
     #[test]
     fn empty_buffer_yields_nothing() {
         let mut dec = FrameDecoder::new();
-        assert_eq!(dec.next_frame(), None);
+        assert_eq!(dec.next_frame(), Ok(None));
     }
 }
