@@ -7,6 +7,10 @@ use std::path::{Path, PathBuf};
 
 use parking_lot::Mutex;
 
+use kriyon_core::folder::FolderRefusal;
+
+use crate::StoreState;
+
 /// The folders picked this run through [`pick_folder`]. In memory only: once a
 /// picked folder is saved as a project, its saved row is what approves it.
 #[derive(Default)]
@@ -53,4 +57,189 @@ pub async fn pick_folder(app: tauri::AppHandle) -> Result<Option<String>, String
         .to_string();
     app.state::<ChosenFolders>().admit(folder);
     Ok(Some(text))
+}
+
+/// The linked worktrees of the repository at `project_folder`, as git lists
+/// them; none when it is not a repository or git fails.
+pub(crate) fn project_worktrees(project_folder: &str) -> Vec<PathBuf> {
+    crate::git_run::GitRun::new(project_folder)
+        .args(["worktree", "list", "--porcelain"])
+        .text()
+        .map(|out| kriyon_core::folder::parse_linked_worktrees(&out))
+        .unwrap_or_default()
+}
+
+/// Refuse `repo` unless it is exactly a saved project's folder: the only
+/// repository a worktree may be made from or set up for.
+fn check_project_repo(store: &StoreState, repo: &str) -> Result<(), String> {
+    let projects: Vec<PathBuf> = store
+        .0
+        .lock()
+        .list_projects()
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .map(|p| PathBuf::from(p.path))
+        .collect();
+    kriyon_core::folder::check_chosen_folder(repo, &projects)
+        .map(|_| ())
+        .map_err(|refusal| match refusal {
+            FolderRefusal::NotChosen => "repo_path is not a saved project's folder".to_string(),
+            other => format!("repo_path: {other}"),
+        })
+}
+
+/// Refuse a new worktree of `repo` on `branch` at `path` unless `repo` is a
+/// saved project's folder and `path` is where a new worktree may go (see
+/// `kriyon_core::folder::check_new_worktree_path`).
+pub(crate) fn check_new_worktree(
+    store: &StoreState,
+    chosen: &ChosenFolders,
+    repo: &str,
+    branch: &str,
+    path: &str,
+) -> Result<(), String> {
+    check_project_repo(store, repo)?;
+    let picked = chosen.0.lock().clone();
+    kriyon_core::folder::check_new_worktree_path(repo, branch, path, &picked)
+        .map_err(|refusal| format!("path: {refusal}"))
+}
+
+/// Refuse a [Worktree bootstrap] unless `repo` is a saved project's folder and
+/// `worktree` is exactly one of its linked worktrees: setup copies `.env`
+/// files out of `repo` and runs install scripts in `worktree`. The main
+/// checkout is not one, so `.env` files are never copied onto themselves.
+pub(crate) fn check_worktree_setup(
+    store: &StoreState,
+    repo: &str,
+    worktree: &str,
+) -> Result<(), String> {
+    check_project_repo(store, repo)?;
+    kriyon_core::folder::check_chosen_folder(worktree, &project_worktrees(repo))
+        .map(|_| ())
+        .map_err(|refusal| match refusal {
+            FolderRefusal::NotChosen => {
+                "worktree_path is not one of the project's worktrees".to_string()
+            }
+            other => format!("worktree_path: {other}"),
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn store_with_project(path: &Path) -> StoreState {
+        let store = crate::store::Store::open_in_memory().unwrap();
+        store
+            .upsert_project(&crate::store::ProjectRow {
+                id: "p".into(),
+                name: "proj".into(),
+                path: path.to_string_lossy().into_owned(),
+                color: None,
+                setup_command: None,
+                pinned_at: None,
+                folder_id: None,
+            })
+            .unwrap();
+        StoreState(Mutex::new(store))
+    }
+
+    fn s(p: &Path) -> &str {
+        p.to_str().unwrap()
+    }
+
+    /// A repo with one commit and one linked worktree; `None` without git.
+    fn repo_with_worktree() -> (tempfile::TempDir, tempfile::TempDir, PathBuf) {
+        let repo = tempfile::tempdir().unwrap();
+        let git = |args: &[&str]| {
+            let got = crate::git_run::GitRun::new(repo.path())
+                .args(args)
+                .outcome()
+                .unwrap();
+            assert!(got.success, "git {args:?}: {}", got.stderr);
+        };
+        git(&["init", "-q"]);
+        git(&[
+            "-c",
+            "user.email=t@e",
+            "-c",
+            "user.name=T",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "i",
+        ]);
+        let parent = tempfile::tempdir().unwrap();
+        let wt = parent.path().join("feature");
+        git(&["worktree", "add", "-q", "-b", "feature", s(&wt)]);
+        (repo, parent, wt)
+    }
+
+    #[test]
+    fn a_worktree_of_a_repo_that_is_no_saved_project_is_refused() {
+        let project = tempfile::tempdir().unwrap();
+        let other = tempfile::tempdir().unwrap();
+        let store = store_with_project(project.path());
+        let repo = s(other.path());
+        let err = check_new_worktree(
+            &store,
+            &ChosenFolders::default(),
+            repo,
+            "x",
+            &kriyon_core::bootstrap::worktree_path_for(repo, "x"),
+        )
+        .unwrap_err();
+        assert_eq!(err, "repo_path is not a saved project's folder");
+    }
+
+    #[test]
+    fn a_new_worktree_goes_next_to_a_saved_project_or_in_a_chosen_folder() {
+        let project = tempfile::tempdir().unwrap();
+        let store = store_with_project(project.path());
+        let repo = s(project.path());
+        let chosen = ChosenFolders::default();
+        check_new_worktree(
+            &store,
+            &chosen,
+            repo,
+            "x",
+            &kriyon_core::bootstrap::worktree_path_for(repo, "x"),
+        )
+        .unwrap();
+        let picked = tempfile::tempdir().unwrap();
+        let err = check_new_worktree(&store, &chosen, repo, "x", s(&picked.path().join("x")))
+            .unwrap_err();
+        assert_eq!(err, "path: not a place a new worktree may go");
+        chosen.admit(picked.path().to_path_buf());
+        check_new_worktree(&store, &chosen, repo, "x", s(&picked.path().join("x"))).unwrap();
+    }
+
+    #[test]
+    fn setup_runs_only_in_a_linked_worktree_of_a_saved_project() {
+        let (repo, _parent, wt) = repo_with_worktree();
+        let store = store_with_project(repo.path());
+        check_worktree_setup(&store, s(repo.path()), s(&wt)).unwrap();
+        // The main checkout is not a worktree to set up: copying its `.env`
+        // files onto themselves would empty them.
+        assert_eq!(
+            check_worktree_setup(&store, s(repo.path()), s(repo.path())).unwrap_err(),
+            "worktree_path is not one of the project's worktrees"
+        );
+        let elsewhere = tempfile::tempdir().unwrap();
+        assert_eq!(
+            check_worktree_setup(&store, s(repo.path()), s(elsewhere.path())).unwrap_err(),
+            "worktree_path is not one of the project's worktrees"
+        );
+    }
+
+    #[test]
+    fn setup_for_a_repo_that_is_no_saved_project_is_refused() {
+        let (repo, _parent, wt) = repo_with_worktree();
+        let store = store_with_project(Path::new("/somewhere/else"));
+        assert_eq!(
+            check_worktree_setup(&store, s(repo.path()), s(&wt)).unwrap_err(),
+            "repo_path is not a saved project's folder"
+        );
+    }
 }

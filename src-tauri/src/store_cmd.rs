@@ -9,7 +9,7 @@
 //! [Approved root], so a project or session row is saved only when its folders
 //! pass the checks in `kriyon_core::folder` (ADR-0058).
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crate::folder_cmd::ChosenFolders;
 use crate::store::{ProjectRow, SessionRow};
@@ -54,7 +54,7 @@ fn check_session_row(store: &StoreState, session: &SessionRow) -> Result<(), Str
     };
     let project = project.ok_or_else(|| "session's project is not saved".to_string())?;
     let project_folder = Path::new(&project.path);
-    let worktrees = || project_worktrees(&project.path);
+    let worktrees = || crate::folder_cmd::project_worktrees(&project.path);
     kriyon_core::folder::check_session_path(
         &session.cwd,
         saved.as_ref().map(|s| s.cwd.as_str()),
@@ -77,16 +77,6 @@ fn check_session_row(store: &StoreState, session: &SessionRow) -> Result<(), Str
         .map_err(|refusal| format!("session worktree: {refusal}"))?;
     }
     Ok(())
-}
-
-/// The linked worktrees of the repository at `project_folder`, as git lists
-/// them; none when it is not a repository or git fails.
-fn project_worktrees(project_folder: &str) -> Vec<PathBuf> {
-    crate::git_run::GitRun::new(project_folder)
-        .args(["worktree", "list", "--porcelain"])
-        .text()
-        .map(|out| kriyon_core::folder::parse_linked_worktrees(&out))
-        .unwrap_or_default()
 }
 
 /// Save a UI layout value (JSON) under `key`.
@@ -411,7 +401,7 @@ mod tests {
     #[test]
     fn a_saved_session_saves_again_once_its_worktree_is_gone() {
         let folder = tempfile::tempdir().unwrap();
-        let gone = PathBuf::from("/no/such/worktree");
+        let gone = std::path::PathBuf::from("/no/such/worktree");
         let store = empty_store();
         saved(&store, &project("p", folder.path()));
         store

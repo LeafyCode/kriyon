@@ -57,12 +57,24 @@ pub fn repo_status(repo_path: &str) -> Result<RepoStatus, String> {
 
 /// Create a new worktree at `path` on a freshly-created branch `branch`, with
 /// the person's [Shell PATH] so its post-checkout hook (git-lfs, say) finds
-/// their tools when the app was opened from the Dock.
+/// their tools when the app was opened from the Dock. `repo_path` must be a
+/// saved project's folder and `path` the default sibling folder or a [Chosen
+/// folder] under the branch's name (ADR-0058): a worktree git lists becomes an
+/// [Approved root].
 ///
 /// # Errors
-/// Returns an error string if git did not create the worktree.
+/// Returns an error string if a path is refused or git did not create the
+/// worktree.
+#[allow(clippy::needless_pass_by_value)]
 #[tauri::command(async)]
-pub fn create_worktree(repo_path: &str, branch: &str, path: &str) -> Result<(), String> {
+pub fn create_worktree(
+    store: tauri::State<'_, StoreState>,
+    chosen: tauri::State<'_, crate::folder_cmd::ChosenFolders>,
+    repo_path: &str,
+    branch: &str,
+    path: &str,
+) -> Result<(), String> {
+    crate::folder_cmd::check_new_worktree(&store, &chosen, repo_path, branch, path)?;
     create_worktree_with(repo_path, branch, path, crate::shell_path::user_path())
 }
 

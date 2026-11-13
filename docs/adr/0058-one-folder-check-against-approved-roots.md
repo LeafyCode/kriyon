@@ -81,8 +81,25 @@ Where it runs:
 - The frontend saves a new session's project before the session, and records the baseline only
   after both, so neither write races the check.
 
-Worktree setup will check its paths with the same function. Remote starts will call it with the
-person's approved roots and never add one themselves.
+**Worktrees, since a worktree git lists becomes an approved root:**
+
+- **`create_worktree`** makes a worktree only from exactly a saved project's folder, and only
+  at the default sibling folder (`<repo>-worktrees/<branch dir>`) or under a [Chosen folder]
+  with the branch's directory name, which is how the spawn dialog builds a chosen location
+  (`check_new_worktree_path`). The path does not exist yet, so its spelling and its chosen
+  parent are what is checked.
+- **`bootstrap_worktree`**, which copies `.env` files out of the repository and runs install
+  scripts and the setup command in the worktree, runs only for exactly a saved project's folder
+  and exactly one of its linked worktrees. The main checkout is not one: copying its `.env`
+  files onto themselves would empty them.
+
+The setup command itself still comes from the webview: the person types it in the spawn dialog,
+and the project row it is saved to is written on a debounce, so reading it back from the store
+would race that write. The local webview can already type into a terminal, so this adds no new
+reach; remote access keeps worktree setup off by default.
+
+Remote starts will call the same functions with the person's approved roots and never add one
+themselves.
 
 ## Consequences
 
@@ -90,8 +107,6 @@ person's approved roots and never add one themselves.
 - Rows saved before this rule are not re-checked; they stay approved as they were.
 - The webview can still name the home folder as a new project, the Home project. A session can
   only ever start in the home folder itself, not under it.
-- A linked worktree counts once git lists it, so `create_worktree` must check where it puts one;
-  the worktree-setup change does that.
 - `ChosenFolders` lives in memory, so a folder picked but never saved is forgotten on quit.
 - A session whose folder was deleted, or whose project was removed, no longer starts a fresh
   shell; it fails with the check's message instead. One whose daemon is still live reattaches.

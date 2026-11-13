@@ -35,6 +35,10 @@ pub enum FolderRefusal {
     /// Not exactly its project's folder or one of the project's worktrees.
     #[error("folder is not the project's folder or one of its worktrees")]
     NotProjectFolder,
+    /// Not where a new worktree may go: the default sibling folder, or a
+    /// [Chosen folder] under the branch's own name.
+    #[error("not a place a new worktree may go")]
+    NotWorktreeLocation,
 }
 
 /// A folder path that passed [`check_folder`]. Its only constructor is that
@@ -71,13 +75,7 @@ pub fn check_folder(
     path: &str,
     approved_roots: &[PathBuf],
 ) -> Result<CheckedFolder, FolderRefusal> {
-    if !Path::new(path).is_absolute() {
-        return Err(FolderRefusal::NotAbsolute);
-    }
-    // `Path::components` silently drops an interior `.`, so split the string.
-    if path.split('/').any(|part| part == "." || part == "..") {
-        return Err(FolderRefusal::NotNormal);
-    }
+    check_spelling(path)?;
     let canonical = Path::new(path)
         .canonicalize()
         .map_err(|_| FolderRefusal::NotADirectory)?;
@@ -93,6 +91,19 @@ pub fn check_folder(
     } else {
         Err(FolderRefusal::OutsideApprovedRoots)
     }
+}
+
+/// Rules 1 and 2 of [`check_folder`], which need no disk: absolute, and no
+/// `.` or `..` parts.
+fn check_spelling(path: &str) -> Result<(), FolderRefusal> {
+    if !Path::new(path).is_absolute() {
+        return Err(FolderRefusal::NotAbsolute);
+    }
+    // `Path::components` silently drops an interior `.`, so split the string.
+    if path.split('/').any(|part| part == "." || part == "..") {
+        return Err(FolderRefusal::NotNormal);
+    }
+    Ok(())
 }
 
 /// Check that `path` is exactly one of the [Chosen folder]s, not merely
@@ -178,6 +189,39 @@ pub fn parse_linked_worktrees(porcelain: &str) -> Vec<PathBuf> {
         .skip(1)
         .map(PathBuf::from)
         .collect()
+}
+
+/// Where a new worktree of `repo` (a saved project's folder) on `branch` may
+/// be made: the default sibling folder, `<repo>-worktrees/<branch dir>`, or a
+/// [Chosen folder] with the branch's directory name under it, which is how
+/// the spawn dialog builds a chosen location. The path does not exist yet, so
+/// only its spelling and its chosen parent are checked.
+///
+/// # Errors
+/// `NotAbsolute` or `NotNormal` for the spelling, else `NotWorktreeLocation`.
+pub fn check_new_worktree_path(
+    repo: &str,
+    branch: &str,
+    path: &str,
+    chosen: &[PathBuf],
+) -> Result<(), FolderRefusal> {
+    check_spelling(path)?;
+    if path == crate::bootstrap::worktree_path_for(repo, branch) {
+        return Ok(());
+    }
+    let path = Path::new(path);
+    let named_for_branch = path
+        .file_name()
+        .is_some_and(|leaf| *leaf == *crate::bootstrap::sanitize_branch_dir(branch));
+    let parent_chosen = path
+        .parent()
+        .and_then(Path::to_str)
+        .is_some_and(|parent| check_chosen_folder(parent, chosen).is_ok());
+    if named_for_branch && parent_chosen {
+        Ok(())
+    } else {
+        Err(FolderRefusal::NotWorktreeLocation)
+    }
 }
 
 #[cfg(test)]
@@ -487,6 +531,64 @@ mod tests {
                 PathBuf::from("/repo-worktrees/feat x"),
                 PathBuf::from("/tmp/detached"),
             ]
+        );
+    }
+
+    // --- New worktree locations ---
+
+    #[test]
+    fn a_new_worktree_may_go_in_the_default_sibling_folder() {
+        assert_eq!(
+            check_new_worktree_path("/work/repo", "feat/x", "/work/repo-worktrees/feat-x", &[]),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn a_new_worktree_may_go_in_a_chosen_folder_under_its_branch_name() {
+        let chosen = tempfile::tempdir().unwrap();
+        let path = chosen.path().join("feat-x");
+        assert_eq!(
+            check_new_worktree_path("/work/repo", "feat/x", s(&path), &approved(&chosen)),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn a_new_worktree_anywhere_else_is_refused() {
+        let chosen = tempfile::tempdir().unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+        // A folder nobody chose.
+        assert_eq!(
+            check_new_worktree_path(
+                "/work/repo",
+                "feat/x",
+                s(&elsewhere.path().join("feat-x")),
+                &approved(&chosen)
+            ),
+            Err(FolderRefusal::NotWorktreeLocation)
+        );
+        // A chosen folder, but not under the branch's own name.
+        assert_eq!(
+            check_new_worktree_path(
+                "/work/repo",
+                "feat/x",
+                s(&chosen.path().join("other")),
+                &approved(&chosen)
+            ),
+            Err(FolderRefusal::NotWorktreeLocation)
+        );
+    }
+
+    #[test]
+    fn a_new_worktree_path_must_be_spelled_plainly() {
+        assert_eq!(
+            check_new_worktree_path("/work/repo", "x", "/work/repo-worktrees/../x", &[]),
+            Err(FolderRefusal::NotNormal)
+        );
+        assert_eq!(
+            check_new_worktree_path("/work/repo", "x", "repo-worktrees/x", &[]),
+            Err(FolderRefusal::NotAbsolute)
         );
     }
 }

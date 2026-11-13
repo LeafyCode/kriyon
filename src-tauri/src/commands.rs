@@ -934,27 +934,36 @@ pub fn worktree_path(repo_path: String, branch: String) -> Result<String, String
 /// project's optional setup command. Best-effort — a non-`ok` report is returned
 /// (not an `Err`) so the caller can offer "Open anyway". Runs on a blocking
 /// thread since installs (e.g. `pnpm install`) can take minutes and must not
-/// occupy a Tokio worker.
+/// occupy a Tokio worker. Only for a linked worktree of a saved project's
+/// folder (ADR-0058), checked on that thread too since it runs git.
 ///
 /// # Errors
-/// Returns `Err` only if the blocking task itself fails to join (e.g. panics);
-/// the bootstrap steps are otherwise always reported via `BootstrapReport`.
+/// Returns `Err` if a path is refused, or if the blocking task itself fails to
+/// join (e.g. panics); the bootstrap steps are otherwise always reported via
+/// `BootstrapReport`.
 #[tauri::command]
 pub async fn bootstrap_worktree(
+    app: tauri::AppHandle,
     repo_path: String,
     worktree_path: String,
     setup_cmd: Option<String>,
 ) -> Result<BootstrapReport, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        run_bootstrap(
+        use tauri::Manager as _;
+        crate::folder_cmd::check_worktree_setup(
+            &app.state::<StoreState>(),
+            &repo_path,
+            &worktree_path,
+        )?;
+        Ok(run_bootstrap(
             &repo_path,
             &worktree_path,
             setup_cmd.as_deref(),
             crate::shell_path::user_path(),
-        )
+        ))
     })
     .await
-    .map_err(|e| e.to_string())
+    .map_err(|e| e.to_string())?
 }
 
 /// Resolve HOME via Tauri, mirroring `seed_prompt`.
