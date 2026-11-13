@@ -1058,7 +1058,7 @@ fn reason_number(reason: RefuseReason) -> u8 {
 mod tests {
     use std::sync::Mutex as StdMutex;
 
-    use crate::host::{Accepted, Host, PairedDevices};
+    use crate::host::{Accepted, Host};
     use crate::LinkConfig;
     use kriyon_core::session::SessionStatus;
     use kriyon_core::standing::StandingState;
@@ -1066,63 +1066,15 @@ mod tests {
     use kriyon_remote::message::{Epoch, Role, SessionInfo};
 
     use super::*;
+    use crate::test_support::{
+        loopback, loopback_config, on_loopback, run, wait_until, MemoryPaired, RecordingEvents,
+    };
 
-    fn loopback() -> std::net::SocketAddr {
-        std::net::SocketAddr::from(([127, 0, 0, 1], 0))
-    }
-
-    fn run<F: std::future::Future>(f: F) -> F::Output {
-        tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .expect("runtime")
-            .block_on(f)
-    }
-
-    /// What a device side told the app: each link state with the host view.
-    #[derive(Default)]
-    struct DeviceSeen(StdMutex<Vec<(LinkState, HostView)>>);
-
-    impl DeviceEvents for DeviceSeen {
-        fn host_changed(&self, _host: EndpointId, state: LinkState, view: &HostView) {
-            self.0.lock().expect("seen").push((state, view.clone()));
-        }
-    }
-
-    impl DeviceSeen {
-        fn last(&self) -> Option<(LinkState, HostView)> {
-            self.0.lock().expect("seen").last().cloned()
-        }
-    }
-
-    /// Attach `rt` to a new loopback endpoint with `key`; returns its id.
-    async fn on_loopback(rt: &DeviceRuntime, key: [u8; 32]) -> EndpointId {
-        let endpoint = crate::endpoint::bind(
-            &LinkConfig {
-                bind: loopback(),
-                ..LinkConfig::new(key)
-            },
-            Vec::new(),
-        )
-        .await
-        .expect("binds");
-        rt.attach(endpoint).await.id()
-    }
-
-    /// Wait until `check` holds, failing with `what` after ten seconds.
     /// Wait until `rt` has `n` starts waiting on `host`.
     async fn until_waiting(rt: &DeviceRuntime, host: &EndpointId, n: usize) {
         let deadline = Instant::now() + Duration::from_secs(10);
         while rt.waiting_starts(host).await != n {
             assert!(Instant::now() < deadline, "never {n} starts waiting");
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-    }
-
-    async fn wait_until(what: &str, mut check: impl FnMut() -> bool) {
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while !check() {
-            assert!(Instant::now() < deadline, "never saw {what}");
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
     }
@@ -1138,13 +1090,6 @@ mod tests {
         let rt = DeviceRuntime::default();
         let me = on_loopback(&rt, DEVICE_KEY).await;
         (rt, me)
-    }
-
-    struct Paired(StdMutex<HashMap<EndpointId, Role>>);
-    impl PairedDevices for Paired {
-        fn role(&self, device: &EndpointId) -> Option<Role> {
-            self.0.lock().expect("lock").get(device).copied()
-        }
     }
 
     fn session() -> SessionInfo {
@@ -1167,21 +1112,11 @@ mod tests {
         device_id: EndpointId,
         heartbeats: bool,
     ) -> (Arc<Host>, JoinHandle<Vec<FromDevice>>) {
-        let paired = Arc::new(Paired(StdMutex::new(HashMap::from([(
-            device_id,
-            Role::Controller,
-        )]))));
+        let paired = Arc::new(MemoryPaired::of([(device_id, Role::Controller)]));
         let host = Arc::new(
-            Host::bind(
-                &LinkConfig {
-                    bind: loopback(),
-                    ..LinkConfig::new([1; 32])
-                },
-                paired,
-                10,
-            )
-            .await
-            .expect("host binds"),
+            Host::bind(&loopback_config(1), paired, 10)
+                .await
+                .expect("host binds"),
         );
         let serving = Arc::clone(&host);
         let task = tokio::spawn(async move {
@@ -1303,7 +1238,7 @@ mod tests {
         run(async {
             let (rt, me) = device_runtime().await;
             let (host, _serving) = fake_host(me, true).await;
-            let seen = Arc::new(DeviceSeen::default());
+            let seen = Arc::new(RecordingEvents::default());
             rt.connect(entry(&host), seen.clone())
                 .await
                 .expect("connects");
@@ -1326,7 +1261,7 @@ mod tests {
             // This fake host never answers a start.
             let (host, _serving) = fake_host(me, true).await;
             let rt = Arc::new(rt);
-            rt.connect(entry(&host), Arc::new(DeviceSeen::default()))
+            rt.connect(entry(&host), Arc::new(RecordingEvents::default()))
                 .await
                 .expect("connects");
             let starting = {
@@ -1350,7 +1285,7 @@ mod tests {
             let (rt, me) = device_runtime().await;
             let (host, _serving) = fake_host(me, true).await;
             let rt = Arc::new(rt);
-            rt.connect(entry(&host), Arc::new(DeviceSeen::default()))
+            rt.connect(entry(&host), Arc::new(RecordingEvents::default()))
                 .await
                 .expect("connects");
             let starting = {
@@ -1370,7 +1305,7 @@ mod tests {
         run(async {
             let (rt, me) = device_runtime().await;
             let (host, serving) = fake_host(me, true).await;
-            let seen = Arc::new(DeviceSeen::default());
+            let seen = Arc::new(RecordingEvents::default());
             rt.connect(entry(&host), seen.clone())
                 .await
                 .expect("connects");
@@ -1462,7 +1397,7 @@ mod tests {
             let (rt, _me) = device_runtime().await;
             // A host that never paired this device.
             let (host, _serving) = fake_host([7; 32], true).await;
-            let seen = Arc::new(DeviceSeen::default());
+            let seen = Arc::new(RecordingEvents::default());
             rt.connect(entry(&host), seen.clone())
                 .await
                 .expect("connects");
@@ -1513,18 +1448,11 @@ mod tests {
     fn a_push_token_reaches_the_host_on_its_control_stream() {
         run(async {
             let (rt, me) = device_runtime().await;
-            let paired = Arc::new(Paired(StdMutex::new(HashMap::from([(me, Role::Viewer)]))));
+            let paired = Arc::new(MemoryPaired::of([(me, Role::Viewer)]));
             let host = Arc::new(
-                Host::bind(
-                    &LinkConfig {
-                        bind: loopback(),
-                        ..LinkConfig::new([1; 32])
-                    },
-                    paired,
-                    10,
-                )
-                .await
-                .expect("host binds"),
+                Host::bind(&loopback_config(1), paired, 10)
+                    .await
+                    .expect("host binds"),
             );
             let serving = Arc::clone(&host);
             let heard = tokio::spawn(async move {
@@ -1543,7 +1471,7 @@ mod tests {
                 .expect("welcome");
                 control.next().await
             });
-            let seen = Arc::new(DeviceSeen::default());
+            let seen = Arc::new(RecordingEvents::default());
             rt.connect(
                 HostEntry {
                     id: host.id(),
@@ -1613,21 +1541,11 @@ mod tests {
     fn rebinding_keeps_each_hosts_open_sessions_on_the_new_endpoint() {
         run(async {
             let (rt, me) = device_runtime().await;
-            let paired = Arc::new(Paired(StdMutex::new(HashMap::from([(
-                me,
-                Role::Controller,
-            )]))));
+            let paired = Arc::new(MemoryPaired::of([(me, Role::Controller)]));
             let host = Arc::new(
-                Host::bind(
-                    &LinkConfig {
-                        bind: loopback(),
-                        ..LinkConfig::new([1; 32])
-                    },
-                    paired,
-                    10,
-                )
-                .await
-                .expect("host binds"),
+                Host::bind(&loopback_config(1), paired, 10)
+                    .await
+                    .expect("host binds"),
             );
             // Each link: welcome, then hear which session is opened.
             let (opened_in, mut opened) = tokio::sync::mpsc::unbounded_channel();
@@ -1659,7 +1577,7 @@ mod tests {
                     });
                 }
             });
-            let seen = Arc::new(DeviceSeen::default());
+            let seen = Arc::new(RecordingEvents::default());
             rt.connect(
                 HostEntry {
                     id: host.id(),

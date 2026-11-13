@@ -85,6 +85,7 @@ libproc = "0.14"
 libc = "0.2.189"
 
 [dev-dependencies]
+kriyon-remote-link = { path = "../crates/kriyon-remote-link", features = ["test-support"] }
 # The real push sender, so host-side wakes are tested against it.
 kriyon-push = { path = "../crates/kriyon-push" }
 # The mock runtime behind `tauri::test`, so the watch-signal route (state

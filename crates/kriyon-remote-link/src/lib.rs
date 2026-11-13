@@ -12,6 +12,8 @@
 //! - [`device`]: pairing from the device's side, connecting, and staying
 //!   connected with backoff until the host says it is no longer paired.
 //! - [`framed`]: messages over a QUIC stream, with the `kriyon-remote` codec.
+//! - `test_support` (the `test-support` feature): shared fakes for tests
+//!   over loopback.
 
 pub mod device;
 pub mod device_runtime;
@@ -20,5 +22,7 @@ pub mod framed;
 pub mod host;
 pub mod invite;
 pub mod keys;
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support;
 
 pub use endpoint::{LinkConfig, LinkError, RelayAccess, ALPN_PAIR, ALPN_REMOTE};

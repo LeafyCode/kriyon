@@ -2,7 +2,6 @@
 //! with one live session "s" whose daemon is the test, a real host endpoint
 //! serving it, and paired devices that dial it.
 
-use kriyon_remote::device_view::LinkState;
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -23,13 +22,14 @@ use kriyon_remote_link::framed::{MessageReader, MessageWriter};
 use kriyon_remote_link::host::{Accepted, Host, PairedDevices};
 use parking_lot::Mutex;
 
-use kriyon_remote::device_view::HostView;
-
 use crate::daemon_client::DaemonEvent;
+pub(crate) use kriyon_remote_link::test_support::{
+    loopback, on_loopback, wait_until, RecordingEvents,
+};
+
 use crate::remote_serve::{EntriesBuilt, LiveSession, RemoteStart, Serve, ServeHost};
 use kriyon_remote::authorize::ProjectFolder;
 use kriyon_remote::message::EntriesUnavailable;
-use kriyon_remote_link::device_runtime::{DeviceEvents, DeviceRuntime};
 
 /// The app, faked: one session "s", paired devices in a map.
 pub(crate) struct FakeHost {
@@ -300,10 +300,6 @@ impl ServeHost for FakeHost {
     }
 }
 
-pub(crate) fn loopback() -> SocketAddr {
-    SocketAddr::from(([127, 0, 0, 1], 0))
-}
-
 pub(crate) struct World {
     pub(crate) host: Arc<Host>,
     pub(crate) fake: Arc<FakeHost>,
@@ -446,49 +442,4 @@ pub(crate) async fn open(
 
 pub(crate) fn run<F: std::future::Future>(f: F) -> F::Output {
     tauri::async_runtime::block_on(f)
-}
-
-/// What a device side told the app: each link state with the host view then.
-#[derive(Default)]
-pub(crate) struct DeviceSeen(Mutex<Vec<(LinkState, HostView)>>);
-
-impl DeviceEvents for DeviceSeen {
-    fn host_changed(&self, _host: EndpointId, state: LinkState, view: &HostView) {
-        self.0.lock().push((state, view.clone()));
-    }
-}
-
-impl DeviceSeen {
-    /// The latest state and view.
-    pub(crate) fn last(&self) -> Option<(LinkState, HostView)> {
-        self.0.lock().last().cloned()
-    }
-
-    /// The latest state.
-    pub(crate) fn state(&self) -> Option<LinkState> {
-        self.0.lock().last().map(|(state, _)| *state)
-    }
-}
-
-/// Put `rt` on its own loopback endpoint with key `key`; returns its id.
-pub(crate) async fn on_loopback(rt: &DeviceRuntime, key: [u8; 32]) -> EndpointId {
-    let endpoint = kriyon_remote_link::endpoint::bind(
-        &LinkConfig {
-            bind: loopback(),
-            ..LinkConfig::new(key)
-        },
-        Vec::new(),
-    )
-    .await
-    .expect("binds");
-    rt.attach(endpoint).await.id()
-}
-
-/// Wait until `check` holds, failing with `what` after ten seconds.
-pub(crate) async fn wait_until(what: &str, mut check: impl FnMut() -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while !check() {
-        assert!(Instant::now() < deadline, "never saw {what}");
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
 }

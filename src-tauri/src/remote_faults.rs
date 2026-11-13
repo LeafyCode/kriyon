@@ -41,7 +41,8 @@ use kriyon_remote::message::{EndpointId, FromDevice, Holder, RefuseReason, Role,
 use parking_lot::Mutex;
 
 use crate::remote_test_support::{
-    answer, asked, device, next, on_loopback, run, wait_until, world, world_on, DeviceSeen, World,
+    answer, asked, device, next, on_loopback, run, wait_until, world, world_on, RecordingEvents,
+    World,
 };
 use kriyon_remote_link::device_runtime::{
     DeviceError, DeviceEvents, DeviceRuntime, HostEntry, ScreenSink, StartError, Timing,
@@ -100,7 +101,7 @@ struct Phone {
     rt: DeviceRuntime,
     me: EndpointId,
     host: EndpointId,
-    seen: Arc<DeviceSeen>,
+    seen: Arc<RecordingEvents>,
     screen: Arc<Mutex<Vec<ScreenEvent>>>,
 }
 
@@ -113,7 +114,7 @@ impl Phone {
         });
         let me = on_loopback(&rt, [key; 32]).await;
         world.fake.paired.lock().insert(me, role);
-        let seen = Arc::new(DeviceSeen::default());
+        let seen = Arc::new(RecordingEvents::default());
         let host = world.host.id();
         rt.connect(
             HostEntry {

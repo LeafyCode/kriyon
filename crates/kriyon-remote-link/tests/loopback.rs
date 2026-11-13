@@ -1,45 +1,26 @@
 //! A host and devices in one process, over loopback, relay off.
 
-use std::collections::HashMap;
-use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use iroh::EndpointAddr;
 use kriyon_remote::codec::Decoded;
 use kriyon_remote::link_policy::{CloseCode, CodeCheck};
-use kriyon_remote::message::{EndpointId, FromDevice, RefuseReason, Role, ToDevice};
+use kriyon_remote::message::{FromDevice, RefuseReason, Role, ToDevice};
 use kriyon_remote_link::device::{stay_connected, Device};
 use kriyon_remote_link::host::{Accepted, Host, PairedDevices};
+use kriyon_remote_link::test_support::{loopback_config, MemoryPaired};
 use kriyon_remote_link::{LinkConfig, LinkError};
 use tokio::time::timeout;
 
 const WAIT: Duration = Duration::from_secs(10);
 const SECRET: [u8; 32] = [7; 32];
 
-#[derive(Default)]
-struct Store(Mutex<HashMap<EndpointId, Role>>);
-
-impl PairedDevices for Store {
-    fn role(&self, device: &EndpointId) -> Option<Role> {
-        self.0.lock().expect("lock").get(device).copied()
-    }
-}
-
-impl Store {
-    fn add(&self, device: EndpointId, role: Role) {
-        self.0.lock().expect("lock").insert(device, role);
-    }
-    fn remove(&self, device: &EndpointId) {
-        self.0.lock().expect("lock").remove(device);
-    }
-}
+/// The host's paired devices.
+type Store = MemoryPaired;
 
 fn config(key: u8) -> LinkConfig {
-    LinkConfig {
-        bind: SocketAddr::from(([127, 0, 0, 1], 0)),
-        ..LinkConfig::new([key; 32])
-    }
+    loopback_config(key)
 }
 
 async fn host(store: &Arc<Store>, unpaired_per_minute: u32) -> Host {

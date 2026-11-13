@@ -159,16 +159,9 @@ impl RemoteEndpoint {
 
 #[cfg(test)]
 mod tests {
-    use kriyon_remote::message::{EndpointId, Role};
+    use kriyon_remote_link::test_support::MemoryPaired;
 
     use super::*;
-
-    struct Nobody;
-    impl PairedDevices for Nobody {
-        fn role(&self, _device: &EndpointId) -> Option<Role> {
-            None
-        }
-    }
 
     fn run<F: std::future::Future>(f: F) -> F::Output {
         tauri::async_runtime::block_on(f)
@@ -180,7 +173,9 @@ mod tests {
             let owner = RemoteEndpoint::new(std::net::SocketAddr::from(([127, 0, 0, 1], 0)));
             assert!(!owner.is_bound().await);
             let first = owner
-                .get([3; 32], || Arc::new(Nobody) as Arc<dyn PairedDevices>)
+                .get([3; 32], || {
+                    Arc::new(MemoryPaired::default()) as Arc<dyn PairedDevices>
+                })
                 .await
                 .expect("binds");
             let again = owner
@@ -205,7 +200,7 @@ mod tests {
         };
         run(async {
             let owner = RemoteEndpoint::new(std::net::SocketAddr::from(([127, 0, 0, 1], 0)));
-            let nobody = || Arc::new(Nobody) as Arc<dyn PairedDevices>;
+            let nobody = || Arc::new(MemoryPaired::default()) as Arc<dyn PairedDevices>;
             let bound_now = Arc::new(std::sync::Mutex::new(Vec::new()));
             let seen = Arc::clone(&bound_now);
             owner.on_bind(Arc::new(move |bound: &Bound| {

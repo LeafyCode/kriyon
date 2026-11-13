@@ -11,7 +11,12 @@ iroh = { version = "1.4.1", default-features = false, features = ["tls-ring"] }
 kriyon-remote = { path = "../kriyon-remote" }
 tokio = { version = "1", default-features = false, features = ["macros", "rt", "sync", "time"] }
 
+[features]
+# Shared fakes for tests over loopback (`test_support`); never in a release.
+test-support = ["tokio/rt-multi-thread"]
+
 [dev-dependencies]
+kriyon-remote-link = { path = ".", features = ["test-support"] }
 kriyon-core = { path = "../kriyon-core" }
 tokio = { version = "1", default-features = false, features = ["macros", "rt-multi-thread", "sync", "time"] }
 

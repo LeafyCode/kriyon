@@ -3340,6 +3340,7 @@ dependencies = [
  "iroh",
  "kriyon-core",
  "kriyon-remote",
+ "kriyon-remote-link",
  "tokio",
 ]
 
