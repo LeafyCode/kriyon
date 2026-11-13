@@ -12,6 +12,7 @@ pub mod push;
 pub mod relay;
 
 pub use device::{
-    HostListener, MobileDevice, MobileError, Pairing, PhoneStore, ScreenListener, StoreError,
+    EntriesListener, HostListener, MobileDevice, MobileError, Pairing, PhoneStore, ScreenListener,
+    StoreError,
 };
 pub use hosts::PairedHost;

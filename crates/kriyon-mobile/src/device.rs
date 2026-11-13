@@ -90,6 +90,13 @@ pub trait ScreenListener: Send + Sync {
     fn frame(&self, frame: Vec<u8>);
 }
 
+/// Where one open session's [Readable view] goes: the JSON of
+/// `kriyon_remote::device_view::ReadableSummary`, whole, on every change.
+#[uniffi::export(with_foreign)]
+pub trait EntriesListener: Send + Sync {
+    fn entries_changed(&self, summary: String);
+}
+
 /// Why a phone action couldn't happen, in words the app can show. Its
 /// words (Display) cross to the app as they are.
 #[derive(Debug, PartialEq, Eq, uniffi::Error)]
@@ -887,6 +894,46 @@ impl MobileDevice {
         Ok(())
     }
 
+    /// Read an open session as [Readable view] entries too: each change
+    /// goes to `listener`, again on every link, until stopped or closed. A
+    /// summary with `unavailable` words means show the terminal; read again
+    /// when the person opens the readable view again.
+    ///
+    /// # Errors
+    /// An id that isn't one, a session not open here, or the link failed.
+    pub async fn read_entries(
+        &self,
+        host_id: String,
+        session_id: String,
+        listener: Arc<dyn EntriesListener>,
+    ) -> Result<(), MobileError> {
+        let host = parse_host_id(&host_id)?;
+        let sink: kriyon_remote_link::device_runtime::EntriesSink = Arc::new(move |event| {
+            listener.entries_changed(json(&kriyon_remote::device_view::readable_summary(&event)));
+        });
+        let device = Arc::clone(&self.shared.device);
+        self.shared
+            .on_runtime(async move { device.read_entries(&host, &session_id, sink).await })
+            .await??;
+        Ok(())
+    }
+
+    /// Stop reading a session as entries (back to its terminal).
+    ///
+    /// # Errors
+    /// An id that isn't one.
+    pub async fn stop_entries(
+        &self,
+        host_id: String,
+        session_id: String,
+    ) -> Result<(), MobileError> {
+        let host = parse_host_id(&host_id)?;
+        let device = Arc::clone(&self.shared.device);
+        self.shared
+            .on_runtime(async move { device.stop_entries(&host, &session_id).await })
+            .await
+    }
+
     /// Close a session opened here.
     ///
     /// # Errors
@@ -1079,6 +1126,30 @@ pub(crate) mod tests {
             loopback(),
         );
         assert!(matches!(started, Err(MobileError::Store { .. })));
+    }
+
+    struct Entries;
+    impl EntriesListener for Entries {
+        fn entries_changed(&self, _summary: String) {}
+    }
+
+    #[test]
+    fn entries_are_read_only_from_a_computer_paired_here() {
+        let store = Arc::new(Memory::default());
+        let device = phone(&store);
+        let reader = Arc::clone(&device);
+        let refused = run(async move {
+            reader
+                .read_entries("ab".repeat(32), "s".into(), Arc::new(Entries))
+                .await
+        });
+        assert!(refused.is_err(), "{refused:?}");
+        let bad = run(async move {
+            device
+                .read_entries("not an id".into(), "s".into(), Arc::new(Entries))
+                .await
+        });
+        assert!(matches!(bad, Err(MobileError::Invalid { .. })), "{bad:?}");
     }
 
     #[test]

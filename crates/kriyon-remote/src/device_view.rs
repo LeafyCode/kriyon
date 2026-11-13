@@ -445,6 +445,122 @@ impl ReadableEntries {
     }
 }
 
+/// A readable view as the apps show it: the desktop's webview and the
+/// phone's screens read this JSON alike.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadableSummary {
+    pub entries: Vec<ShownEntry>,
+    /// Why there are no entries, in words to show over the terminal; `None`
+    /// while the host sends them.
+    pub unavailable: Option<String>,
+}
+
+/// One entry as the apps show it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ShownEntry {
+    pub seq: u64,
+    #[serde(flatten)]
+    pub kind: ShownKind,
+}
+
+/// What an entry shows, tagged `kind`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum ShownKind {
+    You {
+        text: String,
+    },
+    Claude {
+        text: String,
+        done: bool,
+    },
+    Step {
+        name: String,
+        target: String,
+        /// `running`, `done` or `failed`.
+        state: &'static str,
+    },
+    Report {
+        summary: String,
+        outcome: String,
+    },
+    /// Only ever answered in the terminal.
+    Asking {
+        header: String,
+        question: String,
+        options: Vec<String>,
+    },
+    Note {
+        text: String,
+    },
+}
+
+/// What the apps show for `event`.
+#[must_use]
+pub fn readable_summary(event: &EntriesEvent) -> ReadableSummary {
+    use crate::message::{EntriesUnavailable, EntryKind, StepState};
+    match event {
+        EntriesEvent::Unavailable(reason) => ReadableSummary {
+            entries: Vec::new(),
+            unavailable: Some(
+                match reason {
+                    EntriesUnavailable::CompanionOff => {
+                        "The Kriyon Companion is off for this session on the computer, so it shows as its terminal."
+                    }
+                    EntriesUnavailable::NoTranscript => {
+                        "Nothing to read yet, so this session shows as its terminal."
+                    }
+                }
+                .to_string(),
+            ),
+        },
+        EntriesEvent::Entries(entries) => ReadableSummary {
+            entries: entries
+                .iter()
+                .map(|entry| ShownEntry {
+                    seq: entry.seq,
+                    kind: match &entry.kind {
+                        EntryKind::You { text } => ShownKind::You { text: text.clone() },
+                        EntryKind::Claude { text, done } => ShownKind::Claude {
+                            text: text.clone(),
+                            done: *done,
+                        },
+                        EntryKind::Step {
+                            name,
+                            target,
+                            state,
+                        } => ShownKind::Step {
+                            name: name.clone(),
+                            target: target.clone(),
+                            state: match state {
+                                StepState::Running => "running",
+                                StepState::Done => "done",
+                                StepState::Failed => "failed",
+                            },
+                        },
+                        EntryKind::Report { summary, outcome } => ShownKind::Report {
+                            summary: summary.clone(),
+                            outcome: outcome.clone(),
+                        },
+                        EntryKind::Asking {
+                            header,
+                            question,
+                            options,
+                        } => ShownKind::Asking {
+                            header: header.clone(),
+                            question: question.clone(),
+                            options: options.clone(),
+                        },
+                        EntryKind::Note { text } => ShownKind::Note { text: text.clone() },
+                    },
+                })
+                .collect(),
+            unavailable: None,
+        },
+    }
+}
+
 #[cfg(test)]
 mod entries_tests {
     use super::*;
@@ -493,6 +609,40 @@ mod entries_tests {
             reset: true,
         });
         assert_eq!(texts(event), vec![(9, "Z".into())]);
+    }
+
+    #[test]
+    fn the_summary_apps_read_names_each_kind_and_says_why_entries_are_off() {
+        let event = EntriesEvent::Entries(vec![
+            Entry {
+                seq: 1,
+                kind: EntryKind::Step {
+                    name: "Bash".into(),
+                    target: "cargo test".into(),
+                    state: crate::message::StepState::Running,
+                },
+            },
+            Entry {
+                seq: 2,
+                kind: EntryKind::Claude {
+                    text: "Done.".into(),
+                    done: true,
+                },
+            },
+        ]);
+        assert_eq!(
+            serde_json::to_value(readable_summary(&event)).expect("json"),
+            serde_json::json!({
+                "entries": [
+                    {"seq": 1, "kind": "step", "name": "Bash", "target": "cargo test", "state": "running"},
+                    {"seq": 2, "kind": "claude", "text": "Done.", "done": true},
+                ],
+                "unavailable": null,
+            })
+        );
+        let off = readable_summary(&EntriesEvent::Unavailable(EntriesUnavailable::CompanionOff));
+        assert_eq!(off.entries, Vec::new());
+        assert!(off.unavailable.expect("words").contains("Companion"));
     }
 
     #[test]
