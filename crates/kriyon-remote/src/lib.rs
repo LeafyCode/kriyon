@@ -7,4 +7,5 @@ pub mod authorize;
 pub mod codec;
 pub mod control;
 pub mod message;
+pub mod queue;
 pub mod screen;
