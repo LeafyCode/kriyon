@@ -127,6 +127,10 @@ pub struct DeviceRuntime {
 }
 
 struct HostConn {
+    /// Where the host is, and who hears about it: kept to dial it again
+    /// from a rebuilt endpoint.
+    entry: HostEntry,
+    events: Arc<dyn DeviceEvents>,
     conn: Mutex<Conn>,
     task: std::sync::Mutex<Option<JoinHandle<()>>>,
 }
@@ -313,15 +317,25 @@ impl DeviceRuntime {
             return Ok(());
         }
         let conn = Arc::new(HostConn {
+            entry: host.clone(),
+            events,
             conn: Mutex::new(Conn::default()),
             task: std::sync::Mutex::new(None),
         });
         hosts.insert(host.id, Arc::clone(&conn));
         drop(hosts);
+        self.stay_linked(&conn, device);
+        Ok(())
+    }
+
+    /// Keep `conn`'s host linked from `device`, in a task of its own.
+    fn stay_linked(&self, conn: &Arc<HostConn>, device: Arc<Device>) {
         let wake = Arc::clone(&self.wake);
         let timing = self.timing;
-        let staying = Arc::clone(&conn);
+        let staying = Arc::clone(conn);
         let task = tokio::spawn(async move {
+            let host = staying.entry.clone();
+            let events = Arc::clone(&staying.events);
             set_state(&staying, host.id, LinkState::Connecting, events.as_ref()).await;
             stay_connected_waking(&device, host.addr, &wake, |link| {
                 run_link(
@@ -337,11 +351,14 @@ impl DeviceRuntime {
             staying.conn.lock().await.starting.clear();
             set_state(&staying, host.id, LinkState::Removed, events.as_ref()).await;
         });
-        *conn
+        let old = conn
             .task
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(task);
-        Ok(())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .replace(task);
+        if let Some(old) = old {
+            old.abort();
+        }
     }
 
     /// Stop staying connected to `host`.
@@ -512,6 +529,41 @@ impl DeviceRuntime {
             .ok_or(DeviceError::NotConnected)?;
         let sent = control.lock().await.send(message).await;
         sent.map_err(|e| DeviceError::Link(e.to_string()))
+    }
+
+    /// Whether any session is open here, on any host.
+    pub async fn has_open_sessions(&self) -> bool {
+        let conns: Vec<Arc<HostConn>> = self.hosts.lock().await.values().cloned().collect();
+        for conn in conns {
+            if !conn.conn.lock().await.wanted.is_empty() {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Dial from `endpoint` from now on (rebuilt with the same key, for a new
+    /// relay pass): every host's link moves to it, and the sessions open here
+    /// and the starts waiting are taken up again on the new link.
+    pub async fn rebind(&self, endpoint: iroh::Endpoint) {
+        let device = Arc::new(Device::from_endpoint(endpoint));
+        *self.device.lock().await = Some(Arc::clone(&device));
+        let conns: Vec<Arc<HostConn>> = self.hosts.lock().await.values().cloned().collect();
+        for conn in conns {
+            {
+                // The old link goes; what is wanted and waiting stays, and
+                // the new link takes it up.
+                let mut c = conn.conn.lock().await;
+                for (_, open) in c.sessions.drain() {
+                    open.reader.abort();
+                }
+                if let Some(link) = c.link.take() {
+                    link.close();
+                }
+                c.control = None;
+            }
+            self.stay_linked(&conn, Arc::clone(&device));
+        }
     }
 
     /// The hosts connected now (welcomed, heartbeat coming).
@@ -1453,6 +1505,100 @@ mod tests {
                 "the new endpoint is used"
             );
             assert!(!replaced.is_closed());
+        });
+    }
+
+    #[test]
+    fn rebinding_keeps_each_hosts_open_sessions_on_the_new_endpoint() {
+        run(async {
+            let (rt, me) = device_runtime().await;
+            let paired = Arc::new(Paired(StdMutex::new(HashMap::from([(
+                me,
+                Role::Controller,
+            )]))));
+            let host = Arc::new(
+                Host::bind(
+                    &LinkConfig {
+                        bind: loopback(),
+                        ..LinkConfig::new([1; 32])
+                    },
+                    paired,
+                    10,
+                )
+                .await
+                .expect("host binds"),
+            );
+            // Each link: welcome, then hear which session is opened.
+            let (opened_in, mut opened) = tokio::sync::mpsc::unbounded_channel();
+            let serving = Arc::clone(&host);
+            tokio::spawn(async move {
+                while let Some(accepted) = serving.accept().await {
+                    let Accepted::Remote(link) = accepted else {
+                        continue;
+                    };
+                    let opened_in = opened_in.clone();
+                    tokio::spawn(async move {
+                        let (mut out, mut control) = link.accept_stream().await.expect("control");
+                        let _hello = control.next().await;
+                        out.send(&ToDevice::Welcome {
+                            host_name: "Studio".into(),
+                            protocol_minor: 0,
+                            role: Role::Controller,
+                            sessions: vec![session()],
+                        })
+                        .await
+                        .expect("welcome");
+                        let (_out, mut incoming) = link.accept_stream().await.expect("session");
+                        if let Ok(Some(Decoded::Message(FromDevice::Open { session_id }))) =
+                            incoming.next().await
+                        {
+                            let _ = opened_in.send(session_id);
+                        }
+                        link.closed().await;
+                    });
+                }
+            });
+            let seen = Arc::new(DeviceSeen::default());
+            rt.connect(
+                HostEntry {
+                    id: host.id(),
+                    addr: host.addr(),
+                },
+                Arc::clone(&seen) as Arc<dyn DeviceEvents>,
+            )
+            .await
+            .expect("connects");
+            wait_until("welcome", || {
+                seen.last()
+                    .is_some_and(|(state, _)| state == LinkState::Connected)
+            })
+            .await;
+            assert!(!rt.has_open_sessions().await);
+            let sink: ScreenSink = Arc::new(|_| {});
+            rt.open_session(&host.id(), "s", sink).await.expect("opens");
+            assert!(rt.has_open_sessions().await);
+            let first = tokio::time::timeout(Duration::from_secs(10), opened.recv())
+                .await
+                .expect("in time");
+            assert_eq!(first.as_deref(), Some("s"));
+            // A new endpoint with the same key (a new relay pass).
+            let fresh = crate::endpoint::bind(
+                &LinkConfig {
+                    bind: loopback(),
+                    ..LinkConfig::new(DEVICE_KEY)
+                },
+                Vec::new(),
+            )
+            .await
+            .expect("binds");
+            rt.rebind(fresh).await;
+            let again = tokio::time::timeout(Duration::from_secs(10), opened.recv())
+                .await
+                .expect("opened again in time");
+            assert_eq!(again.as_deref(), Some("s"), "the session comes back");
+            assert!(rt.has_open_sessions().await);
+            rt.close_session(&host.id(), "s").await;
+            assert!(!rt.has_open_sessions().await);
         });
     }
 }
