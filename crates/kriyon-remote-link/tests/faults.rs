@@ -881,18 +881,19 @@ fn a_view_asked_as_the_link_comes_back_opens_one_stream() {
         phone.rt.wake();
         // As at a cold start: the app asks again while that open is under
         // way, on and on until the link is up and a while after.
+        // The same view asked again (its screen kept, not a new one).
         let asking = Arc::clone(&phone);
         let again = tokio::spawn(async move {
             for _ in 0..200 {
-                asking.open().await;
+                asking.keep_screen("s", None).await;
                 tokio::time::sleep(Duration::from_millis(2)).await;
             }
         });
         phone.until_state(LinkState::Connected).await;
+        again.await.expect("asks");
         let id = asked(&world).await;
         answer(&world, id, b"once");
         phone.until_screen(b"once").await;
-        again.await.expect("asks");
         // The host refuses a second stream of a session a device has open.
         let refused = phone
             .screen
