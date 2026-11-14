@@ -128,6 +128,9 @@ On `feat/remote-windows-prep` (in `feat/remote-access`), then `feat/windows-remo
     window no longer learns the shell's language (`SessionOpened` is gone); the launch reads it
     from the session shell (`ShellLanguage::of(user_shell(..))`, PowerShell on Windows).
     `safe_path` takes the shell, so a Windows seed path (backslashes, `'`) is typed.
+    **IPC change:** `create_session` returns a plain `bool` (reattached) again, as on remote
+    access, instead of #48's `SessionOpened { reattached, shell }`; the launch line follows the
+    session's shell on every OS (a Mac whose `$SHELL` is pwsh gets PowerShell's).
   - **Folder checks:** #48's switch to `kriyon_core::paths::Canonical` (no `\\?\` paths) is
     applied where remote access moved `validate_cwd` and `known_roots` (`folder_cmd.rs`).
   - **Session start** (`create_session`, `startSession`, `sessionHost.ts`): remote access's

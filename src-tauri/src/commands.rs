@@ -862,13 +862,10 @@ pub async fn start_fresh_claude(app: tauri::AppHandle, id: String) -> Result<(),
     .map_err(|e| e.to_string())?
 }
 
-/// The language of a session's shell, for its launch line: the shell every
-/// session starts in (`SpawnPlan`'s, PowerShell on Windows). A daemon that
-/// survived a restart was started the same way.
+/// The language of a session's shell, for its launch line (PowerShell on
+/// Windows, or wherever `$SHELL` is pwsh).
 fn session_shell() -> kriyon_core::shellinit::ShellLanguage {
-    kriyon_core::shellinit::ShellLanguage::of(&kriyon_core::shellinit::user_shell(
-        std::env::var("SHELL").ok().as_deref(),
-    ))
+    kriyon_core::shellinit::session_shell(std::env::var("SHELL").ok().as_deref())
 }
 
 /// Write the raw request body to the session's stdin.
