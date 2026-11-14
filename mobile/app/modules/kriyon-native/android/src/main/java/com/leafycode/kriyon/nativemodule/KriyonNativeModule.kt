@@ -189,9 +189,14 @@ class KriyonNativeModule : Module() {
       started().wake()
     }
 
+    // Opened for its entries only: its screen comes with setScreen.
     AsyncFunction("openSession") Coroutine { hostId: String, sessionId: String ->
-      val screen = ScreenEvents(this@KriyonNativeModule, hostId, sessionId)
-      rust { started().openSession(hostId, sessionId, screen) }
+      rust { started().openSession(hostId, sessionId, null) }
+    }
+
+    AsyncFunction("setScreen") Coroutine { hostId: String, sessionId: String, on: Boolean ->
+      val screen = if (on) ScreenEvents(this@KriyonNativeModule, hostId, sessionId) else null
+      rust { started().setScreen(hostId, sessionId, screen) }
     }
 
     AsyncFunction("readEntries") Coroutine { hostId: String, sessionId: String ->

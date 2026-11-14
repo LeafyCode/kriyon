@@ -42,9 +42,8 @@ jest.mock("../../modules/kriyon-native/index.ts", () => ({
       frameListeners.push(listener);
       return { remove: jest.fn() };
     }),
-    closeSession: jest.fn(() => Promise.resolve()),
     input: jest.fn(() => Promise.resolve()),
-    openSession: jest.fn(() => Promise.resolve()),
+    setScreen: jest.fn(() => Promise.resolve()),
     takeControl: jest.fn(() => Promise.resolve()),
   },
 }));
@@ -106,10 +105,10 @@ beforeEach(() => {
   usePhone.setState(usePhone.getInitialState());
 });
 
-test("the session opens in Rust, and its frames reach the page once it is ready", async () => {
+test("the session's screen comes on in Rust, and its frames reach the page once it is ready", async () => {
   usePhone.setState({ states: { [MAC]: state({}, "host") } });
   const view = await render(<TerminalView hostId={MAC} sessionId="s1" />);
-  expect(native.openSession).toHaveBeenCalledWith(MAC, "s1");
+  expect(native.setScreen).toHaveBeenCalledWith(MAC, "s1", true);
   await act(() => {
     for (const listener of frameListeners) {
       listener({
@@ -128,7 +127,8 @@ test("the session opens in Rust, and its frames reach the page once it is ready"
   ).toBe(true);
   expect(injected.some((code) => code.includes("AAE"))).toBe(false);
   await view.unmount();
-  expect(native.closeSession).toHaveBeenCalledWith(MAC, "s1");
+  // Its screen goes off; the session stays open (its screen's owner's).
+  expect(native.setScreen).toHaveBeenLastCalledWith(MAC, "s1", false);
 });
 
 test("typing is off until this phone holds control, and Take control asks Rust", async () => {
@@ -230,13 +230,14 @@ test("a page that loads again gets the session afresh, and its typing state", as
   await render(<TerminalView hostId={MAC} sessionId="s1" />);
   await pageReady();
   await act(() => Promise.resolve());
-  expect(native.openSession).toHaveBeenCalledTimes(1);
+  expect(native.setScreen).toHaveBeenCalledTimes(1);
   injected.length = 0;
-  // iOS ended the page's process; it loaded again.
+  // iOS ended the page's process; it loaded again: a fresh screen, on the
+  // same open session.
   await pageReady();
   await act(() => Promise.resolve());
-  expect(native.closeSession).toHaveBeenCalledTimes(1);
-  expect(native.openSession).toHaveBeenCalledTimes(2);
+  expect(native.setScreen).toHaveBeenCalledTimes(2);
+  expect(native.setScreen).toHaveBeenLastCalledWith(MAC, "s1", true);
   expect(injected).toContain("window.kriyon.typing(true);true;");
 });
 
@@ -259,5 +260,5 @@ test("frames that pile up before the page loads are dropped for a fresh screen",
   expect(
     injected.filter((code) => code.includes("frame(")).length
   ).toBeLessThan(300);
-  expect(native.openSession).toHaveBeenCalledTimes(2);
+  expect(native.setScreen).toHaveBeenCalledTimes(2);
 });

@@ -55,6 +55,18 @@ export function SessionScreen({
   );
   const readable = view === "readable" && !unavailable;
   const { retryReadable, show } = usePhone.getState();
+  // Open while shown, read first, whichever view: switching turns its
+  // screen on and off (the terminal's), never closing it.
+  const [note, setNote] = useState<string | null>(null);
+  useEffect(() => {
+    const { closeReadable, openReadable } = usePhone.getState();
+    openReadable(hostId, sessionId).catch((error: unknown) =>
+      setNote(error instanceof Error ? error.message : String(error))
+    );
+    return () => {
+      closeReadable(hostId, sessionId).catch(() => undefined);
+    };
+  }, [hostId, sessionId]);
   // Leaving the session forgets why it had no entries: back, it reads afresh.
   useEffect(
     () => () => usePhone.getState().forgetReadable(hostId, sessionId),
@@ -89,6 +101,7 @@ export function SessionScreen({
       {readable ? (
         <ReadableView
           hostId={hostId}
+          note={note}
           onAnswer={() => setView("terminal")}
           sessionId={sessionId}
         />

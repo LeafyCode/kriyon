@@ -42,14 +42,14 @@ interface PhoneStore {
    * it had none stays, so the terminal keeps saying it.
    */
   closeReadable: (hostId: string, sessionId: string) => Promise<void>;
-  /** Close a session's stream, after any open asked before it. */
-  closeSession: (hostId: string, sessionId: string) => Promise<void>;
   deviceId: string | null;
   /** A session's readable view changed in Rust: kept whole while it is read. */
   entriesChanged: (event: EntriesChangedEvent) => void;
   forget: (hostId: string) => Promise<void>;
   /** Forget a session's readable view (the person left the session). */
   forgetReadable: (hostId: string, sessionId: string) => void;
+  /** Turn an open session's screen off, after what was asked before it. */
+  hideScreen: (hostId: string, sessionId: string) => Promise<void>;
   hostChanged: (state: HostSummary) => void;
   hosts: PairedHost[];
   /**
@@ -71,8 +71,6 @@ interface PhoneStore {
    * entries, with why.
    */
   openReadable: (hostId: string, sessionId: string) => Promise<void>;
-  /** Open a session's stream, after any open or close asked before it. */
-  openSession: (hostId: string, sessionId: string) => Promise<void>;
   pair: (inviteText: string) => Promise<void>;
   pairing: Pairing;
   /** Where phone alerts stand; `null` until asked. */
@@ -89,6 +87,8 @@ interface PhoneStore {
   retryReadable: (hostId: string, sessionId: string) => void;
   screen: Screen;
   show: (screen: Screen) => void;
+  /** Turn an open session's screen on, after what was asked before it. */
+  showScreen: (hostId: string, sessionId: string) => Promise<void>;
   start: (deviceName: string) => Promise<void>;
   startError: string | null;
   states: Record<string, HostSummary>;
@@ -140,6 +140,22 @@ function inTurn(call: () => Promise<void>): Promise<void> {
  * screen shows. Rust keeps the computers and decides; this keeps what it
  * said.
  */
+/**
+ * Read an open session's entries; a read that fails shows its terminal,
+ * saying why.
+ */
+async function readEntries(hostId: string, sessionId: string): Promise<void> {
+  try {
+    await KriyonNative.readEntries(hostId, sessionId);
+  } catch (error) {
+    usePhone.getState().entriesChanged({
+      hostId,
+      sessionId,
+      summary: { entries: [], unavailable: reasonOf(error) },
+    });
+  }
+}
+
 export const usePhone = create<PhoneStore>((set, get) => ({
   back: () => {
     const { cancelPairing, screen, show } = get();
@@ -167,8 +183,9 @@ export const usePhone = create<PhoneStore>((set, get) => ({
     // Closing the stream stops its entries too.
     return inTurn(() => KriyonNative.closeSession(hostId, sessionId));
   },
-  closeSession: (hostId, sessionId) =>
-    inTurn(() => KriyonNative.closeSession(hostId, sessionId)),
+  // The session stays open while its screen goes off (reading again).
+  hideScreen: (hostId, sessionId) =>
+    inTurn(() => KriyonNative.setScreen(hostId, sessionId, false)),
   deviceId: null,
   entriesChanged: ({ hostId, sessionId, summary }) =>
     set((state) => {
@@ -231,19 +248,11 @@ export const usePhone = create<PhoneStore>((set, get) => ({
       const key = readableKey(hostId, sessionId);
       await KriyonNative.openSession(hostId, sessionId);
       set((state) => ({ reading: { ...state.reading, [key]: true } }));
-      try {
-        await KriyonNative.readEntries(hostId, sessionId);
-      } catch (error) {
-        // No entries to show: the terminal, with why.
-        get().entriesChanged({
-          hostId,
-          sessionId,
-          summary: { entries: [], unavailable: reasonOf(error) },
-        });
-      }
+      await readEntries(hostId, sessionId);
     }),
-  openSession: (hostId, sessionId) =>
-    inTurn(() => KriyonNative.openSession(hostId, sessionId)),
+  // On the session already open (openReadable): a fresh screen each time.
+  showScreen: (hostId, sessionId) =>
+    inTurn(() => KriyonNative.setScreen(hostId, sessionId, true)),
   pair: async (inviteText) => {
     if (inviteText.trim() === "") {
       set({
@@ -282,13 +291,15 @@ export const usePhone = create<PhoneStore>((set, get) => ({
   push: null,
   readable: {},
   reading: {},
-  retryReadable: (hostId, sessionId) =>
-    set((state) => {
-      const key = readableKey(hostId, sessionId);
-      return state.readable[key]?.unavailable
-        ? { readable: without(state.readable, key) }
-        : {};
-    }),
+  retryReadable: (hostId, sessionId) => {
+    const key = readableKey(hostId, sessionId);
+    if (!get().readable[key]?.unavailable) {
+      return;
+    }
+    set((state) => ({ readable: without(state.readable, key) }));
+    // The session is still open: read its entries again.
+    inTurn(() => readEntries(hostId, sessionId)).catch(() => undefined);
+  },
   screen: { kind: "home" },
   show: (screen) => set({ newSessionError: null, screen }),
   start: async (deviceName) => {

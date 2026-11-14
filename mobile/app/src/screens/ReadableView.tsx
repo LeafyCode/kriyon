@@ -4,7 +4,7 @@
  * Claude's questions are answered in the terminal. It never touches the
  * terminal's size.
  */
-import { type ComponentRef, useEffect, useRef, useState } from "react";
+import { type ComponentRef, useRef } from "react";
 import { Platform, Pressable, ScrollView, Text, View } from "react-native";
 import type {
   ShownEntry,
@@ -206,10 +206,13 @@ function Entry({
 
 export function ReadableView({
   hostId,
+  note,
   onAnswer,
   sessionId,
 }: {
   hostId: string;
+  /** Why the session couldn't be opened, if it couldn't. */
+  note: string | null;
   /** Show the terminal, where a question is answered. */
   onAnswer: () => void;
   sessionId: string;
@@ -223,17 +226,6 @@ export function ReadableView({
   const scroll = useRef<ComponentRef<typeof ScrollView>>(null);
   // Following the newest entry, until the person scrolls up to read.
   const following = useRef(true);
-  const [note, setNote] = useState<string | null>(null);
-
-  useEffect(() => {
-    const { closeReadable, openReadable } = usePhone.getState();
-    openReadable(hostId, sessionId).catch((error: unknown) =>
-      setNote(error instanceof Error ? error.message : String(error))
-    );
-    return () => {
-      closeReadable(hostId, sessionId).catch(() => undefined);
-    };
-  }, [hostId, sessionId]);
 
   const needs = session?.needsYou
     ? standingMeta(session.standing, colors)

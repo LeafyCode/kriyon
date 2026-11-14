@@ -270,10 +270,17 @@ public final class KriyonNativeModule: Module {
       try self.started().wake()
     }
 
+    // Opened for its entries only: its screen comes with setScreen.
     AsyncFunction("openSession") { (hostId: String, sessionId: String) in
-      let screen = ScreenEvents(module: self, hostId: hostId, sessionId: sessionId)
       try await rust {
-        try await self.started().openSession(hostId: hostId, sessionId: sessionId, listener: screen)
+        try await self.started().openSession(hostId: hostId, sessionId: sessionId, listener: nil)
+      }
+    }
+
+    AsyncFunction("setScreen") { (hostId: String, sessionId: String, on: Bool) in
+      let screen = on ? ScreenEvents(module: self, hostId: hostId, sessionId: sessionId) : nil
+      try await rust {
+        try await self.started().setScreen(hostId: hostId, sessionId: sessionId, listener: screen)
       }
     }
 

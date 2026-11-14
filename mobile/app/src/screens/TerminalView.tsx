@@ -113,13 +113,15 @@ export function TerminalView({
         );
       }
     });
-    const { closeSession, openSession } = usePhone.getState();
-    openSession(hostId, sessionId).catch((error: unknown) =>
+    // The session is open already (its screen's): this turns its screen on
+    // while shown, off when it goes.
+    const { hideScreen, showScreen } = usePhone.getState();
+    showScreen(hostId, sessionId).catch((error: unknown) =>
       setNote(reasonOf(error))
     );
     return () => {
       frames.remove();
-      closeSession(hostId, sessionId).catch(() => undefined);
+      hideScreen(hostId, sessionId).catch(() => undefined);
     };
   }, [hostId, sessionId]);
 
@@ -140,11 +142,10 @@ export function TerminalView({
     if (loads.current > 1 || fresh.current) {
       // A new page, or frames dropped: ask for the whole screen again.
       fresh.current = false;
-      const { closeSession, openSession } = usePhone.getState();
-      closeSession(hostId, sessionId).catch(() => undefined);
-      openSession(hostId, sessionId).catch((error: unknown) =>
-        setNote(reasonOf(error))
-      );
+      usePhone
+        .getState()
+        .showScreen(hostId, sessionId)
+        .catch((error: unknown) => setNote(reasonOf(error)));
       page.current?.injectJavaScript(`window.kriyon.typing(${typing});true;`);
       return;
     }

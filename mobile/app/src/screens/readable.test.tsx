@@ -20,6 +20,7 @@ jest.mock("../../modules/kriyon-native/index.ts", () => ({
     closeSession: jest.fn(() => Promise.resolve()),
     openSession: jest.fn(() => Promise.resolve()),
     readEntries: jest.fn(() => Promise.resolve()),
+    setScreen: jest.fn(() => Promise.resolve()),
     takeControl: jest.fn(() => Promise.resolve()),
   },
 }));
@@ -109,6 +110,21 @@ test("a session opens on its readable view, which reads its entries", async () =
   await view.unmount();
   await act(() => Promise.resolve());
   expect(native.closeSession).toHaveBeenCalledWith(MAC, "s1");
+});
+
+test("switching to the terminal and back keeps the session open", async () => {
+  await render(<SessionScreen hostId={MAC} sessionId="s1" />);
+  await act(() => send(CONVERSATION));
+  await fireEvent.press(screen.getByRole("button", { name: "Terminal" }));
+  await act(() => Promise.resolve());
+  expect(native.setScreen).toHaveBeenLastCalledWith(MAC, "s1", true);
+  await fireEvent.press(screen.getByRole("button", { name: "Readable" }));
+  await act(() => Promise.resolve());
+  expect(native.setScreen).toHaveBeenLastCalledWith(MAC, "s1", false);
+  expect(native.openSession).toHaveBeenCalledTimes(1);
+  expect(native.closeSession).not.toHaveBeenCalled();
+  // What it read is still there.
+  expect(screen.queryByTestId("terminal-page")).toBeNull();
 });
 
 test("the entries show in order, a Viewer's too", async () => {

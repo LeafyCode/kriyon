@@ -109,6 +109,10 @@ interface KriyonNativeModule {
     sessionId: string,
     bytes: Uint8Array
   ) => Promise<void>;
+  /**
+   * Opens a session here for its readable-view entries only: no screen
+   * crosses the link until `setScreen`. It stays open until closed.
+   */
   openSession: (hostId: string, sessionId: string) => Promise<void>;
   /** Starts pairing; resolves to the code to type into the computer. */
   pair: (inviteText: string) => Promise<string>;
@@ -135,6 +139,11 @@ interface KriyonNativeModule {
    * build without a push sender keeps nothing).
    */
   setPushToken: (token: string, platform: "apns" | "fcm") => Promise<boolean>;
+  /**
+   * Turns an open session's screen on (its frames as `onScreenFrame`
+   * events, from a fresh one) or off; the session stays open.
+   */
+  setScreen: (hostId: string, sessionId: string, on: boolean) => Promise<void>;
   /**
    * Starts the device side, once per run (a later call returns the same
    * device, under its first name); resolves to this phone's id.

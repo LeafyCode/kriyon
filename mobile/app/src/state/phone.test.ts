@@ -16,6 +16,7 @@ jest.mock("../../modules/kriyon-native/index.ts", () => ({
     hosts: jest.fn(),
     pair: jest.fn(),
     readEntries: jest.fn(),
+    setScreen: jest.fn(),
     start: jest.fn(),
     wake: jest.fn(),
   },
@@ -182,7 +183,7 @@ test("bytes travel to the terminal page as base64", () => {
   expect(toBase64(big)).toHaveLength(133_336);
 });
 
-test("a session's open and close reach Rust in the order asked", async () => {
+test("a session's open, screen and close reach Rust in the order asked", async () => {
   const order: string[] = [];
   let opened: () => void = () => undefined;
   native.openSession.mockImplementation(
@@ -195,26 +196,42 @@ test("a session's open and close reach Rust in the order asked", async () => {
         };
       })
   );
+  native.readEntries.mockResolvedValue();
+  native.setScreen.mockImplementation((_host, _session, on) => {
+    order.push(on ? "screen on" : "screen off");
+    return Promise.resolve();
+  });
   native.closeSession.mockImplementation(() => {
     order.push("close");
     return Promise.resolve();
   });
-  const { closeSession, openSession } = usePhone.getState();
-  const open = openSession(MAC, "s");
-  const close = closeSession(MAC, "s");
+  const { closeReadable, hideScreen, openReadable, showScreen } =
+    usePhone.getState();
+  const steps = [
+    openReadable(MAC, "s"),
+    showScreen(MAC, "s"),
+    hideScreen(MAC, "s"),
+    closeReadable(MAC, "s"),
+  ];
   await Promise.resolve();
   expect(order).toEqual(["open starts"]);
   opened();
-  await Promise.all([open, close]);
-  expect(order).toEqual(["open starts", "open ends", "close"]);
+  await Promise.all(steps);
+  expect(order).toEqual([
+    "open starts",
+    "open ends",
+    "screen on",
+    "screen off",
+    "close",
+  ]);
 });
 
-test("a failed open doesn't stop the next one", async () => {
-  native.openSession.mockRejectedValueOnce(new Error("NotConnected"));
-  native.openSession.mockResolvedValueOnce();
-  const { openSession } = usePhone.getState();
-  await expect(openSession(MAC, "s")).rejects.toThrow("NotConnected");
-  await expect(openSession(MAC, "s")).resolves.toBeUndefined();
+test("a failed screen doesn't stop the next one", async () => {
+  native.setScreen.mockRejectedValueOnce(new Error("NotOpen"));
+  native.setScreen.mockResolvedValueOnce();
+  const { showScreen } = usePhone.getState();
+  await expect(showScreen(MAC, "s")).rejects.toThrow("NotOpen");
+  await expect(showScreen(MAC, "s")).resolves.toBeUndefined();
 });
 
 const ENTRIES = {
