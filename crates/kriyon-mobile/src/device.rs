@@ -422,6 +422,10 @@ impl Shared {
         let (key_id, sealed) =
             crate::push::seal_for(&key, &push.token, push.platform, &host, now_s())
                 .map_err(|reason| MobileError::Invalid { reason })?;
+        // Alerts turned off while the key was fetched: not given after all.
+        if self.alerts_off.load(std::sync::atomic::Ordering::SeqCst) {
+            return Ok(());
+        }
         Ok(self.device.send_push_token(&host, key_id, sealed).await?)
     }
 
@@ -1122,9 +1126,12 @@ impl MobileDevice {
     /// Works from the readable view, the screen off. Refused while a
     /// question shows (answered in the terminal).
     ///
+    /// Returns once the computer says it reached the terminal.
+    ///
     /// # Errors
-    /// An id that isn't one, not connected, not open, no control, or the
-    /// computer hasn't named the session's run yet.
+    /// An id that isn't one, not connected, not open, no control, the
+    /// computer hasn't named the session's run yet, or it refused (in words
+    /// a person reads) or didn't answer.
     pub async fn compose(
         &self,
         host_id: String,

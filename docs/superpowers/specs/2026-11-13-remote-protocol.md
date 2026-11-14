@@ -198,9 +198,12 @@ never waits on a network write. A full session queue means [Skip ahead]
   stream is open for [Readable view] entries only: no snapshot or update
   crosses the link (or the relay, with its rate cap), and the device still
   counts as an onlooker. Such a stream is told the session's run with
-  `Run { run }`, after `Open` once the daemon has named it and again for each
-  new run, so the device can write `Compose` from its entries; with the
-  screen on, `Snapshot` names the run instead.
+  `Run { run }`, after `Open` once the daemon has named it, again for each
+  new run, and when its screen goes off (the snapshot that would have named
+  it may be what was dropped), so the device can write `Compose` from its
+  entries; with the screen on, `Snapshot` names the run instead. A device
+  waits for its compose's `InputAck` or refusal on that stream and tells the
+  person, the screen on or off.
 - `Screen { on: bool }` on an open session stream turns its screen on (a
   fresh snapshot, then updates) or off (no more updates, a snapshot under
   way dropped), so switching between the readable view and the terminal

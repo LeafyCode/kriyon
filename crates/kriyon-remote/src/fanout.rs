@@ -384,6 +384,11 @@ impl SessionFanout {
                 stream.queue = SessionQueue::new(self.limit);
                 stream.dropped = true;
             }
+            // The snapshot that names the run may be what just went: told
+            // the run, it can still write from its entries.
+            if let Some(run) = self.seq.as_ref().map(ScreenSeq::run) {
+                self.tell_run(&[*device], run);
+            }
         }
         None
     }
@@ -673,10 +678,11 @@ mod tests {
             "{messages:?}"
         );
         assert_eq!(messages.len(), 2);
-        // Off again: updates stop, and a snapshot asked for is dropped.
+        // Off again: updates stop, and a snapshot asked for is dropped; the
+        // run is told again.
         fanout.set_screen(&A, false);
         fanout.output(b"unseen again");
-        assert_eq!(drain(&mut fanout, &A).0, Vec::new());
+        assert_eq!(drain(&mut fanout, &A).0, vec![ToDevice::Run { run: 8 }]);
         assert_eq!(fanout.resync(&A, Instant::now()), None);
     }
 
@@ -699,7 +705,9 @@ mod tests {
         following(&mut fanout, A, b"x");
         fanout.output(b"queued");
         fanout.set_screen(&A, false);
-        assert_eq!(drain(&mut fanout, &A).0, Vec::new(), "nothing stale");
+        // Nothing stale, but the run: the snapshot that would have named it
+        // may be what was dropped, and the device writes from its entries.
+        assert_eq!(drain(&mut fanout, &A).0, vec![ToDevice::Run { run: 7 }]);
         assert!(fanout.dropped(&A), "its entries start over too");
         // Off and on again with nothing queued: entries are left alone.
         assert!(fanout.set_screen(&A, true).is_some());

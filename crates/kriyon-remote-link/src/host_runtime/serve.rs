@@ -1400,6 +1400,8 @@ impl Serve {
                 if let Some(ask) = ask {
                     (served.ask)(ask);
                 }
+                // Turned off, it is told the run: sent now.
+                served.wake(&[device]);
             }
             _ => return false,
         }
@@ -1997,11 +1999,11 @@ mod tests {
             assert!(matches!(next(&mut sr).await, ToDevice::Snapshot { .. }));
             let _ = world.serve.on_event("s", DaemonEvent::Output(b"seen"));
             assert!(matches!(next(&mut sr).await, ToDevice::Update { .. }));
-            // Off: no more output; the entries go on.
+            // Off: no more output, but the run again; the entries go on.
             sw.send(&FromDevice::Screen { on: false })
                 .await
                 .expect("off");
-            tokio::time::sleep(Duration::from_millis(200)).await;
+            assert_eq!(next(&mut sr).await, ToDevice::Run { run: 1 });
             let _ = world.serve.on_event("s", DaemonEvent::Output(b"unseen"));
             *world.fake.entries.lock() = Ok(vec![note("a", "A"), note("b", "B")]);
             assert!(

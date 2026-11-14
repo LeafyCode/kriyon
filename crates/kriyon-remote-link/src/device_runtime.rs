@@ -256,8 +256,28 @@ struct OpenSession {
     writer: Arc<Mutex<MessageWriter<FromDevice>>>,
     screen: Arc<std::sync::Mutex<SessionScreen>>,
     reading: ReadingSlot,
+    /// Who waits for the host's answer to a compose, if anyone.
+    answer: AnswerSlot,
     reader: JoinHandle<()>,
 }
+
+/// Where the host's answer to a write goes: whether it reached the PTY, or
+/// why it was refused.
+type AnswerSlot =
+    Arc<std::sync::Mutex<Option<tokio::sync::oneshot::Sender<Result<bool, RefuseReason>>>>>;
+
+/// The answer slot, locked: poison is only another thread's panic, and the
+/// slot is a plain value.
+fn waiter(
+    slot: &AnswerSlot,
+) -> std::sync::MutexGuard<'_, Option<tokio::sync::oneshot::Sender<Result<bool, RefuseReason>>>> {
+    slot.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// How long a compose waits for the host's answer: it types the text, then
+/// Enter after a beat.
+const COMPOSE_ANSWER_WAIT: Duration = Duration::from_secs(15);
 
 impl DeviceRuntime {
     /// A device side that counts a host lost on other than the spec's
@@ -795,8 +815,30 @@ impl DeviceRuntime {
         session: &str,
         text: String,
     ) -> Result<(), DeviceError> {
+        let (told, answer) = tokio::sync::oneshot::channel();
+        let slot = {
+            let conn = self.host(host).await?;
+            let c = conn.conn.lock().await;
+            let open = c.sessions.get(session).ok_or(DeviceError::NotOpen)?;
+            Arc::clone(&open.answer)
+        };
+        // One waits at a time: a newer compose takes the answer.
+        *waiter(&slot) = Some(told);
         self.write(host, session, |screen, epoch| screen.compose(epoch, text))
-            .await
+            .await?;
+        match tokio::time::timeout(COMPOSE_ANSWER_WAIT, answer).await {
+            Ok(Ok(Ok(true))) => Ok(()),
+            Ok(Ok(Ok(false))) => Err(DeviceError::Link(
+                "It didn't reach that computer's terminal.".into(),
+            )),
+            Ok(Ok(Err(reason))) => Err(DeviceError::Link(
+                kriyon_remote::device_view::refusal_words(reason).into(),
+            )),
+            // The link went, or no answer in time.
+            Ok(Err(_)) | Err(_) => Err(DeviceError::Link(
+                "That computer didn't say whether it arrived.".into(),
+            )),
+        }
     }
 
     /// Send the write `make` makes from `session`'s screen state and this
@@ -856,17 +898,20 @@ async fn open_wanted(
     let writer = Arc::new(Mutex::new(writer));
     let screen = Arc::new(std::sync::Mutex::new(screen));
     let reading: ReadingSlot = Arc::default();
+    let answer: AnswerSlot = Arc::default();
     let reader = tokio::spawn(read_session(
         reader,
         Arc::clone(&writer),
         Arc::clone(&reading),
         Arc::clone(&screen),
         Arc::clone(shown_in),
+        Arc::clone(&answer),
     ));
     let open = OpenSession {
         writer: Arc::clone(&writer),
         screen,
         reading: Arc::clone(&reading),
+        answer,
         reader,
     };
     let mut c = conn.conn.lock().await;
@@ -1124,6 +1169,7 @@ async fn read_session(
     reading: ReadingSlot,
     screen: Arc<std::sync::Mutex<SessionScreen>>,
     shown_in: ScreenSlot,
+    answer: AnswerSlot,
 ) {
     let mut tick = tokio::time::interval(TICK);
     loop {
@@ -1147,6 +1193,21 @@ async fn read_session(
                     }
                 }
                 let events = lock(&screen).on_message(message, Instant::now());
+                // A compose waiting hears how its write went.
+                for event in &events {
+                    let told = match event {
+                        ScreenEvent::InputAck { written, .. } => Some(Ok(*written)),
+                        ScreenEvent::Refused(reason) if refuses_a_write(*reason) => {
+                            Some(Err(*reason))
+                        }
+                        _ => None,
+                    };
+                    if let Some(told) = told {
+                        if let Some(waiting) = waiter(&answer).take() {
+                            let _ = waiting.send(told);
+                        }
+                    }
+                }
                 // Screen off: nothing to show, nothing to ask for again; a
                 // refusal of the stream (the session went) is told to the
                 // readable view, if it is read. A write's refusal (a compose

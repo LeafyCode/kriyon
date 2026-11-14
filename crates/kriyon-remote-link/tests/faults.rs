@@ -476,17 +476,22 @@ fn a_compose_refused_while_a_dialog_shows_leaves_the_entries_showing() {
                 showing: true,
                 changed_at_seq: None,
             });
+        // Refused, and the phone is told why.
         let deadline = Instant::now() + Duration::from_secs(10);
-        while phone
-            .rt
-            .compose(&phone.host, "s", "hi".into())
-            .await
-            .is_err()
-        {
-            assert!(Instant::now() < deadline, "never sent");
+        let refused = loop {
+            match phone.rt.compose(&phone.host, "s", "hi".into()).await {
+                Err(DeviceError::NoScreen) => {}
+                other => break other,
+            }
+            assert!(Instant::now() < deadline, "never told the run");
             tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        };
+        assert_eq!(
+            refused,
+            Err(DeviceError::Link(
+                kriyon_remote::device_view::refusal_words(RefuseReason::DialogOpen).into()
+            ))
+        );
         assert!(world.fake.typed.lock().is_empty(), "nothing typed");
         assert!(
             !seen
