@@ -165,9 +165,11 @@ export const useRemoteHosts = create<RemoteHostsStore>((set, get) => {
       attempt(async () => {
         set({ hosts: await remoteHosts() });
       }),
+    // Quiet: a screen goes with its session, so hiding one that just closed
+    // (the view closes it as the terminal unmounts) is no failure.
     hideScreen: (hostId, sessionId) =>
       inTurn(hostId, sessionId, () =>
-        attempt(() => remoteHostHideScreen(hostId, sessionId))
+        remoteHostHideScreen(hostId, sessionId).catch(() => undefined)
       ),
     open: (hostId, sessionId) =>
       inTurn(hostId, sessionId, () =>

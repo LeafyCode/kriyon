@@ -55,8 +55,16 @@ struct Reading {
     entries: std::sync::Mutex<ReadableEntries>,
 }
 
-/// An open stream's [`Reading`], once the person reads it.
-type ReadingSlot = Arc<std::sync::Mutex<Option<Arc<Reading>>>>;
+/// An open stream's [`Reading`], once the person reads it; and a refusal
+/// that came, with the screen off, before anyone read it, to tell the
+/// reader when one comes.
+#[derive(Default)]
+struct ReadingState {
+    read: Option<Arc<Reading>>,
+    refused: Option<RefuseReason>,
+}
+
+type ReadingSlot = Arc<std::sync::Mutex<ReadingState>>;
 
 /// A paired host, as the device keeps it.
 #[derive(Clone, Debug)]
@@ -508,9 +516,9 @@ impl DeviceRuntime {
         let writer = {
             let c = conn.conn.lock().await;
             let screen = c.wanted.get(session).ok_or(DeviceError::NotOpen)?;
-            *shown(screen) = sink;
+            let was_on = std::mem::replace(&mut *shown(screen), sink).is_some();
             c.sessions.get(session).map(|open| {
-                if on {
+                if on && !was_on {
                     // A new screen follows from the snapshot coming; what was
                     // queued before it is not drawn.
                     if let Ok(fresh) = SessionScreen::new() {
@@ -568,7 +576,14 @@ impl DeviceRuntime {
             }
             c.reading.insert(session.to_string(), Arc::clone(&reading));
             c.sessions.get(session).map(|open| {
-                *slot(&open.reading) = Some(Arc::clone(&reading));
+                let refused = {
+                    let mut state = slot(&open.reading);
+                    state.read = Some(Arc::clone(&reading));
+                    state.refused.take()
+                };
+                if let Some(reason) = refused {
+                    (reading.sink)(EntriesEvent::Refused(reason));
+                }
                 Arc::clone(&open.writer)
             })
         };
@@ -596,7 +611,7 @@ impl DeviceRuntime {
             let mut c = conn.conn.lock().await;
             c.reading.remove(session);
             c.sessions.get(session).map(|open| {
-                *slot(&open.reading) = None;
+                slot(&open.reading).read = None;
                 Arc::clone(&open.writer)
             })
         };
@@ -794,14 +809,17 @@ async fn open_wanted(
         let_go(gone).await;
     }
     // The screen turned on or off while this stream opened: say so now.
-    let screen_now = shown(shown_in).is_some();
-    if kept && screen_now != screen_on {
-        writer
-            .lock()
-            .await
-            .send(&FromDevice::Screen { on: screen_now })
-            .await
-            .map_err(link_err)?;
+    // Read under the writer's lock, which set_screen also takes to send, so
+    // the last word the host hears is the slot's.
+    if kept {
+        let mut writer = writer.lock().await;
+        let screen_now = shown(shown_in).is_some();
+        if screen_now != screen_on {
+            writer
+                .send(&FromDevice::Screen { on: screen_now })
+                .await
+                .map_err(link_err)?;
+        }
     }
     if let Some(read) = read {
         // Read before this link: ask from what it has.
@@ -810,7 +828,7 @@ async fn open_wanted(
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .highest();
-        *slot(&reading) = Some(read);
+        slot(&reading).read = Some(read);
         writer
             .lock()
             .await
@@ -1000,7 +1018,7 @@ fn shown(screen: &ScreenSlot) -> std::sync::MutexGuard<'_, Option<ScreenSink>> {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-fn slot(reading: &ReadingSlot) -> std::sync::MutexGuard<'_, Option<Arc<Reading>>> {
+fn slot(reading: &ReadingSlot) -> std::sync::MutexGuard<'_, ReadingState> {
     reading
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -1029,7 +1047,7 @@ async fn read_session(
                     Ok(Some(Decoded::Unknown { .. })) => continue,
                     _ => return,
                 };
-                let read = slot(&reading).clone();
+                let read = slot(&reading).read.clone();
                 if let Some(read) = read {
                     let event = read
                         .entries
@@ -1045,9 +1063,17 @@ async fn read_session(
                 // Screen off: nothing to show, nothing to ask for again; a
                 // refusal is told to the readable view, if it is read.
                 let Some(sink) = shown(&shown_in).clone() else {
-                    if let Some(read) = slot(&reading).clone() {
-                        for event in &events {
-                            if let ScreenEvent::Refused(reason) = event {
+                    for event in &events {
+                        if let ScreenEvent::Refused(reason) = event {
+                            let read = {
+                                let mut state = slot(&reading);
+                                if state.read.is_none() {
+                                    // Kept for the reader to come.
+                                    state.refused = Some(*reason);
+                                }
+                                state.read.clone()
+                            };
+                            if let Some(read) = read {
                                 (read.sink)(EntriesEvent::Refused(*reason));
                             }
                         }

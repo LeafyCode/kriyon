@@ -4,11 +4,28 @@ import { useRemoteHosts } from "../state/remoteHosts.ts";
 import type { HostSummary, SessionSummary } from "./hostSummary.ts";
 import { RemoteView } from "./RemoteView.tsx";
 
-vi.mock("./RemoteTerminal.tsx", () => ({
-  RemoteTerminal: ({ sessionId }: { sessionId: string }) => (
-    <div data-testid="remote-terminal">{sessionId}</div>
-  ),
-}));
+vi.mock("./RemoteTerminal.tsx", async () => {
+  const { useEffect } = await import("react");
+  const { useRemoteHosts: store } = await import("../state/remoteHosts.ts");
+  return {
+    // As the real one: its screen on while shown, off when it goes.
+    RemoteTerminal: ({
+      hostId,
+      sessionId,
+    }: {
+      hostId: string;
+      sessionId: string;
+    }) => {
+      useEffect(() => {
+        store.getState().showScreen(hostId, sessionId, () => undefined);
+        return () => {
+          store.getState().hideScreen(hostId, sessionId);
+        };
+      }, [hostId, sessionId]);
+      return <div data-testid="remote-terminal">{sessionId}</div>;
+    },
+  };
+});
 
 const PAIR_HINT = /Settings, Remote access/;
 const FIX_LOGIN = /Fix login/;
@@ -171,6 +188,29 @@ test("with no entries to read there, the terminal shows with why", () => {
   );
   expect(screen.getByText("The Companion is off.")).toBeInTheDocument();
   expect(screen.getByTestId("remote-terminal")).toBeVisible();
+});
+
+test("a chosen session is opened before its screen is shown, and closed after", () => {
+  const order: string[] = [];
+  const step = (what: string) =>
+    vi.fn(() => {
+      order.push(what);
+      return Promise.resolve();
+    });
+  useRemoteHosts.setState({
+    close: step("close"),
+    hideScreen: step("hide"),
+    hosts: [{ hostId: HOST, name: "Studio", pairedAt: 0 }],
+    links: { [HOST]: link() },
+    open: step("open"),
+    showScreen: step("show"),
+  });
+  const view = render(<RemoteView />);
+  fireEvent.click(screen.getByRole("button", { name: DOCS }));
+  expect(order).toEqual(["open", "show"]);
+  view.unmount();
+  // Both go; hiding the screen of a session just closed is harmless.
+  expect(order.slice(2).sort()).toEqual(["close", "hide"]);
 });
 
 test("a session that ended there stops showing here", () => {

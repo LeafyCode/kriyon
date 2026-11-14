@@ -341,9 +341,9 @@ impl SessionFanout {
 
     /// Turn `device`'s screen on: the requester id to ask for its snapshot,
     /// asked again if it was on (a new screen needs the whole of it); `None`
-    /// before the daemon named its run (it can't answer). Or off: no more
-    /// updates, what was queued dropped (its entries start over,
-    /// [`Self::dropped`]) and a snapshot under way with it.
+    /// before the daemon named its run, whose hello then asks for it. Or
+    /// off: no more updates, what was queued dropped (its entries start over
+    /// if any went, [`Self::dropped`]) and a snapshot under way with it.
     pub fn set_screen(&mut self, device: &EndpointId, on: bool) -> Option<RequesterId> {
         let stream = self.devices.get_mut(device)?;
         let was = std::mem::replace(&mut stream.screen, on);
@@ -354,8 +354,11 @@ impl SessionFanout {
         if was {
             stream.awaiting = None;
             stream.held = None;
-            stream.queue = SessionQueue::new(self.limit);
-            stream.dropped = true;
+            // Its entries start over only if some went with the queue.
+            if !stream.queue.is_empty() {
+                stream.queue = SessionQueue::new(self.limit);
+                stream.dropped = true;
+            }
         }
         None
     }
@@ -658,6 +661,10 @@ mod tests {
         fanout.set_screen(&A, false);
         assert_eq!(drain(&mut fanout, &A).0, Vec::new(), "nothing stale");
         assert!(fanout.dropped(&A), "its entries start over too");
+        // Off and on again with nothing queued: entries are left alone.
+        assert!(fanout.set_screen(&A, true).is_some());
+        fanout.set_screen(&A, false);
+        assert!(!fanout.dropped(&A));
         // A resync while off doesn't use up the gate.
         assert_eq!(fanout.resync(&A, Instant::now()), None);
         assert!(fanout.set_screen(&A, true).is_some());
@@ -666,10 +673,11 @@ mod tests {
     }
 
     #[test]
-    fn before_the_daemon_names_its_run_a_screen_cannot_be_turned_on() {
+    fn a_screen_turned_on_before_the_daemon_names_its_run_comes_with_its_hello() {
         let mut fanout = SessionFanout::new(1024).expect("fanout");
         fanout.open_without_screen(A);
         assert_eq!(fanout.set_screen(&A, true), None);
+        assert_eq!(fanout.hello(7).len(), 1, "its snapshot asked for then");
     }
 
     #[test]

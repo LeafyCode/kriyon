@@ -311,16 +311,6 @@ fn reading(served: &std::sync::Weak<Served>, host: &Arc<dyn ServeHost>, id: &str
     }
 }
 
-/// What a session-stream request came to ([`Serve::stream_request`]).
-enum Request {
-    /// Done; nothing to answer.
-    Done,
-    /// Done; answer this.
-    Answer(ToDevice),
-    /// Not one: a write, for the session's writer.
-    Write,
-}
-
 /// What building a session's [Readable view] entries came to.
 #[derive(Debug)]
 pub enum EntriesBuilt {
@@ -1210,10 +1200,10 @@ impl Serve {
             let answer = match (checked, message) {
                 (Err(reason), _) => Some(ToDevice::Refused { reason }),
                 (Ok(()), Decoded::Message(message)) => {
-                    match self.stream_request(&served, &id, device, &message) {
-                        Request::Done => None,
-                        Request::Answer(answer) => Some(answer),
-                        Request::Write => self.write(&id, device, role, &message).await,
+                    if self.stream_request(&served, &id, device, &message) {
+                        None
+                    } else {
+                        self.write(&id, device, role, &message).await
                     }
                 }
                 (Ok(()), Decoded::Unknown { .. }) => Some(ToDevice::Refused {
@@ -1321,15 +1311,14 @@ impl Serve {
 
     /// A device's `Resync` (a fresh snapshot), `Screen` (turn its screen on
     /// or off), `RequestEntries` (start reading entries) or `StopEntries` on
-    /// session `id`'s stream: done, or what to answer; any other message is
-    /// a write.
+    /// session `id`'s stream, done; `false` for any other message (a write).
     fn stream_request(
         &self,
         served: &Arc<Served>,
         id: &str,
         device: EndpointId,
         request: &FromDevice,
-    ) -> Request {
+    ) -> bool {
         match request {
             FromDevice::RequestEntries { .. } => {
                 served.readers.lock().insert(device, EntryReader::new());
@@ -1346,22 +1335,16 @@ impl Serve {
                 }
             }
             FromDevice::Screen { on } => {
+                // Before the daemon names its run, its hello asks for the
+                // snapshot: nothing to answer now.
                 let ask = served.fanout.lock().set_screen(&device, *on);
-                match ask {
-                    Some(ask) => (served.ask)(ask),
-                    // An older daemon can't make a snapshot for one device,
-                    // as when opened with the screen.
-                    None if *on => {
-                        return Request::Answer(ToDevice::Refused {
-                            reason: RefuseReason::NotAllowed,
-                        });
-                    }
-                    None => {}
+                if let Some(ask) = ask {
+                    (served.ask)(ask);
                 }
             }
-            _ => return Request::Write,
+            _ => return false,
         }
-        Request::Done
+        true
     }
 
     /// Start session `id`'s entries thread, unless it runs.

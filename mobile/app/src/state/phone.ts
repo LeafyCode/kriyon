@@ -135,12 +135,6 @@ function inTurn(call: () => Promise<void>): Promise<void> {
 }
 
 /**
- * The phone app's copy of what Rust reports: this phone's id, its paired
- * computers and each one's latest state, the pairing in progress, and which
- * screen shows. Rust keeps the computers and decides; this keeps what it
- * said.
- */
-/**
  * Read an open session's entries; a read that fails shows its terminal,
  * saying why.
  */
@@ -156,6 +150,12 @@ async function readEntries(hostId: string, sessionId: string): Promise<void> {
   }
 }
 
+/**
+ * The phone app's copy of what Rust reports: this phone's id, its paired
+ * computers and each one's latest state, the pairing in progress, and which
+ * screen shows. Rust keeps the computers and decides; this keeps what it
+ * said.
+ */
 export const usePhone = create<PhoneStore>((set, get) => ({
   back: () => {
     const { cancelPairing, screen, show } = get();

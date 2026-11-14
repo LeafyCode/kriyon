@@ -248,6 +248,12 @@ test("the screen is shown and hidden after the open, in the order asked", async 
   expect(order).toEqual(["open", "show", "hide"]);
 });
 
+test("hiding the screen of a session already closed is no failure", async () => {
+  vi.mocked(remoteHostHideScreen).mockRejectedValue("that session isn't open");
+  await useRemoteHosts.getState().hideScreen(HOST, "s1");
+  expect(useRemoteHosts.getState().error).toBeNull();
+});
+
 test("a failure to open says why", async () => {
   vi.mocked(remoteHostOpenSession).mockRejectedValue("not connected");
   await useRemoteHosts.getState().open(HOST, "s1");

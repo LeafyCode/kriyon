@@ -103,9 +103,13 @@ function RemoteSession({
     (state) => state.readable[`${hostId}:${sessionId}`]
   );
   // Open while it is chosen, whichever is shown: switching never closes it.
+  // The terminal mounts once the open is asked for, so its screen is turned
+  // on after it (a child's effects run before its parent's).
+  const [opened, setOpened] = useState(false);
   useEffect(() => {
     const store = useRemoteHosts.getState();
     store.open(hostId, sessionId).catch(() => undefined);
+    setOpened(true);
     return () => {
       store.close(hostId, sessionId).catch(() => undefined);
     };
@@ -141,7 +145,7 @@ function RemoteSession({
         />
       ) : null}
       {/* Only while shown: reading, no screen crosses the link. */}
-      {reading ? null : (
+      {reading || !opened ? null : (
         <div style={screenStyle}>
           <RemoteTerminal hostId={hostId} sessionId={sessionId} />
         </div>
