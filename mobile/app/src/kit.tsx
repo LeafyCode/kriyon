@@ -460,25 +460,40 @@ export function TopBar({
   );
 }
 
-/** The time now, again every `everyMs`: for ages and running clocks. */
+/** Reduce motion as last heard, asked once when the app starts. */
+let reduceMotionKnown: boolean | null = null;
+AccessibilityInfo.isReduceMotionEnabled()
+  .then((on) => {
+    reduceMotionKnown ??= on;
+  })
+  .catch(() => undefined);
+
 /**
  * Whether the phone asks for less motion (Reduce motion on iPhone, Remove
  * animations on Android): sheets then appear in place, and scrolls jump.
  */
 export function useReduceMotion(): boolean {
-  const [reduce, setReduce] = useState(false);
+  // The last answer known, so a sheet opened later starts right.
+  const [reduce, setReduce] = useState(reduceMotionKnown ?? false);
   useEffect(() => {
     let live = true;
+    // A change heard first is newer than the first answer: it wins.
+    let heard = false;
     AccessibilityInfo.isReduceMotionEnabled()
       .then((on) => {
-        if (live) {
+        if (live && !heard) {
+          reduceMotionKnown = on;
           setReduce(on);
         }
       })
       .catch(() => undefined);
     const listener = AccessibilityInfo.addEventListener(
       "reduceMotionChanged",
-      setReduce
+      (on: boolean) => {
+        heard = true;
+        reduceMotionKnown = on;
+        setReduce(on);
+      }
     );
     return () => {
       live = false;
@@ -495,13 +510,15 @@ export function useReduceMotion(): boolean {
 export const KEY_TEXT_MAX = 1.4;
 
 /**
- * Whether the phone's text size is large (past 1.3×): a status pill then
+ * Whether the phone's text size is large (1.3× and up; checked as past
+ * 1.25 so a 1.3 that arrives as 1.2999 still counts): a status pill then
  * goes under its title instead of squeezing it, and titles take two lines.
  */
 export function useLargeText(): boolean {
   return useWindowDimensions().fontScale > 1.25;
 }
 
+/** The time now, again every `everyMs`: for ages and running clocks. */
 export function useNow(everyMs = 30_000): number {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {

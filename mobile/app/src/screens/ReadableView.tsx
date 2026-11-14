@@ -74,7 +74,11 @@ function Entry({
     case "claude":
       return (
         <View
-          accessibilityLabel={`Claude: ${entry.text}`}
+          accessibilityLabel={
+            entry.done
+              ? `Claude: ${entry.text}`
+              : `Claude, still writing: ${entry.text}`
+          }
           accessible
           style={{ flexDirection: "row", gap: 10 }}
           testID={id}

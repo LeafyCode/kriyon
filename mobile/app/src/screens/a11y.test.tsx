@@ -103,9 +103,13 @@ test("home reads its count as one sentence, and the bar once, not again by its l
   usePhone.setState({ hosts: [paired], states: { [MAC]: mac() } });
   await render(<HomeScreen />);
   expect(screen.getByLabelText("2 sessions, 1 needs you")).toBeOnTheScreen();
+  // What's seen says the same words.
+  expect(screen.getByText("sessions · 1 needs you")).toBeOnTheScreen();
+  // Its own element on iOS too, where a label alone isn't read.
   expect(
-    screen.getByLabelText("1 asking, 0 your turn, 1 running, 0 idle")
-  ).toBeOnTheScreen();
+    screen.getByLabelText("1 asking, 0 your turn, 1 running, 0 idle").props
+      .accessible
+  ).toBe(true);
   expect(
     isHiddenFromAccessibility(
       screen.getByText("1 asking", { includeHiddenElements: true })
@@ -132,6 +136,7 @@ const CONVERSATION: ReadableSummary = {
   entries: [
     { kind: "you", seq: 1, text: "Fix the login bug" },
     { done: true, kind: "claude", seq: 2, text: "The form sends too early." },
+    { done: false, kind: "claude", seq: 5, text: "Now the tests" },
     {
       kind: "step",
       name: "Read",
@@ -165,6 +170,9 @@ test("the readable view reads what was said, by whom, and each step in one go", 
     screen.getByLabelText("Claude: The form sends too early.")
   ).toBeOnTheScreen();
   expect(screen.getByLabelText("Read src/login.ts, done")).toBeOnTheScreen();
+  expect(
+    screen.getByLabelText("Claude, still writing: Now the tests")
+  ).toBeOnTheScreen();
   // The question is read as it is, and its button stays a button of its own.
   expect(screen.getByText("Fix the failing test too?")).toBeOnTheScreen();
   expect(
@@ -199,7 +207,7 @@ test("the new session sheet reads its own Close only: the scrim behind is silent
 
 test("pairing says which step it's on, as one reading", async () => {
   await render(<PairScreen />);
-  const steps = screen.getByLabelText("Step 1 of 2");
+  const steps = screen.getByLabelText("Step 1 of 2: Scan the code");
   expect(steps.props.accessible).toBe(true);
 });
 
@@ -221,4 +229,29 @@ test("motion follows the phone's Reduce motion, and its changes", async () => {
   expect(result.current).toBe(true);
   await act(() => changed?.(false));
   expect(result.current).toBe(false);
+});
+
+test("a change of Reduce motion while the first answer is on its way wins", async () => {
+  let changed: ((on: boolean) => void) | undefined;
+  let answer: ((on: boolean) => void) | undefined;
+  jest.spyOn(AccessibilityInfo, "isReduceMotionEnabled").mockReturnValue(
+    new Promise<boolean>((done) => {
+      answer = done;
+    })
+  );
+  jest
+    .spyOn(AccessibilityInfo, "addEventListener")
+    .mockImplementation((_event, handler) => {
+      changed = handler as (on: boolean) => void;
+      return { remove: jest.fn() } as unknown as ReturnType<
+        typeof AccessibilityInfo.addEventListener
+      >;
+    });
+  const { result } = await renderHook(() => useReduceMotion());
+  await act(() => changed?.(true));
+  await act(async () => {
+    answer?.(false);
+    await Promise.resolve();
+  });
+  expect(result.current).toBe(true);
 });

@@ -66,7 +66,7 @@ export function SettingsScreen() {
               },
             ]}
           >
-            <View style={{ flex: 1, gap: 2 }}>
+            <View style={{ flex: large ? undefined : 1, gap: 2 }}>
               <Text style={text.body}>When a session needs you</Text>
               <Text style={text.caption}>
                 Says only "A session needs you". Details come from your

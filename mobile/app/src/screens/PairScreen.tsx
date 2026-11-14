@@ -23,7 +23,11 @@ function Steps({ second }: { second: boolean }) {
   const steps = ["1 · Scan the code", "2 · Confirm on the computer"];
   return (
     <View
-      accessibilityLabel={second ? "Step 2 of 2" : "Step 1 of 2"}
+      accessibilityLabel={
+        second
+          ? "Step 2 of 2: Confirm on the computer"
+          : "Step 1 of 2: Scan the code"
+      }
       accessible
       style={{
         flexDirection: "row",

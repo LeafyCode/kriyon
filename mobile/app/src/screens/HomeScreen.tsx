@@ -93,12 +93,13 @@ function Glance({
         </Text>
         <Text style={[text.body, { color: t.ink2 }]}>
           {counts.total === 1 ? "session" : "sessions"}
-          {counts.needsYou > 0 ? ` · ${counts.needsYou} need you` : ""}
+          {counts.needsYou > 0 ? ` · ${needWords(counts.needsYou)}` : ""}
         </Text>
       </View>
       <View
         accessibilityLabel={described}
         accessibilityRole="image"
+        accessible
         style={{
           borderRadius: 4,
           flexDirection: "row",
@@ -148,13 +149,15 @@ function Glance({
   );
 }
 
+/** "1 needs you", "2 need you": seen and read the same. */
+function needWords(needsYou: number): string {
+  return `${needsYou} ${needsYou === 1 ? "needs" : "need"} you`;
+}
+
 /** "7 sessions, 2 need you": the glance's count, read as one sentence. */
 function countWords(total: number, needsYou: number): string {
   const sessions = `${total} ${total === 1 ? "session" : "sessions"}`;
-  if (needsYou === 0) {
-    return sessions;
-  }
-  return `${sessions}, ${needsYou} ${needsYou === 1 ? "needs" : "need"} you`;
+  return needsYou === 0 ? sessions : `${sessions}, ${needWords(needsYou)}`;
 }
 
 function Chips({

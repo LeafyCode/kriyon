@@ -107,7 +107,7 @@ test("with no computer yet, home offers pairing", async () => {
 test("home leads with the sessions at a glance and what needs you, in words", async () => {
   usePhone.setState({ hosts: [paired], states: { [MAC]: connected } });
   await render(<HomeScreen />);
-  expect(screen.getByText("sessions · 1 need you")).toBeOnTheScreen();
+  expect(screen.getByText("sessions · 1 needs you")).toBeOnTheScreen();
   expect(
     screen.getByLabelText("1 asking, 0 your turn, 1 running, 0 idle")
   ).toBeOnTheScreen();
@@ -246,7 +246,7 @@ test("pairing takes the pasted code and shows the digits to type there", async (
   native.finishPairing.mockReturnValue(new Promise(() => undefined));
   usePhone.setState({ screen: { kind: "pair" } });
   await render(<PairScreen />);
-  expect(screen.getByLabelText("Step 1 of 2")).toBeOnTheScreen();
+  expect(screen.getByLabelText("Step 1 of 2: Scan the code")).toBeOnTheScreen();
   await fireEvent.changeText(
     screen.getByLabelText("Pairing code from the computer"),
     "kriyon-pair:1:abc"
@@ -255,7 +255,9 @@ test("pairing takes the pasted code and shows the digits to type there", async (
   expect(
     await screen.findByLabelText("Pairing code 1 2 3 4 5 6")
   ).toBeOnTheScreen();
-  expect(screen.getByLabelText("Step 2 of 2")).toBeOnTheScreen();
+  expect(
+    screen.getByLabelText("Step 2 of 2: Confirm on the computer")
+  ).toBeOnTheScreen();
   expect(screen.getByText("Waiting for the computer…")).toBeOnTheScreen();
   // Not sent yet: nothing said about the role or when the code runs out.
   expect(screen.queryByText("Role on this computer")).toBeNull();
