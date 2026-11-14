@@ -323,8 +323,9 @@ fn now_ms() -> u64 {
 }
 
 /// The computer woke (a sleep, Modern Standby): devices hear the host is
-/// alive at once, and the endpoint looks for paths again now (the network
-/// may be another), rather than each waiting out its own timer.
+/// alive at once, the endpoint looks for paths again now (the network may
+/// be another), and this computer's own links to other computers retry
+/// now, rather than each waiting out its own timer (a backoff of up to 30 s).
 fn on_wake(app: &tauri::AppHandle) {
     if let Some(serve) = app.try_state::<kriyon_remote_link::host_runtime::Serve>() {
         serve.heartbeat(now_ms());
@@ -333,6 +334,11 @@ fn on_wake(app: &tauri::AppHandle) {
     tauri::async_runtime::spawn(async move {
         if let Some(endpoint) = app.try_state::<crate::remote_endpoint::RemoteEndpoint>() {
             endpoint.network_changed().await;
+        }
+        // After the paths are looked for, so the retry uses them.
+        if let Some(devices) = app.try_state::<kriyon_remote_link::device_runtime::DeviceRuntime>()
+        {
+            devices.wake();
         }
     });
 }

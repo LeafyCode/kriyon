@@ -146,9 +146,10 @@ On `feat/remote-windows-prep` (in `feat/remote-access`), then `feat/windows-remo
   main loop's tick (the wall clock 10 s past the last tick). On a wake the host sends devices a
   heartbeat at once and tells iroh the network may have changed (`network_change`), so links
   find a path again without waiting out their timers. Left: keeping the PC awake while a
-  device is connected (a product choice), this computer's own device side reconnecting at once
-  on a wake (it waits out its backoff, up to 30 s), and the copy that a sleeping PC can't be
-  reached; all checked on a real PC.
+  device is connected (a product choice), and the copy that a sleeping PC can't be reached;
+  checked on a real PC. This computer's own links to other computers retry at once on a wake
+  too (`DeviceRuntime::wake`, after the network change), rather than waiting out a backoff of
+  up to 30 s.
 - **Step 2:** `.github/workflows/windows.yml` runs clippy and the tests on Windows for every
   crate, the daemon and the app (`kriyon-ptyd`, `src-tauri`, and kriyon-core's own tests, which
   #48 ported), on `dev`, `main` and every `feat/windows-*` push. No secrets.
