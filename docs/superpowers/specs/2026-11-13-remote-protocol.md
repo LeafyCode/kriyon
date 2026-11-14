@@ -197,7 +197,10 @@ never waits on a network write. A full session queue means [Skip ahead]
   `Update { run, seq, bytes }` for every chunk of output. Without it the
   stream is open for [Readable view] entries only: no snapshot or update
   crosses the link (or the relay, with its rate cap), and the device still
-  counts as an onlooker.
+  counts as an onlooker. Such a stream is told the session's run with
+  `Run { run }`, after `Open` once the daemon has named it and again for each
+  new run, so the device can write `Compose` from its entries; with the
+  screen on, `Snapshot` names the run instead.
 - `Screen { on: bool }` on an open session stream turns its screen on (a
   fresh snapshot, then updates) or off (no more updates, a snapshot under
   way dropped), so switching between the readable view and the terminal
@@ -315,15 +318,18 @@ and resets every reader.
   gives it back from the device that holds it: the host holds it again and
   bumps the epoch, as when that device goes away (giving back what it doesn't
   hold changes nothing). Every device hears `Control { holder, epoch }`.
-- `Input { run, epoch, seen_seq, bytes }`, `Compose { run, epoch, seen_seq, text }`
+- `Input { run, epoch, seen_seq, bytes }`, `Compose { run, epoch, text }`
   and `Resize { run, epoch, cols, rows }` must carry the current run and epoch.
   `seen_seq` is the last screen update the device had drawn. The host refuses
-  with `Stale` when the run or epoch is old, or when a CLI dialog appeared or
-  changed after `seen_seq`, so a lagging phone can't answer a dialog it never
-  saw.
-- `Compose` is refused while a CLI dialog is showing (ADR-0040). This is a
-  guard against mistakes, not a security boundary: a Controller can send the
-  same bytes as `Input`.
+  with `Stale` when the run or epoch is old, or when an `Input` comes after a
+  CLI dialog appeared or changed past its `seen_seq`, so a lagging phone can't
+  answer a dialog it never saw.
+- `Compose` is refused while a CLI dialog is showing (ADR-0040), checked again
+  atomically at the write. So it can never answer a dialog, and needs no
+  `seen_seq`: a device reading entries with its screen off can write one. The
+  host types it as the desktop's composer does (`kriyon_core::attachment`),
+  then Enter. The dialog guard is against mistakes, not a security boundary:
+  a Controller can send the same bytes as `Input`.
 - While a remote device holds control it may resize to its own size, never
   under 80 columns. When control returns to the host, the host's size comes back.
 - Receipts are honest: `InputAck { epoch, written: bool }` means the bytes
@@ -342,7 +348,7 @@ removal or new dialog between the check and the write still wins.
 | `Hello`, `Resync`, `Open`, `Screen`, `RequestEntries`, `StopEntries` | Viewer, Controller | control / session | paired (`NotPaired`), session exists (`NoSuchSession`); with the screen, its size (`ScreenTooLarge`) |
 | `TakeControl` | Controller | control | role (`NotAllowed`), control rules §7 (`NotInControl`) |
 | `Input`, `Resize` | Controller | session | role, holds control, run + epoch + `seen_seq` (`Stale`), size bounds shared with the local resize command (`OutOfRange`) |
-| `Compose` | Controller | session | as `Input`, plus no dialog showing (`DialogOpen`) |
+| `Compose` | Controller | session | role, holds control, run + epoch (`Stale`), no dialog showing (`DialogOpen`) |
 | `StartSession` | Controller | control | role; project exists and its folder is inside an approved root (`FolderNotAllowed`) |
 | `PushToken` | Viewer, Controller | control | size (`OutOfRange`) |
 | `ReleaseControl`, `ForgetPushToken` | Viewer, Controller | control | paired (`NotPaired`) |

@@ -1981,6 +1981,8 @@ mod tests {
             *world.fake.entries.lock() = Ok(vec![note("a", "A")]);
             let (_phone, link, _cw, _cr) = device(&world, 3, Role::Viewer).await;
             let (mut sw, mut sr) = open_with(&link, false).await;
+            // No screen, but its run, to write to Claude from its entries.
+            assert_eq!(next(&mut sr).await, ToDevice::Run { run: 1 });
             sw.send(&FromDevice::RequestEntries { since: 0 })
                 .await
                 .expect("asked");

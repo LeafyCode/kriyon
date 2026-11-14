@@ -778,6 +778,35 @@ impl DeviceRuntime {
         session: &str,
         bytes: Vec<u8>,
     ) -> Result<(), DeviceError> {
+        self.write(host, session, |screen, epoch| screen.input(epoch, bytes))
+            .await
+    }
+
+    /// Send `text` to Claude in `session` as the desktop's composer does
+    /// (the host types it, then Enter), whether its screen is on or not:
+    /// this device must control it. Refused while a dialog shows.
+    ///
+    /// # Errors
+    /// [`DeviceError`]: not connected, not open, no control, or the host
+    /// hasn't named the session's run yet (`NoScreen`).
+    pub async fn compose(
+        &self,
+        host: &EndpointId,
+        session: &str,
+        text: String,
+    ) -> Result<(), DeviceError> {
+        self.write(host, session, |screen, epoch| screen.compose(epoch, text))
+            .await
+    }
+
+    /// Send the write `make` makes from `session`'s screen state and this
+    /// device's epoch; this device must control the session.
+    async fn write(
+        &self,
+        host: &EndpointId,
+        session: &str,
+        make: impl FnOnce(&SessionScreen, kriyon_remote::message::Epoch) -> Option<FromDevice>,
+    ) -> Result<(), DeviceError> {
         let me = self.my_id().await.ok_or(DeviceError::NotConnected)?;
         let conn = self.host(host).await?;
         let (writer, message) = {
@@ -789,12 +818,14 @@ impl DeviceRuntime {
                 .filter(|control| control.holder == Holder::Device(me))
                 .ok_or(DeviceError::NoControl)?;
             let open = c.sessions.get(session).ok_or(DeviceError::NotOpen)?;
-            let message = open
-                .screen
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .input(control.epoch, bytes)
-                .ok_or(DeviceError::NoScreen)?;
+            let message = make(
+                &open
+                    .screen
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+                control.epoch,
+            )
+            .ok_or(DeviceError::NoScreen)?;
             (Arc::clone(&open.writer), message)
         };
         let sent = writer.lock().await.send(&message).await;
@@ -1117,10 +1148,15 @@ async fn read_session(
                 }
                 let events = lock(&screen).on_message(message, Instant::now());
                 // Screen off: nothing to show, nothing to ask for again; a
-                // refusal is told to the readable view, if it is read.
+                // refusal of the stream (the session went) is told to the
+                // readable view, if it is read. A write's refusal (a compose
+                // while a dialog shows, say) isn't: the entries go on.
                 let Some(sink) = shown(&shown_in).clone() else {
                     for event in &events {
                         if let ScreenEvent::Refused(reason) = event {
+                            if refuses_a_write(*reason) {
+                                continue;
+                            }
                             let read = {
                                 let mut state = slot(&reading);
                                 if state.read.is_none() {
@@ -1154,6 +1190,18 @@ async fn read_session(
             return;
         }
     }
+}
+
+/// Whether `reason` refuses a write on a stream that goes on, rather than
+/// the stream itself.
+fn refuses_a_write(reason: RefuseReason) -> bool {
+    matches!(
+        reason,
+        RefuseReason::NotInControl
+            | RefuseReason::Stale
+            | RefuseReason::DialogOpen
+            | RefuseReason::OutOfRange
+    )
 }
 
 /// One session's screen event as one frame on the webview's raw channel, so

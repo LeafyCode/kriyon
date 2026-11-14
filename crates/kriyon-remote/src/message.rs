@@ -230,7 +230,6 @@ pub enum FromDevice {
     Compose {
         run: u64,
         epoch: Epoch,
-        seen_seq: u64,
         text: String,
     },
     /// Session stream.
@@ -434,6 +433,13 @@ pub enum ToDevice {
     Usage {
         #[serde(with = "crate::nested::one")]
         usage: PlanUsage,
+    },
+    /// Session stream with the screen off: the session's [Session run],
+    /// after `Open` once the daemon named it and again for each new run, so
+    /// a device reading entries can write `Compose` (spec §6). With the
+    /// screen on, `Snapshot` names it.
+    Run {
+        run: u64,
     },
 }
 
@@ -687,7 +693,6 @@ mod tests {
                 FromDevice::Compose {
                     run: 0,
                     epoch: EPOCH,
-                    seen_seq: 0,
                     text: s(),
                 },
                 6,
@@ -970,11 +975,12 @@ mod tests {
     }
 
     #[test]
-    fn the_usage_tag_is_fixed() {
+    fn the_usage_and_run_tags_are_fixed() {
         let usage = ToDevice::Usage {
             usage: PlanUsage::default(),
         };
         assert_eq!(tag(&usage), 15);
+        assert_eq!(tag(&ToDevice::Run { run: 1 }), 16);
     }
 
     #[test]

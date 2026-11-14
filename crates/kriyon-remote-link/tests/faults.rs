@@ -404,6 +404,101 @@ fn a_phone_reads_a_session_as_entries_across_a_dropped_link() {
 }
 
 #[test]
+fn a_phone_reading_entries_writes_to_claude_without_a_screen() {
+    run(async {
+        let world = world().await;
+        let _beats = Beats::start(&world);
+        let phone = Phone::connect(&world, 3, Role::Controller).await;
+        phone
+            .rt
+            .open_session(&phone.host, "s", None)
+            .await
+            .expect("opens for entries");
+        phone.take_control().await;
+        // The host names the run on this screen-off stream; until then
+        // there is nothing to name.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            match phone
+                .rt
+                .compose(&phone.host, "s", "run the tests".into())
+                .await
+            {
+                Ok(()) => break,
+                Err(DeviceError::NoScreen) => {}
+                Err(other) => panic!("{other:?}"),
+            }
+            assert!(Instant::now() < deadline, "never told the run");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        // Typed as the desktop's composer types it, then Enter.
+        wait_until("the message typed", || {
+            world.fake.typed.lock().ends_with(b"\r")
+        })
+        .await;
+        let typed = String::from_utf8(world.fake.typed.lock().clone()).expect("utf8");
+        assert!(typed.contains("run the tests"), "{typed:?}");
+        assert!(world.asks.lock().is_empty(), "no screen asked for");
+    });
+}
+
+#[test]
+fn a_compose_refused_while_a_dialog_shows_leaves_the_entries_showing() {
+    use kriyon_remote::device_view::EntriesEvent;
+    run(async {
+        let world = world().await;
+        let _beats = Beats::start(&world);
+        *world.fake.entries.lock() = Ok(vec![note("a", "A")]);
+        let phone = Phone::connect(&world, 3, Role::Controller).await;
+        phone
+            .rt
+            .open_session(&phone.host, "s", None)
+            .await
+            .expect("opens for entries");
+        let seen: Arc<Mutex<Vec<EntriesEvent>>> = Arc::default();
+        let into = Arc::clone(&seen);
+        phone
+            .rt
+            .read_entries(
+                &phone.host,
+                "s",
+                Arc::new(move |event| into.lock().push(event)),
+            )
+            .await
+            .expect("reads");
+        wait_until("the entries", || !seen.lock().is_empty()).await;
+        phone.take_control().await;
+        world
+            .fake
+            .gate
+            .lock()
+            .set_dialog(kriyon_remote::authorize::Dialog {
+                showing: true,
+                changed_at_seq: None,
+            });
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while phone
+            .rt
+            .compose(&phone.host, "s", "hi".into())
+            .await
+            .is_err()
+        {
+            assert!(Instant::now() < deadline, "never sent");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        assert!(world.fake.typed.lock().is_empty(), "nothing typed");
+        assert!(
+            !seen
+                .lock()
+                .iter()
+                .any(|event| matches!(event, EntriesEvent::Refused(_))),
+            "the entries still show"
+        );
+    });
+}
+
+#[test]
 fn a_phone_gives_back_control_and_turns_its_alerts_off_and_on() {
     run(async {
         let world = world().await;

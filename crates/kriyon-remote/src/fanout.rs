@@ -166,6 +166,14 @@ impl SessionFanout {
         self.seq = Some(ScreenSeq::new(run));
         // Another daemon counts its dialogs afresh.
         self.dialog_generation = None;
+        // A screen names the run in its snapshot; one off is told it.
+        let off: Vec<EndpointId> = self
+            .devices
+            .iter()
+            .filter(|(_, stream)| !stream.screen)
+            .map(|(device, _)| *device)
+            .collect();
+        self.tell_run(&off, run);
         self.ask_all(false)
     }
 
@@ -337,6 +345,23 @@ impl SessionFanout {
     /// onlooker), with no screen until it turns it on.
     pub fn open_without_screen(&mut self, device: EndpointId) {
         self.insert(device, false);
+        if let Some(run) = self.seq.as_ref().map(ScreenSeq::run) {
+            self.tell_run(&[device], run);
+        }
+    }
+
+    /// Tell `devices` (their screens off) the session's run, so they can
+    /// write to Claude from its entries (spec §6). Best effort: a queue that
+    /// can't take it starts over, and the next run or reopen tells it again.
+    fn tell_run(&mut self, devices: &[EndpointId], run: u64) {
+        let Ok(frame) = encode(&ToDevice::Run { run }) else {
+            return;
+        };
+        for device in devices {
+            if let Some(stream) = self.devices.get_mut(device) {
+                stream.queue.push(frame.clone());
+            }
+        }
     }
 
     /// Turn `device`'s screen on: the requester id to ask for its snapshot,
@@ -631,9 +656,12 @@ mod tests {
         fanout.open_without_screen(A);
         assert!(fanout.is_open(&A), "still open: an onlooker");
         fanout.output(b"unseen");
-        assert_eq!(drain(&mut fanout, &A).0, Vec::new());
-        // A new run asks every device for a screen, but not this one.
+        // No screen, but its run, for writing to Claude from its entries.
+        assert_eq!(drain(&mut fanout, &A).0, vec![ToDevice::Run { run: 7 }]);
+        // A new run asks every device for a screen, but not this one: it is
+        // told the new run.
         assert_eq!(fanout.hello(8), Vec::<RequesterId>::new());
+        assert_eq!(drain(&mut fanout, &A).0, vec![ToDevice::Run { run: 8 }]);
         // On: a snapshot, then updates.
         let id = fanout.set_screen(&A, true).expect("asks");
         fanout.snapshot_part(id, b"screen");
@@ -650,6 +678,18 @@ mod tests {
         fanout.output(b"unseen again");
         assert_eq!(drain(&mut fanout, &A).0, Vec::new());
         assert_eq!(fanout.resync(&A, Instant::now()), None);
+    }
+
+    #[test]
+    fn a_screen_off_stream_opened_before_the_run_is_named_hears_it_once_it_is() {
+        let mut fanout = SessionFanout::new(1 << 20).expect("fanout");
+        fanout.open_without_screen(A);
+        assert_eq!(drain(&mut fanout, &A).0, Vec::new());
+        fanout.hello(3);
+        assert_eq!(drain(&mut fanout, &A).0, vec![ToDevice::Run { run: 3 }]);
+        // The same run said again: nothing new.
+        fanout.hello(3);
+        assert_eq!(drain(&mut fanout, &A).0, Vec::new());
     }
 
     #[test]

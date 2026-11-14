@@ -143,7 +143,7 @@ pub trait HostFacts {
 pub struct PendingWrite {
     pub run: u64,
     pub epoch: Epoch,
-    /// `None` for a resize, which answers no dialog.
+    /// `None` for a resize or a compose, which answer no dialog.
     pub seen_seq: Option<u64>,
     /// `Compose`, which is refused while a dialog shows.
     pub compose: bool,
@@ -165,15 +165,12 @@ impl PendingWrite {
                 seen_seq: Some(seen_seq),
                 compose: false,
             }),
-            FromDevice::Compose {
+            // It answers no dialog (refused while one shows), so what the
+            // device saw of the screen doesn't matter.
+            FromDevice::Compose { run, epoch, .. } => Some(Self {
                 run,
                 epoch,
-                seen_seq,
-                ..
-            } => Some(Self {
-                run,
-                epoch,
-                seen_seq: Some(seen_seq),
+                seen_seq: None,
                 compose: true,
             }),
             FromDevice::Resize { run, epoch, .. } => Some(Self {
@@ -440,7 +437,6 @@ mod tests {
         FromDevice::Compose {
             run: RUN,
             epoch: host.control.epoch(),
-            seen_seq: 10,
             text: "hi".into(),
         }
     }
@@ -801,6 +797,30 @@ mod tests {
         assert_eq!(check(&h, PHONE, SESSION, input(&h, 10)), Ok(()));
         h.dialog.showing = false;
         assert_eq!(check(&h, PHONE, SESSION, compose(&h)), Ok(()));
+    }
+
+    /// A compose answers no dialog: it is refused while one shows, checked
+    /// again at the write. So it needs no screen seen, and a device reading
+    /// entries with its screen off can write one.
+    #[test]
+    fn compose_needs_no_screen_seen_but_input_does() {
+        let (mut h, _) = host();
+        h.dialog = Dialog {
+            showing: false,
+            changed_at_seq: Some(50),
+        };
+        assert_eq!(check(&h, PHONE, SESSION, compose(&h)), Ok(()));
+        assert_eq!(
+            check(&h, PHONE, SESSION, input(&h, 10)),
+            Err(RefuseReason::Stale)
+        );
+        // Its run and epoch still count.
+        let old_run = FromDevice::Compose {
+            run: RUN + 1,
+            epoch: h.control.epoch(),
+            text: "hi".into(),
+        };
+        assert_eq!(check(&h, PHONE, SESSION, old_run), Err(RefuseReason::Stale));
     }
 
     #[test]

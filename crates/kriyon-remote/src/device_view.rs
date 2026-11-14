@@ -165,6 +165,9 @@ pub struct SessionScreen {
     follower: ScreenFollower,
     parts: SnapshotParts,
     unpacker: Unpacker,
+    /// The newest [Session run] the host named: in a snapshot, or in `Run`
+    /// while the screen is off.
+    run: Option<u64>,
 }
 
 impl SessionScreen {
@@ -174,6 +177,7 @@ impl SessionScreen {
         Ok(Self {
             follower: ScreenFollower::new(),
             parts: SnapshotParts::new(),
+            run: None,
             unpacker: Unpacker::new()?,
         })
     }
@@ -234,6 +238,10 @@ impl SessionScreen {
                 vec![ScreenEvent::InputAck { epoch, written }]
             }
             ToDevice::Refused { reason } => vec![ScreenEvent::Refused(reason)],
+            ToDevice::Run { run } => {
+                self.run = Some(run);
+                Vec::new()
+            }
             _ => Vec::new(),
         }
     }
@@ -242,6 +250,7 @@ impl SessionScreen {
         match self.unpacker.unpack(Kind::Snapshot, packed) {
             Ok(bytes) => {
                 self.follower.snapshot(head.run, head.seq);
+                self.run = Some(head.run);
                 vec![ScreenEvent::Screen {
                     cols: head.cols,
                     rows: head.rows,
@@ -267,6 +276,18 @@ impl SessionScreen {
     /// timer): lost, and the last ask was a second ago.
     pub fn resync_due(&mut self, now: Instant) -> bool {
         self.follower.resync_due(now)
+    }
+
+    /// `Compose` for `text` under `epoch`, naming the newest run the host
+    /// named: with the screen on or off, as a compose answers no dialog.
+    /// `None` before the host named one.
+    #[must_use]
+    pub fn compose(&self, epoch: Epoch, text: String) -> Option<FromDevice> {
+        Some(FromDevice::Compose {
+            run: self.run?,
+            epoch,
+            text,
+        })
     }
 
     /// `Input` for `bytes` under `epoch`, naming the run and the last update
@@ -322,6 +343,10 @@ pub enum Typing {
 /// One session, as a device's screens show it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "the JSON both apps read: each flag is a field there, mirrored in TypeScript"
+)]
 pub struct SessionSummary {
     pub id: SessionId,
     pub title: String,
@@ -336,6 +361,10 @@ pub struct SessionSummary {
     /// This device may type now: connected, a Controller, holding control.
     /// The host checks again at the write.
     pub may_type: bool,
+    /// This device may write to Claude now (`compose`): it may type and no
+    /// question shows (one is answered in the terminal). The host checks
+    /// again at the write.
+    pub may_compose: bool,
     /// Its [Session digest], as the host sent it.
     pub question: Option<crate::message::Question>,
     pub activity: Option<String>,
@@ -454,6 +483,7 @@ pub fn host_summary(
                     .control
                     .get(&session.id)
                     .map(|control| typing(&control.holder, me));
+                let may_type = connected && controller && typing == Some(Typing::You);
                 SessionSummary {
                     id: session.id.clone(),
                     title: session.title.clone(),
@@ -464,7 +494,8 @@ pub fn host_summary(
                     dialog_open: session.dialog_open,
                     last_change_ms: session.last_change_ms,
                     typing,
-                    may_type: connected && controller && typing == Some(Typing::You),
+                    may_type,
+                    may_compose: may_type && !session.dialog_open,
                     question: session.question.clone(),
                     activity: session.activity.clone(),
                     running_since_ms: session.running_since_ms,
@@ -1144,6 +1175,44 @@ mod tests {
                 bytes: b"y".to_vec()
             })
         );
+    }
+
+    #[test]
+    fn compose_names_the_newest_run_told_with_the_screen_on_or_off() {
+        let t = Instant::now();
+        let mut screen = SessionScreen::new().expect("screen");
+        assert_eq!(screen.compose(EPOCH, "hi".into()), None, "no run yet");
+        // Reading entries, the screen off: the host names the run.
+        screen.on_message(ToDevice::Run { run: 7 }, t);
+        let composed = |run| FromDevice::Compose {
+            run,
+            epoch: EPOCH,
+            text: "hi".into(),
+        };
+        assert_eq!(screen.compose(EPOCH, "hi".into()), Some(composed(7)));
+        // The screen on: a snapshot names it.
+        screen.on_message(snapshot(9, 4, b"a", false), t);
+        assert_eq!(screen.compose(EPOCH, "hi".into()), Some(composed(9)));
+        // Off again, and a new run.
+        screen.on_message(ToDevice::Run { run: 10 }, t);
+        assert_eq!(screen.compose(EPOCH, "hi".into()), Some(composed(10)));
+    }
+
+    #[test]
+    fn writing_to_claude_needs_typing_and_no_question_showing() {
+        let me = [2; 32];
+        let view = home_view(me);
+        let link = LinkFacts::new(LinkState::Connected);
+        let summary = host_summary(&[0xab; 32], &me, &link, &view);
+        // s1 holds control but asks a question: answered in the terminal.
+        assert!(summary.sessions[0].may_type);
+        assert!(!summary.sessions[0].may_compose);
+        let mut answered = view.clone();
+        answered.sessions[0].dialog_open = false;
+        let summary = host_summary(&[0xab; 32], &me, &link, &answered);
+        assert!(summary.sessions[0].may_compose);
+        // Not held: neither.
+        assert!(!summary.sessions[1].may_compose);
     }
 
     #[test]

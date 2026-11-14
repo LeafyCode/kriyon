@@ -32,6 +32,9 @@ export interface SessionSummary {
   diff?: DiffStat | null;
   id: string;
   lastChangeMs: number;
+  /** This device may write to Claude now: it may type and no question
+   *  shows (answered in the terminal). Rust always sends it. */
+  mayCompose?: boolean;
   /** This device may type now: connected, a Controller, holding control. */
   mayType: boolean;
   needsYou: boolean;

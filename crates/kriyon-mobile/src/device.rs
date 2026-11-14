@@ -1116,6 +1116,28 @@ impl MobileDevice {
             .on_runtime(async move { device.input(&host, &session_id, bytes).await })
             .await??)
     }
+
+    /// Send `text` to Claude in a session this phone has control of, as the
+    /// desktop's composer sends a prompt: the computer types it, then Enter.
+    /// Works from the readable view, the screen off. Refused while a
+    /// question shows (answered in the terminal).
+    ///
+    /// # Errors
+    /// An id that isn't one, not connected, not open, no control, or the
+    /// computer hasn't named the session's run yet.
+    pub async fn compose(
+        &self,
+        host_id: String,
+        session_id: String,
+        text: String,
+    ) -> Result<(), MobileError> {
+        let host = parse_host_id(&host_id)?;
+        let device = Arc::clone(&self.shared.device);
+        Ok(self
+            .shared
+            .on_runtime(async move { device.compose(&host, &session_id, text).await })
+            .await??)
+    }
 }
 
 #[cfg(test)]
