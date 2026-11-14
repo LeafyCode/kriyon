@@ -32,11 +32,8 @@ jest.mock("./RelaySection.tsx", () => ({ RelaySection: () => null }));
 jest.mock("../../modules/kriyon-native/index.ts", () => ({
   KriyonNative: {
     addListener: jest.fn(() => ({ remove: jest.fn() })),
-    closeSession: jest.fn(() => Promise.resolve()),
     input: jest.fn(() => Promise.resolve()),
-    openSession: jest.fn(() => Promise.resolve()),
-    readEntries: jest.fn(() => Promise.resolve()),
-    setScreen: jest.fn(() => Promise.resolve()),
+    setView: jest.fn(() => Promise.resolve()),
     takeControl: jest.fn(() => Promise.resolve()),
   },
 }));

@@ -57,6 +57,10 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
   [Session] beside its list entry: the question it asks, the tool running and since when, how the
   last turn ended and what it changed. Built only from cheap sources the [Host] already holds,
   never the transcript or git, and redacted. _Avoid_: preview, card data.
+- **Session view** (`kriyon_remote_link::device_runtime::SessionView`, `set_view`) — how a
+  [Remote device] wants one [Session] shown: open, with its screen and its [Readable view]
+  entries each on or off, or closed. Sent whole and numbered in the order asked, so a late call
+  changes nothing; kept across links (ADR-0062). _Avoid_: subscription, watch state.
 - **Session fan-out** (`kriyon_remote::fanout::SessionFanout`) — the [Host]'s one copy of a
   [Session]'s screen stream for every [Remote device] that has it open: it numbers the output as
   [Screen update]s once, asks the [PTY daemon] for each device's [Screen snapshot], and keeps a

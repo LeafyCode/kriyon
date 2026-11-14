@@ -17,10 +17,7 @@ jest.mock("../terminal/page.generated.ts", () => ({ TERMINAL_PAGE: "" }));
 jest.mock("../../modules/kriyon-native/index.ts", () => ({
   KriyonNative: {
     addListener: jest.fn(() => ({ remove: jest.fn() })),
-    closeSession: jest.fn(() => Promise.resolve()),
-    openSession: jest.fn(() => Promise.resolve()),
-    readEntries: jest.fn(() => Promise.resolve()),
-    setScreen: jest.fn(() => Promise.resolve()),
+    setView: jest.fn(() => Promise.resolve()),
     takeControl: jest.fn(() => Promise.resolve()),
   },
 }));
@@ -100,28 +97,38 @@ beforeEach(() => {
   });
 });
 
+/** The views asked of Rust, in order, as [open, screen, entries]. */
+function viewsAsked(): [boolean, boolean, boolean][] {
+  return native.setView.mock.calls.map(
+    ([, , , open, screen, entries]) =>
+      [open, screen, entries] as [boolean, boolean, boolean]
+  );
+}
+
 test("a session opens on its readable view, which reads its entries", async () => {
   const view = await render(<SessionScreen hostId={MAC} sessionId="s1" />);
   await act(() => Promise.resolve());
-  expect(native.openSession).toHaveBeenCalledWith(MAC, "s1");
-  expect(native.readEntries).toHaveBeenCalledWith(MAC, "s1");
+  expect(native.setView).toHaveBeenCalledWith(
+    MAC,
+    "s1",
+    expect.any(Number),
+    true,
+    false,
+    true
+  );
   expect(screen.queryByTestId("terminal-page")).toBeNull();
   await view.unmount();
   await act(() => Promise.resolve());
-  expect(native.closeSession).toHaveBeenCalledWith(MAC, "s1");
+  expect(viewsAsked().at(-1)).toEqual([false, false, false]);
 });
 
-test("opened straight on the terminal, the session opens before its screen comes on", async () => {
+test("opened straight on the terminal, the session ends open with its screen on", async () => {
   await render(
     <SessionScreen hostId={MAC} initialView="terminal" sessionId="s1" />
   );
   await act(() => Promise.resolve());
-  await act(() => Promise.resolve());
-  expect(native.openSession).toHaveBeenCalledWith(MAC, "s1");
-  expect(native.setScreen).toHaveBeenCalledWith(MAC, "s1", true);
-  expect(native.openSession.mock.invocationCallOrder[0]).toBeLessThan(
-    native.setScreen.mock.invocationCallOrder[0] ?? 0
-  );
+  expect(viewsAsked().at(-1)).toEqual([true, true, true]);
+  expect(viewsAsked()).not.toContainEqual([false, false, false]);
 });
 
 test("switching to the terminal and back keeps the session open", async () => {
@@ -129,12 +136,12 @@ test("switching to the terminal and back keeps the session open", async () => {
   await act(() => send(CONVERSATION));
   await fireEvent.press(screen.getByRole("tab", { name: "Terminal" }));
   await act(() => Promise.resolve());
-  expect(native.setScreen).toHaveBeenLastCalledWith(MAC, "s1", true);
+  expect(viewsAsked().at(-1)).toEqual([true, true, true]);
   await fireEvent.press(screen.getByRole("tab", { name: "Readable" }));
   await act(() => Promise.resolve());
-  expect(native.setScreen).toHaveBeenLastCalledWith(MAC, "s1", false);
-  expect(native.openSession).toHaveBeenCalledTimes(1);
-  expect(native.closeSession).not.toHaveBeenCalled();
+  expect(viewsAsked().at(-1)).toEqual([true, false, true]);
+  // Never closed between.
+  expect(viewsAsked().every(([open]) => open)).toBe(true);
   // What it read is still there.
   expect(screen.queryByTestId("terminal-page")).toBeNull();
 });
@@ -200,11 +207,13 @@ test("no entries: the terminal, with why; Readable tries again", async () => {
   );
   expect(screen.getByText("The Kriyon Companion is off.")).toBeOnTheScreen();
   expect(screen.getByTestId("terminal-page")).toBeOnTheScreen();
-  native.readEntries.mockClear();
+  native.setView.mockClear();
   await fireEvent.press(screen.getByRole("tab", { name: "Readable" }));
   await act(() => Promise.resolve());
   expect(screen.queryByTestId("terminal-page")).toBeNull();
-  expect(native.readEntries).toHaveBeenCalledWith(MAC, "s1");
+  // Its entries off, then on: read afresh.
+  expect(viewsAsked().map(([, , entries]) => entries)).toContain(false);
+  expect(viewsAsked().at(-1)?.[2]).toBe(true);
 });
 
 test("what the session needs from you shows on top, in a word", async () => {
@@ -225,7 +234,7 @@ test("while Claude asks, the message bar says to answer in the terminal", async 
 });
 
 test("a session that can't be opened says so on its readable view", async () => {
-  native.openSession.mockRejectedValueOnce(new Error("not connected"));
+  native.setView.mockRejectedValueOnce(new Error("not connected"));
   await render(<SessionScreen hostId={MAC} sessionId="s1" />);
   expect(await screen.findByText("not connected")).toBeOnTheScreen();
   expect(screen.queryByTestId("terminal-page")).toBeNull();

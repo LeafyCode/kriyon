@@ -30,7 +30,7 @@
 //! [`LOST_AFTER`] here, not the spec's 40 s.
 
 use kriyon_remote::device_view::LinkState;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -41,7 +41,8 @@ use kriyon_remote::message::{EndpointId, FromDevice, Holder, RefuseReason, Role,
 use parking_lot::Mutex;
 
 use kriyon_remote_link::device_runtime::{
-    DeviceError, DeviceEvents, DeviceRuntime, HostEntry, ScreenSink, StartError, Timing,
+    DeviceError, DeviceEvents, DeviceRuntime, EntriesSink, HostEntry, ScreenSink, SessionView,
+    StartError, Timing,
 };
 use kriyon_remote_link::test_support::host_world::{
     answer, asked, device, next, on_loopback, run, wait_until, world, world_on, RecordingEvents,
@@ -103,6 +104,8 @@ struct Phone {
     host: EndpointId,
     seen: Arc<RecordingEvents>,
     screen: Arc<Mutex<Vec<ScreenEvent>>>,
+    /// The next view's number: each asked after the last.
+    seq: AtomicU64,
 }
 
 impl Phone {
@@ -131,6 +134,7 @@ impl Phone {
             host,
             seen,
             screen: Arc::default(),
+            seq: AtomicU64::new(1),
         };
         phone.until_state(LinkState::Connected).await;
         phone
@@ -146,10 +150,30 @@ impl Phone {
 
     /// Open session "s"; its screen events are kept in `seen.screen`.
     async fn open(&self) {
+        self.view("s", true, None).await;
+    }
+
+    /// Ask for `session` open here, its screen on or off, its entries read
+    /// (to `entries`) or not. Never fails for a host paired here.
+    async fn view(&self, session: &str, screen: bool, entries: Option<EntriesSink>) {
+        let view = SessionView::Open {
+            screen: screen.then(|| self.sink()),
+            entries,
+        };
+        self.ask(session, view).await;
+    }
+
+    /// Ask for `session` closed here.
+    async fn close(&self, session: &str) {
+        self.ask(session, SessionView::Closed).await;
+    }
+
+    async fn ask(&self, session: &str, view: SessionView) {
+        let seq = self.seq.fetch_add(1, Ordering::Relaxed);
         self.rt
-            .open_session(&self.host, "s", Some(self.sink()))
+            .set_view(&self.host, session, seq, view)
             .await
-            .expect("opens");
+            .expect("a paired host's view is always taken");
     }
 
     /// Where this phone's screen events go.
@@ -277,39 +301,19 @@ fn a_phone_reading_entries_turns_the_screen_on_and_off_without_closing_the_sessi
         let _beats = Beats::start(&world);
         *world.fake.entries.lock() = Ok(vec![note("a", "A")]);
         let phone = Phone::connect(&world, 3, Role::Viewer).await;
-        phone
-            .rt
-            .open_session(&phone.host, "s", None)
-            .await
-            .expect("opens for entries");
         let seen: Arc<Mutex<Vec<EntriesEvent>>> = Arc::default();
         let into = Arc::clone(&seen);
-        phone
-            .rt
-            .read_entries(
-                &phone.host,
-                "s",
-                Arc::new(move |event| into.lock().push(event)),
-            )
-            .await
-            .expect("reads");
+        let entries: EntriesSink = Arc::new(move |event| into.lock().push(event));
+        phone.view("s", false, Some(Arc::clone(&entries))).await;
         wait_until("the entries", || !seen.lock().is_empty()).await;
         assert!(world.asks.lock().is_empty(), "no screen asked for");
         // The terminal: the screen comes on the same stream.
-        phone
-            .rt
-            .set_screen(&phone.host, "s", Some(phone.sink()))
-            .await
-            .expect("on");
+        phone.view("s", true, Some(Arc::clone(&entries))).await;
         let id = asked(&world).await;
         answer(&world, id, b"the screen");
         phone.until_screen(b"the screen").await;
         // Back to reading: the session stays open, its entries go on.
-        phone
-            .rt
-            .set_screen(&phone.host, "s", None)
-            .await
-            .expect("off");
+        phone.view("s", false, Some(entries)).await;
         let before = seen.lock().len();
         *world.fake.entries.lock() = Ok(vec![note("a", "A"), note("b", "B")]);
         wait_until("more entries", || seen.lock().len() > before).await;
@@ -327,19 +331,12 @@ fn a_session_gone_says_so_in_the_readable_view_with_the_screen_off() {
         let seen: Arc<Mutex<Vec<EntriesEvent>>> = Arc::default();
         let into = Arc::clone(&seen);
         phone
-            .rt
-            .open_session(&phone.host, "gone", None)
-            .await
-            .expect("asked");
-        phone
-            .rt
-            .read_entries(
-                &phone.host,
+            .view(
                 "gone",
-                Arc::new(move |event| into.lock().push(event)),
+                false,
+                Some(Arc::new(move |event| into.lock().push(event))),
             )
-            .await
-            .expect("reads");
+            .await;
         wait_until("the refusal", || {
             seen.lock()
                 .iter()
@@ -361,14 +358,12 @@ fn a_phone_reads_a_session_as_entries_across_a_dropped_link() {
         let seen: Arc<Mutex<Vec<EntriesEvent>>> = Arc::default();
         let into = Arc::clone(&seen);
         phone
-            .rt
-            .read_entries(
-                &phone.host,
+            .view(
                 "s",
-                Arc::new(move |event| into.lock().push(event)),
+                true,
+                Some(Arc::new(move |event| into.lock().push(event))),
             )
-            .await
-            .expect("reads");
+            .await;
         let texts = |seen: &Mutex<Vec<EntriesEvent>>| -> Vec<String> {
             match seen.lock().last() {
                 Some(EntriesEvent::Entries(entries)) => entries
@@ -394,7 +389,7 @@ fn a_phone_reads_a_session_as_entries_across_a_dropped_link() {
         wait_until("the third", || texts(&seen).len() == 3).await;
 
         // Back to the terminal: the host stops building for this phone.
-        phone.rt.stop_entries(&phone.host, "s").await;
+        phone.view("s", true, None).await;
         tokio::time::sleep(Duration::from_secs(2)).await;
         let builds = world.fake.builds.load(Ordering::Relaxed);
         *world.fake.entries.lock() = Ok(vec![note("a", "A"), note("d", "D")]);
@@ -865,5 +860,100 @@ fn a_viewer_cant_start_and_is_told_why_in_words() {
             "This device isn't allowed to do that."
         );
         assert!(world.fake.starts.lock().is_empty());
+    });
+}
+
+// One view per session: the last asked is what the host sees, whatever
+// order the asks arrive in, and a link going down never fails one.
+
+#[test]
+fn a_view_asked_as_the_link_comes_back_opens_one_stream() {
+    run(async {
+        let world = world().await;
+        let beats = Beats::start(&world);
+        let phone = Arc::new(Phone::connect(&world, 3, Role::Viewer).await);
+        beats.sleep();
+        phone.until_state(LinkState::Lost).await;
+        // Open while the link is down: the link coming back opens it.
+        phone.open().await;
+        beats.wake();
+        phone.rt.wake();
+        // As at a cold start: the app asks again while that open is under
+        // way, on and on until the link is up and a while after.
+        let asking = Arc::clone(&phone);
+        let again = tokio::spawn(async move {
+            for _ in 0..200 {
+                asking.open().await;
+                tokio::time::sleep(Duration::from_millis(2)).await;
+            }
+        });
+        phone.until_state(LinkState::Connected).await;
+        let id = asked(&world).await;
+        answer(&world, id, b"once");
+        phone.until_screen(b"once").await;
+        again.await.expect("asks");
+        // The host refuses a second stream of a session a device has open.
+        let refused = phone
+            .screen
+            .lock()
+            .iter()
+            .any(|event| matches!(event, ScreenEvent::Refused(_)));
+        assert!(!refused, "a second stream was opened, and refused");
+    });
+}
+
+#[test]
+fn a_view_older_than_one_taken_changes_nothing() {
+    run(async {
+        let world = world().await;
+        let _beats = Beats::start(&world);
+        let phone = Phone::connect(&world, 3, Role::Viewer).await;
+        // Asked second but arriving first: the open, numbered 2, stands.
+        phone
+            .rt
+            .set_view(
+                &phone.host,
+                "s",
+                2,
+                SessionView::Open {
+                    screen: None,
+                    entries: None,
+                },
+            )
+            .await
+            .expect("opens");
+        wait_until("onlooked", || world.fake.onlooked.lock().contains("s")).await;
+        phone
+            .rt
+            .set_view(&phone.host, "s", 1, SessionView::Closed)
+            .await
+            .expect("taken, and ignored");
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        assert!(
+            world.fake.onlooked.lock().contains("s"),
+            "a stale close closed it"
+        );
+        // A newer close does.
+        phone.seq.store(3, Ordering::Relaxed);
+        phone.close("s").await;
+        wait_until("closed", || !world.fake.onlooked.lock().contains("s")).await;
+    });
+}
+
+#[test]
+fn views_changed_while_the_link_drops_never_fail_and_show_once_back() {
+    run(async {
+        let world = world().await;
+        let _beats = Beats::start(&world);
+        let phone = Phone::connect(&world, 3, Role::Viewer).await;
+        watching(&world, &phone, b"before").await;
+        world.host.reconnect(&phone.me);
+        // Each is taken (Phone::ask expects it), whatever the link is doing.
+        phone.view("s", false, None).await;
+        phone.view("s", true, None).await;
+        phone.until_state(LinkState::Connected).await;
+        let id = asked(&world).await;
+        answer(&world, id, b"after");
+        phone.until_screen(b"after").await;
     });
 }

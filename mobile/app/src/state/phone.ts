@@ -41,6 +41,12 @@ export type Pairing =
   | { name: string; phase: "paired" }
   | { phase: "failed"; reason: string };
 
+/** How the person wants a session shown here: its screen, its entries. */
+interface View {
+  entries: boolean;
+  screen: boolean;
+}
+
 interface PhoneStore {
   /**
    * The phone's Back (Android's gesture or button, and the screens' own):
@@ -113,6 +119,8 @@ interface PhoneStore {
   start: (deviceName: string) => Promise<void>;
   startError: string | null;
   states: Record<string, HostSummary>;
+  /** Each session's view as last asked of Rust, by `host:session`. */
+  views: Record<string, View>;
 }
 
 /** A session's key in `readable`. */
@@ -121,20 +129,8 @@ export function readableKey(hostId: string, sessionId: string): string {
 }
 
 /** `readable` without `key`. */
-function without(
-  readable: Record<string, ReadableSummary>,
-  key: string
-): Record<string, ReadableSummary> {
-  const { [key]: _gone, ...rest } = readable;
-  return rest;
-}
-
-/** `keys` without `key`. */
-function withoutKey(
-  keys: Record<string, true>,
-  key: string
-): Record<string, true> {
-  const { [key]: _gone, ...rest } = keys;
+function without<T>(record: Record<string, T>, key: string): Record<string, T> {
+  const { [key]: _gone, ...rest } = record;
   return rest;
 }
 
@@ -144,31 +140,46 @@ function reasonOf(error: unknown): string {
 }
 
 /**
- * Session opens and closes run one after another, so a close never
- * overtakes the open it follows; a failed one doesn't stop the next.
+ * The last view's number. Rust takes only a view newer than the last it
+ * took, so calls may reach it in any order: nothing here waits on another.
  */
-let sessionCalls: Promise<unknown> = Promise.resolve();
-
-function inTurn(call: () => Promise<void>): Promise<void> {
-  const turn = sessionCalls.then(call, call);
-  sessionCalls = turn.catch(() => undefined);
-  return turn;
-}
+let viewSeq = 0;
 
 /**
- * Read an open session's entries; a read that fails shows its terminal,
- * saying why.
+ * Ask Rust to show a session as `view` (`null`: closed). Rust keeps it
+ * across links; it fails only for a computer not paired here.
  */
-async function readEntries(hostId: string, sessionId: string): Promise<void> {
-  try {
-    await KriyonNative.readEntries(hostId, sessionId);
-  } catch (error) {
-    usePhone.getState().entriesChanged({
-      hostId,
-      sessionId,
-      summary: { entries: [], unavailable: reasonOf(error) },
-    });
-  }
+function setView(
+  hostId: string,
+  sessionId: string,
+  view: View | null
+): Promise<void> {
+  const key = readableKey(hostId, sessionId);
+  usePhone.setState((state) => ({
+    views: view ? { ...state.views, [key]: view } : without(state.views, key),
+  }));
+  viewSeq += 1;
+  return KriyonNative.setView(
+    hostId,
+    sessionId,
+    viewSeq,
+    view !== null,
+    view?.screen ?? false,
+    view?.entries ?? false
+  );
+}
+
+/** Change part of a session's view; the rest stays as last asked. */
+function changeView(
+  hostId: string,
+  sessionId: string,
+  change: Partial<View>
+): Promise<void> {
+  const now = usePhone.getState().views[readableKey(hostId, sessionId)] ?? {
+    entries: false,
+    screen: false,
+  };
+  return setView(hostId, sessionId, { ...now, ...change });
 }
 
 /**
@@ -199,14 +210,14 @@ export const usePhone = create<PhoneStore>((set, get) => ({
       readable: state.readable[key]?.unavailable
         ? state.readable
         : without(state.readable, key),
-      reading: withoutKey(state.reading, key),
+      reading: without(state.reading, key),
     }));
     // Closing the stream stops its entries too.
-    return inTurn(() => KriyonNative.closeSession(hostId, sessionId));
+    return setView(hostId, sessionId, null);
   },
   // The session stays open while its screen goes off (reading again).
   hideScreen: (hostId, sessionId) =>
-    inTurn(() => KriyonNative.setScreen(hostId, sessionId, false)),
+    changeView(hostId, sessionId, { screen: false }),
   deviceId: null,
   entriesChanged: ({ hostId, sessionId, summary }) =>
     set((state) => {
@@ -264,16 +275,19 @@ export const usePhone = create<PhoneStore>((set, get) => ({
     set((state) => ({
       readable: without(state.readable, readableKey(hostId, sessionId)),
     })),
-  openReadable: (hostId, sessionId) =>
-    inTurn(async () => {
-      const key = readableKey(hostId, sessionId);
-      await KriyonNative.openSession(hostId, sessionId);
-      set((state) => ({ reading: { ...state.reading, [key]: true } }));
-      await readEntries(hostId, sessionId);
-    }),
-  // On the session already open (openReadable): a fresh screen each time.
+  openReadable: (hostId, sessionId) => {
+    const key = readableKey(hostId, sessionId);
+    set((state) => ({ reading: { ...state.reading, [key]: true } }));
+    return changeView(hostId, sessionId, { entries: true }).catch(
+      (error: unknown) => {
+        set((state) => ({ reading: without(state.reading, key) }));
+        throw error;
+      }
+    );
+  },
+  // On the session open (openReadable): a fresh screen each time.
   showScreen: (hostId, sessionId) =>
-    inTurn(() => KriyonNative.setScreen(hostId, sessionId, true)),
+    changeView(hostId, sessionId, { screen: true }),
   pair: async (inviteText) => {
     if (inviteText.trim() === "") {
       set({
@@ -318,10 +332,12 @@ export const usePhone = create<PhoneStore>((set, get) => ({
       return;
     }
     set((state) => ({ readable: without(state.readable, key) }));
-    // The session is still open: read its entries again.
-    inTurn(() => readEntries(hostId, sessionId)).catch(() => undefined);
+    // The session stays open: its entries off, then on, are read afresh.
+    changeView(hostId, sessionId, { entries: false }).catch(() => undefined);
+    changeView(hostId, sessionId, { entries: true }).catch(() => undefined);
   },
   screen: { kind: "home" },
+  views: {},
   sendMessage: (hostId, sessionId, text) =>
     // One after another, as typed: the order and the beat are the point.
     messageSteps(text).reduce(

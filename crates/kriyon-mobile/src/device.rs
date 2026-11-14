@@ -15,7 +15,8 @@ use kriyon_remote::pairing::PairingInvite;
 use kriyon_remote::relay::RelayAction;
 use kriyon_remote_link::device::DevicePairing;
 use kriyon_remote_link::device_runtime::{
-    screen_frame, DeviceError, DeviceEvents, DeviceRuntime, HostEntry, ScreenSink, StartError,
+    screen_frame, DeviceError, DeviceEvents, DeviceRuntime, EntriesSink, HostEntry, ScreenSink,
+    SessionView, StartError,
 };
 use kriyon_remote_link::keys::{load_or_create, KeyVault};
 use kriyon_remote_link::{LinkConfig, RelayAccess};
@@ -957,102 +958,47 @@ impl MobileDevice {
         }
     }
 
-    /// Open a session; its screen goes to `listener`, again on every link.
-    /// With no listener it opens for its [Readable view] entries only: no
-    /// screen crosses the link (or the relay) until [`Self::set_screen`].
+    /// Show a session as the person wants it: `open`, its screen going to
+    /// `screen` (or none crossing the link, or the relay) and its [Readable
+    /// view] entries to `entries` (or not read); or closed. The app numbers
+    /// views in the order it asks (`seq`): one older than the last taken
+    /// (a call that arrived late) changes nothing. The view is kept and
+    /// shown again on every link; a link that is down never fails it.
+    ///
+    /// An entries summary with `unavailable` words means show the terminal;
+    /// ask for the entries again when the person opens the readable view.
     ///
     /// # Errors
-    /// An id that isn't one, or not connected to that computer.
-    pub async fn open_session(
+    /// An id that isn't one, or a computer not paired here.
+    pub async fn set_view(
         &self,
         host_id: String,
         session_id: String,
-        listener: Option<Arc<dyn ScreenListener>>,
+        seq: u64,
+        open: bool,
+        screen: Option<Arc<dyn ScreenListener>>,
+        entries: Option<Arc<dyn EntriesListener>>,
     ) -> Result<(), MobileError> {
         let host = parse_host_id(&host_id)?;
-        let sink = listener.map(screen_sink);
+        let view = if open {
+            SessionView::Open {
+                screen: screen.map(screen_sink),
+                entries: entries.map(|listener| -> EntriesSink {
+                    Arc::new(move |event| {
+                        listener.entries_changed(json(
+                            &kriyon_remote::device_view::readable_summary(&event),
+                        ));
+                    })
+                }),
+            }
+        } else {
+            SessionView::Closed
+        };
         let device = Arc::clone(&self.shared.device);
         self.shared
-            .on_runtime(async move { device.open_session(&host, &session_id, sink).await })
+            .on_runtime(async move { device.set_view(&host, &session_id, seq, view).await })
             .await??;
         Ok(())
-    }
-
-    /// Turn an open session's screen on (to `listener`) or off (`None`),
-    /// without closing it: switching between the readable view and the
-    /// terminal.
-    ///
-    /// # Errors
-    /// An id that isn't one, a session not open here, or the link failed.
-    pub async fn set_screen(
-        &self,
-        host_id: String,
-        session_id: String,
-        listener: Option<Arc<dyn ScreenListener>>,
-    ) -> Result<(), MobileError> {
-        let host = parse_host_id(&host_id)?;
-        let sink = listener.map(screen_sink);
-        let device = Arc::clone(&self.shared.device);
-        self.shared
-            .on_runtime(async move { device.set_screen(&host, &session_id, sink).await })
-            .await??;
-        Ok(())
-    }
-
-    /// Read an open session as [Readable view] entries too: each change
-    /// goes to `listener`, again on every link, until stopped or closed. A
-    /// summary with `unavailable` words means show the terminal; read again
-    /// when the person opens the readable view again.
-    ///
-    /// # Errors
-    /// An id that isn't one, a session not open here, or the link failed.
-    pub async fn read_entries(
-        &self,
-        host_id: String,
-        session_id: String,
-        listener: Arc<dyn EntriesListener>,
-    ) -> Result<(), MobileError> {
-        let host = parse_host_id(&host_id)?;
-        let sink: kriyon_remote_link::device_runtime::EntriesSink = Arc::new(move |event| {
-            listener.entries_changed(json(&kriyon_remote::device_view::readable_summary(&event)));
-        });
-        let device = Arc::clone(&self.shared.device);
-        self.shared
-            .on_runtime(async move { device.read_entries(&host, &session_id, sink).await })
-            .await??;
-        Ok(())
-    }
-
-    /// Stop reading a session as entries (back to its terminal).
-    ///
-    /// # Errors
-    /// An id that isn't one.
-    pub async fn stop_entries(
-        &self,
-        host_id: String,
-        session_id: String,
-    ) -> Result<(), MobileError> {
-        let host = parse_host_id(&host_id)?;
-        let device = Arc::clone(&self.shared.device);
-        self.shared
-            .on_runtime(async move { device.stop_entries(&host, &session_id).await })
-            .await
-    }
-
-    /// Close a session opened here.
-    ///
-    /// # Errors
-    /// An id that isn't one.
-    pub async fn close_session(
-        &self,
-        host_id: String,
-        session_id: String,
-    ) -> Result<(), MobileError> {
-        let host = parse_host_id(&host_id)?;
-        let device = Arc::clone(&self.shared.device);
-        self.shared
-            .on_runtime(async move { device.close_session(&host, &session_id).await })
-            .await
     }
 
     /// Ask for typing control of a session.
@@ -1075,7 +1021,7 @@ impl MobileDevice {
     /// Start a session on a paired computer in its project `project_id`,
     /// titled `title` or after the project: the new session's id, once the
     /// computer answers (it is asked again across reconnects, as one start).
-    /// Open it with [`Self::open_session`].
+    /// Show it with [`Self::set_view`].
     ///
     /// # Errors
     /// An id that isn't one, a computer not paired here, or its refusal
@@ -1263,19 +1209,26 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn entries_are_read_only_from_a_computer_paired_here() {
+    fn a_view_is_taken_only_for_a_computer_paired_here() {
         let store = Arc::new(Memory::default());
         let device = phone(&store);
         let reader = Arc::clone(&device);
         let refused = run(async move {
             reader
-                .read_entries("ab".repeat(32), "s".into(), Arc::new(Entries))
+                .set_view(
+                    "ab".repeat(32),
+                    "s".into(),
+                    1,
+                    true,
+                    None,
+                    Some(Arc::new(Entries)),
+                )
                 .await
         });
         assert!(refused.is_err(), "{refused:?}");
         let bad = run(async move {
             device
-                .read_entries("not an id".into(), "s".into(), Arc::new(Entries))
+                .set_view("not an id".into(), "s".into(), 2, false, None, None)
                 .await
         });
         assert!(matches!(bad, Err(MobileError::Invalid { .. })), "{bad:?}");

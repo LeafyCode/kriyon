@@ -1,9 +1,8 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, expect, test, vi } from "vitest";
 import {
-  remoteHostHideScreen,
   remoteHostInput,
-  remoteHostShowScreen,
+  remoteHostSetView,
   remoteHostTakeControl,
 } from "../ipc/bridge.ts";
 import { useLayout } from "../state/layout.ts";
@@ -50,9 +49,8 @@ vi.mock("@xterm/xterm", () => ({
 
 vi.mock("../ipc/bridge.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../ipc/bridge.ts")>()),
-  remoteHostHideScreen: vi.fn(() => Promise.resolve()),
   remoteHostInput: vi.fn(() => Promise.resolve()),
-  remoteHostShowScreen: vi.fn(() => Promise.resolve()),
+  remoteHostSetView: vi.fn(() => Promise.resolve()),
   remoteHostTakeControl: vi.fn(() => Promise.resolve()),
 }));
 
@@ -100,11 +98,12 @@ function link(
 }
 
 function frames(): (frame: Uint8Array) => void {
-  const [call] = vi.mocked(remoteHostShowScreen).mock.calls.slice(-1);
-  if (!call) {
+  const [call] = vi.mocked(remoteHostSetView).mock.calls.slice(-1);
+  const onFrame = call?.[3]?.onFrame;
+  if (!onFrame) {
     throw new Error("not shown");
   }
-  return call[2];
+  return onFrame;
 }
 
 beforeEach(() => {
@@ -116,14 +115,20 @@ beforeEach(() => {
 test("turns the screen on when shown and off when it goes", async () => {
   const { unmount } = render(<RemoteTerminal hostId={HOST} sessionId="s1" />);
   await act(() => Promise.resolve());
-  expect(remoteHostShowScreen).toHaveBeenCalledWith(
+  expect(remoteHostSetView).toHaveBeenLastCalledWith(
     HOST,
     "s1",
-    expect.any(Function)
+    expect.any(Number),
+    { onEntries: null, onFrame: expect.any(Function) }
   );
   unmount();
   await vi.waitFor(() =>
-    expect(remoteHostHideScreen).toHaveBeenCalledWith(HOST, "s1")
+    expect(remoteHostSetView).toHaveBeenLastCalledWith(
+      HOST,
+      "s1",
+      expect.any(Number),
+      { onEntries: null, onFrame: null }
+    )
   );
   expect(termHolder.current?.dispose).toHaveBeenCalled();
 });
@@ -218,7 +223,7 @@ test("a refusal and a receipt are said in plain words", async () => {
 });
 
 test("a failure to show the screen or take control says why", async () => {
-  vi.mocked(remoteHostShowScreen).mockRejectedValueOnce("not connected");
+  vi.mocked(remoteHostSetView).mockRejectedValueOnce("not connected");
   render(<RemoteTerminal hostId={HOST} sessionId="s1" />);
   expect(await screen.findByText("not connected")).toBeTruthy();
 });

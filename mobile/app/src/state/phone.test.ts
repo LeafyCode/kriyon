@@ -8,15 +8,12 @@ jest.mock("../../modules/kriyon-native/index.ts", () => ({
   KriyonNative: {
     addListener: jest.fn(() => ({ remove: jest.fn() })),
     cancelPairing: jest.fn(),
-    closeSession: jest.fn(),
-    openSession: jest.fn(),
     finishPairing: jest.fn(),
     forget: jest.fn(),
     hosts: jest.fn(),
     input: jest.fn(),
     pair: jest.fn(),
-    readEntries: jest.fn(),
-    setScreen: jest.fn(),
+    setView: jest.fn(),
     start: jest.fn(),
     wake: jest.fn(),
   },
@@ -165,55 +162,40 @@ test("bytes travel to the terminal page as base64", () => {
   expect(toBase64(big)).toHaveLength(133_336);
 });
 
-test("a session's open, screen and close reach Rust in the order asked", async () => {
-  const order: string[] = [];
-  let opened: () => void = () => undefined;
-  native.openSession.mockImplementation(
-    () =>
-      new Promise<void>((resolve) => {
-        order.push("open starts");
-        opened = () => {
-          order.push("open ends");
-          resolve();
-        };
-      })
+/** The views asked of Rust, as [seq, open, screen, entries]. */
+function viewsAsked(): [number, boolean, boolean, boolean][] {
+  return native.setView.mock.calls.map(
+    ([, , seq, open, screen, entries]) =>
+      [seq, open, screen, entries] as [number, boolean, boolean, boolean]
   );
-  native.readEntries.mockResolvedValue();
-  native.setScreen.mockImplementation((_host, _session, on) => {
-    order.push(on ? "screen on" : "screen off");
-    return Promise.resolve();
-  });
-  native.closeSession.mockImplementation(() => {
-    order.push("close");
-    return Promise.resolve();
-  });
+}
+
+test("each change to a session's view goes to Rust whole, numbered, without waiting", () => {
+  // Rust is slow to answer: nothing waits on it.
+  native.setView.mockReturnValue(new Promise<void>(() => undefined));
   const { closeReadable, hideScreen, openReadable, showScreen } =
     usePhone.getState();
-  const steps = [
-    openReadable(MAC, "s"),
-    showScreen(MAC, "s"),
-    hideScreen(MAC, "s"),
-    closeReadable(MAC, "s"),
-  ];
-  await Promise.resolve();
-  expect(order).toEqual(["open starts"]);
-  opened();
-  await Promise.all(steps);
-  expect(order).toEqual([
-    "open starts",
-    "open ends",
-    "screen on",
-    "screen off",
-    "close",
+  openReadable(MAC, "s");
+  showScreen(MAC, "s");
+  hideScreen(MAC, "s");
+  closeReadable(MAC, "s");
+  const asked = viewsAsked();
+  expect(
+    asked.map(([, open, screen, entries]) => [open, screen, entries])
+  ).toEqual([
+    [true, false, true],
+    [true, true, true],
+    [true, false, true],
+    [false, false, false],
   ]);
-});
-
-test("a failed screen doesn't stop the next one", async () => {
-  native.setScreen.mockRejectedValueOnce(new Error("NotOpen"));
-  native.setScreen.mockResolvedValueOnce();
-  const { showScreen } = usePhone.getState();
-  await expect(showScreen(MAC, "s")).rejects.toThrow("NotOpen");
-  await expect(showScreen(MAC, "s")).resolves.toBeUndefined();
+  const seqs = asked.map(([seq]) => seq);
+  expect(seqs).toEqual([...seqs].sort((a, b) => a - b));
+  expect(new Set(seqs).size).toBe(seqs.length);
+  expect(
+    native.setView.mock.calls.every(
+      ([host, session]) => host === MAC && session === "s"
+    )
+  ).toBe(true);
 });
 
 const ENTRIES = {
@@ -224,24 +206,8 @@ const ENTRIES = {
   unavailable: null,
 };
 
-test("the readable view opens the session, then reads its entries", async () => {
-  const order: string[] = [];
-  native.openSession.mockImplementation(() => {
-    order.push("open");
-    return Promise.resolve();
-  });
-  native.readEntries.mockImplementation(() => {
-    order.push("read");
-    return Promise.resolve();
-  });
-  await usePhone.getState().openReadable(MAC, "s1");
-  expect(order).toEqual(["open", "read"]);
-  expect(native.readEntries).toHaveBeenCalledWith(MAC, "s1");
-});
-
 test("entries are kept whole as Rust last sent them, for their session only", async () => {
-  native.openSession.mockResolvedValue();
-  native.readEntries.mockResolvedValue();
+  native.setView.mockResolvedValue();
   const { entriesChanged, openReadable } = usePhone.getState();
   await openReadable(MAC, "s1");
   entriesChanged({ hostId: MAC, sessionId: "s1", summary: ENTRIES });
@@ -257,22 +223,11 @@ test("entries are kept whole as Rust last sent them, for their session only", as
   expect(usePhone.getState().readable[readableKey(MAC, "s2")]).toBeUndefined();
 });
 
-test("a read that fails shows the terminal, saying why", async () => {
-  native.openSession.mockResolvedValue();
-  native.readEntries.mockRejectedValue(new Error("not connected"));
-  await usePhone.getState().openReadable(MAC, "s1");
-  expect(usePhone.getState().readable[readableKey(MAC, "s1")]).toEqual({
-    entries: [],
-    unavailable: "not connected",
-  });
-});
-
-test("a session that can't be opened is said by the view, not as no entries", async () => {
-  native.openSession.mockRejectedValue(new Error("not connected"));
+test("a view Rust won't take is said by the view, not as no entries", async () => {
+  native.setView.mockRejectedValue(new Error("not paired"));
   await expect(usePhone.getState().openReadable(MAC, "s1")).rejects.toThrow(
-    "not connected"
+    "not paired"
   );
-  expect(native.readEntries).not.toHaveBeenCalled();
   expect(usePhone.getState().readable[readableKey(MAC, "s1")]).toBeUndefined();
 });
 
@@ -284,14 +239,12 @@ test("entries for a session not being read are dropped", () => {
 });
 
 test("closing drops the entries, and keeps only why there were none", async () => {
-  native.openSession.mockResolvedValue();
-  native.readEntries.mockResolvedValue();
-  native.closeSession.mockResolvedValue();
+  native.setView.mockResolvedValue();
   const { closeReadable, entriesChanged, openReadable } = usePhone.getState();
   await openReadable(MAC, "s1");
   entriesChanged({ hostId: MAC, sessionId: "s1", summary: ENTRIES });
   await closeReadable(MAC, "s1");
-  expect(native.closeSession).toHaveBeenCalledWith(MAC, "s1");
+  expect(viewsAsked().at(-1)?.[1]).toBe(false);
   expect(usePhone.getState().readable[readableKey(MAC, "s1")]).toBeUndefined();
   await openReadable(MAC, "s1");
   const off = { entries: [], unavailable: "The Kriyon Companion is off." };
@@ -301,6 +254,25 @@ test("closing drops the entries, and keeps only why there were none", async () =
   // Late news from the closed read changes nothing.
   entriesChanged({ hostId: MAC, sessionId: "s1", summary: ENTRIES });
   expect(usePhone.getState().readable[readableKey(MAC, "s1")]).toEqual(off);
+});
+
+test("trying again asks Rust for the entries afresh, the session staying open", async () => {
+  native.setView.mockResolvedValue();
+  const { openReadable, retryReadable, showScreen } = usePhone.getState();
+  await openReadable(MAC, "s1");
+  await showScreen(MAC, "s1");
+  usePhone.setState({
+    readable: { [readableKey(MAC, "s1")]: { entries: [], unavailable: "off" } },
+  });
+  native.setView.mockClear();
+  retryReadable(MAC, "s1");
+  // Off, then on: a new read, from the start.
+  expect(
+    viewsAsked().map(([, open, screen, entries]) => [open, screen, entries])
+  ).toEqual([
+    [true, true, false],
+    [true, true, true],
+  ]);
 });
 
 test("trying again, or leaving the session, forgets why there were none", () => {

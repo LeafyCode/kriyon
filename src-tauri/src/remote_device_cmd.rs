@@ -11,7 +11,9 @@ use serde::Serialize;
 use tauri::{Emitter as _, Manager as _};
 
 use crate::remote_cmd::parse_device_id;
-use kriyon_remote_link::device_runtime::{screen_frame, DeviceEvents, DeviceRuntime, HostEntry};
+use kriyon_remote_link::device_runtime::{
+    screen_frame, DeviceEvents, DeviceRuntime, EntriesSink, HostEntry, ScreenSink, SessionView,
+};
 
 /// The longest invite text taken: a QR code's worth, with room.
 const MAX_INVITE_TEXT: usize = 8 * 1024;
@@ -239,124 +241,70 @@ pub async fn remote_host_forget(app: tauri::AppHandle, host_id: String) -> Resul
     Ok(())
 }
 
-/// Open a host's session, for its [Readable view] entries only: no screen
-/// crosses the link until [`remote_host_show_screen`]. It stays open,
-/// whichever is shown, until closed.
-///
-/// # Errors
-/// For a bad id, or a host not connected now.
-#[tauri::command]
-pub async fn remote_host_open_session(
-    app: tauri::AppHandle,
-    host_id: String,
-    session_id: String,
-) -> Result<(), String> {
-    let id = parse_device_id(&host_id)?;
-    check_session_id(&session_id)?;
-    runtime(&app)
-        .open_session(&id, &session_id, None)
-        .await
-        .map_err(|e| e.to_string())
+/// How the webview wants a host's session shown (see
+/// [`remote_host_set_view`]).
+#[derive(Debug, serde::Deserialize)]
+pub struct ViewAsked {
+    /// The view's number, in the order asked.
+    seq: u64,
+    /// Open here, or closed.
+    open: bool,
+    /// Its screen on.
+    screen: bool,
+    /// Its entries read.
+    entries: bool,
 }
 
-/// Show an open host session's screen: it comes on `on_screen` as raw
-/// frames (see [`screen_frame`]), from a fresh snapshot.
+/// Show a host's session here as the person wants it (`view`): open, its
+/// screen on (to `on_screen`, as raw frames: see [`screen_frame`]) or off
+/// (none crosses the link) and its [Readable view] entries read (to
+/// `on_entries`, whole on every change) or not; or closed (it keeps running
+/// there). A channel goes unused while its part is off. Views are numbered
+/// in the order asked: one older than the last taken, arriving late,
+/// changes nothing. Kept across links; a link that is down never fails it.
 ///
 /// # Errors
-/// For a bad id, a session not open here, or a link failure.
+/// For a bad id, or a host not paired here.
 #[tauri::command]
-pub async fn remote_host_show_screen(
+pub async fn remote_host_set_view(
     app: tauri::AppHandle,
     host_id: String,
     session_id: String,
+    view: ViewAsked,
     on_screen: tauri::ipc::Channel<Vec<u8>>,
-) -> Result<(), String> {
-    let id = parse_device_id(&host_id)?;
-    check_session_id(&session_id)?;
-    let sink: kriyon_remote_link::device_runtime::ScreenSink =
-        Arc::new(move |event: ScreenEvent| {
-            if let Some(frame) = screen_frame(&event) {
-                let _ = on_screen.send(frame);
-            }
-        });
-    runtime(&app)
-        .set_screen(&id, &session_id, Some(sink))
-        .await
-        .map_err(|e| e.to_string())
-}
-
-/// Stop showing a host session's screen; the session stays open (its
-/// entries go on).
-///
-/// # Errors
-/// For a bad id, a session not open here, or a link failure.
-#[tauri::command]
-pub async fn remote_host_hide_screen(
-    app: tauri::AppHandle,
-    host_id: String,
-    session_id: String,
-) -> Result<(), String> {
-    let id = parse_device_id(&host_id)?;
-    check_session_id(&session_id)?;
-    runtime(&app)
-        .set_screen(&id, &session_id, None)
-        .await
-        .map_err(|e| e.to_string())
-}
-
-/// Read an open host session as [Readable view] entries too; what to show
-/// comes on `on_entries`, whole, on every change, until stopped or closed.
-///
-/// # Errors
-/// For a bad id, a session not open here, or a link failure.
-#[tauri::command]
-pub async fn remote_host_read_entries(
-    app: tauri::AppHandle,
-    host_id: String,
-    session_id: String,
     on_entries: tauri::ipc::Channel<kriyon_remote::device_view::ReadableSummary>,
 ) -> Result<(), String> {
     let id = parse_device_id(&host_id)?;
     check_session_id(&session_id)?;
-    let sink = Arc::new(move |event: kriyon_remote::device_view::EntriesEvent| {
-        let _ = on_entries.send(kriyon_remote::device_view::readable_summary(&event));
-    });
+    let seq = view.seq;
+    let view = if view.open {
+        SessionView::Open {
+            screen: view
+                .screen
+                .then_some(on_screen)
+                .map(|channel| -> ScreenSink {
+                    Arc::new(move |event: ScreenEvent| {
+                        if let Some(frame) = screen_frame(&event) {
+                            let _ = channel.send(frame);
+                        }
+                    })
+                }),
+            entries: view
+                .entries
+                .then_some(on_entries)
+                .map(|channel| -> EntriesSink {
+                    Arc::new(move |event| {
+                        let _ = channel.send(kriyon_remote::device_view::readable_summary(&event));
+                    })
+                }),
+        }
+    } else {
+        SessionView::Closed
+    };
     runtime(&app)
-        .read_entries(&id, &session_id, sink)
+        .set_view(&id, &session_id, seq, view)
         .await
         .map_err(|e| e.to_string())
-}
-
-/// Stop reading a host session as entries: back to its terminal.
-///
-/// # Errors
-/// For a bad id.
-#[tauri::command]
-pub async fn remote_host_stop_entries(
-    app: tauri::AppHandle,
-    host_id: String,
-    session_id: String,
-) -> Result<(), String> {
-    let id = parse_device_id(&host_id)?;
-    check_session_id(&session_id)?;
-    runtime(&app).stop_entries(&id, &session_id).await;
-    Ok(())
-}
-
-/// Close a host's session stream; the session keeps running there.
-///
-/// # Errors
-/// For a bad id.
-#[tauri::command]
-pub async fn remote_host_close_session(
-    app: tauri::AppHandle,
-    host_id: String,
-    session_id: String,
-) -> Result<(), String> {
-    let id = parse_device_id(&host_id)?;
-    check_session_id(&session_id)?;
-    runtime(&app).close_session(&id, &session_id).await;
-    Ok(())
 }
 
 /// Start a session on a paired host in project `project_id`, titled

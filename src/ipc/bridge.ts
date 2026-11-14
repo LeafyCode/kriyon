@@ -2076,65 +2076,45 @@ export function remoteHostForget(hostId: string): Promise<void> {
   return invoke("remote_host_forget", { hostId });
 }
 
-/** Open a paired computer's session here, for its [Readable view] entries
- *  only: its screen comes with {@link remoteHostShowScreen}. */
-export function remoteHostOpenSession(
-  hostId: string,
-  sessionId: string
-): Promise<void> {
-  return invoke("remote_host_open_session", { hostId, sessionId });
+/** How a paired computer's session is shown here: its screen's frames go
+ *  to `onFrame` (or no screen crosses the link), its [Readable view]
+ *  entries to `onEntries`, whole on every change (or it isn't read). */
+export interface RemoteView {
+  onEntries: ((summary: ReadableSummary) => void) | null;
+  onFrame: ((frame: Uint8Array) => void) | null;
 }
 
-/** Show an open session's screen: its frames come to `onFrame`, from a
- *  fresh one. */
-export function remoteHostShowScreen(
+/** Show a paired computer's session here as `view`, or close it (`null`;
+ *  it keeps running there). Views are numbered in the order asked: Rust
+ *  takes only one newer than the last (`seq`), and keeps it across links.
+ *  A screen turned on starts from a fresh one. Rejects only for a computer
+ *  not paired here. */
+export function remoteHostSetView(
   hostId: string,
   sessionId: string,
-  onFrame: (frame: Uint8Array) => void
+  seq: number,
+  view: RemoteView | null
 ): Promise<void> {
+  // Both channels always go (Tauri takes no missing one); Rust uses each
+  // only while its part is on.
   const onScreen = new Channel<ArrayBuffer>();
-  onScreen.onmessage = (message) => onFrame(new Uint8Array(message));
-  return invoke("remote_host_show_screen", { hostId, onScreen, sessionId });
-}
-
-/** Stop showing an open session's screen; it stays open. */
-export function remoteHostHideScreen(
-  hostId: string,
-  sessionId: string
-): Promise<void> {
-  return invoke("remote_host_hide_screen", { hostId, sessionId });
-}
-
-/** Read an open session there as [Readable view] entries too: each change
- *  comes to `onEntries`, whole, until stopped or closed. */
-export function remoteHostReadEntries(
-  hostId: string,
-  sessionId: string,
-  onEntries: (summary: ReadableSummary) => void
-): Promise<void> {
-  const channel = new Channel<ReadableSummary>();
-  channel.onmessage = (summary) => onEntries(summary);
-  return invoke("remote_host_read_entries", {
+  const onFrame = view?.onFrame;
+  onScreen.onmessage = (message) => onFrame?.(new Uint8Array(message));
+  const onEntries = new Channel<ReadableSummary>();
+  const entries = view?.onEntries;
+  onEntries.onmessage = (summary) => entries?.(summary);
+  return invoke("remote_host_set_view", {
     hostId,
-    onEntries: channel,
+    onEntries,
+    onScreen,
     sessionId,
+    view: {
+      entries: Boolean(entries),
+      open: view !== null,
+      screen: Boolean(onFrame),
+      seq,
+    },
   });
-}
-
-/** Stop reading a session there as entries: back to its terminal. */
-export function remoteHostStopEntries(
-  hostId: string,
-  sessionId: string
-): Promise<void> {
-  return invoke("remote_host_stop_entries", { hostId, sessionId });
-}
-
-/** Close a paired computer's session here; it keeps running there. */
-export function remoteHostCloseSession(
-  hostId: string,
-  sessionId: string
-): Promise<void> {
-  return invoke("remote_host_close_session", { hostId, sessionId });
 }
 
 /** Ask for typing control of a paired computer's session. */

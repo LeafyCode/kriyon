@@ -189,27 +189,14 @@ class KriyonNativeModule : Module() {
       started().wake()
     }
 
-    // Opened for its entries only: its screen comes with setScreen.
-    AsyncFunction("openSession") Coroutine { hostId: String, sessionId: String ->
-      rust { started().openSession(hostId, sessionId, null) }
-    }
-
-    AsyncFunction("setScreen") Coroutine { hostId: String, sessionId: String, on: Boolean ->
-      val screen = if (on) ScreenEvents(this@KriyonNativeModule, hostId, sessionId) else null
-      rust { started().setScreen(hostId, sessionId, screen) }
-    }
-
-    AsyncFunction("readEntries") Coroutine { hostId: String, sessionId: String ->
-      val entries = EntriesEvents(this@KriyonNativeModule, hostId, sessionId)
-      rust { started().readEntries(hostId, sessionId, entries) }
-    }
-
-    AsyncFunction("stopEntries") Coroutine { hostId: String, sessionId: String ->
-      rust { started().stopEntries(hostId, sessionId) }
-    }
-
-    AsyncFunction("closeSession") Coroutine { hostId: String, sessionId: String ->
-      rust { started().closeSession(hostId, sessionId) }
+    // One call shows a session as the person wants it: open (its screen
+    // and its entries each on or off) or closed. Rust takes only a view
+    // newer than the last (`seq`), so calls may arrive in any order.
+    AsyncFunction("setView") Coroutine {
+      hostId: String, sessionId: String, seq: Double, open: Boolean, screen: Boolean, entries: Boolean ->
+      val screenEvents = if (screen) ScreenEvents(this@KriyonNativeModule, hostId, sessionId) else null
+      val entriesEvents = if (entries) EntriesEvents(this@KriyonNativeModule, hostId, sessionId) else null
+      rust { started().setView(hostId, sessionId, seq.toLong().toULong(), open, screenEvents, entriesEvents) }
     }
 
     AsyncFunction("startSession") Coroutine { hostId: String, projectId: String, title: String? ->

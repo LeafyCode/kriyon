@@ -94,7 +94,6 @@ interface KriyonNativeModule {
   ) => EventSubscription;
   /** Stops the pairing in progress; the phone keeps nothing of it. */
   cancelPairing: () => Promise<void>;
-  closeSession: (hostId: string, sessionId: string) => Promise<void>;
   finishPairing: () => Promise<PairedHost>;
   forget: (hostId: string) => Promise<void>;
   /**
@@ -109,18 +108,8 @@ interface KriyonNativeModule {
     sessionId: string,
     bytes: Uint8Array
   ) => Promise<void>;
-  /**
-   * Opens a session here for its readable-view entries only: no screen
-   * crosses the link until `setScreen`. It stays open until closed.
-   */
-  openSession: (hostId: string, sessionId: string) => Promise<void>;
   /** Starts pairing; resolves to the code to type into the computer. */
   pair: (inviteText: string) => Promise<string>;
-  /**
-   * Reads a session opened here as readable-view entries too, as
-   * `onEntriesChanged` events, until stopped or closed.
-   */
-  readEntries: (hostId: string, sessionId: string) => Promise<void>;
   /** Our relay as it stands. */
   relay: () => Promise<PhoneRelay>;
   /** The relay account's subscription and devices: status only. */
@@ -140,10 +129,21 @@ interface KriyonNativeModule {
    */
   setPushToken: (token: string, platform: "apns" | "fcm") => Promise<boolean>;
   /**
-   * Turns an open session's screen on (its frames as `onScreenFrame`
-   * events, from a fresh one) or off; the session stays open.
+   * Shows a session as the person wants it: open, its screen on (as
+   * `onScreen` events, from a fresh one) or off and its readable-view
+   * entries read (as `onEntriesChanged` events) or not; or closed (it keeps
+   * running on the computer). Views are numbered in the order asked:
+   * Rust takes only one newer than the last, and keeps it across links.
+   * Rejects only for a computer not paired here.
    */
-  setScreen: (hostId: string, sessionId: string, on: boolean) => Promise<void>;
+  setView: (
+    hostId: string,
+    sessionId: string,
+    seq: number,
+    open: boolean,
+    screen: boolean,
+    entries: boolean
+  ) => Promise<void>;
   /**
    * Starts the device side, once per run (a later call returns the same
    * device, under its first name); resolves to this phone's id.
@@ -159,8 +159,6 @@ interface KriyonNativeModule {
     projectId: string,
     title: string | null
   ) => Promise<string>;
-  /** Stops reading a session as entries. */
-  stopEntries: (hostId: string, sessionId: string) => Promise<void>;
   takeControl: (hostId: string, sessionId: string) => Promise<void>;
   wake: () => void;
 }

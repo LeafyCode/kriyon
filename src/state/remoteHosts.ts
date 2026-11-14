@@ -4,16 +4,11 @@ import {
   onRemoteHostChanged,
   onRemoteHostPairingEnded,
   type PairedHost,
-  remoteHostCloseSession,
   remoteHostForget,
-  remoteHostHideScreen,
   remoteHostInput,
-  remoteHostOpenSession,
   remoteHostPair,
-  remoteHostReadEntries,
-  remoteHostShowScreen,
+  remoteHostSetView,
   remoteHostStartSession,
-  remoteHostStopEntries,
   remoteHosts,
   remoteHostsWake,
   remoteHostTakeControl,
@@ -92,6 +87,14 @@ interface RemoteHostsStore {
   takeControl: (hostId: string, sessionId: string) => Promise<void>;
   takeStarted: () => void;
   type: (hostId: string, sessionId: string, text: string) => Promise<void>;
+  /** Each session's view as last asked of Rust, by `host:session`. */
+  views: Record<string, SessionView>;
+}
+
+/** How a session is shown here: its screen's frames, its entries read. */
+interface SessionView {
+  entries: boolean;
+  onFrame: ((frame: Uint8Array) => void) | null;
 }
 
 function readableKey(hostId: string, sessionId: string): string {
@@ -107,24 +110,44 @@ export function readableOf(
 }
 
 export const useRemoteHosts = create<RemoteHostsStore>((set, get) => {
-  // Rust keeps one stream per session and an open replaces it, so a close
-  // sent after a newer open would end the newer stream. Each session's opens
-  // and closes go to Rust one at a time, in the order asked.
-  const queues = new Map<string, Promise<void>>();
-  function inTurn(
+  // Rust takes only a view newer than the last it took, so calls may reach
+  // it in any order and nothing here waits on another.
+  let viewSeq = 0;
+
+  function onEntries(hostId: string, sessionId: string) {
+    return (summary: ReadableSummary) =>
+      set((state) => ({
+        readable: {
+          ...state.readable,
+          [readableKey(hostId, sessionId)]: summary,
+        },
+      }));
+  }
+
+  /** Ask Rust to show a session as changed by `change`, or closed (`null`). */
+  function setView(
     hostId: string,
     sessionId: string,
-    step: () => Promise<void>
-  ) {
-    const key = `${hostId}:${sessionId}`;
-    const turn = (queues.get(key) ?? Promise.resolve()).then(step);
-    queues.set(key, turn);
-    turn.then(() => {
-      if (queues.get(key) === turn) {
-        queues.delete(key);
-      }
-    });
-    return turn;
+    change: Partial<SessionView> | null
+  ): Promise<void> {
+    const key = readableKey(hostId, sessionId);
+    viewSeq += 1;
+    if (change === null) {
+      const { [key]: _gone, ...views } = get().views;
+      set({ views });
+      return attempt(() => remoteHostSetView(hostId, sessionId, viewSeq, null));
+    }
+    const view = {
+      ...(get().views[key] ?? { entries: false, onFrame: null }),
+      ...change,
+    };
+    set((state) => ({ views: { ...state.views, [key]: view } }));
+    return attempt(() =>
+      remoteHostSetView(hostId, sessionId, viewSeq, {
+        onEntries: view.entries ? onEntries(hostId, sessionId) : null,
+        onFrame: view.onFrame,
+      })
+    );
   }
 
   function forgetReadable(hostId: string, sessionId: string) {
@@ -145,11 +168,10 @@ export const useRemoteHosts = create<RemoteHostsStore>((set, get) => {
   }
 
   return {
-    close: (hostId, sessionId) =>
-      inTurn(hostId, sessionId, async () => {
-        forgetReadable(hostId, sessionId);
-        await attempt(() => remoteHostCloseSession(hostId, sessionId));
-      }),
+    close: (hostId, sessionId) => {
+      forgetReadable(hostId, sessionId);
+      return setView(hostId, sessionId, null);
+    },
     error: null,
     forget: (hostId) =>
       attempt(async () => {
@@ -165,39 +187,23 @@ export const useRemoteHosts = create<RemoteHostsStore>((set, get) => {
       attempt(async () => {
         set({ hosts: await remoteHosts() });
       }),
-    // Quiet: a screen goes with its session, so hiding one that just closed
-    // (the view closes it as the terminal unmounts) is no failure.
+    // A screen goes with its session: hiding one that just closed (the view
+    // closes it as the terminal unmounts) asks nothing.
     hideScreen: (hostId, sessionId) =>
-      inTurn(hostId, sessionId, () =>
-        remoteHostHideScreen(hostId, sessionId).catch(() => undefined)
-      ),
-    open: (hostId, sessionId) =>
-      inTurn(hostId, sessionId, () =>
-        attempt(() => remoteHostOpenSession(hostId, sessionId))
-      ),
+      readableKey(hostId, sessionId) in get().views
+        ? setView(hostId, sessionId, { onFrame: null })
+        : Promise.resolve(),
+    open: (hostId, sessionId) => setView(hostId, sessionId, {}),
     showScreen: (hostId, sessionId, onFrame) =>
-      inTurn(hostId, sessionId, () =>
-        attempt(() => remoteHostShowScreen(hostId, sessionId, onFrame))
-      ),
+      setView(hostId, sessionId, { onFrame }),
     readable: {},
+    views: {},
     readEntries: (hostId, sessionId) =>
-      inTurn(hostId, sessionId, () =>
-        attempt(() =>
-          remoteHostReadEntries(hostId, sessionId, (summary) =>
-            set((state) => ({
-              readable: {
-                ...state.readable,
-                [readableKey(hostId, sessionId)]: summary,
-              },
-            }))
-          )
-        )
-      ),
-    stopEntries: (hostId, sessionId) =>
-      inTurn(hostId, sessionId, async () => {
-        forgetReadable(hostId, sessionId);
-        await attempt(() => remoteHostStopEntries(hostId, sessionId));
-      }),
+      setView(hostId, sessionId, { entries: true }),
+    stopEntries: (hostId, sessionId) => {
+      forgetReadable(hostId, sessionId);
+      return setView(hostId, sessionId, { entries: false });
+    },
     pair: async (invite) => {
       const text = invite.trim();
       if (text === "") {

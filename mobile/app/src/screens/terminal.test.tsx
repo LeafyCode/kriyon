@@ -47,7 +47,7 @@ jest.mock("../../modules/kriyon-native/index.ts", () => ({
       return { remove: jest.fn() };
     }),
     input: jest.fn(() => Promise.resolve()),
-    setScreen: jest.fn(() => Promise.resolve()),
+    setView: jest.fn(() => Promise.resolve()),
     takeControl: jest.fn(() => Promise.resolve()),
   },
 }));
@@ -111,7 +111,14 @@ beforeEach(() => {
 test("the session's screen comes on in Rust, and its frames reach the page once it is ready", async () => {
   usePhone.setState({ states: { [MAC]: state({}, "host") } });
   const view = await render(<TerminalView hostId={MAC} sessionId="s1" />);
-  expect(native.setScreen).toHaveBeenCalledWith(MAC, "s1", true);
+  expect(native.setView).toHaveBeenLastCalledWith(
+    MAC,
+    "s1",
+    expect.any(Number),
+    true,
+    true,
+    false
+  );
   await act(() => {
     for (const listener of frameListeners) {
       listener({
@@ -131,7 +138,14 @@ test("the session's screen comes on in Rust, and its frames reach the page once 
   expect(injected.some((code) => code.includes("AAE"))).toBe(false);
   await view.unmount();
   // Its screen goes off; the session stays open (its screen's owner's).
-  expect(native.setScreen).toHaveBeenLastCalledWith(MAC, "s1", false);
+  expect(native.setView).toHaveBeenLastCalledWith(
+    MAC,
+    "s1",
+    expect.any(Number),
+    true,
+    false,
+    false
+  );
 });
 
 test("typing is off until this phone holds control, and Take control asks Rust", async () => {
@@ -218,14 +232,21 @@ test("the page is told the phone's light or dark, and again when it loads again"
   expect(injected.some((code) => code.startsWith("window.kriyon.theme("))).toBe(
     true
   );
-  expect(native.setScreen).toHaveBeenCalledTimes(1);
+  expect(native.setView).toHaveBeenCalledTimes(1);
   injected.length = 0;
   // iOS ended the page's process; it loaded again: a fresh screen, on the
   // same open session.
   await pageReady();
   await act(() => Promise.resolve());
-  expect(native.setScreen).toHaveBeenCalledTimes(2);
-  expect(native.setScreen).toHaveBeenLastCalledWith(MAC, "s1", true);
+  expect(native.setView).toHaveBeenCalledTimes(2);
+  expect(native.setView).toHaveBeenLastCalledWith(
+    MAC,
+    "s1",
+    expect.any(Number),
+    true,
+    true,
+    false
+  );
   expect(injected.some((code) => code.startsWith("window.kriyon.theme("))).toBe(
     true
   );
@@ -296,5 +317,5 @@ test("frames that pile up before the page loads are dropped for a fresh screen",
   expect(
     injected.filter((code) => code.includes("frame(")).length
   ).toBeLessThan(300);
-  expect(native.setScreen).toHaveBeenCalledTimes(2);
+  expect(native.setView).toHaveBeenCalledTimes(2);
 });

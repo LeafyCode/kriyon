@@ -270,33 +270,18 @@ public final class KriyonNativeModule: Module {
       try self.started().wake()
     }
 
-    // Opened for its entries only: its screen comes with setScreen.
-    AsyncFunction("openSession") { (hostId: String, sessionId: String) in
+    // One call shows a session as the person wants it: open (its screen
+    // and its entries each on or off) or closed. Rust takes only a view
+    // newer than the last (`seq`), so calls may arrive in any order.
+    AsyncFunction("setView") {
+      (hostId: String, sessionId: String, seq: Double, open: Bool, screen: Bool, entries: Bool) in
+      let screenEvents = screen ? ScreenEvents(module: self, hostId: hostId, sessionId: sessionId) : nil
+      let entriesEvents = entries ? EntriesEvents(module: self, hostId: hostId, sessionId: sessionId) : nil
       try await rust {
-        try await self.started().openSession(hostId: hostId, sessionId: sessionId, listener: nil)
+        try await self.started().setView(
+          hostId: hostId, sessionId: sessionId, seq: UInt64(seq), open: open,
+          screen: screenEvents, entries: entriesEvents)
       }
-    }
-
-    AsyncFunction("setScreen") { (hostId: String, sessionId: String, on: Bool) in
-      let screen = on ? ScreenEvents(module: self, hostId: hostId, sessionId: sessionId) : nil
-      try await rust {
-        try await self.started().setScreen(hostId: hostId, sessionId: sessionId, listener: screen)
-      }
-    }
-
-    AsyncFunction("readEntries") { (hostId: String, sessionId: String) in
-      let entries = EntriesEvents(module: self, hostId: hostId, sessionId: sessionId)
-      try await rust {
-        try await self.started().readEntries(hostId: hostId, sessionId: sessionId, listener: entries)
-      }
-    }
-
-    AsyncFunction("stopEntries") { (hostId: String, sessionId: String) in
-      try await rust { try await self.started().stopEntries(hostId: hostId, sessionId: sessionId) }
-    }
-
-    AsyncFunction("closeSession") { (hostId: String, sessionId: String) in
-      try await rust { try await self.started().closeSession(hostId: hostId, sessionId: sessionId) }
     }
 
     AsyncFunction("startSession") { (hostId: String, projectId: String, title: String?) -> String in
