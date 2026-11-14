@@ -112,9 +112,12 @@ impl PassKeeper {
                 }
                 allowed
             };
-            if let Some(this) = rebind.this_device() {
-                if rebind.relay().renew(now_s, &this, force).await {
-                    rebind.changed();
+            // Signed in first: this device (its key) is read only then.
+            if rebind.relay().may_renew().await {
+                if let Some(this) = rebind.this_device() {
+                    if rebind.relay().renew(now_s, &this, force).await {
+                        rebind.changed();
+                    }
                 }
             }
             if let Err(why) = self.apply(now_s, rebind, force).await {
@@ -271,6 +274,7 @@ mod tests {
         rebuilds: AtomicUsize,
         fail: AtomicBool,
         changes: AtomicUsize,
+        asked_who: AtomicUsize,
     }
 
     impl Endpoint {
@@ -296,7 +300,15 @@ mod tests {
                 rebuilds: AtomicUsize::new(0),
                 fail: AtomicBool::new(false),
                 changes: AtomicUsize::new(0),
+                asked_who: AtomicUsize::new(0),
             }
+        }
+
+        /// Bound, its relay never signed in to.
+        async fn signed_out(api: &str) -> Self {
+            let endpoint = Self::bound(api).await;
+            endpoint.relay.sign_out().await.expect("signed out");
+            endpoint
         }
 
         /// Bound, with no relay yet.
@@ -318,6 +330,7 @@ mod tests {
             &self.relay
         }
         fn this_device(&self) -> Option<ThisDevice> {
+            self.asked_who.fetch_add(1, Ordering::Relaxed);
             Some(device())
         }
         async fn want(&self, relay: Option<(RelayAccess, u64)>) -> InUse {
@@ -407,6 +420,20 @@ mod tests {
             // The one in use is about to run out: rebuilt, busy or not.
             keeper.check(DEC_14 - 60, &endpoint).await;
             assert_eq!(endpoint.rebuilds(), 1, "rebuilt before it runs out");
+        });
+    }
+
+    /// Never signed in to the relay: the minute's check leaves the [Device
+    /// key] alone (reading it may ask a locked keychain every minute).
+    #[test]
+    fn a_relay_nobody_signed_in_to_never_reads_the_device_key() {
+        let (api, _) = passes();
+        run(async {
+            let keeper = PassKeeper::default();
+            let endpoint = Endpoint::signed_out(&api).await;
+            keeper.check(NOV_15 - 1, &endpoint).await;
+            assert_eq!(endpoint.asked_who.load(Ordering::Relaxed), 0);
+            assert_eq!(endpoint.rebuilds(), 0);
         });
     }
 

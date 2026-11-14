@@ -582,6 +582,14 @@ impl RelayRuntime {
         ))
     }
 
+    /// Whether a pass may be fetched at all: signed in, and the relay on.
+    /// Asked before this device is (its key read), so an app never signed in
+    /// leaves the keychain alone.
+    pub async fn may_renew(&self) -> bool {
+        let saved = self.saved().await;
+        saved.on && saved.token.is_some()
+    }
+
     /// Fetch a new pass when one is due (`force`: now, after the relay said
     /// the pass is out of date). Returns whether a new one came. Keeps the
     /// pass in hand when the API can't be reached.
