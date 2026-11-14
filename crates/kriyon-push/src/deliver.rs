@@ -8,7 +8,7 @@ use std::future::Future;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use kriyon_remote::push::Platform;
+use kriyon_push_seal::Platform;
 
 use crate::gate::Alert;
 use crate::jwt::{Es256Key, Rs256Key};

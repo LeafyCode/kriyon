@@ -14,6 +14,7 @@ on:
       - crates/kriyon-remote-link/**
       - crates/kriyon-relay-client/**
       - crates/kriyon-push/**
+      - crates/kriyon-push-seal/**
       - Cargo.toml
       - Cargo.lock
       # The desktop files the phone app reads: the screen stream and themes.
@@ -35,6 +36,7 @@ on:
       - crates/kriyon-remote-link/**
       - crates/kriyon-relay-client/**
       - crates/kriyon-push/**
+      - crates/kriyon-push-seal/**
       - Cargo.toml
       - Cargo.lock
       # The desktop files the phone app reads: the screen stream and themes.

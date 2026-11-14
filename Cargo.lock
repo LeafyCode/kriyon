@@ -3490,7 +3490,7 @@ dependencies = [
  "http-body-util",
  "hyper",
  "hyper-util",
- "kriyon-remote",
+ "kriyon-push-seal",
  "reqwest",
  "ring",
  "rustls",
@@ -3498,6 +3498,18 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "tokio",
+]
+
+[[package]]
+name = "kriyon-push-seal"
+version = "0.16.0"
+dependencies = [
+ "ed25519-dalek",
+ "hpke",
+ "postcard",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
 ]
 
 [[package]]
@@ -3519,8 +3531,8 @@ version = "0.16.0"
 dependencies = [
  "ed25519-dalek",
  "hmac 0.12.1",
- "hpke",
  "kriyon-core",
+ "kriyon-push-seal",
  "postcard",
  "serde",
  "serde_json",

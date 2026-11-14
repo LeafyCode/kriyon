@@ -5,7 +5,7 @@
 
 use std::collections::{HashMap, VecDeque};
 
-use kriyon_remote::push::{open_push_token, verify_wake, Platform, WakeRequest, MAX_SEALED};
+use kriyon_push_seal::{open_push_token, verify_wake, Platform, WakeRequest, MAX_SEALED};
 use sha2::{Digest, Sha256};
 
 /// How far a wake-up's time may be from ours, either way.
@@ -127,10 +127,7 @@ impl Gate {
     /// The current key: its id and public key, as `GET /v1/key` gives it.
     #[must_use]
     pub fn current_key(&self) -> (u32, [u8; 32]) {
-        (
-            self.key_id,
-            kriyon_remote::push::push_public_key(&self.secret),
-        )
+        (self.key_id, kriyon_push_seal::push_public_key(&self.secret))
     }
 
     /// The secret for key `key_id` at `now`, if this sender still holds it.
@@ -259,7 +256,7 @@ fn array<const N: usize>(text: &str) -> Result<[u8; N], Refusal> {
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use kriyon_remote::push::{push_public_key, seal_push_token, sign_wake, PushTokenPlain};
+    use kriyon_push_seal::{push_public_key, seal_push_token, sign_wake, PushTokenPlain};
 
     use super::*;
 
@@ -437,7 +434,7 @@ pub(crate) mod tests {
 
     #[test]
     fn a_token_sealed_to_a_retired_key_opens_for_sixty_days_after() {
-        use kriyon_remote::push::{push_public_key, seal_push_token, sign_wake, PushTokenPlain};
+        use kriyon_push_seal::{push_public_key, seal_push_token, sign_wake, PushTokenPlain};
         const OLD: [u8; 32] = [3; 32];
         let retired_at = NOW - 10 * DAY;
         let mut gate = Gate::new(KEY_ID + 1, SECRET).with_retired(KEY_ID, OLD, retired_at);

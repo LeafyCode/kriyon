@@ -14,7 +14,9 @@ pub mod link_policy;
 pub mod message;
 pub mod nested;
 pub mod pairing;
-pub mod push;
+/// Push crypto (spec §10), in its own crate so the push sender builds it
+/// alone; here under its old name.
+pub use kriyon_push_seal as push;
 pub mod queue;
 pub mod relay;
 pub mod screen;

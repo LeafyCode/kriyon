@@ -481,7 +481,7 @@ for remote starts, because it runs scripts.
 7. Field types: `key_id` u32; `request_id` 16 random bytes; `at` and
    `expires` Unix seconds; `platform` APNs = 0, FCM = 1. `sealed` is
    `enc (32 bytes) ‖ ciphertext`, at most 1 KiB. Test vectors made
-   independently of our code are in `crates/kriyon-remote/tests/push_vectors.json`.
+   independently of our code are in `crates/kriyon-push-seal/tests/push_vectors.json`.
 8. The sender could notice one phone's token arriving from several hosts. Not
    linking them is a policy promise; the crypto doesn't prevent it.
 9. Alerts are a hint. The app re-checks the host each time it opens.

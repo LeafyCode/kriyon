@@ -16,7 +16,7 @@ use http_body_util::{BodyExt as _, Full, Limited};
 use hyper::body::{Bytes, Incoming};
 use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::{TokioIo, TokioTimer};
-use kriyon_remote::push::{Platform, SenderKey, WakeRequest};
+use kriyon_push_seal::{Platform, SenderKey, WakeRequest};
 use tokio::net::TcpListener;
 
 use crate::deliver::{Deliver, DeliverError};
@@ -201,7 +201,7 @@ mod tests {
     use crate::gate::tests::{host_id, sealed_for, to_hex, wake, HOST_SECRET, KEY_ID, NOW, SECRET};
     use crate::gate::Alert;
 
-    use kriyon_remote::push::push_public_key;
+    use kriyon_push_seal::push_public_key;
 
     use super::*;
 

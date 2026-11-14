@@ -3,6 +3,9 @@
 //! the sender for; the sender checks the signature, opens the token in
 //! memory, sends one alert and forgets it.
 //!
+//! Its own crate, so the push sender builds it without the rest of the
+//! protocol (and its zstd).
+//!
 //! The wire shapes here are pinned by `tests/push_vectors.json`, made by an
 //! independent Python implementation the phone library also checks against.
 

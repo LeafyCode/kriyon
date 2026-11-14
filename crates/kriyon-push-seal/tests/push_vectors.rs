@@ -2,7 +2,7 @@
 //! with Python's `cryptography` and `pyhpke`: the phone library checks
 //! against the same file.
 
-use kriyon_remote::push::{
+use kriyon_push_seal::{
     open_push_token, push_public_key, seal_push_token, sign_wake, verify_wake, wake_bytes,
     Platform, PushTokenPlain, TOKEN_INFO, WAKE_CONTEXT,
 };
