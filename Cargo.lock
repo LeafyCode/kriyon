@@ -3529,7 +3529,6 @@ dependencies = [
 name = "kriyon-remote"
 version = "0.16.0"
 dependencies = [
- "ed25519-dalek",
  "hmac 0.12.1",
  "kriyon-core",
  "kriyon-push-seal",

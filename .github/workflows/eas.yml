@@ -17,6 +17,7 @@ on:
       - crates/kriyon-remote-link/**
       - crates/kriyon-relay-client/**
       - crates/kriyon-push/**
+      - crates/kriyon-push-seal/**
       - Cargo.toml
       - Cargo.lock
       - scripts/mobile/**
