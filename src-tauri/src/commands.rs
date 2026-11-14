@@ -1455,8 +1455,8 @@ mod tests {
     use super::*;
 
     mod launch {
+        use kriyon_core::uds::UnixStream;
         use std::io::Read as _;
-        use std::os::unix::net::UnixStream;
         use std::time::{Duration, Instant};
 
         use kriyon_core::wire::{Frame, FrameDecoder};

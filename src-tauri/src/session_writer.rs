@@ -410,10 +410,10 @@ mod tests {
     use crate::daemon_client::DaemonClient;
     use kriyon_remote::authorize::Dialog;
 
+    use kriyon_core::uds::UnixStream;
     use kriyon_remote::authorize::PendingWrite;
     use kriyon_remote::message::{Holder, RefuseReason, Role};
     use std::io::Read as _;
-    use std::os::unix::net::UnixStream;
 
     const PHONE: EndpointId = [7; 32];
 

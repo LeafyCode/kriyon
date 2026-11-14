@@ -293,6 +293,8 @@ mod tests {
         assert_eq!(err, "cwd has a '.' or '..' part");
     }
 
+    // A path that isn't UTF-8 is made from raw bytes, which only Unix allows.
+    #[cfg(unix)]
     #[test]
     fn validate_cwd_names_a_non_utf8_path_for_what_it_is() {
         use std::os::unix::ffi::OsStrExt as _;
