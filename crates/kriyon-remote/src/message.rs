@@ -220,17 +220,22 @@ pub enum FromDevice {
     /// Control stream.
     TakeControl { session_id: SessionId },
     /// Session stream.
+    /// `write_id` (the device's, never 0, rising) comes back in the write's
+    /// answer, so a device with two writes in flight tells their answers
+    /// apart. So for `Compose` and `Resize`.
     Input {
         run: u64,
         epoch: Epoch,
         seen_seq: u64,
         bytes: Vec<u8>,
+        write_id: u32,
     },
     /// Session stream.
     Compose {
         run: u64,
         epoch: Epoch,
         text: String,
+        write_id: u32,
     },
     /// Session stream.
     Resize {
@@ -238,6 +243,7 @@ pub enum FromDevice {
         epoch: Epoch,
         cols: u16,
         rows: u16,
+        write_id: u32,
     },
     /// Control stream.
     StartSession {
@@ -391,9 +397,11 @@ pub enum ToDevice {
         bytes: Vec<u8>,
     },
     /// The bytes reached the PTY (`written`), not that Claude acted on them.
+    /// `write_id` is the write's own.
     InputAck {
         epoch: Epoch,
         written: bool,
+        write_id: u32,
     },
     StartResult {
         request_id: RequestId,
@@ -440,6 +448,12 @@ pub enum ToDevice {
     /// screen on, `Snapshot` names it.
     Run {
         run: u64,
+    },
+    /// Session stream: the write `write_id` (an `Input`, `Compose` or
+    /// `Resize`) was refused, and why. Its own answer, never `Refused`.
+    WriteRefused {
+        write_id: u32,
+        reason: RefuseReason,
     },
 }
 
@@ -686,6 +700,7 @@ mod tests {
                     epoch: EPOCH,
                     seen_seq: 0,
                     bytes: vec![],
+                    write_id: 0,
                 },
                 5,
             ),
@@ -694,6 +709,7 @@ mod tests {
                     run: 0,
                     epoch: EPOCH,
                     text: s(),
+                    write_id: 0,
                 },
                 6,
             ),
@@ -703,6 +719,7 @@ mod tests {
                     epoch: EPOCH,
                     cols: 80,
                     rows: 24,
+                    write_id: 0,
                 },
                 7,
             ),
@@ -789,6 +806,7 @@ mod tests {
                 ToDevice::InputAck {
                     epoch: EPOCH,
                     written: true,
+                    write_id: 0,
                 },
                 8,
             ),
@@ -981,6 +999,13 @@ mod tests {
         };
         assert_eq!(tag(&usage), 15);
         assert_eq!(tag(&ToDevice::Run { run: 1 }), 16);
+        assert_eq!(
+            tag(&ToDevice::WriteRefused {
+                write_id: 1,
+                reason: RefuseReason::Stale
+            }),
+            17
+        );
     }
 
     #[test]
@@ -1064,6 +1089,7 @@ mod tests {
             },
             seen_seq: u64::MAX,
             bytes: vec![0; len],
+            write_id: 0,
         };
         assert!(crate::codec::encode(&input(MAX_INPUT_BYTES)).is_ok());
     }
@@ -1075,6 +1101,7 @@ mod tests {
             epoch: EPOCH,
             seen_seq: 300,
             bytes: b"y\r".to_vec(),
+            write_id: 0,
         };
         let bytes = postcard::to_allocvec(&message).expect("encodes");
         assert_eq!(postcard::from_bytes::<FromDevice>(&bytes), Ok(message));

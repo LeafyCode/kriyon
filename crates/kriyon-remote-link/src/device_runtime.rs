@@ -346,14 +346,25 @@ struct OpenSession {
 
 /// Where the host's answer to a write goes: whether it reached the PTY, or
 /// why it was refused.
-type AnswerSlot =
-    Arc<std::sync::Mutex<Option<tokio::sync::oneshot::Sender<Result<bool, RefuseReason>>>>>;
+type AnswerSlot = Arc<std::sync::Mutex<Option<(u32, AnswerTo)>>>;
+
+/// Told how a write went.
+type AnswerTo = tokio::sync::oneshot::Sender<Result<bool, RefuseReason>>;
+
+/// A write id no other write from this device has had (never 0).
+fn fresh_write_id() -> u32 {
+    static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
+    loop {
+        let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if id != 0 {
+            return id;
+        }
+    }
+}
 
 /// The answer slot, locked: poison is only another thread's panic, and the
 /// slot is a plain value.
-fn waiter(
-    slot: &AnswerSlot,
-) -> std::sync::MutexGuard<'_, Option<tokio::sync::oneshot::Sender<Result<bool, RefuseReason>>>> {
+fn waiter(slot: &AnswerSlot) -> std::sync::MutexGuard<'_, Option<(u32, AnswerTo)>> {
     slot.lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
@@ -822,8 +833,11 @@ impl DeviceRuntime {
         session: &str,
         bytes: Vec<u8>,
     ) -> Result<(), DeviceError> {
-        self.write(host, session, |screen, epoch| screen.input(epoch, bytes))
-            .await
+        let write_id = fresh_write_id();
+        self.write(host, session, |screen, epoch| {
+            screen.input(epoch, bytes, write_id)
+        })
+        .await
     }
 
     /// Send `text` to Claude in `session` as the desktop's composer does
@@ -846,10 +860,14 @@ impl DeviceRuntime {
             let open = c.sessions.get(session).ok_or(DeviceError::NotOpen)?;
             Arc::clone(&open.answer)
         };
-        // One waits at a time: a newer compose takes the answer.
-        *waiter(&slot) = Some(told);
-        self.write(host, session, |screen, epoch| screen.compose(epoch, text))
-            .await?;
+        // One waits at a time: a newer compose takes the answer. Only its
+        // own answer counts, never one to typing in the terminal.
+        let write_id = fresh_write_id();
+        *waiter(&slot) = Some((write_id, told));
+        self.write(host, session, |screen, epoch| {
+            screen.compose(epoch, text, write_id)
+        })
+        .await?;
         match tokio::time::timeout(COMPOSE_ANSWER_WAIT, answer).await {
             Ok(Ok(Ok(true))) => Ok(()),
             Ok(Ok(Ok(false))) => Err(DeviceError::Link(
@@ -1383,31 +1401,15 @@ async fn read_session(
                     }
                 }
                 let events = lock(&screen).on_message(message, Instant::now());
-                // A compose waiting hears how its write went.
-                for event in &events {
-                    let told = match event {
-                        ScreenEvent::InputAck { written, .. } => Some(Ok(*written)),
-                        ScreenEvent::Refused(reason) if refuses_a_write(*reason) => {
-                            Some(Err(*reason))
-                        }
-                        _ => None,
-                    };
-                    if let Some(told) = told {
-                        if let Some(waiting) = waiter(&answer).take() {
-                            let _ = waiting.send(told);
-                        }
-                    }
-                }
+                // A compose waiting hears how its own write went.
+                tell_answer(&answer, &events);
                 // Screen off: nothing to show, nothing to ask for again; a
                 // refusal of the stream (the session went) is told to the
                 // readable view, if it is read. A write's refusal (a compose
-                // while a dialog shows, say) isn't: the entries go on.
+                // while a dialog shows, say) is its own: the entries go on.
                 let Some(sink) = shown(&shown_in).clone() else {
                     for event in &events {
                         if let ScreenEvent::Refused(reason) = event {
-                            if refuses_a_write(*reason) {
-                                continue;
-                            }
                             let read = {
                                 let mut state = slot(&reading);
                                 if state.read.is_none() {
@@ -1443,16 +1445,25 @@ async fn read_session(
     }
 }
 
-/// Whether `reason` refuses a write on a stream that goes on, rather than
-/// the stream itself.
-fn refuses_a_write(reason: RefuseReason) -> bool {
-    matches!(
-        reason,
-        RefuseReason::NotInControl
-            | RefuseReason::Stale
-            | RefuseReason::DialogOpen
-            | RefuseReason::OutOfRange
-    )
+/// Tell the compose waiting in `answer` how its write went, if one of
+/// `events` is its own answer: another write's (typing in the terminal)
+/// never is.
+fn tell_answer(answer: &AnswerSlot, events: &[ScreenEvent]) {
+    for event in events {
+        let told = match event {
+            ScreenEvent::InputAck {
+                written, write_id, ..
+            } => (*write_id, Ok(*written)),
+            ScreenEvent::WriteRefused { write_id, reason } => (*write_id, Err(*reason)),
+            _ => continue,
+        };
+        let mut waiting = waiter(answer);
+        if waiting.as_ref().is_some_and(|(id, _)| *id == told.0) {
+            if let Some((_, to)) = waiting.take() {
+                let _ = to.send(told.1);
+            }
+        }
+    }
 }
 
 /// One session's screen event as one frame on the webview's raw channel, so
@@ -1482,7 +1493,7 @@ pub fn screen_frame(event: &ScreenEvent) -> Option<Vec<u8>> {
         }
         ScreenEvent::InputAck { written, .. } => Some(vec![2, u8::from(*written)]),
         // Its words go with it, so the desktop and the phone say one thing.
-        ScreenEvent::Refused(reason) => Some(
+        ScreenEvent::Refused(reason) | ScreenEvent::WriteRefused { reason, .. } => Some(
             [
                 &[3, reason_number(*reason)][..],
                 kriyon_remote::device_view::refusal_words(*reason).as_bytes(),
@@ -1521,7 +1532,7 @@ mod tests {
     use kriyon_core::session::SessionStatus;
     use kriyon_core::standing::StandingState;
     use kriyon_remote::compress::{compress, Kind};
-    use kriyon_remote::message::{Epoch, Role, SessionInfo};
+    use kriyon_remote::message::{Epoch, RefuseReason, Role, SessionInfo};
 
     use super::*;
     use crate::test_support::{
@@ -1675,7 +1686,7 @@ mod tests {
                 message = incoming.next() => match message {
                     Ok(Some(Decoded::Message(input @ FromDevice::Input { .. }))) => {
                         heard.push(input);
-                        out.send(&ToDevice::InputAck { epoch: EPOCH, written: true })
+                        out.send(&ToDevice::InputAck { epoch: EPOCH, written: true, write_id: 1, })
                             .await
                             .expect("ack");
                         // Stay up so the receipt arrives before the link goes.
@@ -1694,6 +1705,31 @@ mod tests {
             id: host.id(),
             addr: host.addr(),
         }
+    }
+
+    #[test]
+    fn a_compose_hears_only_its_own_answer() {
+        let answer: AnswerSlot = Arc::default();
+        let (to, mut told) = tokio::sync::oneshot::channel();
+        *waiter(&answer) = Some((5, to));
+        // Typing in the terminal answered first: not the compose's.
+        tell_answer(
+            &answer,
+            &[ScreenEvent::InputAck {
+                epoch: EPOCH,
+                written: true,
+                write_id: 4,
+            }],
+        );
+        assert!(told.try_recv().is_err(), "still waiting");
+        tell_answer(
+            &answer,
+            &[ScreenEvent::WriteRefused {
+                write_id: 5,
+                reason: RefuseReason::DialogOpen,
+            }],
+        );
+        assert_eq!(told.try_recv(), Ok(Err(RefuseReason::DialogOpen)));
     }
 
     #[test]
@@ -1845,12 +1881,16 @@ mod tests {
                 session_id: "s1".into(),
                 screen: true,
             }));
-            assert!(heard.contains(&FromDevice::Input {
-                run: 9,
-                epoch: EPOCH,
-                seen_seq: 2,
-                bytes: b"y".to_vec()
-            }));
+            assert!(heard.iter().any(|message| matches!(
+                message,
+                FromDevice::Input {
+                    run: 9,
+                    epoch: EPOCH,
+                    seen_seq: 2,
+                    bytes,
+                    write_id,
+                } if bytes == b"y" && *write_id != 0
+            )));
             rt.disconnect(&host.id()).await;
         });
     }
@@ -1918,7 +1958,8 @@ mod tests {
         assert_eq!(
             screen_frame(&ScreenEvent::InputAck {
                 epoch: EPOCH,
-                written: false
+                written: false,
+                write_id: 1,
             }),
             Some(vec![2, 0])
         );

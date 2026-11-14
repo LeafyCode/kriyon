@@ -154,10 +154,17 @@ pub enum ScreenEvent {
     Output(Vec<u8>),
     /// Send `Resync` to the host.
     Resync,
-    /// The host's receipt for input: `written` means it reached the PTY.
-    InputAck { epoch: Epoch, written: bool },
+    /// The host's receipt for write `write_id`: `written` means it reached
+    /// the PTY.
+    InputAck {
+        epoch: Epoch,
+        written: bool,
+        write_id: u32,
+    },
     /// The host refused something on this stream.
     Refused(RefuseReason),
+    /// The host refused write `write_id`.
+    WriteRefused { write_id: u32, reason: RefuseReason },
 }
 
 /// One open session stream, on the device.
@@ -234,10 +241,19 @@ impl SessionScreen {
                 Follow::Ignore => Vec::new(),
                 Follow::Resync => vec![ScreenEvent::Resync],
             },
-            ToDevice::InputAck { epoch, written } => {
-                vec![ScreenEvent::InputAck { epoch, written }]
-            }
+            ToDevice::InputAck {
+                epoch,
+                written,
+                write_id,
+            } => vec![ScreenEvent::InputAck {
+                epoch,
+                written,
+                write_id,
+            }],
             ToDevice::Refused { reason } => vec![ScreenEvent::Refused(reason)],
+            ToDevice::WriteRefused { write_id, reason } => {
+                vec![ScreenEvent::WriteRefused { write_id, reason }]
+            }
             ToDevice::Run { run } => {
                 self.run = Some(run);
                 Vec::new()
@@ -282,23 +298,25 @@ impl SessionScreen {
     /// named: with the screen on or off, as a compose answers no dialog.
     /// `None` before the host named one.
     #[must_use]
-    pub fn compose(&self, epoch: Epoch, text: String) -> Option<FromDevice> {
+    pub fn compose(&self, epoch: Epoch, text: String, write_id: u32) -> Option<FromDevice> {
         Some(FromDevice::Compose {
             run: self.run?,
             epoch,
             text,
+            write_id,
         })
     }
 
     /// `Input` for `bytes` under `epoch`, naming the run and the last update
     /// drawn. `None` before the first snapshot: there is nothing to answer.
     #[must_use]
-    pub fn input(&self, epoch: Epoch, bytes: Vec<u8>) -> Option<FromDevice> {
+    pub fn input(&self, epoch: Epoch, bytes: Vec<u8>, write_id: u32) -> Option<FromDevice> {
         Some(FromDevice::Input {
             run: self.follower.run()?,
             epoch,
             seen_seq: self.follower.seen_seq()?,
             bytes,
+            write_id,
         })
     }
 }
@@ -1139,13 +1157,15 @@ mod tests {
             screen.on_message(
                 ToDevice::InputAck {
                     epoch: EPOCH,
-                    written: true
+                    written: true,
+                    write_id: 3,
                 },
                 t
             ),
             [ScreenEvent::InputAck {
                 epoch: EPOCH,
-                written: true
+                written: true,
+                write_id: 3,
             }]
         );
         assert_eq!(
@@ -1163,16 +1183,21 @@ mod tests {
     fn input_names_the_run_the_epoch_and_the_last_update_drawn() {
         let t = Instant::now();
         let mut screen = SessionScreen::new().expect("screen");
-        assert_eq!(screen.input(EPOCH, b"y".to_vec()), None, "nothing seen yet");
+        assert_eq!(
+            screen.input(EPOCH, b"y".to_vec(), 3),
+            None,
+            "nothing seen yet"
+        );
         screen.on_message(snapshot(9, 4, b"a", false), t);
         screen.on_message(update(9, 5, b"b"), t);
         assert_eq!(
-            screen.input(EPOCH, b"y".to_vec()),
+            screen.input(EPOCH, b"y".to_vec(), 3),
             Some(FromDevice::Input {
                 run: 9,
                 epoch: EPOCH,
                 seen_seq: 5,
-                bytes: b"y".to_vec()
+                bytes: b"y".to_vec(),
+                write_id: 3,
             })
         );
     }
@@ -1181,21 +1206,22 @@ mod tests {
     fn compose_names_the_newest_run_told_with_the_screen_on_or_off() {
         let t = Instant::now();
         let mut screen = SessionScreen::new().expect("screen");
-        assert_eq!(screen.compose(EPOCH, "hi".into()), None, "no run yet");
+        assert_eq!(screen.compose(EPOCH, "hi".into(), 3), None, "no run yet");
         // Reading entries, the screen off: the host names the run.
         screen.on_message(ToDevice::Run { run: 7 }, t);
         let composed = |run| FromDevice::Compose {
             run,
             epoch: EPOCH,
             text: "hi".into(),
+            write_id: 3,
         };
-        assert_eq!(screen.compose(EPOCH, "hi".into()), Some(composed(7)));
+        assert_eq!(screen.compose(EPOCH, "hi".into(), 3), Some(composed(7)));
         // The screen on: a snapshot names it.
         screen.on_message(snapshot(9, 4, b"a", false), t);
-        assert_eq!(screen.compose(EPOCH, "hi".into()), Some(composed(9)));
+        assert_eq!(screen.compose(EPOCH, "hi".into(), 3), Some(composed(9)));
         // Off again, and a new run.
         screen.on_message(ToDevice::Run { run: 10 }, t);
-        assert_eq!(screen.compose(EPOCH, "hi".into()), Some(composed(10)));
+        assert_eq!(screen.compose(EPOCH, "hi".into(), 3), Some(composed(10)));
     }
 
     #[test]

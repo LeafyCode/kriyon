@@ -358,8 +358,29 @@ impl SessionFanout {
             return;
         };
         for device in devices {
-            if let Some(stream) = self.devices.get_mut(device) {
-                stream.queue.push(frame.clone());
+            let Some(stream) = self.devices.get_mut(device) else {
+                continue;
+            };
+            stream.queue.push(frame.clone());
+            if stream.queue.is_skipping() {
+                self.start_queue_over(device);
+            }
+        }
+    }
+
+    /// `device`'s queue overflowed: a fresh one, its entries start over
+    /// ([`Self::dropped`]), and with its screen off it is told the run again
+    /// first, since that went with the queue.
+    fn start_queue_over(&mut self, device: &EndpointId) {
+        let run = self.seq.as_ref().map(ScreenSeq::run);
+        let Some(stream) = self.devices.get_mut(device) else {
+            return;
+        };
+        stream.queue = SessionQueue::new(self.limit);
+        stream.dropped = true;
+        if let (false, Some(run)) = (stream.screen, run) {
+            if let Ok(frame) = encode(&ToDevice::Run { run }) {
+                stream.queue.push(frame);
             }
         }
     }
@@ -471,8 +492,7 @@ impl SessionFanout {
         if !stream.queue.is_skipping() {
             return Ok(());
         }
-        stream.queue = SessionQueue::new(self.limit);
-        stream.dropped = true;
+        self.start_queue_over(device);
         Err(self.ask(device, true))
     }
 
@@ -733,12 +753,15 @@ mod tests {
         let mut fanout = SessionFanout::new(1024).expect("fanout");
         fanout.hello(7);
         fanout.open_without_screen(A);
+        assert_eq!(drain(&mut fanout, &A).0, vec![ToDevice::Run { run: 7 }]);
         assert_eq!(fanout.send(&A, vec![0; 16]), Ok(()));
         assert_eq!(
             fanout.send(&A, vec![0; 4096]),
             Err(None),
             "dropped, no snapshot"
         );
+        // The run it was told went with the queue: told again, first.
+        assert_eq!(drain(&mut fanout, &A).0, vec![ToDevice::Run { run: 7 }]);
     }
 
     #[test]

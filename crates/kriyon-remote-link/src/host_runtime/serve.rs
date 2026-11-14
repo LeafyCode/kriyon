@@ -43,12 +43,32 @@ use kriyon_core::daemon::DaemonEvent;
 /// Whether `message` is a write (typing, compose, resize): its answer is
 /// what the device waits on, as it would on an `InputAck`.
 fn is_write(message: &Decoded<FromDevice>) -> bool {
-    matches!(
-        message,
-        Decoded::Message(
-            FromDevice::Input { .. } | FromDevice::Compose { .. } | FromDevice::Resize { .. }
-        )
-    )
+    write_id(message).is_some()
+}
+
+/// The device's id for `message` if it is a write: its answer carries it.
+fn write_id(message: &Decoded<FromDevice>) -> Option<u32> {
+    match message {
+        Decoded::Message(message) => write_id_of(message),
+        Decoded::Unknown { .. } => None,
+    }
+}
+
+fn write_id_of(message: &FromDevice) -> Option<u32> {
+    match message {
+        FromDevice::Input { write_id, .. }
+        | FromDevice::Compose { write_id, .. }
+        | FromDevice::Resize { write_id, .. } => Some(*write_id),
+        _ => None,
+    }
+}
+
+/// A refusal of `message`: a write's names it ([`ToDevice::WriteRefused`]).
+fn refused(message: &Decoded<FromDevice>, reason: RefuseReason) -> ToDevice {
+    match write_id(message) {
+        Some(write_id) => ToDevice::WriteRefused { write_id, reason },
+        None => ToDevice::Refused { reason },
+    }
 }
 
 /// The first 8 hex digits of a device's id: enough to tell devices apart in
@@ -1257,7 +1277,7 @@ impl Serve {
             );
             let answers_write = is_write(&message);
             let answer = match (checked, message) {
-                (Err(reason), _) => Some(ToDevice::Refused { reason }),
+                (Err(reason), message) => Some(refused(&message, reason)),
                 (Ok(()), Decoded::Message(message)) => {
                     if self.stream_request(&served, &id, device, &message) {
                         None
@@ -1290,7 +1310,7 @@ impl Serve {
         answers: &tokio::sync::mpsc::Sender<ToDevice>,
         wake: &Notify,
     ) {
-        if let ToDevice::Refused { reason } = &answer {
+        if let ToDevice::Refused { reason } | ToDevice::WriteRefused { reason, .. } = &answer {
             if !self.refusal(device, *reason, "session", answers_write) {
                 return;
             }
@@ -1314,8 +1334,8 @@ impl Serve {
         role: Role,
         message: &FromDevice,
     ) -> Option<ToDevice> {
-        let Some(write) = PendingWrite::of(message) else {
-            // Readable entries are a later revision's.
+        let (Some(write), Some(write_id)) = (PendingWrite::of(message), write_id_of(message))
+        else {
             return Some(ToDevice::Refused {
                 reason: RefuseReason::NotAllowed,
             });
@@ -1347,7 +1367,7 @@ impl Serve {
                             written = false;
                             break;
                         }
-                        Err(reason) => return Some(ToDevice::Refused { reason }),
+                        Err(reason) => return Some(ToDevice::WriteRefused { write_id, reason }),
                     }
                     if key.wait_ms > 0 {
                         tokio::time::sleep(std::time::Duration::from_millis(key.wait_ms)).await;
@@ -1363,8 +1383,9 @@ impl Serve {
             Ok(written) => ToDevice::InputAck {
                 epoch: write.epoch,
                 written,
+                write_id,
             },
-            Err(reason) => ToDevice::Refused { reason },
+            Err(reason) => ToDevice::WriteRefused { write_id, reason },
         })
     }
 
@@ -1877,12 +1898,14 @@ mod tests {
                 },
                 seen_seq: 0,
                 bytes: b"rm -rf".to_vec(),
+                write_id: 1,
             })
             .await
             .expect("input");
             assert_eq!(
                 next(&mut sr).await,
-                ToDevice::Refused {
+                ToDevice::WriteRefused {
+                    write_id: 1,
                     reason: RefuseReason::NotAllowed
                 }
             );
@@ -2097,7 +2120,8 @@ mod tests {
             for _ in 0..writes {
                 assert_eq!(
                     next(&mut sr).await,
-                    ToDevice::Refused {
+                    ToDevice::WriteRefused {
+                        write_id: 1,
                         reason: RefuseReason::NotAllowed
                     }
                 );
@@ -2474,6 +2498,7 @@ mod tests {
             epoch,
             seen_seq,
             bytes: bytes.to_vec(),
+            write_id: 1,
         }
     }
 
@@ -2493,7 +2518,8 @@ mod tests {
                 next(&mut sr).await,
                 ToDevice::InputAck {
                     epoch,
-                    written: true
+                    written: true,
+                    write_id: 1,
                 }
             );
             assert_eq!(world.fake.typed.lock().as_slice(), b"ls\r");
@@ -2517,7 +2543,7 @@ mod tests {
                 }
             ));
             sw.send(&typing(epoch, 0, b"late")).await.expect("input");
-            assert!(matches!(next(&mut sr).await, ToDevice::Refused { .. }));
+            assert!(matches!(next(&mut sr).await, ToDevice::WriteRefused { .. }));
             assert_eq!(world.fake.typed.lock().as_slice(), b"", "nothing written");
         });
     }
@@ -2547,7 +2573,7 @@ mod tests {
             assert_ne!(newer, epoch, "a takeover bumps the epoch");
             assert!(matches!(holder, kriyon_remote::message::Holder::Device(_)));
             sw.send(&typing(epoch, 0, b"late")).await.expect("input");
-            assert!(matches!(next(&mut sr).await, ToDevice::Refused { .. }));
+            assert!(matches!(next(&mut sr).await, ToDevice::WriteRefused { .. }));
             assert_eq!(world.fake.typed.lock().as_slice(), b"", "nothing written");
         });
     }
@@ -2639,7 +2665,8 @@ mod tests {
             sw.send(&typing(epoch, 0, b"b")).await.expect("input");
             assert_eq!(
                 next(&mut sr).await,
-                ToDevice::Refused {
+                ToDevice::WriteRefused {
+                    write_id: 1,
                     reason: RefuseReason::NotPaired
                 }
             );
@@ -2666,7 +2693,7 @@ mod tests {
             let (mut sw, mut sr, epoch) = in_control(&world, &link, &mut cw, &mut cr).await;
             world.fake.paired.lock().insert(phone.id(), Role::Viewer);
             sw.send(&typing(epoch, 0, b"b")).await.expect("input");
-            assert!(matches!(next(&mut sr).await, ToDevice::Refused { .. }));
+            assert!(matches!(next(&mut sr).await, ToDevice::WriteRefused { .. }));
             assert_eq!(world.fake.typed.lock().as_slice(), b"", "nothing written");
         });
     }
@@ -2684,7 +2711,8 @@ mod tests {
             sw.send(&typing(epoch, 3, b"1")).await.expect("input");
             assert_eq!(
                 next(&mut sr).await,
-                ToDevice::Refused {
+                ToDevice::WriteRefused {
+                    write_id: 1,
                     reason: RefuseReason::Stale
                 }
             );

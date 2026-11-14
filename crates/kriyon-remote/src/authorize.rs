@@ -430,6 +430,7 @@ mod tests {
             epoch: host.control.epoch(),
             seen_seq,
             bytes: b"y".to_vec(),
+            write_id: 0,
         }
     }
 
@@ -438,6 +439,7 @@ mod tests {
             run: RUN,
             epoch: host.control.epoch(),
             text: "hi".into(),
+            write_id: 0,
         }
     }
 
@@ -447,6 +449,7 @@ mod tests {
             epoch: host.control.epoch(),
             cols,
             rows,
+            write_id: 0,
         }
     }
 
@@ -736,6 +739,7 @@ mod tests {
             epoch: h.control.epoch(),
             seen_seq: 0,
             bytes: vec![],
+            write_id: 0,
         };
         let mut epoch = h.control.epoch();
         epoch.counter -= 1;
@@ -744,6 +748,7 @@ mod tests {
             epoch,
             cols: 80,
             rows: 24,
+            write_id: 0,
         };
         for message in [old_run, old_epoch] {
             assert_eq!(check(&h, PHONE, SESSION, message), Err(RefuseReason::Stale));
@@ -819,6 +824,7 @@ mod tests {
             run: RUN + 1,
             epoch: h.control.epoch(),
             text: "hi".into(),
+            write_id: 0,
         };
         assert_eq!(check(&h, PHONE, SESSION, old_run), Err(RefuseReason::Stale));
     }

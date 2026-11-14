@@ -199,11 +199,12 @@ never waits on a network write. A full session queue means [Skip ahead]
   crosses the link (or the relay, with its rate cap), and the device still
   counts as an onlooker. Such a stream is told the session's run with
   `Run { run }`, after `Open` once the daemon has named it, again for each
-  new run, and when its screen goes off (the snapshot that would have named
-  it may be what was dropped), so the device can write `Compose` from its
-  entries; with the screen on, `Snapshot` names the run instead. A device
-  waits for its compose's `InputAck` or refusal on that stream and tells the
-  person, the screen on or off.
+  new run, when its screen goes off (the snapshot that would have named it
+  may be what was dropped), and first in a queue started over after an
+  overflow (the one it was told went with it), so the device can write
+  `Compose` from its entries; with the screen on, `Snapshot` names the run
+  instead. A device waits for its compose's own answer on that stream (by
+  `write_id`, §7) and tells the person, the screen on or off.
 - `Screen { on: bool }` on an open session stream turns its screen on (a
   fresh snapshot, then updates) or off (no more updates, a snapshot under
   way dropped), so switching between the readable view and the terminal
@@ -321,8 +322,14 @@ and resets every reader.
   gives it back from the device that holds it: the host holds it again and
   bumps the epoch, as when that device goes away (giving back what it doesn't
   hold changes nothing). Every device hears `Control { holder, epoch }`.
-- `Input { run, epoch, seen_seq, bytes }`, `Compose { run, epoch, text }`
-  and `Resize { run, epoch, cols, rows }` must carry the current run and epoch.
+- `Input { run, epoch, seen_seq, bytes, write_id }`,
+  `Compose { run, epoch, text, write_id }` and
+  `Resize { run, epoch, cols, rows, write_id }` must carry the current run and
+  epoch. `write_id` is the device's own number for the write (never 0,
+  rising): its answer carries it, `InputAck { .., write_id }` or
+  `WriteRefused { write_id, reason }` (never `Refused`), so a device with two
+  writes in flight (typing in the terminal, a compose from the readable view)
+  tells their answers apart.
   `seen_seq` is the last screen update the device had drawn. The host refuses
   with `Stale` when the run or epoch is old, or when an `Input` comes after a
   CLI dialog appeared or changed past its `seen_seq`, so a lagging phone can't
@@ -335,7 +342,7 @@ and resets every reader.
   a Controller can send the same bytes as `Input`.
 - While a remote device holds control it may resize to its own size, never
   under 80 columns. When control returns to the host, the host's size comes back.
-- Receipts are honest: `InputAck { epoch, written: bool }` means the bytes
+- Receipts are honest: `InputAck { epoch, written: bool, write_id }` means the bytes
   reached the PTY, not that Claude acted on them.
 
 ## 8. The host's one check
