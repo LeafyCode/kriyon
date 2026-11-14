@@ -6,7 +6,8 @@
 #[cfg(windows)]
 pub mod windows;
 
-/// Where a device key is kept.
+/// Where a device key is kept: any [`SecretVault`] is one (stores implement
+/// that one trait); [`load_or_create`] checks the key is 32 bytes.
 pub trait KeyVault {
     /// The stored secret, or `None` when there is none yet.
     ///
@@ -41,6 +42,16 @@ pub trait SecretVault: Send + Sync {
     /// # Errors
     /// Why the vault couldn't be written.
     fn remove(&self) -> Result<(), String>;
+}
+
+impl<T: SecretVault + ?Sized> KeyVault for T {
+    fn read(&self) -> Result<Option<Vec<u8>>, String> {
+        SecretVault::read(self)
+    }
+
+    fn write(&self, secret: &[u8; 32]) -> Result<(), String> {
+        SecretVault::write(self, secret)
+    }
 }
 
 /// Why the device key couldn't be had.
@@ -120,41 +131,45 @@ impl<S: SecretVault, L: SecretVault> SecretVault for SizedVault<S, L> {
     }
 }
 
-impl<S: SecretVault, L: SecretVault> KeyVault for SizedVault<S, L> {
-    fn read(&self) -> Result<Option<Vec<u8>>, String> {
-        SecretVault::read(self)
-    }
-
-    fn write(&self, secret: &[u8; 32]) -> Result<(), String> {
-        SecretVault::write(self, secret)
-    }
-}
-
 /// The macOS keychain, under `<bundle identifier>.remote` / an item name
 /// (`device-key` for the device key).
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
+    use std::sync::Mutex;
 
     use super::*;
 
+    /// A store in memory: one trait, [`SecretVault`], makes it a key vault.
     #[derive(Default)]
     struct Memory {
-        stored: RefCell<Option<Vec<u8>>>,
-        writes: RefCell<u32>,
+        stored: Mutex<Option<Vec<u8>>>,
+        writes: Mutex<u32>,
         broken: bool,
     }
 
-    impl KeyVault for Memory {
+    impl Memory {
+        fn held(&self) -> Option<Vec<u8>> {
+            self.stored.lock().expect("store").clone()
+        }
+        fn writes(&self) -> u32 {
+            *self.writes.lock().expect("writes")
+        }
+    }
+
+    impl SecretVault for Memory {
         fn read(&self) -> Result<Option<Vec<u8>>, String> {
             if self.broken {
                 return Err("locked".into());
             }
-            Ok(self.stored.borrow().clone())
+            Ok(self.held())
         }
-        fn write(&self, secret: &[u8; 32]) -> Result<(), String> {
-            *self.writes.borrow_mut() += 1;
-            *self.stored.borrow_mut() = Some(secret.to_vec());
+        fn write(&self, secret: &[u8]) -> Result<(), String> {
+            *self.writes.lock().expect("writes") += 1;
+            *self.stored.lock().expect("store") = Some(secret.to_vec());
+            Ok(())
+        }
+        fn remove(&self) -> Result<(), String> {
+            *self.stored.lock().expect("store") = None;
             Ok(())
         }
     }
@@ -163,7 +178,7 @@ mod tests {
     fn the_first_start_makes_a_key_and_keeps_it() {
         let vault = Memory::default();
         assert_eq!(load_or_create(&vault, || [7; 32]), Ok([7; 32]));
-        assert_eq!(*vault.stored.borrow(), Some(vec![7; 32]));
+        assert_eq!(vault.held(), Some(vec![7; 32]));
     }
 
     #[test]
@@ -174,20 +189,20 @@ mod tests {
             load_or_create(&vault, || panic!("never a second key")),
             Ok([7; 32])
         );
-        assert_eq!(*vault.writes.borrow(), 1);
+        assert_eq!(vault.writes(), 1);
     }
 
     #[test]
     fn a_damaged_key_is_an_error_and_is_left_alone() {
         let vault = Memory {
-            stored: RefCell::new(Some(vec![1; 5])),
+            stored: Mutex::new(Some(vec![1; 5])),
             ..Memory::default()
         };
         assert_eq!(
             load_or_create(&vault, || panic!("never replaced")),
             Err(DeviceKeyError::Damaged(5))
         );
-        assert_eq!(*vault.writes.borrow(), 0);
+        assert_eq!(vault.writes(), 0);
     }
 
     #[test]

@@ -123,17 +123,6 @@ const MISSING_ENTITLEMENT: i32 = -34018;
 const NOT_FOUND: i32 = -25300;
 
 #[cfg(target_os = "macos")]
-impl KeyVault for Keychain {
-    fn read(&self) -> Result<Option<Vec<u8>>, String> {
-        SecretVault::read(self)
-    }
-
-    fn write(&self, secret: &[u8; 32]) -> Result<(), String> {
-        SecretVault::write(self, secret)
-    }
-}
-
-#[cfg(target_os = "macos")]
 impl SecretVault for Keychain {
     fn read(&self) -> Result<Option<Vec<u8>>, String> {
         use security_framework::passwords::{generic_password, get_generic_password};

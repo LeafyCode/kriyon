@@ -5,7 +5,7 @@
 //! plain words, never a prompt the app waits on: the desktop unlocks its
 //! keyring at login. The secret is never kept anywhere else, such as a file.
 
-use kriyon_remote_link::keys::{KeyVault, SecretVault};
+use kriyon_remote_link::keys::SecretVault;
 
 /// Why the keyring couldn't be used.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -100,16 +100,6 @@ impl<K: Keyring> SecretVault for KeyringVault<K> {
 
     fn remove(&self) -> Result<(), String> {
         self.keyring.delete(&self.attributes()).map_err(words)
-    }
-}
-
-impl<K: Keyring> KeyVault for KeyringVault<K> {
-    fn read(&self) -> Result<Option<Vec<u8>>, String> {
-        SecretVault::read(self)
-    }
-
-    fn write(&self, secret: &[u8; 32]) -> Result<(), String> {
-        SecretVault::write(self, secret)
     }
 }
 

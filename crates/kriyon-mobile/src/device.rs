@@ -18,7 +18,7 @@ use kriyon_remote_link::device_runtime::{
     screen_frame, DeviceError, DeviceEvents, DeviceRuntime, EntriesSink, HostEntry, ScreenSink,
     ScreenView, SessionView, StartError,
 };
-use kriyon_remote_link::keys::{load_or_create, KeyVault};
+use kriyon_remote_link::keys::{load_or_create, SecretVault};
 use kriyon_remote_link::{LinkConfig, RelayAccess};
 
 use crate::hosts::{hosts_bytes, read_hosts, with_host, without_host, PairedHost, HOSTS_KEY};
@@ -182,15 +182,19 @@ fn store_error(error: &StoreError) -> MobileError {
 /// The device key, kept in the phone's store.
 struct StoreVault<'a>(&'a dyn PhoneStore);
 
-impl KeyVault for StoreVault<'_> {
+impl SecretVault for StoreVault<'_> {
     fn read(&self) -> Result<Option<Vec<u8>>, String> {
         self.0.read(DEVICE_KEY.into()).map_err(|e| e.to_string())
     }
 
-    fn write(&self, secret: &[u8; 32]) -> Result<(), String> {
+    fn write(&self, secret: &[u8]) -> Result<(), String> {
         self.0
             .write(DEVICE_KEY.into(), secret.to_vec())
             .map_err(|e| e.to_string())
+    }
+
+    fn remove(&self) -> Result<(), String> {
+        self.0.remove(DEVICE_KEY.into()).map_err(|e| e.to_string())
     }
 }
 
