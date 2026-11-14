@@ -333,7 +333,7 @@ mod tests {
             project_folder(&store, "nope"),
             Ok(ProjectFolderCheck::NoSuchProject)
         ));
-        let gone = store_with_project(Path::new("/no/such/folder"));
+        let gone = store_with_project(&project.path().join("no-such-folder"));
         assert!(matches!(
             project_folder(&gone, "p"),
             Ok(ProjectFolderCheck::NotAllowed(FolderRefusal::NotADirectory))

@@ -1810,6 +1810,11 @@ mod tests {
             .outcome()
             .expect("git setup command should spawn");
         assert!(got.success, "git {args:?} failed: {}", got.stderr);
+        // A test repo keeps its files' line endings as written, whatever the
+        // machine's git does (Windows' runners turn on core.autocrlf).
+        if args.first() == Some(&"init") {
+            git_setup(repo, &["config", "core.autocrlf", "false"]);
+        }
     }
 
     /// Count worktrees for `repo` by shelling straight to git, bypassing the
