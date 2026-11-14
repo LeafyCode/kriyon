@@ -49,6 +49,10 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
   [Session] as entries (the prompt, Claude's reply, steps, reports, a question showing) instead
   of the terminal: what the [Structured view] shows, redacted and trimmed for a phone. Off with
   the companion off ("exact or off"). _Avoid_: chat view, transcript view.
+- **Nested record** (`kriyon_remote::nested`) — a record inside a remote message (a session's
+  entry, a [Readable view] entry) sent as its own bytes with their length first, so it can grow:
+  an older reader skips fields it doesn't know, a newer one reads fields an older writer left out
+  as zero ("none"). _Avoid_: envelope, blob.
 - **Session fan-out** (`kriyon_remote::fanout::SessionFanout`) — the [Host]'s one copy of a
   [Session]'s screen stream for every [Remote device] that has it open: it numbers the output as
   [Screen update]s once, asks the [PTY daemon] for each device's [Screen snapshot], and keeps a

@@ -23,7 +23,7 @@ pub const YOU_MAX: usize = 1024;
 pub const CLAUDE_MAX: usize = 4096;
 /// The most bytes of a step's name and target together.
 pub const STEP_MAX: usize = 160;
-/// The most bytes of a report's summary and outcome together.
+/// The most bytes of a report's summary and event together.
 pub const REPORT_MAX: usize = 512;
 /// The most options of a question, and the most bytes of each.
 pub const ASK_OPTIONS: usize = 8;
@@ -58,8 +58,13 @@ pub enum EntryKind {
         target: String,
         state: StepState,
     },
-    /// A [Work report].
-    Report { summary: String, outcome: String },
+    /// A [Work report]: its outcome in words is the device's to choose;
+    /// `event` is what a monitor saw (an [`ReportOutcome::Event`]), else empty.
+    Report {
+        summary: String,
+        outcome: ReportOutcome,
+        event: String,
+    },
     /// Claude's question dialog is showing: answered only in the terminal.
     Asking {
         header: String,
@@ -278,17 +283,14 @@ fn step_kind(name: &str, target: Option<&str>, is_error: bool, finished: bool) -
 }
 
 fn report_kind(report: &WorkReport) -> EntryKind {
-    let outcome = match report.outcome {
-        ReportOutcome::Completed => "Finished".to_string(),
-        ReportOutcome::Failed => "Failed".to_string(),
-        ReportOutcome::Stopped => "Stopped".to_string(),
-        ReportOutcome::Event => report.event.clone().unwrap_or_else(|| "Event".into()),
-        ReportOutcome::Update => "Update".to_string(),
+    let event = match (report.outcome, &report.event) {
+        (ReportOutcome::Event, Some(event)) => cut(&redact(event), REPORT_MAX / 4),
+        _ => String::new(),
     };
-    let outcome = cut(&redact(&outcome), REPORT_MAX / 4);
     EntryKind::Report {
-        summary: cut(&redact(&report.summary), REPORT_MAX - outcome.len()),
-        outcome,
+        summary: cut(&redact(&report.summary), REPORT_MAX - event.len()),
+        outcome: report.outcome,
+        event,
     }
 }
 
@@ -490,7 +492,8 @@ mod tests {
             vec![
                 &EntryKind::Report {
                     summary: "Agent \"Review\" finished".into(),
-                    outcome: "Finished".into()
+                    outcome: crate::work_report::ReportOutcome::Completed,
+                    event: String::new(),
                 },
                 &EntryKind::Note {
                     text: "Context compacted".into()

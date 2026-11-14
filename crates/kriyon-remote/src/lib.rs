@@ -12,6 +12,7 @@ pub mod entries;
 pub mod fanout;
 pub mod link_policy;
 pub mod message;
+pub mod nested;
 pub mod pairing;
 pub mod push;
 pub mod queue;

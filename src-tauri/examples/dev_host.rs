@@ -26,6 +26,7 @@ use kriyon_core::daemon::DaemonEvent;
 use kriyon_core::readable::{EntryKind, Keyed, StepState};
 use kriyon_core::session::SessionStatus;
 use kriyon_core::standing::StandingState;
+use kriyon_core::work_report::ReportOutcome;
 use kriyon_remote::authorize::{PendingWrite, ProjectFolder};
 use kriyon_remote::control::{Change, HostIsTyping};
 use kriyon_remote::message::{EndpointId, ProjectInfo, RefuseReason, Role, SessionInfo};
@@ -159,7 +160,8 @@ fn conversation(beat: u64) -> Vec<Keyed> {
             "report",
             EntryKind::Report {
                 summary: "Waited for the token before sending; one test still fails.".into(),
-                outcome: "Finished".into(),
+                outcome: ReportOutcome::Completed,
+                event: String::new(),
             },
         ));
     }

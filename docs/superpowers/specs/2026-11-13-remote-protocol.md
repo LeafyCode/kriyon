@@ -65,9 +65,24 @@ calls while Remote access is off.
   and answered with `Refused { reason: UnknownMessage }`, never a crash.
   Trailing bytes after a known message are ignored.
 - **Adding fields.** postcard doesn't describe itself, so fields are appended
-  only at the end of a top-level message, never inside a nested struct or a
-  list item; otherwise add a new message type. The host never depends on a
-  new field for a security check unless it requires that minor version.
+  only at the end of a top-level message or of a nested record, never inside
+  any other struct or list item; otherwise add a new message type. The host
+  never depends on a new field for a security check unless it requires that
+  minor version.
+- **Nested records.** `SessionInfo` (in `Welcome`, `SessionList` and
+  `SessionStatus`), `Entry` (in `Entries`) and the `EntryKind` inside each
+  `Entry` go on the wire as their own postcard bytes with the length first
+  (`kriyon_remote::nested`), so each one can grow:
+  - Old reader, new writer: a reader skips the record's tail bytes it
+    doesn't know.
+  - New reader, old writer: a reader decodes a record as if it went on with
+    zero bytes, so each missing tail field comes out as its zero: `None`,
+    `false`, `0`, an empty `String` or `Vec`.
+  - So a field appended inside a nested record must have a zero-byte default
+    (`Option`, `bool`, a number, `String`, `Vec`). An appended enum field's
+    tag-0 variant must mean "unknown" or "none".
+  - A struct inside a nested record that is not itself nested can't grow; a
+    new field goes beside it instead.
 - **Compression.** Each [Screen update] and snapshot is one independent zstd
   frame, no dictionary, with the content size in the frame header. The stated
   content size bounds memory: decoders refuse a frame without it, and refuse more than 8 MiB decompressed for an
@@ -202,7 +217,11 @@ the source of truth; entries are best-effort and say so.
     ended.
   - `Step { name, target, state }`, `state` one of `Running`, `Done`,
     `Failed`: one tool call.
-  - `Report { summary, outcome }`: a [Work report].
+  - `Report { summary, outcome, event }`: a [Work report]. `outcome` is one
+    of `Update` (0: anything else, and what a device reads for an outcome it
+    doesn't know), `Completed`, `Failed`, `Stopped`, `Event`; `event` is
+    what a monitor saw for an `Event`, else empty. The words and their
+    colour are the device's.
   - `Asking { header, question, options: Vec<String> }`: Claude's question
     dialog is showing. The device shows the question and its options, never
     an answer button, only "Answer in the terminal", which opens the terminal
@@ -234,7 +253,7 @@ notice instead of transcript-only turns; so the host answers
 | `You` text | 1 KiB |
 | `Claude` text | 4 KiB: the start kept, then "…"; the rest is in the terminal |
 | `Step` name and target | 160 bytes together |
-| `Report` summary and outcome | 512 bytes |
+| `Report` summary and event | 512 bytes |
 | `Asking` header, question and options | 1 KiB |
 | The window | the newest 200 entries |
 | One `Entries` message | 64 KiB; a bigger batch goes in several |
@@ -337,8 +356,9 @@ the host without the payload.
   title is at most 200 bytes. Names and titles refuse control characters,
   line and paragraph separators, bidi and zero-width characters.
 - Message tags are the variant positions (postcard), append-only, pinned by
-  golden tests; so are the numbers of `RefuseReason`, `SessionStatus`, `Role`
-  and `Holder`.
+  golden tests; so are the numbers of `RefuseReason`, `SessionStatus`, `Role`,
+  `Holder`, `EntryKind`, `StepState`, `EntriesUnavailable` and
+  `ReportOutcome`, and the nested-record framing.
 
 **Projects.** Right after `Welcome`, and again whenever it changes, the host
 sends `ProjectList { projects: [ProjectInfo { id, name, parked }] }`, Viewers

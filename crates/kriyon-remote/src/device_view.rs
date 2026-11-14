@@ -12,7 +12,8 @@ use std::time::Instant;
 
 use crate::compress::{CompressError, Kind, SnapshotHead, SnapshotParts, Unpacker};
 use crate::message::{
-    Epoch, FromDevice, Holder, ProjectInfo, RefuseReason, Role, SessionId, SessionInfo, ToDevice,
+    Epoch, FromDevice, Holder, ProjectInfo, RefuseReason, ReportOutcome, Role, SessionId,
+    SessionInfo, ToDevice,
 };
 use crate::screen::{Follow, ScreenFollower};
 
@@ -505,6 +506,19 @@ pub enum ShownKind {
     },
 }
 
+/// A report's outcome in the desktop's words; what a monitor saw stands as
+/// its own.
+fn outcome_words(outcome: ReportOutcome, event: &str) -> String {
+    match outcome {
+        ReportOutcome::Completed => "Finished".into(),
+        ReportOutcome::Failed => "Failed".into(),
+        ReportOutcome::Stopped => "Stopped".into(),
+        ReportOutcome::Event if !event.is_empty() => event.into(),
+        ReportOutcome::Event => "Event".into(),
+        ReportOutcome::Update => "Update".into(),
+    }
+}
+
 /// What the apps show for `event`.
 #[must_use]
 pub fn readable_summary(event: &EntriesEvent) -> ReadableSummary {
@@ -552,9 +566,13 @@ pub fn readable_summary(event: &EntriesEvent) -> ReadableSummary {
                                 StepState::Failed => "failed",
                             },
                         },
-                        EntryKind::Report { summary, outcome } => ShownKind::Report {
+                        EntryKind::Report {
+                            summary,
+                            outcome,
+                            event,
+                        } => ShownKind::Report {
                             summary: summary.clone(),
-                            outcome: outcome.clone(),
+                            outcome: outcome_words(*outcome, event),
                         },
                         EntryKind::Asking {
                             header,
@@ -687,6 +705,46 @@ mod entries_tests {
         let off = readable_summary(&EntriesEvent::Unavailable(EntriesUnavailable::CompanionOff));
         assert_eq!(off.entries, Vec::new());
         assert!(off.unavailable.expect("words").contains("Companion"));
+    }
+
+    #[test]
+    fn a_reports_outcome_is_put_in_the_desktops_words_on_the_device() {
+        let report = |seq, outcome, event: &str| Entry {
+            seq,
+            kind: EntryKind::Report {
+                summary: "s".into(),
+                outcome,
+                event: event.into(),
+            },
+        };
+        let summary = readable_summary(&EntriesEvent::Entries(vec![
+            report(1, ReportOutcome::Completed, ""),
+            report(2, ReportOutcome::Failed, ""),
+            report(3, ReportOutcome::Stopped, ""),
+            report(4, ReportOutcome::Event, "Port 3000 is up"),
+            report(5, ReportOutcome::Event, ""),
+            // What an older device reads for an outcome it doesn't know.
+            report(6, ReportOutcome::Update, ""),
+        ]));
+        let words: Vec<_> = summary
+            .entries
+            .iter()
+            .map(|entry| match &entry.kind {
+                ShownKind::Report { outcome, .. } => outcome.as_str(),
+                other => panic!("{other:?}"),
+            })
+            .collect();
+        assert_eq!(
+            words,
+            [
+                "Finished",
+                "Failed",
+                "Stopped",
+                "Port 3000 is up",
+                "Event",
+                "Update"
+            ]
+        );
     }
 
     #[test]

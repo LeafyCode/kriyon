@@ -302,6 +302,7 @@ pub enum ToDevice {
         host_name: String,
         protocol_minor: u16,
         role: Role,
+        #[serde(with = "crate::nested::list")]
         sessions: Vec<SessionInfo>,
     },
     /// `at` is Unix milliseconds.
@@ -310,10 +311,12 @@ pub enum ToDevice {
         at: u64,
     },
     SessionList {
+        #[serde(with = "crate::nested::list")]
         sessions: Vec<SessionInfo>,
     },
     /// One session's entry changed.
     SessionStatus {
+        #[serde(with = "crate::nested::one")]
         session: SessionInfo,
     },
     Control {
@@ -375,6 +378,7 @@ pub enum ToDevice {
     /// Session stream, after `RequestEntries`: [Readable view] entries, new
     /// or changed. `reset`: drop every entry you have first (spec §6).
     Entries {
+        #[serde(with = "crate::nested::list")]
         entries: Vec<Entry>,
         reset: bool,
         /// The lowest `seq` still in the host's window, past the "older in
@@ -394,10 +398,12 @@ pub enum ToDevice {
 pub struct Entry {
     /// The host's, per session, rising, never reused within a [Session run].
     pub seq: u64,
+    #[serde(with = "crate::nested::one")]
     pub kind: EntryKind,
 }
 
 pub use kriyon_core::readable::{EntryKind, StepState};
+pub use kriyon_core::work_report::ReportOutcome;
 
 /// Why a session has no [Readable view] entries.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -716,6 +722,104 @@ mod tests {
             reason: EntriesUnavailable::CompanionOff,
         };
         assert_eq!(tag(&unavailable), 14);
+    }
+
+    #[test]
+    fn entry_numbers_are_fixed() {
+        let s = String::new;
+        let kinds = [
+            (EntryKind::You { text: s() }, 0),
+            (
+                EntryKind::Claude {
+                    text: s(),
+                    done: false,
+                },
+                1,
+            ),
+            (
+                EntryKind::Step {
+                    name: s(),
+                    target: s(),
+                    state: StepState::Running,
+                },
+                2,
+            ),
+            (
+                EntryKind::Report {
+                    summary: s(),
+                    outcome: ReportOutcome::Update,
+                    event: s(),
+                },
+                3,
+            ),
+            (
+                EntryKind::Asking {
+                    header: s(),
+                    question: s(),
+                    options: vec![],
+                },
+                4,
+            ),
+            (EntryKind::Note { text: s() }, 5),
+        ];
+        for (kind, expected) in kinds {
+            assert_eq!(tag(&kind), expected, "{kind:?}");
+        }
+        let states = [StepState::Running, StepState::Done, StepState::Failed];
+        for (state, expected) in states.into_iter().zip(0..) {
+            assert_eq!(tag(&state), expected, "{state:?}");
+        }
+        let reasons = [
+            EntriesUnavailable::CompanionOff,
+            EntriesUnavailable::NoTranscript,
+        ];
+        for (reason, expected) in reasons.into_iter().zip(0..) {
+            assert_eq!(tag(&reason), expected, "{reason:?}");
+        }
+        // Tag 0 is the one a device that doesn't know a newer outcome reads.
+        let outcomes = [
+            ReportOutcome::Update,
+            ReportOutcome::Completed,
+            ReportOutcome::Failed,
+            ReportOutcome::Stopped,
+            ReportOutcome::Event,
+        ];
+        for (outcome, expected) in outcomes.into_iter().zip(0..) {
+            assert_eq!(tag(&outcome), expected, "{outcome:?}");
+        }
+    }
+
+    /// Session entries and readable-view entries are nested records (spec
+    /// §3): each one's bytes, length first, so they can grow.
+    #[test]
+    fn session_and_readable_entries_go_as_nested_records() {
+        let record = postcard::to_allocvec(&info()).expect("encodes");
+        let status =
+            postcard::to_allocvec(&ToDevice::SessionStatus { session: info() }).expect("encodes");
+        let mut expected = vec![3, u8::try_from(record.len()).expect("small")];
+        expected.extend_from_slice(&record);
+        assert_eq!(status, expected);
+
+        let list = postcard::to_allocvec(&ToDevice::SessionList {
+            sessions: vec![info()],
+        })
+        .expect("encodes");
+        let mut expected = vec![2, 1, u8::try_from(record.len()).expect("small")];
+        expected.extend_from_slice(&record);
+        assert_eq!(list, expected);
+
+        let entries = postcard::to_allocvec(&ToDevice::Entries {
+            entries: vec![Entry {
+                seq: 7,
+                kind: EntryKind::Note { text: "n".into() },
+            }],
+            reset: true,
+            from: 1,
+        })
+        .expect("encodes");
+        // Tag, one entry of 5 bytes: seq 7, then its kind of 3 bytes (Note,
+        // "n"); then reset and from.
+        assert_eq!(entries, [13, 1, 5, 7, 3, 5, 1, b'n', 1, 1]);
     }
 
     #[test]
