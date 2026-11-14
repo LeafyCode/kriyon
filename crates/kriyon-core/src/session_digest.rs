@@ -13,7 +13,6 @@ use crate::activity::ToolActivity;
 use crate::readable::{cut, AskShown, STEP_MAX};
 use crate::redact::redact;
 use crate::session::SessionStatus;
-use crate::transcript::{parse_line, StructuredEvent};
 
 /// The most bytes of a question's text on Home.
 pub const QUESTION_MAX: usize = 300;
@@ -67,7 +66,7 @@ pub struct DigestFacts<'a> {
     /// The main agent's tool running now.
     pub current_tool: Option<&'a ToolActivity>,
     pub last_turn: Option<&'a TurnFacts>,
-    /// Claude's last reply, from the companion ([`last_reply`]).
+    /// Claude's last reply, from the companion (`structured::last_reply`).
     pub last_reply: Option<&'a str>,
 }
 
@@ -142,21 +141,6 @@ fn diff_of(changes: &[FileChange]) -> Option<Diff> {
         removed: changes.iter().map(|change| change.removed).sum(),
     };
     (diff.files > 0).then_some(diff)
-}
-
-/// Claude's last reply in the companion's rows (oldest first): the newest
-/// prose it wrote. Only the rows' tail need be passed.
-#[must_use]
-pub fn last_reply(rows: &[&str]) -> Option<String> {
-    rows.iter().rev().find_map(|row| {
-        parse_line(row)
-            .into_iter()
-            .rev()
-            .find_map(|event| match event {
-                StructuredEvent::Assistant { text } if !text.trim().is_empty() => Some(text),
-                _ => None,
-            })
-    })
 }
 
 #[cfg(test)]
@@ -317,17 +301,5 @@ mod tests {
             ..facts(SessionStatus::Running)
         });
         assert!(running.activity.expect("tool").len() <= STEP_MAX);
-    }
-
-    #[test]
-    fn the_last_reply_is_the_newest_prose_in_the_rows() {
-        let rows = [
-            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"First."}]}}"#,
-            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"Last."}]}}"#,
-            r#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"ls"}}]}}"#,
-            "not json",
-        ];
-        assert_eq!(last_reply(&rows).as_deref(), Some("Last."));
-        assert_eq!(last_reply(&[]), None);
     }
 }

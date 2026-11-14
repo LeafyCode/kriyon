@@ -170,9 +170,11 @@ async fn look(app: &tauri::AppHandle, sender: &Arc<PushSender>) {
     let Some(host_secret) = host_secret(app, &rt) else {
         return;
     };
+    // Only who needs the person: no digest, so no home.
     let Ok(sessions) = crate::session_list_rt::current(
         &app.state::<crate::AppState>(),
         &app.state::<crate::StoreState>(),
+        None,
     ) else {
         return;
     };

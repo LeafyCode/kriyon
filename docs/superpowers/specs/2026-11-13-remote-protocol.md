@@ -187,7 +187,10 @@ never waits on a network write. A full session queue means [Skip ahead]
   and current tool, the [Activity log]'s last turn and the companion's last
   rows, read again only when the log says the session worked. Never the
   transcript, never git. Every text passes [Redaction]. `Question` and `Diff`
-  can't grow (spec §3).
+  can't grow (spec §3). Claude's last reply is read from the companion's
+  [Bridge spool] again when the spool changes too, since it can land after
+  the turn's end does; rows of a subagent or of a nested `claude -p` don't
+  count.
 - `Open { session_id, screen: bool }` on a new session stream. Host checks
   the session exists, then, with `screen`, sends `Snapshot { run, seq, cols,
   rows, bytes, skipped }` (the [Screen snapshot], ADR-0004) followed by
@@ -393,7 +396,8 @@ session in it is parked).
 
 **Plan limits.** After `ProjectList`, and again whenever it changes, the host
 sends `Usage { usage: PlanUsage { five_hour, weekly } }` (a nested record),
-each an `Option<UsageWindow { used_percent, resets_at_ms }>`: the account's
+each an `Option<UsageWindow { used_percent, resets_at_ms }>` (which can't
+grow; a new field goes in `PlanUsage`): the account's
 [Plan limits] as its desktop shows them, a whole percent 0 to 100; both
 `None` with "Live usage" off. A device's Home shows the window nearest its
 limit (the 5-hour one on a tie) with the desktop's name for it.

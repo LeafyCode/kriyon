@@ -197,7 +197,8 @@ impl ServeHost for AppServeHost {
     fn sessions(&self) -> Vec<SessionInfo> {
         let state = self.0.state::<AppState>();
         let store = self.0.state::<StoreState>();
-        crate::session_list_rt::current(&state, &store)
+        let home = crate::commands::resolve_home(&self.0).ok();
+        crate::session_list_rt::current(&state, &store, home.as_deref())
             .map(|list| list.into_iter().map(SessionInfo::from).collect())
             .unwrap_or_default()
     }

@@ -948,23 +948,6 @@ impl ActivityStore {
         Ok(rows)
     }
 
-    /// The newest `limit` of [`Self::bridge_rows`], oldest first.
-    ///
-    /// # Errors
-    /// On a database error.
-    pub fn bridge_tail(&self, session_id: &str, limit: i64) -> Result<Vec<String>, ActivityError> {
-        let mut stmt = self.conn.prepare(
-            "SELECT b.line FROM bridge_rows b
-             JOIN companion_runs r ON r.session_id = b.session_id AND r.run = b.run
-             WHERE b.session_id = ?1 ORDER BY r.rowid DESC, b.seq DESC LIMIT ?2",
-        )?;
-        let mut rows = stmt
-            .query_map(params![session_id, limit], |r| r.get(0))?
-            .collect::<Result<Vec<String>, _>>()?;
-        rows.reverse();
-        Ok(rows)
-    }
-
     /// Bytes in use (free pages excluded).
     ///
     /// # Errors
@@ -2566,28 +2549,6 @@ mod tests {
             store.turns("s1", 10).expect("reads")[0].ended_ms,
             Some(9000)
         );
-    }
-
-    #[test]
-    fn the_rows_tail_is_the_newest_rows_oldest_first() {
-        let mut store = ActivityStore::open_in_memory().expect("opens");
-        bridge(
-            &mut store,
-            &[
-                serde_json::json!({"kind":"row","run":"r1","seq":1,"uuid":"a"}),
-                serde_json::json!({"kind":"row","run":"r1","seq":2,"uuid":"b"}),
-                serde_json::json!({"kind":"row","run":"r2","seq":1,"uuid":"c"}),
-            ],
-        );
-        let uuids: Vec<String> = store
-            .bridge_tail("s1", 2)
-            .expect("reads")
-            .iter()
-            .map(|l| {
-                serde_json::from_str::<serde_json::Value>(l).expect("JSON")["uuid"].to_string()
-            })
-            .collect();
-        assert_eq!(uuids, [r#""b""#, r#""c""#]);
     }
 
     #[test]

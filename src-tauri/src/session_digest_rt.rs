@@ -4,23 +4,40 @@
 //! last reply, read again only when the log says the session worked since.
 
 use std::collections::HashMap;
+use std::path::Path;
+use std::time::SystemTime;
 
 use kriyon_core::activity::ToolActivity;
 use kriyon_core::activity_log::StepKind;
 use kriyon_core::session::SessionId;
-use kriyon_core::session_digest::{last_reply, FileChange, TurnFacts};
+use kriyon_core::session_digest::{FileChange, TurnFacts};
+use kriyon_core::structured::last_reply;
 use parking_lot::Mutex;
 
 use crate::activity_store::ActivityTurn;
 
-/// How many of the companion's newest rows are looked through for Claude's
+/// How much of the companion's spool's end is looked through for Claude's
 /// last reply.
-const REPLY_ROWS: i64 = 40;
+const REPLY_BYTES: u64 = 64 * 1024;
 
-/// A session's last turn as last read, and when the log had seen it work.
-#[derive(Clone, Debug, Default)]
-struct ReadTurn {
+/// What a last turn was read from, as cheap to look at as can be: when the
+/// [Activity log] last saw the session work, and the spool's size and time.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Fresh {
     last_active_ms: Option<i64>,
+    spool: Option<(SystemTime, u64)>,
+}
+
+/// A file's time and size; `None` when it isn't there.
+fn stamp(path: &Path) -> Option<(SystemTime, u64)> {
+    let meta = std::fs::metadata(path).ok()?;
+    Some((meta.modified().ok()?, meta.len()))
+}
+
+/// A session's last turn as last read, and what it was read from.
+#[derive(Clone, Debug)]
+struct ReadTurn {
+    key: Fresh,
     turn: Option<TurnFacts>,
     reply: Option<String>,
 }
@@ -52,20 +69,28 @@ impl DigestSources {
         self.tools.lock().get(id).cloned()
     }
 
-    /// Session `id`'s last turn and Claude's last reply: read from the
-    /// [Activity log] only when `last_active_ms` moved since the last read.
+    /// Session `id`'s last turn and Claude's last reply. Read again only
+    /// when the [Activity log] saw it work since (`last_active_ms`) or the
+    /// companion's [Bridge spool] (`spool`) changed: its last reply can land
+    /// after the turn's end does.
     pub fn last_turn(
         &self,
         id: &str,
         last_active_ms: Option<i64>,
+        spool: &Path,
+        conversation: Option<&str>,
     ) -> (Option<TurnFacts>, Option<String>) {
-        self.last_turn_with(id, last_active_ms, || {
+        let key = Fresh {
+            last_active_ms,
+            spool: stamp(spool),
+        };
+        self.last_turn_with(id, key, || {
             let turn = crate::activity_rt::last_turn(id).map(|turn| turn_facts(&turn));
             // The reply only matters once the turn is over.
             let reply = turn.as_ref().filter(|turn| turn.ended).and_then(|_| {
-                let rows = crate::activity_rt::bridge_tail(id, REPLY_ROWS);
+                let rows = crate::status_rt::read_tail_lines(spool, REPLY_BYTES);
                 let rows: Vec<&str> = rows.iter().map(String::as_str).collect();
-                last_reply(&rows)
+                last_reply(&rows, conversation)
             });
             (turn, reply)
         })
@@ -74,11 +99,11 @@ impl DigestSources {
     fn last_turn_with(
         &self,
         id: &str,
-        last_active_ms: Option<i64>,
+        key: Fresh,
         read: impl FnOnce() -> (Option<TurnFacts>, Option<String>),
     ) -> (Option<TurnFacts>, Option<String>) {
         if let Some(read) = self.turns.lock().get(id) {
-            if read.last_active_ms == last_active_ms {
+            if read.key == key {
                 return (read.turn.clone(), read.reply.clone());
             }
         }
@@ -86,7 +111,7 @@ impl DigestSources {
         self.turns.lock().insert(
             id.to_string(),
             ReadTurn {
-                last_active_ms,
+                key,
                 turn: turn.clone(),
                 reply: reply.clone(),
             },
@@ -197,18 +222,25 @@ mod tests {
     }
 
     #[test]
-    fn the_last_turn_is_read_again_only_when_the_session_worked_since() {
+    fn the_last_turn_is_read_again_only_when_the_session_worked_or_the_spool_grew() {
         let sources = DigestSources::default();
         let reads = std::cell::Cell::new(0);
         let read = || {
             reads.set(reads.get() + 1);
             (Some(TurnFacts::default()), None)
         };
-        let _ = sources.last_turn_with("s", Some(1), read);
-        let _ = sources.last_turn_with("s", Some(1), read);
+        let at = |last_active_ms, len| Fresh {
+            last_active_ms: Some(last_active_ms),
+            spool: Some((SystemTime::UNIX_EPOCH, len)),
+        };
+        let _ = sources.last_turn_with("s", at(1, 10), read);
+        let _ = sources.last_turn_with("s", at(1, 10), read);
         assert_eq!(reads.get(), 1);
-        let _ = sources.last_turn_with("s", Some(2), read);
+        let _ = sources.last_turn_with("s", at(2, 10), read);
         assert_eq!(reads.get(), 2);
+        // The reply landed after the turn's end did.
+        let _ = sources.last_turn_with("s", at(2, 20), read);
+        assert_eq!(reads.get(), 3);
     }
 
     #[test]

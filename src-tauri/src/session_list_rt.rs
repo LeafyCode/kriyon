@@ -70,11 +70,16 @@ fn gather(
         .collect()
 }
 
-/// The [Session list] now.
+/// The [Session list] now; with the user's `home`, each session's digest
+/// knows its last turn too.
 ///
 /// # Errors
 /// When the store cannot be read.
-pub fn current(state: &AppState, store: &StoreState) -> Result<Vec<SessionListEntry>, String> {
+pub fn current(
+    state: &AppState,
+    store: &StoreState,
+    home: Option<&std::path::Path>,
+) -> Result<Vec<SessionListEntry>, String> {
     let rows = store.0.lock().list_sessions().map_err(|e| e.to_string())?;
     let now = Instant::now();
     let now_ms = SystemTime::now()
@@ -96,15 +101,24 @@ pub fn current(state: &AppState, store: &StoreState) -> Result<Vec<SessionListEn
             session.engine.dialog().is_some_and(|d| d.open);
     }
     let last_active = crate::activity_rt::last_active_by_session();
-    for row in &rows {
+    // Only the sessions listed: one put away isn't.
+    let listed = rows
+        .iter()
+        .filter(|row| row.archived_at.is_none() && row.parked_at.is_none());
+    for row in listed {
         let id = SessionId(row.id.clone());
         let entry = live.entry(id.clone()).or_default();
         entry.tool = state.digests.tool(&id);
-        let (turn, reply) = state
-            .digests
-            .last_turn(&row.id, last_active.get(&row.id).copied());
-        entry.turn = turn;
-        entry.reply = reply;
+        if let Some(home) = home {
+            let (turn, reply) = state.digests.last_turn(
+                &row.id,
+                last_active.get(&row.id).copied(),
+                &kriyon_core::paths::bridge_spool(home, &row.id),
+                row.claude_session_id.as_deref(),
+            );
+            entry.turn = turn;
+            entry.reply = reply;
+        }
     }
     Ok(session_list(gather(rows, &live, &last_active), now_ms))
 }
