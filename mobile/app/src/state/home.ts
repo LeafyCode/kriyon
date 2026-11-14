@@ -69,7 +69,7 @@ export function glance<Host extends { hostId: string }>(
   return counts;
 }
 
-/** The cards under Needs you, newest first: asking or your turn. */
+/** The cards under Needs you, in each computer's order: asking or your turn. */
 export function needsYouCards<Host extends { hostId: string }>(
   hosts: Host[],
   states: Record<string, HostSummary>

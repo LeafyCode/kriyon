@@ -142,8 +142,11 @@ never waits on a network write. A full session queue means [Skip ahead]
   standing, needs_you, dialog_open, last_change_ms }`, the host's Session list
   computed in Rust (`kriyon_core::standing`). `standing` carries "unknown" when
   hooks are off or status is stale, so a device never shows a confident "idle"
-  the desktop wouldn't. `SessionStatus { session }` sends one whole updated
-  entry.
+  the desktop wouldn't. The list is in the host's order (the desktop's:
+  longest-waiting first), and devices keep it. `SessionStatus { session }`
+  sends one whole updated entry, which replaces its session in place or, if
+  new, goes at the end; any other change of order, or a session gone, sends
+  the whole `SessionList` again.
 - `Open { session_id, screen: bool }` on a new session stream. Host checks
   the session exists, then, with `screen`, sends `Snapshot { run, seq, cols,
   rows, bytes, skipped }` (the [Screen snapshot], ADR-0004) followed by

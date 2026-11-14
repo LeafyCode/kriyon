@@ -94,24 +94,23 @@ export interface NeedsYou<Host> {
 }
 
 /**
- * Sessions that need you, newest first: only on computers still paired
- * (in `hosts`) and connected, since nothing else can be acted on from here.
+ * Sessions that need you, in each computer's own order (the desktop's:
+ * longest-waiting first): only on computers still paired (in `hosts`) and
+ * connected, since nothing else can be acted on from here.
  */
 export function needsYou<Host extends { hostId: string }>(
   hosts: Host[],
   summaries: Record<string, HostSummary>
 ): NeedsYou<Host>[] {
-  return hosts
-    .flatMap((host) => {
-      const summary = summaries[host.hostId];
-      if (summary?.link !== "connected") {
-        return [];
-      }
-      return summary.sessions
-        .filter((session) => session.needsYou)
-        .map((session) => ({ host, session }));
-    })
-    .sort((a, b) => b.session.lastChangeMs - a.session.lastChangeMs);
+  return hosts.flatMap((host) => {
+    const summary = summaries[host.hostId];
+    if (summary?.link !== "connected") {
+      return [];
+    }
+    return summary.sessions
+      .filter((session) => session.needsYou)
+      .map((session) => ({ host, session }));
+  });
 }
 
 /** A standing's label, in the desktop's words. */

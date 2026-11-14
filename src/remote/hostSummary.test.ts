@@ -34,7 +34,7 @@ const summary = (over: Partial<HostSummary>): HostSummary => ({
 });
 
 describe("needs you", () => {
-  test("only sessions waiting on connected, still-paired computers, newest first", () => {
+  test("only sessions waiting on connected, still-paired computers, in each computer's own order", () => {
     const hosts = [
       { hostId: "a", name: "Mac" },
       { hostId: "b", name: "Studio" },
@@ -60,8 +60,9 @@ describe("needs you", () => {
     expect(
       needsYou(hosts, summaries).map((one) => [one.host.name, one.session.id])
     ).toEqual([
-      ["Mac", "new"],
+      // The computer's order (the desktop's: longest-waiting first), kept.
       ["Mac", "old"],
+      ["Mac", "new"],
     ]);
   });
 });

@@ -384,8 +384,8 @@ struct Inner {
     sessions: Mutex<HashMap<String, Arc<Served>>>,
     controls: Mutex<HashMap<EndpointId, Arc<ControlOut>>>,
     heartbeat_seq: AtomicU64,
-    /// The session list as devices last heard it.
-    heard: Mutex<HashMap<String, SessionInfo>>,
+    /// The session list as devices last heard it, in the host's order.
+    heard: Mutex<Vec<SessionInfo>>,
     /// The project list as devices last heard it.
     heard_projects: Mutex<Option<Vec<ProjectInfo>>>,
     /// When the tick last looked at the project list: it changes seldom, and
@@ -468,7 +468,7 @@ impl Serve {
             sessions: Mutex::new(HashMap::new()),
             controls: Mutex::new(HashMap::new()),
             heartbeat_seq: AtomicU64::new(0),
-            heard: Mutex::new(HashMap::new()),
+            heard: Mutex::new(Vec::new()),
             heard_projects: Mutex::new(None),
             projects_looked: Mutex::new(None),
             control_asks: Mutex::default(),
@@ -658,19 +658,23 @@ impl Serve {
         if due {
             self.projects_changed();
         }
-        let now = sessions_heard(self.0.host.sessions());
+        let now = self.0.host.sessions();
         let mut heard = self.0.heard.lock();
-        let gone = heard.keys().any(|id| !now.contains_key(id));
+        // Devices keep the host's order: a status changes a session in
+        // place or adds it at the end, so anything else is the whole list.
+        let in_place =
+            heard.len() <= now.len() && heard.iter().zip(&now).all(|(was, is)| was.id == is.id);
         let changed: Vec<SessionInfo> = now
-            .values()
-            .filter(|info| heard.get(&info.id) != Some(*info))
-            .cloned()
+            .iter()
+            .enumerate()
+            .filter(|(at, info)| heard.get(*at) != Some(*info))
+            .map(|(_, info)| info.clone())
             .collect();
         *heard = now;
-        let list: Vec<SessionInfo> = heard.values().cloned().collect();
+        let list = (!in_place).then(|| heard.clone());
         drop(heard);
-        if gone {
-            self.broadcast(&ToDevice::SessionList { sessions: list });
+        if let Some(sessions) = list {
+            self.broadcast(&ToDevice::SessionList { sessions });
         } else {
             for session in changed {
                 self.broadcast(&ToDevice::SessionStatus { session });
@@ -929,7 +933,7 @@ impl Serve {
         {
             let mut heard = self.0.heard.lock();
             if heard.is_empty() {
-                *heard = sessions_heard(sessions);
+                *heard = sessions;
             }
         }
         let writing = tokio::spawn(write_control(writer, Arc::clone(&out)));
@@ -1383,14 +1387,6 @@ impl Serve {
     }
 }
 
-/// A session list by id.
-fn sessions_heard(sessions: Vec<SessionInfo>) -> HashMap<String, SessionInfo> {
-    sessions
-        .into_iter()
-        .map(|info| (info.id.clone(), info))
-        .collect()
-}
-
 /// Write a device's control queue out as it fills.
 async fn write_control(mut writer: MessageWriter<ToDevice>, out: Arc<ControlOut>) {
     loop {
@@ -1449,6 +1445,8 @@ mod tests {
     use kriyon_remote::message::{Epoch, Holder};
 
     use super::*;
+    use kriyon_core::session::SessionStatus;
+    use kriyon_core::standing::StandingState;
     use kriyon_remote::message::{Entry, EntryKind};
 
     use crate::test_support::host_world::*;
@@ -1632,6 +1630,59 @@ mod tests {
                 next(&mut cr).await,
                 ToDevice::SessionStatus { session } if session.title == "renamed"
             ));
+        });
+    }
+
+    #[test]
+    fn devices_hear_the_sessions_in_the_hosts_order() {
+        run(async {
+            let world = world().await;
+            let session = |id: &str| SessionInfo {
+                id: id.into(),
+                title: id.into(),
+                project_id: "p".into(),
+                status: SessionStatus::Idle,
+                standing: StandingState::Idle,
+                needs_you: false,
+                dialog_open: false,
+                last_change_ms: 0,
+            };
+            let ids = |list: &[SessionInfo]| -> Vec<String> {
+                list.iter().map(|info| info.id.clone()).collect()
+            };
+            let order: Vec<SessionInfo> = ["m", "z", "a", "q", "b"].map(session).into();
+            *world.fake.sessions.lock() = Some(order.clone());
+            let (_phone, _link, _cw, mut cr) = device(&world, 3, Role::Viewer).await;
+            // Its list as the host keeps it (longest-waiting first, as the
+            // desktop shows it), however it changes.
+            let mut reordered = order.clone();
+            reordered.reverse();
+            *world.fake.sessions.lock() = Some(reordered.clone());
+            world.serve.sessions_changed();
+            loop {
+                match next(&mut cr).await {
+                    ToDevice::SessionList { sessions } => {
+                        assert_eq!(ids(&sessions), ids(&reordered));
+                        break;
+                    }
+                    ToDevice::ProjectList { .. } | ToDevice::SessionStatus { .. } => {}
+                    other => panic!("{other:?}"),
+                }
+            }
+            // One gone: the rest, still in order.
+            reordered.remove(1);
+            *world.fake.sessions.lock() = Some(reordered.clone());
+            world.serve.sessions_changed();
+            loop {
+                match next(&mut cr).await {
+                    ToDevice::SessionList { sessions } => {
+                        assert_eq!(ids(&sessions), ids(&reordered));
+                        break;
+                    }
+                    ToDevice::ProjectList { .. } | ToDevice::SessionStatus { .. } => {}
+                    other => panic!("{other:?}"),
+                }
+            }
         });
     }
 

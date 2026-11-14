@@ -40,6 +40,8 @@ pub struct FakeHost {
     pub typed: Mutex<Vec<u8>>,
     pub onlooked: Mutex<HashSet<String>>,
     pub title: Mutex<String>,
+    /// The host's sessions, in its order, instead of the one session "s".
+    pub sessions: Mutex<Option<Vec<SessionInfo>>>,
     /// The push tokens devices gave, in order.
     pub push_tokens: Mutex<Vec<(EndpointId, u32, Vec<u8>)>>,
     /// Each project's folder, as the check sees it; unknown ids have none.
@@ -86,6 +88,7 @@ impl Default for FakeHost {
             typed: Mutex::default(),
             onlooked: Mutex::default(),
             title: Mutex::default(),
+            sessions: Mutex::default(),
             push_tokens: Mutex::default(),
             folders: Mutex::default(),
             starts: Mutex::default(),
@@ -132,6 +135,9 @@ impl ServeHost for FakeHost {
     }
     fn sessions(&self) -> Vec<SessionInfo> {
         self.called();
+        if let Some(sessions) = self.sessions.lock().clone() {
+            return sessions;
+        }
         vec![SessionInfo {
             id: "s".into(),
             title: self.title.lock().clone(),
@@ -388,7 +394,7 @@ pub async fn device(
         .expect("hello");
     let welcome = next(&mut reader).await;
     assert!(
-        matches!(&welcome, ToDevice::Welcome { role: r, sessions, .. } if *r == role && sessions.len() == 1),
+        matches!(&welcome, ToDevice::Welcome { role: r, sessions, .. } if *r == role && !sessions.is_empty()),
         "{welcome:?}"
     );
     let projects = next(&mut reader).await;

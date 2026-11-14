@@ -105,7 +105,7 @@ test("at a glance counts the sessions of connected computers by kind", () => {
   });
 });
 
-test("needs you lists asking and your-turn sessions, newest first, with their kind", () => {
+test("needs you lists asking and your-turn sessions in the computer's order, with their kind", () => {
   const cards = needsYouCards(paired, { [MAC]: host({}) });
   expect(cards.map(({ kind, session: s }) => [kind, s.id])).toEqual([
     ["asking", "ask"],
