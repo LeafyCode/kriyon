@@ -12,6 +12,8 @@ import { CommandPalette } from "../palette/CommandPalette.tsx";
 import { PromptEditor } from "../prompts/PromptEditor.tsx";
 import { PromptPicker } from "../prompts/PromptPicker.tsx";
 import { PromptsView } from "../prompts/PromptsView.tsx";
+import { ControlAsks } from "../remote/ControlAsks.tsx";
+import { RemoteView } from "../remote/RemoteView.tsx";
 import { SettingsView } from "../settings/SettingsView.tsx";
 import { Sidebar } from "../sidebar/Sidebar.tsx";
 import { HandoffCards } from "../spawn/HandoffCard.tsx";
@@ -248,6 +250,11 @@ export function Shell({ children, onCloseSession, onNewSession }: ShellProps) {
             <PromptsView />
           </ErrorBoundary>
         ) : null}
+        {view === "remote" ? (
+          <ErrorBoundary label="This view crashed.">
+            <RemoteView />
+          </ErrorBoundary>
+        ) : null}
         {view === "settings" ? (
           <ErrorBoundary label="This view crashed.">
             <SettingsView />
@@ -266,6 +273,7 @@ export function Shell({ children, onCloseSession, onNewSession }: ShellProps) {
       {/* Global toast host: mounted here (not in `children`) so it shows in
             every view — children are only visible in studio/focus. */}
       <Toast />
+      <ControlAsks />
       <OutsideOpenConfirm />
       {/* Last, so its spotlight sits over every other overlay. */}
       <AppTour />

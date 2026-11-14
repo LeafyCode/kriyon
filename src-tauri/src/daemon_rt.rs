@@ -573,10 +573,8 @@ pub(crate) fn adopt_live_daemons<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
             use std::collections::hash_map::Entry;
             match state.sessions.lock().entry(SessionId(id.clone())) {
                 Entry::Vacant(slot) => {
-                    slot.insert(Session {
-                        engine: std::sync::Arc::new(engine),
-                        zdotdir: None,
-                    });
+                    // Adopted: its shell already runs whatever it ran.
+                    slot.insert(Session::new(std::sync::Arc::new(engine), None, true));
                     None
                 }
                 Entry::Occupied(_) => Some(engine),
@@ -876,7 +874,7 @@ mod tests {
         });
 
         assert!(shutdown_detached(&socket));
-        assert_eq!(daemon.join().expect("join"), Some(Frame::Shutdown));
+        assert_eq!(daemon.join().expect("join"), Ok(Some(Frame::Shutdown)));
     }
 
     #[test]

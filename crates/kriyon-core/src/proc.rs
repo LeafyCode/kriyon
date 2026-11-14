@@ -80,6 +80,29 @@ impl TerminalSeat {
     }
 }
 
+/// Where a process sits on its terminal, from its Linux `/proc/<pid>/stat`
+/// line, against the session's terminal device number `session_tty`.
+///
+/// The command name (field 2) is in parentheses and may itself hold spaces and
+/// parentheses, so the fields are read after the *last* `)`: state, ppid,
+/// pgrp, session, `tty_nr`, `tpgid`. `tty_nr` uses the kernel's device
+/// encoding, which equals the `st_rdev` of the terminal's device file for
+/// every major number below 4096 — all terminals. `None` for a line that
+/// doesn't parse.
+#[must_use]
+pub fn seat_from_proc_stat(stat: &str, session_tty: u64) -> Option<TerminalSeat> {
+    let (_, after_name) = stat.rsplit_once(')')?;
+    let mut fields = after_name.split_whitespace().skip(2); // state, ppid
+    let pgid = fields.next()?.parse().ok()?;
+    let tty_nr: i64 = fields.nth(1)?.parse().ok()?; // after session
+    let foreground_pgid = fields.next()?.parse().ok()?;
+    Some(TerminalSeat {
+        pgid,
+        foreground_pgid,
+        on_session_tty: tty_nr > 0 && u64::try_from(tty_nr).ok() == Some(session_tty),
+    })
+}
+
 /// Parse the output of `ps -axww -o pid=,ppid=,tpgid=,args=`.
 ///
 /// Tolerant by design (the [Loose coupling] rule applies to the OS too): a row
@@ -598,6 +621,36 @@ pub fn windows_command_of(shell: i32, procs: impl IntoIterator<Item = (i32, i32)
         .map(|(pid, _)| pid)
 }
 
+/// Where a Windows poster sits in its session: process `poster` against the
+/// session's `shell` and the `(pid, parent pid)` members of the shell's Job
+/// Object.
+///
+/// Windows has no terminal foreground, so [`windows_command_of`]'s rule stands
+/// in for it: the session's [Owning claude] is a member whose parent is the
+/// shell. A `claude` nested under it (through its tool shell) is a grandchild
+/// or deeper, so it never owns the session, and neither does anything outside
+/// the job.
+#[must_use]
+pub fn windows_seat(
+    poster: i32,
+    shell: i32,
+    members: impl IntoIterator<Item = (i32, i32)>,
+) -> TerminalSeat {
+    let mut in_job = false;
+    let mut shells_child = false;
+    for (pid, ppid) in members {
+        if pid == poster {
+            in_job = true;
+            shells_child = ppid == shell && pid != shell;
+        }
+    }
+    TerminalSeat {
+        pgid: poster,
+        foreground_pgid: if shells_child { poster } else { 0 },
+        on_session_tty: in_job,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -615,11 +668,69 @@ mod tests {
         assert_eq!(windows_command_of(10, [(10, 10)]), None);
     }
 
+    #[test]
+    fn a_windows_poster_owns_the_session_only_as_the_shells_own_child_in_its_job() {
+        // Shell 10 running claude (20); claude's tool shell (30) runs a nested
+        // claude (40). 50 is a process outside the session's job.
+        let job = [(10, 5), (20, 10), (30, 20), (40, 30)];
+        assert!(
+            windows_seat(20, 10, job).owns_session(),
+            "the session's claude"
+        );
+        assert!(!windows_seat(40, 10, job).owns_session(), "a nested claude");
+        assert!(
+            !windows_seat(10, 10, job).owns_session(),
+            "the shell itself"
+        );
+        assert!(!windows_seat(50, 10, job).owns_session(), "outside the job");
+        // A process whose parent pid is the shell's but who is not in the job
+        // (a pid the shell's could be reused by) is outside the session.
+        assert!(!windows_seat(60, 10, [(10, 5)]).owns_session());
+    }
+
     fn seat(pgid: i32, foreground_pgid: i32, on_session_tty: bool) -> TerminalSeat {
         TerminalSeat {
             pgid,
             foreground_pgid,
             on_session_tty,
+        }
+    }
+
+    /// `/dev/pts/1`: major 136, minor 1.
+    const PTS_1: u64 = (136 << 8) | 1;
+
+    #[test]
+    fn a_proc_stat_line_gives_the_terminal_seat() {
+        let stat = "4242 (claude) S 4100 4242 4100 34817 4242 4194560 0 0 0 0 0 0 0 0 20 0";
+        assert_eq!(
+            seat_from_proc_stat(stat, PTS_1),
+            Some(seat(4242, 4242, true))
+        );
+        assert!(seat_from_proc_stat(stat, PTS_1).is_some_and(|s| s.owns_session()));
+    }
+
+    #[test]
+    fn a_command_name_with_spaces_and_parentheses_is_skipped_whole() {
+        let stat = "77 (a (b) c) d) S 1 70 70 34818 -1 0 0";
+        assert_eq!(seat_from_proc_stat(stat, PTS_1), Some(seat(70, -1, false)));
+    }
+
+    #[test]
+    fn a_process_with_no_terminal_is_not_on_the_session_terminal() {
+        let line = "88 (claude) S 1 88 88 0 -1 0";
+        let parsed = seat_from_proc_stat(line, PTS_1).expect("parses");
+        assert!(!parsed.on_session_tty && !parsed.owns_session());
+    }
+
+    #[test]
+    fn a_proc_stat_line_that_does_not_parse_gives_nothing() {
+        for stat in [
+            "",
+            "12 (claude",
+            "12 (claude) S 1 x 1 34817 1",
+            "12 (claude) S 1",
+        ] {
+            assert_eq!(seat_from_proc_stat(stat, PTS_1), None, "{stat:?}");
         }
     }
 

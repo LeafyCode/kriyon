@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use kriyon_core::attachment::{self, AttachmentKind, Outgoing};
-use kriyon_core::session::{SessionEngine as _, SessionId};
+use kriyon_core::session::SessionId;
 use parking_lot::Mutex;
 use serde::Serialize;
 use tauri::{Emitter as _, Manager as _};
@@ -411,15 +411,12 @@ pub async fn submit_prompt(
     tauri::async_runtime::spawn_blocking(move || {
         for key in keys {
             {
+                // Through the session's writer, as the host typing.
                 let state = handle.state::<AppState>();
-                let sessions = state.sessions.lock();
-                let session = sessions
-                    .get(&id)
-                    .ok_or_else(|| "session not found".to_string())?;
-                session
-                    .engine
-                    .write_stdin(key.text.as_bytes())
-                    .map_err(|e| e.to_string())?;
+                let engine = crate::commands::engine_of(&state, &id)?;
+                state
+                    .writers
+                    .host_write(&id, engine.as_ref(), key.text.as_bytes())?;
             }
             if key.wait_ms > 0 {
                 std::thread::sleep(Duration::from_millis(key.wait_ms));

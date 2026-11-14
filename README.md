@@ -82,7 +82,9 @@ installer; it replaces the old version and keeps your settings.
 - Kriyon runs the `claude` CLI you installed. It never bundles, patches, or replaces it.
 - You sign in through Anthropic's own flow. Kriyon never reads, stores, or moves your
   credentials.
-- Kriyon has no accounts and no servers of its own.
+- Kriyon needs no account and runs no server for you, unless you choose our paid relay to
+  reach your computer from anywhere. Remote access is off until you turn it on; see
+  [Remote access](docs/remote-access.md).
 
 The reasoning is in [ADR 0030](docs/adr/0030-never-touch-credentials-or-bundle-the-cli.md).
 

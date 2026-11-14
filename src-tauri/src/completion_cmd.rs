@@ -5,15 +5,15 @@
 //! warmup costs nothing and never sends a message to Claude. Pure merge/parse
 //! logic lives in `kriyon_core::completion`.
 
-use kriyon_core::paths::Canonical as _;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use kriyon_core::completion::{
-    merge_commands, parse_frontmatter, parse_plugin_manifest, path_within_roots, Frontmatter,
-    SlashCommand, BUILTIN_AGENTS, BUILTIN_COMMANDS,
+    merge_commands, parse_frontmatter, parse_plugin_manifest, Frontmatter, SlashCommand,
+    BUILTIN_AGENTS, BUILTIN_COMMANDS,
 };
 
+use crate::folder_cmd::validate_cwd;
 use crate::StoreState;
 
 /// Safety bound on how many command/skill files one catalog build will read, so
@@ -196,38 +196,6 @@ fn build_catalog(home: &Path, cwd: &Path) -> CommandCatalog {
     }
 }
 
-/// Every directory the composer is allowed to touch: each persisted project
-/// root, session cwd, and session worktree path, canonicalized (entries whose
-/// path no longer resolves are dropped). The IPC trust-boundary allowlist that
-/// [`validate_cwd`] checks a frontend-supplied `cwd` against.
-pub(crate) fn known_roots(store: &StoreState) -> Vec<PathBuf> {
-    // The store lock is scoped to the queries alone. Canonicalizing is one
-    // `realpath` syscall per root, and this runs on every `@`-mention keystroke
-    // (via `list_files`) — holding the mutex across that loop parked every
-    // main-thread store command (`list_sessions`, `save_layout`,
-    // `session_snapshots`, the tray poll) behind a pile of filesystem calls.
-    let roots: Vec<PathBuf> = {
-        let store = store.0.lock();
-        let mut roots: Vec<PathBuf> = Vec::new();
-        if let Ok(projects) = store.list_projects() {
-            roots.extend(projects.into_iter().map(|p| PathBuf::from(p.path)));
-        }
-        if let Ok(sessions) = store.list_sessions() {
-            for s in sessions {
-                roots.push(PathBuf::from(s.cwd));
-                if let Some(w) = s.worktree_path {
-                    roots.push(PathBuf::from(w));
-                }
-            }
-        }
-        roots
-    };
-    roots
-        .into_iter()
-        .filter_map(|r| r.canonical().ok())
-        .collect()
-}
-
 /// How much of `~/.claude/history.jsonl` is read: the newest part is what
 /// the Up arrow reaches.
 const HISTORY_TAIL: u64 = 4 * 1024 * 1024;
@@ -260,30 +228,6 @@ pub fn prompt_history(
         cwd.trim_end_matches('/'),
         HISTORY_LIMIT,
     ))
-}
-
-/// Validate a frontend-supplied `cwd` before any filesystem walk or process
-/// spawn: it must canonicalize to an existing directory that is (or sits inside)
-/// a known session/project root. Returns the canonical path so callers act on
-/// the resolved directory, never the raw string. This enforces the AGENTS.md
-/// IPC trust-boundary rule — never walk or spawn in a blindly-trusted path.
-///
-/// # Errors
-/// `cwd is not a directory` when the path does not resolve to a directory;
-/// `cwd is not a known session or project root` when it resolves but falls
-/// outside every registered root.
-pub(crate) fn validate_cwd(store: &StoreState, cwd: &Path) -> Result<PathBuf, String> {
-    let canonical = cwd
-        .canonical()
-        .map_err(|_| "cwd is not a directory".to_string())?;
-    if !canonical.is_dir() {
-        return Err("cwd is not a directory".to_string());
-    }
-    if path_within_roots(&canonical, &known_roots(store)) {
-        Ok(canonical)
-    } else {
-        Err("cwd is not a known session or project root".to_string())
-    }
 }
 
 #[cfg(test)]
@@ -489,55 +433,6 @@ mod tests {
         assert!(out[0].is_dir, "directories sort before files");
         assert_eq!(out[0].path, "zzz_match");
         assert_eq!(out[1].path, "aaa_MATCH.txt");
-    }
-
-    use parking_lot::Mutex;
-
-    fn store_with_project_root(path: &str) -> StoreState {
-        let store = crate::store::Store::open_in_memory().unwrap();
-        store
-            .upsert_project(&crate::store::ProjectRow {
-                id: "p1".into(),
-                name: "proj".into(),
-                path: path.to_string(),
-                color: None,
-                setup_command: None,
-                pinned_at: None,
-                folder_id: None,
-            })
-            .unwrap();
-        StoreState(Mutex::new(store))
-    }
-
-    #[test]
-    fn validate_cwd_accepts_a_known_root_and_its_descendants() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().canonical().unwrap();
-        std::fs::create_dir(root.join("sub")).unwrap();
-        let state = store_with_project_root(&root.to_string_lossy());
-
-        assert_eq!(validate_cwd(&state, &root).unwrap(), root);
-        assert_eq!(
-            validate_cwd(&state, &root.join("sub")).unwrap(),
-            root.join("sub").canonical().unwrap()
-        );
-    }
-
-    #[test]
-    fn validate_cwd_rejects_a_dir_outside_every_known_root() {
-        // A real, existing directory that was never registered as a root.
-        let outside = tempfile::tempdir().unwrap();
-        let registered = tempfile::tempdir().unwrap();
-        let state = store_with_project_root(&registered.path().to_string_lossy());
-        let err = validate_cwd(&state, outside.path()).unwrap_err();
-        assert_eq!(err, "cwd is not a known session or project root");
-    }
-
-    #[test]
-    fn validate_cwd_rejects_a_nonexistent_path() {
-        let state = store_with_project_root("/tmp");
-        let err = validate_cwd(&state, Path::new("/no/such/dir/anywhere")).unwrap_err();
-        assert_eq!(err, "cwd is not a directory");
     }
 }
 

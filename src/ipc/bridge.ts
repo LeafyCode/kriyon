@@ -1,15 +1,19 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import type { HostSummary } from "../remote/hostSummary.ts";
+import type { ReadableSummary } from "../remote/readableSummary.ts";
 import type {
   DirEntry,
   FileBlame,
   FileContent,
   FileWriteResult,
   HooksOffScope,
+  LaunchOutcome,
   MergeOutcome,
   NestedInitiation,
   NestedOutcome,
+  NestedReport,
   NestedRequest,
   NotifyPreference,
   NotifySound,
@@ -22,7 +26,6 @@ import type {
   SavedPrompt,
   SessionActivity,
   SessionDiff,
-  SessionOpened,
   SessionRow,
   SessionStatus,
   StudioEvent,
@@ -81,10 +84,10 @@ export interface StatusUpdate {
 }
 
 /**
- * Open (or reattach to) the session's pty daemon. Resolves with `reattached`
- * true when it reattached to a daemon that survived a previous app run —
- * meaning `claude` is already running in its shell and must NOT be re-launched
- * — and with the language of the session's shell, for the launch line.
+ * Open (or reattach to) the session's pty daemon. Resolves to `true` when it
+ * reattached to a daemon that survived a previous app run — meaning `claude` is
+ * already running in its shell and must NOT be re-launched — and `false` for a
+ * freshly spawned daemon.
  */
 export function createSession(
   id: string,
@@ -92,10 +95,23 @@ export function createSession(
   onBytes: (bytes: Uint8Array) => void,
   onBusy: (busy: boolean) => void,
   onExit: () => void
-): Promise<SessionOpened> {
+): Promise<boolean> {
   if (!hasTauri()) {
-    return Promise.resolve({ reattached: false, shell: "posix" });
+    return Promise.resolve(false);
   }
+  return invoke<boolean>("create_session", {
+    cwd,
+    id,
+    ...sessionChannels(onBytes, onBusy, onExit),
+  });
+}
+
+/** The three channels a session's shell reports through. */
+function sessionChannels(
+  onBytes: (bytes: Uint8Array) => void,
+  onBusy: (busy: boolean) => void,
+  onExit: () => void
+) {
   const channel = new Channel<ArrayBuffer>();
   channel.onmessage = (msg) => onBytes(new Uint8Array(msg));
   const busyChannel = new Channel<boolean>();
@@ -104,12 +120,29 @@ export function createSession(
   // crashed) — never for an app-initiated close or client handover.
   const exitChannel = new Channel<boolean>();
   exitChannel.onmessage = () => onExit();
-  return invoke<SessionOpened>("create_session", {
-    id,
-    cwd,
-    onBusy: busyChannel,
-    onExit: exitChannel,
-    onOutput: channel,
+  return { onBusy: busyChannel, onExit: exitChannel, onOutput: channel };
+}
+
+/**
+ * Start a new session: Rust saves its rows (its project's first, when given),
+ * then opens its shell, so no shell starts before the rows that approve its
+ * folder (ADR-0058), capturing its git baseline alongside when `baseline`.
+ * Rejects with the reason when a folder is refused.
+ */
+export function startSession(
+  rows: { baseline: boolean; project: ProjectRow | null; session: SessionRow },
+  onBytes: (bytes: Uint8Array) => void,
+  onBusy: (busy: boolean) => void,
+  onExit: () => void
+): Promise<{ baselineOid: string | null; reattached: boolean }> {
+  if (!hasTauri()) {
+    return Promise.resolve({ baselineOid: null, reattached: false });
+  }
+  return invoke("start_session", {
+    baseline: rows.baseline,
+    project: rows.project,
+    session: rows.session,
+    ...sessionChannels(onBytes, onBusy, onExit),
   });
 }
 
@@ -159,7 +192,7 @@ export function writeStdin(id: string, data: Uint8Array): Promise<void> {
 
 /**
  * Report bytes the frontend has drained from a session's PTY output, so the
- * backend reader can resume after parking at its high-water mark. Fire-and-
+ * backend output gate can send what it held. Fire-and-
  * forget from the caller's perspective; the backend just advances a counter.
  */
 export function reportDrained(id: string, bytes: number): Promise<void> {
@@ -179,11 +212,28 @@ export function closeSession(id: string): Promise<void> {
 }
 
 /**
- * Write a session's seed [Handoff prompt] to a path-contained file and resolve
- * to its absolute path, so the launcher can start `claude "$(cat <path>)"`.
+ * Launch `claude` into session `id`'s shell, once per shell (Rust decides the
+ * command and claims the launch): resuming `claudeSessionId` when given,
+ * otherwise fresh with an optional first prompt and [Nested session] report
+ * address.
  */
-export function seedPrompt(id: string, text: string): Promise<string> {
-  return invoke("seed_prompt", { id, text });
+export function launchClaude(
+  id: string,
+  claudeSessionId: string | null,
+  seed: string | undefined,
+  report: NestedReport | undefined
+): Promise<LaunchOutcome> {
+  return invoke("launch_claude", {
+    claudeSessionId,
+    id,
+    report: report ?? null,
+    seed: seed ?? null,
+  });
+}
+
+/** Start a plain `claude` in session `id`, whose resume failed. */
+export function startFreshClaude(id: string): Promise<void> {
+  return invoke("start_fresh_claude", { id });
 }
 
 // --- Transcript ---
@@ -269,6 +319,35 @@ export interface HooksOffUpdate {
  * start. Returns a promise resolving to an unlisten function.
  */
 export const onSessionHooksOff = subscribe<HooksOffUpdate>("session-hooks-off");
+
+/** A device that wants to type in a session the person typed in just now. */
+export interface ControlAsk {
+  deviceId: string;
+  deviceName: string;
+  sessionId: string;
+}
+
+/** Subscribe to `remote-control-asked`. */
+export const onRemoteControlAsked = subscribe<ControlAsk>(
+  "remote-control-asked"
+);
+
+/** The person lets a device type in a session ("Let <device> type"). */
+export function remoteLetDeviceType(
+  sessionId: string,
+  deviceId: string
+): Promise<void> {
+  return invoke("remote_let_device_type", { deviceId, sessionId });
+}
+
+/** A session started without the window (by a remote device): its row. */
+export const onSessionAdded = subscribe<SessionRow>("session-added");
+
+/** A session's git baseline that came after its start returned (a slow repository). */
+export const onSessionBaseline = subscribe<{
+  baselineOid: string;
+  sessionId: string;
+}>("session-baseline");
 
 /** What the user agreed Kriyon adds to Claude Code (mirrors Rust `IntegrationPrefs`). */
 export interface IntegrationPrefs {
@@ -1112,17 +1191,9 @@ export function writeFile(
 }
 
 /**
- * Capture a hook-free snapshot of `cwd`'s working tree as a dangling tree
- * object oid — the baseline a session's Changes view diffs against. Persist
- * the result on the session row (`baselineOid`) so it survives app restart.
- */
-export function captureBaseline(cwd: string): Promise<string> {
-  return invoke("capture_baseline", { cwd });
-}
-
-/**
- * Diff a session's working-tree changes against its `baselineOid` (from
- * {@link captureBaseline}), rather than against a committed ref. Catches
+ * Diff a session's working-tree changes against its `baselineOid` (taken
+ * in Rust while its shell opened, `session_start::start`), rather than
+ * against a committed ref. Catches
  * edits made by any means and self-corrects when a file is reverted.
  */
 export function diffSessionChanges(
@@ -1381,13 +1452,13 @@ export function homeDir(): Promise<string> {
  * `null` if the user cancels (or there is no Tauri runtime). Used to choose the
  * working directory for a new session.
  */
-export async function pickDirectory(): Promise<string | null> {
+export function pickDirectory(): Promise<string | null> {
   if (!hasTauri()) {
-    return null;
+    return Promise.resolve(null);
   }
-  const { open } = await import("@tauri-apps/plugin-dialog");
-  const selected = await open({ directory: true, multiple: false });
-  return typeof selected === "string" ? selected : null;
+  // The Rust core runs the picker and records the pick as a [Chosen folder]:
+  // only those may become a new project (ADR-0058).
+  return invoke<string | null>("pick_folder");
 }
 
 // --- Composer completions ---
@@ -1725,4 +1796,406 @@ export const onUpdateChanged = subscribe<UpdateSnapshot>("update-changed");
  */
 export const onUpdateChannelAnswered = subscribe<UpdateSnapshot>(
   "update-channel-answered"
+);
+
+// Remote access (ADR 0057). Mirrors `src-tauri/src/remote_cmd.rs`.
+
+/** What a paired device may do. */
+export type RemoteRole = "viewer" | "controller";
+
+/** The pairing in progress, as the host sees it. */
+export type RemotePairing =
+  | { state: "idle" }
+  | { expiresAtMs: number; role: RemoteRole; state: "waiting" }
+  | {
+      deviceName: string;
+      expiresAtMs: number;
+      role: RemoteRole;
+      state: "codeWanted";
+    }
+  | { state: "expired" }
+  | { state: "burned" };
+
+/** Remote access as the settings show it. */
+export interface RemoteStatus {
+  enabled: boolean;
+  /** Windows Defender Firewall asks before Kriyon may accept connections. */
+  firewallAsks: boolean;
+  /** The host's endpoint id while on. */
+  hostId: string | null;
+  pairing: RemotePairing;
+  /** The UDP port remote access listens on (the person's choice). */
+  port: number;
+  /** How devices can reach this computer, while on. */
+  routes: RemoteRoutes | null;
+}
+
+/** The ways a device can reach this computer now (spec §2). */
+export interface RemoteRoutes {
+  /** Devices have reached it only through the relay for a while, where a
+   * firewall may be blocking direct links (Windows). */
+  directBlocked: boolean;
+  /** Why it isn't on the chosen port, if it isn't. */
+  portNote: string | null;
+  /** Bound with our relay. */
+  relay: boolean;
+  /** Its Tailscale addresses: devices on the same tailnet dial them. */
+  tailscale: string[];
+}
+
+/** What typing a pairing code did. */
+export type RemoteCodeResult =
+  | { deviceId: string; name: string; outcome: "paired"; role: RemoteRole }
+  | { outcome: "wrong"; triesLeft: number }
+  | { outcome: "burned" }
+  | { outcome: "noAttempt" };
+
+/** A paired device. */
+export interface RemoteDevice {
+  id: string;
+  name: string;
+  pairedAt: number;
+  role: RemoteRole;
+}
+
+/** A QR code as a grid: `size * size` of `1` dark / `0` light, row by row. */
+export interface QrGrid {
+  dark: string;
+  size: number;
+}
+
+/** Remote access's state. Off outside the Tauri webview. */
+export function remoteStatus(): Promise<RemoteStatus> {
+  if (!hasTauri()) {
+    return Promise.resolve({
+      enabled: false,
+      firewallAsks: false,
+      hostId: null,
+      pairing: { state: "idle" },
+      port: 49_731,
+      routes: null,
+    });
+  }
+  return invoke("remote_status");
+}
+
+/**
+ * Listen on UDP `port` for remote access from now on. Devices paired before
+ * keep the old port's addresses.
+ */
+export function remoteSetPort(port: number): Promise<RemoteStatus> {
+  return invoke("remote_set_port", { port });
+}
+
+/** Turn remote access on (the host endpoint comes up) or off (none at all). */
+export function remoteSetEnabled(enabled: boolean): Promise<RemoteStatus> {
+  return invoke("remote_set_enabled", { enabled });
+}
+
+/** Start pairing a device as `role`; resolves to the QR code's text. */
+export function remoteStartPairing(role: RemoteRole): Promise<string> {
+  return invoke("remote_start_pairing", { role });
+}
+
+/** The QR code for a pairing invite's text, drawn in Rust. */
+export function remotePairingQr(text: string): Promise<QrGrid> {
+  return invoke("remote_pairing_qr", { text });
+}
+
+/** Stop the pairing in progress. */
+export function remoteStopPairing(): Promise<void> {
+  return invoke("remote_stop_pairing");
+}
+
+/** The person typed the six-digit code the device shows. */
+export function remoteEnterCode(code: string): Promise<RemoteCodeResult> {
+  return invoke("remote_enter_code", { code });
+}
+
+/** Every paired device. None outside the Tauri webview. */
+export function remoteDevices(): Promise<RemoteDevice[]> {
+  if (!hasTauri()) {
+    return Promise.resolve([]);
+  }
+  return invoke("remote_devices");
+}
+
+/** Rename a paired device (1 to 64 bytes of plain text). */
+export function remoteRenameDevice(id: string, name: string): Promise<void> {
+  return invoke("remote_rename_device", { id, name });
+}
+
+/** Remove a paired device: it is forgotten and cut off at once. */
+export function remoteRemoveDevice(id: string): Promise<void> {
+  return invoke("remote_remove_device", { id });
+}
+
+/** Change a paired device's role; it reconnects with the new one. */
+export function remoteSetDeviceRole(
+  id: string,
+  role: RemoteRole
+): Promise<void> {
+  return invoke("remote_set_device_role", { id, role });
+}
+
+/**
+ * Subscribe to `remote-pairing-code-wanted`: a device took the pairing, and
+ * the person should type the code it shows.
+ */
+export const onRemoteCodeWanted = subscribe<{ deviceName: string }>(
+  "remote-pairing-code-wanted"
+);
+
+// Our relay (paid). Mirrors `src-tauri/src/relay_cmd.rs` and `relay_rt.rs`.
+
+/** A device sign-in in progress: the code to show and the page it opens. */
+export interface RelaySignIn {
+  userCode: string;
+  verificationUri: string;
+  verificationUriComplete: string;
+}
+
+/** Our relay as the settings show it. */
+export interface RelayView {
+  /** Whether this build has a relay at all; none: the relay is hidden. */
+  available: boolean;
+  on: boolean;
+  /** When the pass in hand expires, in Unix seconds. */
+  passExpiresAt: number | null;
+  /** What went wrong last, in the relay contract's words. */
+  problem: string | null;
+  signedIn: boolean;
+  signIn: RelaySignIn | null;
+}
+
+/** A subscription's state, as the relay account reports it. */
+export type RelaySubscriptionState =
+  | "pending"
+  | "active"
+  | "past_due"
+  | "canceled"
+  | "expired";
+
+/** A device on the relay account. */
+export interface RelayDevice {
+  deviceId: string;
+  deviceKey: string;
+  lastPassAt?: string | null;
+  name: string;
+  platform: string;
+}
+
+/** The relay account's status (`GET /status`). */
+export interface RelayAccount {
+  blocked: boolean;
+  deviceLimit: number;
+  devices: RelayDevice[];
+  subscription: {
+    /** Null while the first payment is pending. */
+    paidUntil: string | null;
+    plan: string;
+    state: RelaySubscriptionState;
+  } | null;
+}
+
+const NO_RELAY: RelayView = {
+  available: false,
+  on: false,
+  passExpiresAt: null,
+  problem: null,
+  signedIn: false,
+  signIn: null,
+};
+
+/** Our relay's state. None outside the Tauri webview. */
+export function relayView(): Promise<RelayView> {
+  if (!hasTauri()) {
+    return Promise.resolve(NO_RELAY);
+  }
+  return invoke("relay_view");
+}
+
+/** Start a device sign-in: Rust opens the sign-in page and waits for it. */
+export function relaySignIn(): Promise<RelaySignIn> {
+  return invoke("relay_sign_in");
+}
+
+/** Stop the sign-in in progress. */
+export function relayCancelSignIn(): Promise<void> {
+  return invoke("relay_cancel_sign_in");
+}
+
+/** Sign out of the relay account on this computer; the relay goes off. */
+export function relaySignOut(): Promise<RelayView> {
+  return invoke("relay_sign_out");
+}
+
+/** Turn our relay on (this device's pass is fetched) or off. */
+export function relaySetEnabled(enabled: boolean): Promise<RelayView> {
+  return invoke("relay_set_enabled", { enabled });
+}
+
+/** The relay account's subscription and devices. */
+export function relayAccount(): Promise<RelayAccount> {
+  return invoke("relay_account");
+}
+
+/** Remove a device from the relay account; it stays paired. */
+export function relayRemoveDevice(deviceId: string): Promise<void> {
+  return invoke("relay_remove_device", { deviceId });
+}
+
+/** This computer's device key, to mark it in the relay account's list. */
+export function relayThisDevice(): Promise<{ deviceKey: string }> {
+  return invoke("relay_this_device");
+}
+
+/** Open the website's subscriptions page in the browser. */
+export function relayOpenSubscriptions(): Promise<void> {
+  return invoke("relay_open_subscriptions");
+}
+
+/** Subscribe to `relay-changed`: the relay's state changed in Rust. */
+export const onRelayChanged = subscribe<null>("relay-changed");
+
+// This computer as a remote device of another: the commands in
+// `src-tauri/src/remote_device_cmd.rs`. A paired computer's link and
+// sessions come as Rust's HostSummary, typed in remote/hostSummary.ts
+// (shared with the phone app).
+
+/**
+ * Start a session on a paired computer in project `projectId`, titled
+ * `title` or after the project. Resolves to the new session's id once that
+ * computer answers (it is asked again across reconnects); rejects with its
+ * refusal in plain words.
+ */
+export function remoteHostStartSession(
+  hostId: string,
+  projectId: string,
+  title: string
+): Promise<string> {
+  return invoke("remote_host_start_session", {
+    hostId,
+    projectId,
+    title: title.trim() === "" ? null : title,
+  });
+}
+
+/** A computer this one paired with, as stored. */
+export interface PairedHost {
+  hostId: string;
+  name: string;
+  pairedAt: number;
+}
+
+/** How a pairing started here ended. */
+export type HostPairingEnded =
+  | { hostId: string; name: string; outcome: "paired" }
+  | { outcome: "failed"; reason: string };
+
+/**
+ * Pair with the computer whose pairing code (the QR code's text) was pasted.
+ * Resolves to the six-digit code to type into that computer.
+ */
+export function remoteHostPair(invite: string): Promise<string> {
+  return invoke("remote_host_pair", { invite });
+}
+
+/** Every computer this one paired with. None outside the Tauri webview. */
+export function remoteHosts(): Promise<PairedHost[]> {
+  if (!hasTauri()) {
+    return Promise.resolve([]);
+  }
+  return invoke("remote_hosts");
+}
+
+/** Forget a paired computer. */
+export function remoteHostForget(hostId: string): Promise<void> {
+  return invoke("remote_host_forget", { hostId });
+}
+
+/** A paired computer's session's screen, as a view asks for it: none
+ *  crossing the link, a fresh one whose frames go to `fresh` (from a
+ *  snapshot: a terminal shown, or drawn again), or kept as it is (the view
+ *  changes something else; its frames go on where they went). */
+export type RemoteScreen =
+  | "off"
+  | "kept"
+  | { fresh: (frame: Uint8Array) => void };
+
+/** How a paired computer's session is shown here: its screen, and its
+ *  [Readable view] entries going to `onEntries`, whole on every change (or
+ *  not read). */
+export interface RemoteView {
+  onEntries: ((summary: ReadableSummary) => void) | null;
+  screen: RemoteScreen;
+}
+
+/** Show a paired computer's session here as `view`, or close it (`null`;
+ *  it keeps running there). Views are numbered in the order asked: Rust
+ *  takes only one newer than the last (`seq`), and keeps it across links.
+ *  Rejects only for a computer not paired here. */
+export function remoteHostSetView(
+  hostId: string,
+  sessionId: string,
+  seq: number,
+  view: RemoteView | null
+): Promise<void> {
+  // Both channels always go (Tauri takes no missing one); Rust uses each
+  // only while its part is asked for.
+  const screen = view?.screen ?? "off";
+  const onScreen = new Channel<ArrayBuffer>();
+  if (typeof screen === "object") {
+    onScreen.onmessage = (message) => screen.fresh(new Uint8Array(message));
+  }
+  const onEntries = new Channel<ReadableSummary>();
+  const entries = view?.onEntries;
+  onEntries.onmessage = (summary) => entries?.(summary);
+  return invoke("remote_host_set_view", {
+    hostId,
+    onEntries,
+    onScreen,
+    sessionId,
+    view: {
+      entries: Boolean(entries),
+      open: view !== null,
+      screen: typeof screen === "object" ? "fresh" : screen,
+      seq,
+    },
+  });
+}
+
+/** Ask for typing control of a paired computer's session. */
+export function remoteHostTakeControl(
+  hostId: string,
+  sessionId: string
+): Promise<void> {
+  return invoke("remote_host_take_control", { hostId, sessionId });
+}
+
+/** Type into a paired computer's session this one controls. */
+export function remoteHostInput(
+  hostId: string,
+  sessionId: string,
+  text: string
+): Promise<void> {
+  return invoke("remote_host_input", { hostId, sessionId, text });
+}
+
+/** Retry waiting reconnects at once (the app came to the front). */
+export function remoteHostsWake(): Promise<void> {
+  if (!hasTauri()) {
+    return Promise.resolve();
+  }
+  return invoke("remote_hosts_wake");
+}
+
+/** Subscribe to `remote-host-changed`: a paired computer's link or sessions. */
+export const onRemoteHostChanged = subscribe<HostSummary>(
+  "remote-host-changed"
+);
+
+/** Subscribe to `remote-host-pairing-ended`. */
+export const onRemoteHostPairingEnded = subscribe<HostPairingEnded>(
+  "remote-host-pairing-ended"
 );

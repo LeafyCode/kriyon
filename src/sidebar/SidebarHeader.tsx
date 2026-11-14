@@ -1,6 +1,7 @@
 import {
   BookMarked,
   Inbox,
+  Laptop,
   Maximize2,
   MessagesSquare,
   PanelLeft,
@@ -10,6 +11,7 @@ import { type CSSProperties, type ReactNode, useMemo } from "react";
 import { TOP_BAND_HEIGHT, TRAFFIC_LIGHT_CLEARANCE } from "../layout/topBand.ts";
 import { shortcutLabel } from "../platform/shortcut.ts";
 import { useLayout } from "../state/layout.ts";
+import { remoteNeedsYouCount, useRemoteHosts } from "../state/remoteHosts.ts";
 import { isPutAway, useSessions } from "../state/sessions.ts";
 import { useUi } from "../state/ui.ts";
 import { iconButton, inputBox, kbd, row30 } from "../theme/recipes.ts";
@@ -187,6 +189,11 @@ export function SidebarHeader({ query, setQuery }: SidebarHeaderProps) {
     (state) => needsYouSectionItems(state).length
   );
 
+  // Shown only once this computer is paired with another: most people
+  // never use remote access, and an empty view is noise.
+  const pairedComputers = useRemoteHosts((state) => state.hosts.length);
+  const remoteNeedsYou = useRemoteHosts(remoteNeedsYouCount);
+
   const navRows = useMemo(
     () =>
       [
@@ -211,8 +218,19 @@ export function SidebarHeader({ query, setQuery }: SidebarHeaderProps) {
           needsYou: false,
           value: "prompts",
         },
+        ...(pairedComputers > 0
+          ? [
+              {
+                count: remoteNeedsYou,
+                icon: <Laptop size={12} strokeWidth={1.75} />,
+                label: "Other computers",
+                needsYou: true,
+                value: "remote",
+              } as const,
+            ]
+          : []),
       ] as const,
-    [needsYouCount, openSessions]
+    [needsYouCount, openSessions, pairedComputers, remoteNeedsYou]
   );
 
   return (

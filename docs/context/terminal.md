@@ -47,16 +47,22 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
 - **Write queue** (`WriteQueue`) — the frontend buffer that coalesces incoming PTY output
   (`Uint8Array` chunks) and flushes them to xterm once per `requestAnimationFrame` via a single
   `term.write` of the concatenated bytes, instead of one write per channel message. Each flush
-  reports the byte count it consumed (see [Drained counter]) so the reader can resume. _Avoid_:
-  render buffer, frame buffer.
-- **Backpressure** — the Rust PTY reader's flow control on the output path. It tracks
-  `pending = sent − drained` bytes; when `pending` exceeds the high-water mark (128 KB) the reader
-  thread parks on a condvar, resuming once it falls below the low-water mark (16 KB). Keeps a fast
-  `claude` from outrunning the renderer without dropping or reordering bytes. _Avoid_: throttle,
+  reports the byte count it consumed (see [Drained counter]) so the [Output gate] can send more.
+  It flushes only on animation frames, so a hidden window's queue stops flushing. _Avoid_: render
+  buffer, frame buffer.
+- **Output gate** (`OutputGate`) — decides what a [Session]'s output does on its way to the
+  webview, so the [Daemon client]'s reader never waits on a webview that has stopped drawing
+  (ADR-0059). It tracks `in_flight = delivered − drained`: under the high-water mark (128 KB)
+  output goes straight through; above it the reader waits while the webview still drains. After
+  500 ms with no drain the webview is stalled: output is held (up to 1 MB) and released in order,
+  128 KB at a time, once in-flight bytes drain to the low-water mark (16 KB); past that cap the
+  held bytes are dropped and, once the webview catches up, it repaints from the
+  [Screen snapshot]. Replaced **Backpressure**, which parked the
+  reader and so froze every session while the window was hidden. _Avoid_: backpressure, throttle,
   flow control (ambiguous with terminal XON/XOFF).
 - **Drained counter** (`report_drained`) — the per-[Session] count of output bytes the frontend has
   taken ownership of from the output channel. The `report_drained(id, bytes)` command adds to it and
-  signals the [Backpressure] condvar so a parked reader can resume. `pending = sent − drained`.
+  lets the [Output gate] release held output or ask for a repaint.
   _Avoid_: ack, acknowledged bytes.
 - **PTY daemon** (`kriyon-ptyd`) — the long-lived, out-of-process daemon that owns one [Session]'s
   PTY and child shell, one process per [Session], so the [Session] outlives an app crash. It
@@ -73,12 +79,25 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
   connects to. Keyed by Kriyon's [Session] id, which is validated before it is interpolated into the
   path (the trust-boundary path-containment rule). _Avoid_: ipc socket.
 - **Daemon frame** (`Frame`) — one length-prefixed message on the [Session socket]
-  (`[tag][u32 len][payload]`): `Output` / `Stdin` / `Resize` / `Attach` / `Shutdown`. Encoded and
-  decoded by the pure `wire` module, which tolerates partial reads and skips unknown tags.
-  _Avoid_: packet, message.
+  (`[tag][u32 len][payload]`): `Output` / `Stdin` / `Resize` / `Attach` / `Shutdown` / `Busy` /
+  `Repaint`; `Hello { run }` (daemon → app), the daemon's [Session run], first on every attach;
+  `Screen` (daemon → app), the [Screen snapshot] for the app's own terminal, kept apart from
+  `Output` so a repaint is never taken for output the session made; for one requester's
+  [Output history] `RequestHistory { id }` (app → daemon), then `History { id }` frames closed by
+  `HistoryEnd { id }`; for one requester's snapshot, which repaints nothing else,
+  `RequestSnapshot { id }`, then `Snapshot { id }` frames closed by `SnapshotEnd { id }`, in
+  order with the output; and `Dialog` (daemon → app), the [Dialog generation] each time a [CLI
+  dialog] appears, changes or closes on the daemon's screen, and once on attach. Encoded and
+  decoded by the pure `wire` module (`ByteStream` splits a run of bytes into frames), which
+  tolerates partial reads and skips unknown tags, so an older app ignores the frames a newer
+  daemon adds. _Avoid_: packet, message.
+- **Daemon event** (`DaemonEvent`) — one frame from the [PTY daemon] as the [Daemon client]'s
+  reader read it, handed to the client's listener in order, before the webview's pacing can
+  wait: the one place to hook what a session says (its output, its screen, busy and dialog
+  state, history and snapshot answers). _Avoid_: callback, message.
 - **Daemon client** (`DaemonClient`) — the app-side [Engine] that connects to a [Session socket],
-  runs the framed reader thread feeding [Backpressure] (so [Drained counter] and pacing are
-  unchanged), and sends stdin/resize/shutdown frames. Implements `SessionEngine`, so the app's hot
+  runs the framed reader thread feeding the [Output gate] (which never blocks it), and sends
+  stdin/resize/shutdown/repaint frames. Implements `SessionEngine`, so the app's hot
   path does not change when the PTY moves out of process. _Avoid_: pty client.
 - **Screen snapshot** (`state_formatted`) — the escape codes the [PTY daemon]'s headless `vt100`
   emulator emits to reconstruct the current screen (contents, colours, cursor, input modes), sent to
@@ -87,3 +106,9 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
   a client is attached, and keeps no scrollback — only the visible screen, which is all the snapshot
   serialises. It replaced the bounded output ring the daemon used to fill only while detached.
   _Avoid_: scrollback ring, replay buffer (ambiguous with the frontend's detached replay buffer).
+- **Output history** (`OutputHistory`) — the most recent raw output of a session, up to 4 MiB,
+  kept by its [PTY daemon] from every output byte, attached or not, and sent to a [Daemon client]
+  that asks (`RequestHistory`). It holds what scrolled past the [Screen snapshot]: what a client
+  missed when it skipped ahead, or before it attached. Trimmed oldest first, to a line start
+  (ADR-0060).
+  _Avoid_: scrollback ring (the old attach-replay buffer ADR-0004 removed), scrollback.

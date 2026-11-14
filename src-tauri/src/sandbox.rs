@@ -44,7 +44,7 @@ use std::path::{Path, PathBuf};
 use kriyon_core::completion::path_within_roots;
 use kriyon_core::failure::tagged_failure;
 
-use crate::completion_cmd::validate_cwd;
+use crate::folder_cmd::validate_cwd;
 use crate::StoreState;
 
 /// Byte-identical to `MISSING_FILE_ERROR_MESSAGE` in
@@ -189,7 +189,7 @@ impl SandboxRoot {
     /// The **only** constructor: run the full `cwd` preamble — reject
     /// flag-like values, validate the path against the app's known
     /// session/project roots (see
-    /// [`validate_cwd`](crate::completion_cmd::validate_cwd)), then convert the
+    /// [`validate_cwd`](crate::folder_cmd::validate_cwd)), then convert the
     /// canonicalized result to UTF-8 without lossy substitution.
     ///
     /// # Errors
@@ -616,7 +616,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = store_with_project_root(&dir.path().to_string_lossy());
         assert_eq!(
-            SandboxRoot::validate(&store, "/no/such/dir/anywhere").unwrap_err(),
+            SandboxRoot::validate(&store, &dir.path().join("no-such-dir").to_string_lossy())
+                .unwrap_err(),
             "cwd is not a directory"
         );
     }

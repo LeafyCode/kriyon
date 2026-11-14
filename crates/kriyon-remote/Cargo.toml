@@ -1,0 +1,23 @@
+[package]
+name = "kriyon-remote"
+version.workspace = true
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+description = "Remote access protocol for Kriyon: messages, codec, control, authorize, pairing, relay rules. Pure: no network, no IO."
+
+[dependencies]
+kriyon-core = { path = "../kriyon-core" }
+kriyon-push-seal = { path = "../kriyon-push-seal" }
+hmac = "0.12"
+postcard = { version = "1", default-features = false, features = ["alloc"] }
+serde = { version = "1", features = ["derive"] }
+# Names of variants for the summaries devices show (device_view).
+serde_json = "1"
+sha2 = "0.10"
+zstd = { version = "0.13", default-features = false }
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"
+correctness = "deny"

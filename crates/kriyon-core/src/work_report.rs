@@ -3,7 +3,7 @@
 //! as a `user` row of `<task-notification>` blocks that no person typed, so the
 //! [Structured view] shows it as a line of its own, never as a prompt.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// The tag Claude Code wraps each report in.
 const OPEN: &str = "<task-notification>";
@@ -23,18 +23,20 @@ pub const PEER_ORIGIN: &str = "peer";
 /// What a subagent's hand-back says of itself, after the sender's tag.
 const HANDBACK: &str = "[Subagent hand-back]";
 
-/// How the work a report is about came out.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+/// How the work a report is about came out. Variant order is the remote
+/// protocol's numbers: append only. A device that doesn't know an outcome
+/// leaves that entry out (spec §3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ReportOutcome {
+    /// Anything else (an outcome a newer build added).
+    Update,
     Completed,
     Failed,
     /// Stopped or killed before it finished.
     Stopped,
     /// A monitor saw something; the work goes on.
     Event,
-    /// Anything else (an outcome a newer build added).
-    Update,
 }
 
 /// One [Work report], reduced to what the view shows.

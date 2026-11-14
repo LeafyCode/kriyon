@@ -1,6 +1,7 @@
 import type { CSSProperties } from "react";
 import { ViewHeader } from "../layout/ViewHeader.tsx";
 import { NeedsYouList } from "../needsYou/NeedsYouList.tsx";
+import { standingLabel } from "../remote/hostSummary.ts";
 import { useLayout } from "../state/layout.ts";
 import { useSessions } from "../state/sessions.ts";
 import { useNeedsYouView } from "../state/useNeedsYouView.ts";
@@ -14,7 +15,7 @@ import type {
 } from "../types.ts";
 import { Segmented } from "../ui/Segmented.tsx";
 
-interface StateMeta {
+export interface StateMeta {
   color: string;
   label: string;
 }
@@ -24,21 +25,20 @@ interface StateMeta {
  * so the palette stays in one place; `unknown` is rendered distinctly with the
  * faint ink ramp and never collapsed into `idle`.
  */
-function standingMeta(state: StandingState): StateMeta {
+export function standingMeta(state: StandingState): StateMeta {
+  // The words are the phone's too (remote/hostSummary.ts).
+  const label = standingLabel(state);
   switch (state) {
     case "running":
-      return { color: statusMeta("running").color, label: "Running" };
+      return { color: statusMeta("running").color, label };
     case "awaiting_input":
-      return {
-        color: statusMeta("waiting").color,
-        label: "Awaiting input",
-      };
+      return { color: statusMeta("waiting").color, label };
     case "changed":
-      return { color: statusMeta("done").color, label: "Changed" };
+      return { color: statusMeta("done").color, label };
     case "idle":
-      return { color: statusMeta("idle").color, label: "Idle" };
+      return { color: statusMeta("idle").color, label };
     default:
-      return { color: tokens.color.ink.faint, label: "Unknown" };
+      return { color: tokens.color.ink.faint, label };
   }
 }
 

@@ -7,6 +7,7 @@ import type {
 import {
   onFocusSession,
   onSessionActivity,
+  onSessionBaseline,
   onSessionClaudeId,
   onSessionHandoff,
   onSessionHeartbeat,
@@ -21,6 +22,7 @@ import {
   installCommandCenterListeners,
   statusChangeAt,
 } from "./commandCenterListeners.ts";
+import { useSessions } from "./sessions.ts";
 
 /** An unlisten no-op the mocked subscribers resolve to. */
 function noop(): void {
@@ -28,6 +30,8 @@ function noop(): void {
 }
 
 vi.mock("../ipc/bridge", () => ({
+  onSessionAdded: vi.fn(() => Promise.resolve(noop)),
+  onSessionBaseline: vi.fn(() => Promise.resolve(noop)),
   onSessionStatus: vi.fn(() => Promise.resolve(noop)),
   onSessionUsage: vi.fn(() => Promise.resolve(noop)),
   onSessionActivity: vi.fn(() => Promise.resolve(noop)),
@@ -43,6 +47,8 @@ vi.mock("../ipc/bridge", () => ({
   onWorkingTreeChanged: vi.fn(() => Promise.resolve(noop)),
   onPlanLimits: vi.fn(() => Promise.resolve(noop)),
   onCompanionChanged: vi.fn(() => Promise.resolve(noop)),
+  // The sessions store saves a changed row.
+  upsertSession: vi.fn(() => Promise.resolve()),
 }));
 
 const stops: Array<() => void> = [];
@@ -128,6 +134,36 @@ test("activity, title, claude-id, ready, handoff, and focus subscribers are inst
   expect(onSessionReady).toHaveBeenCalled();
   expect(onSessionHandoff).toHaveBeenCalled();
   expect(onFocusSession).toHaveBeenCalled();
+});
+
+test("a baseline that came after the start's wait lands on its session", async () => {
+  useSessions.setState({
+    sessions: {
+      s1: {
+        archivedAt: null,
+        baselineOid: null,
+        claudeSessionId: null,
+        createdAt: 1,
+        cwd: "/repo",
+        id: "s1",
+        projectId: "p1",
+        status: "idle",
+        summary: "",
+        title: "s1",
+        titleLocked: false,
+        worktreePath: null,
+      },
+    },
+  });
+  stops.push(installSessionListeners());
+  await Promise.resolve();
+
+  const cb = captured<{ baselineOid: string; sessionId: string }>(
+    onSessionBaseline as unknown as { mock: { calls: unknown[][] } }
+  );
+  cb({ baselineOid: "late-oid", sessionId: "s1" });
+
+  expect(useSessions.getState().sessions.s1?.baselineOid).toBe("late-oid");
 });
 
 test("a launch replay never moves a session's recency", async () => {

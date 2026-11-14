@@ -1,9 +1,10 @@
-import { BookMarked, Inbox, MessagesSquare } from "lucide-react";
+import { BookMarked, Inbox, Laptop, MessagesSquare } from "lucide-react";
 import type { CSSProperties, ReactNode } from "react";
 import { shortcutLabel } from "../platform/shortcut.ts";
 import { pickFocusSession } from "../sidebar/sessionOrder.ts";
 import { useCommandCenter } from "../state/commandCenter.ts";
 import { useLayout } from "../state/layout.ts";
+import { useRemoteHosts } from "../state/remoteHosts.ts";
 import { isPutAway, useSessions } from "../state/sessions.ts";
 import { useUi } from "../state/ui.ts";
 import { accentAlpha, tokens } from "../theme/tokens.ts";
@@ -97,6 +98,7 @@ export function FocusRail() {
   const activeSessionId = useSessions((state) => state.activeSessionId);
   const setActiveSession = useSessions((state) => state.setActiveSession);
   const setView = useLayout((state) => state.setView);
+  const paired = useRemoteHosts((state) => state.hosts.length > 0);
   const openPalette = useUi((state) => state.openPalette);
   const lastChangeMs = useCommandCenter((state) => state.lastChangeMs);
 
@@ -154,6 +156,13 @@ export function FocusRail() {
         label="Prompts"
         onSelect={() => setView("prompts")}
       />
+      {paired ? (
+        <ViewTile
+          icon={<Laptop size={15} strokeWidth={1.75} />}
+          label="Other computers"
+          onSelect={() => setView("remote")}
+        />
+      ) : null}
       <span style={dividerStyle} />
       <button
         aria-label="Open command palette"

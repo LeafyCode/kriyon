@@ -22,6 +22,7 @@ import {
 import { installSessionListeners } from "./state/backendListeners.ts";
 import { installBridgeMirrors } from "./state/bridgeMirrors.ts";
 import { installCommandCenterListeners } from "./state/commandCenterListeners.ts";
+import { installControlAskListener } from "./state/controlAsks.ts";
 import { setHomeFolder } from "./state/homeRelative.ts";
 import { useIntegration } from "./state/integration.ts";
 import { useLayout } from "./state/layout.ts";
@@ -33,6 +34,7 @@ import {
 } from "./state/nestedSessions.ts";
 import { hydrate, installPersistence } from "./state/persistence.ts";
 import { installNotesPickReset } from "./state/projectNotes.ts";
+import { installRemoteHostListeners } from "./state/remoteHosts.ts";
 import { useSessions } from "./state/sessions.ts";
 import { freedMemoryNote } from "./state/stopCost.ts";
 import {
@@ -316,6 +318,8 @@ function App() {
     const stopCloseOnQuit = installCloseOnQuit();
     const stopMainWindowActions = installMainWindowActions();
     const stopMenuBarModeSync = installMenuBarModeSync();
+    const stopRemoteHosts = installRemoteHostListeners();
+    const stopControlAsks = installControlAskListener();
     // A caret left in non-editable content makes WebKit rescan the whole
     // document on every rendering update, which froze the UI for as long as
     // anything kept repainting. See `strayCaret.ts` for the measured stack.
@@ -341,6 +345,8 @@ function App() {
       stopCloseOnQuit();
       stopMainWindowActions();
       stopMenuBarModeSync();
+      stopRemoteHosts();
+      stopControlAsks();
       stopStrayCaretGuard();
       stopDomWeightWatch();
     };

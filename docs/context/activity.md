@@ -75,11 +75,18 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
   (`SessionStatus`) stays the one source-of-truth status; [Standing state] is its
   command-center projection plus a liveness overlay (see [Standing staleness]).
   _Avoid_: session summary, board entry.
-- **Standing state** (`StandingState`) — the vocabulary the [Command center] renders:
+- **Standing state** (`StandingState`; in Rust `kriyon_core::standing::standing_state`, both
+  held to `scripts/standing-cases.json`) — the vocabulary the [Command center] renders:
   `running | awaiting_input | changed | idle | unknown`. A presentation of [Status]:
   `running→running`, `waiting→awaiting_input`, `done`/`error`→`changed`, `idle→idle`.
-  `unknown` is shown honestly — a [Session standing] that has gone stale, never collapsed
-  into `idle`.
+  `unknown` is shown honestly — a [Session standing] that has gone stale, or whose [Hooks off],
+  never collapsed into `idle`.
+- **Session list** (`kriyon_core::standing::session_list`, `SessionListEntry`) — the host's own
+  answer to "which sessions are there and which need me", built in Rust without the window, for
+  remote devices: each session not put away, with its [Status], [Standing state], whether it
+  needs the person (the [Session runtime]'s `needs_you`, the one the menu-bar badge counts),
+  whether a [CLI dialog] shows, and when its status last changed. Those that need the person
+  come first, the longest waiting first. _Avoid_: session index, roster.
 - **Needs-you rail** — the pinned top section of the [Command center] gathering every
   [Session standing] whose [Standing state] is `awaiting_input`: the sessions actually
   blocked on the user. _Avoid_: attention list, inbox.

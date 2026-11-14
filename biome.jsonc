@@ -11,6 +11,11 @@
       "!**/dist",
       "!**/target",
       "!src-tauri/gen",
+      // The phone app's native projects, made by `expo prebuild`.
+      "!mobile/app/ios",
+      "!mobile/app/android",
+      // The terminal page, built by mobile/app/scripts/terminal-page.mjs.
+      "!mobile/app/src/terminal/page.generated.ts",
       // `claude --worktree` checkouts live here; each carries its own
       // biome.jsonc, which Biome rejects as a nested root.
       "!.claude/worktrees",

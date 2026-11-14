@@ -95,6 +95,7 @@ mod tests {
             kind,
             text: text.to_string(),
             asked_at: None,
+            question: None,
         }
     }
 

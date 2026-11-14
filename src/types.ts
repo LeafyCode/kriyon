@@ -138,6 +138,21 @@ export interface PastSessionPage {
  * the session that started it (`to`), and the id its own conversation is
  * started with (`from`), so only that conversation reports (ADR-0049).
  */
+/** What launching `claude` into a session came to (mirrors Rust
+ *  `commands::LaunchOutcome`). */
+export type LaunchOutcome =
+  /** `claude` was launched; track its boot (`resuming` if `--resume`). */
+  | { kind: "launched"; resuming: boolean }
+  /** Launched fresh, but the seed prompt's file couldn't be written: the
+   *  first prompt was lost. */
+  | { kind: "seedDropped" }
+  /** The command never reached the shell; nothing started. */
+  | { kind: "writeFailed" }
+  /** The shell outlived the app and already runs `claude`. */
+  | { kind: "reattached" }
+  /** No such session, or `claude` was already launched into its shell. */
+  | { kind: "skipped" };
+
 export interface NestedReport {
   from: string;
   /** The person started it with [Split off], so the lead didn't ask for it. */
@@ -173,7 +188,7 @@ export interface SessionRow {
   /** When the session was archived (ms since epoch), or null while active. */
   archivedAt: number | null;
   /**
-   * The git oid captured at session start (see `captureBaseline`), used as the
+   * The git oid captured at session start (see `capture_baseline` in Rust, taken as the session starts), used as the
    * base of the working-tree diff for the Changes view. `null` until a
    * baseline has been captured, or when the session's cwd is not a git repo.
    */
@@ -498,15 +513,4 @@ export interface SessionActivity {
   shells: BackgroundShell[];
   subagents: Subagent[];
   tasks: Task[];
-}
-
-/** The language a session's shell reads its launch line in — Rust's `ShellLanguage`. */
-export type ShellLanguage = "posix" | "powerShell";
-
-/** What `create_session` reports about the session it opened — Rust's `SessionOpened`. */
-export interface SessionOpened {
-  /** It reattached to a daemon that survived a previous app run: `claude` is already running. */
-  reattached: boolean;
-  /** The language the session's shell reads its launch line in. */
-  shell: ShellLanguage;
 }

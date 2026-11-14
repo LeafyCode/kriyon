@@ -5,13 +5,23 @@
 [graph]
 # Kriyon ships for macOS only. Linux builds in CI just to run the tests, and
 # Windows is never built, so their platform-only crates are out of scope.
+# The phone library (crates/kriyon-mobile) builds for iOS from nearly the
+# same crates as macOS; listing iOS here would check the desktop app as if it
+# ran on iOS too (its non-macOS Unix crates), which it never does.
 targets = ["aarch64-apple-darwin", "x86_64-apple-darwin"]
 all-features = true
 
 [advisories]
 # Every vulnerability and unmaintained-crate advisory fails the check. To
 # accept one, add it here with the reason and a date to look again.
-ignore = []
+ignore = [
+  # basic-toml is unmaintained. It comes only through uniffi_bindgen, behind
+  # kriyon-mobile's `bindgen` feature: the tool that writes the Swift
+  # bindings at build time (scripts/mobile/build-ios.sh). It never ships in
+  # the app or the phone library. Look again with the next uniffi release,
+  # or by 2027-03-01.
+  { id = "RUSTSEC-2026-0374", reason = "build-time binding generator only (uniffi_bindgen); never shipped" },
+]
 
 [licenses]
 # Permissive licences, plus MPL-2.0 (file-level copyleft; we don't modify
@@ -31,6 +41,12 @@ allow = [
   "Zlib",
 ]
 confidence-threshold = 0.9
+
+# Mozilla's CA root list, shipped as data under CDLA-Permissive-2.0; required by
+# iroh-relay (kriyon-remote-link). Allowed for this crate only.
+[[licenses.exceptions]]
+crate = "webpki-roots"
+allow = ["CDLA-Permissive-2.0"]
 
 [licenses.private]
 # Kriyon's own crates are not published to crates.io.

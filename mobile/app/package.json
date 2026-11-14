@@ -1,0 +1,51 @@
+{
+  "name": "@kriyon/mobile",
+  "version": "0.16.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "main": "index.ts",
+  "scripts": {
+    "android": "pnpm terminal-page && expo run:android",
+    "eas-build-post-install": "node ../../scripts/mobile/eas-build.mjs post-install",
+    "eas-build-pre-install": "node ../../scripts/mobile/eas-build.mjs pre-install",
+    "ios": "pnpm terminal-page && expo run:ios",
+    "start": "pnpm terminal-page && expo start --dev-client",
+    "terminal-page": "node scripts/terminal-page.mjs",
+    "test": "pnpm terminal-page && jest",
+    "typecheck": "pnpm terminal-page && tsc --noEmit"
+  },
+  "jest": {
+    "preset": "jest-expo"
+  },
+  "dependencies": {
+    "@expo-google-fonts/geist": "0.4.2",
+    "@expo-google-fonts/jetbrains-mono": "0.4.1",
+    "@xterm/addon-unicode11": "0.10.0-beta.301",
+    "@xterm/xterm": "6.1.0-beta.304",
+    "expo": "~58.0.25",
+    "expo-build-properties": "~58.0.12",
+    "expo-camera": "~58.0.14",
+    "expo-dev-client": "~58.0.20",
+    "expo-device": "~58.0.5",
+    "expo-font": "~58.0.12",
+    "expo-local-authentication": "~58.0.3",
+    "expo-notifications": "~58.1.9",
+    "expo-status-bar": "~58.0.5",
+    "expo-system-ui": "~58.0.7",
+    "react": "19.3.0",
+    "react-native": "0.88.1",
+    "react-native-safe-area-context": "~5.11.1",
+    "react-native-svg": "15.16.0",
+    "react-native-webview": "14.0.1",
+    "zustand": "^5.0.15"
+  },
+  "devDependencies": {
+    "@jest/globals": "~30.5.2",
+    "@testing-library/react-native": "^14.1.0",
+    "@types/react": "~19.3.0",
+    "jest": "~30.5.2",
+    "jest-expo": "~58.0.14",
+    "rolldown": "1.2.13",
+    "typescript": "~7.0.2"
+  }
+}

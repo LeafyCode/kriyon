@@ -7,13 +7,16 @@ pub mod commands;
 pub mod completion_cmd;
 pub mod daemon_client;
 pub mod daemon_rt;
+pub mod device_key;
 pub mod entry_cmd;
 pub mod file_cmd;
+pub mod folder_cmd;
 pub mod git_cmd;
 pub mod git_run;
 pub mod handoff_rt;
 pub mod hooks;
 pub mod integration;
+pub mod keyring_vault;
 pub mod links_cmd;
 pub mod memory;
 pub mod menu;
@@ -25,8 +28,20 @@ pub mod policy;
 pub mod proc_win;
 pub mod prompt_cmd;
 pub mod quit;
+pub mod readable_rt;
+pub mod relay_cmd;
+pub mod remote_cmd;
+pub mod remote_device_cmd;
+pub mod remote_endpoint;
+pub mod remote_host_rt;
+pub mod remote_push_rt;
+pub mod remote_starts;
 pub mod sandbox;
+pub mod session_digest_rt;
+pub mod session_list_rt;
 pub mod session_registry;
+pub mod session_start;
+pub mod session_writer;
 pub mod settings_cmd;
 pub mod shell_path;
 pub mod sleep_rt;
@@ -63,12 +78,44 @@ pub struct Session {
     /// held lock.
     pub engine: std::sync::Arc<DaemonClient>,
     pub zdotdir: Option<tempfile::TempDir>,
+    /// Whether this client reattached to a daemon that survived the app: its
+    /// shell already runs `claude`, which must never be launched again.
+    pub reattached: bool,
+    /// Whether `claude` was launched into this client's shell: once per
+    /// shell, however many ways ask (see `commands::launch_claude`).
+    pub launched: std::sync::atomic::AtomicBool,
+    /// Where its output goes, which a window can take over; `None` for an
+    /// adopted client, whose output goes nowhere.
+    pub sink: Option<std::sync::Arc<crate::session_start::SinkSlot>>,
+}
+
+impl Session {
+    /// A session client; `reattached` when its daemon outlived the app.
+    #[must_use]
+    pub fn new(
+        engine: std::sync::Arc<DaemonClient>,
+        zdotdir: Option<tempfile::TempDir>,
+        reattached: bool,
+    ) -> Self {
+        Self {
+            engine,
+            zdotdir,
+            reattached,
+            launched: std::sync::atomic::AtomicBool::new(false),
+            sink: None,
+        }
+    }
 }
 
 /// Shared application state: the live sessions keyed by their internal id.
 #[derive(Default)]
 pub struct AppState {
     pub sessions: Mutex<HashMap<SessionId, Session>>,
+    /// One writer gate per session: every PTY write and resize passes it
+    /// (plan Step C, "one writer per session").
+    pub writers: crate::session_writer::Writers,
+    /// The [Remote device] starts under way: a resend waits for the first.
+    pub remote_starts: crate::remote_starts::RemoteStarts,
     /// Live transcript watches keyed by session id. Held here so each watch is
     /// not dropped immediately (dropping it stops the notify watch and the poll
     /// thread); removing an entry stops watching that session's transcript.
@@ -158,6 +205,10 @@ pub struct AppState {
     pub handoffs: Mutex<HashMap<SessionId, kriyon_core::handoff::HandoffFileWatch>>,
     /// The cached [Limit reading]s behind the account's [Plan limits].
     pub plan_limits: Mutex<crate::plan_limits_rt::LimitsReader>,
+    /// What each session's [Session digest] is built from.
+    pub digests: crate::session_digest_rt::DigestSources,
+    /// The turns behind the [Readable view]s read lately.
+    pub readable_turns: crate::readable_rt::TurnsCache,
 }
 
 /// Managed handle to the [`Store`]. The connection is not `Sync`, so it is
@@ -209,6 +260,9 @@ pub(crate) fn refresh_needs_you_badge<R: tauri::Runtime>(handle: &tauri::AppHand
 /// How often the background ticker runs. Everything slower is expressed as a
 /// multiple of this, in [`SAMPLE_EVERY_N_TICKS`].
 const TICK_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
+/// Remote heartbeats every 15 s (`kriyon_remote::link_policy::HEARTBEAT_EVERY`)
+/// on the 2 s tick: every 14 s, so a beat is never late.
+const REMOTE_HEARTBEAT_EVERY_N_TICKS: u64 = 7;
 
 /// How many ticks between [Session footprint] samples and [Sleeping session]
 /// passes — 6s: fresh enough for a sidebar chip, cheap enough to never matter
@@ -251,6 +305,42 @@ fn background_tick<R: tauri::Runtime>(app: &tauri::AppHandle<R>, tick: u64) {
     }
 
     emit_watch_heartbeats(app);
+
+    // Remote devices hear the app is alive from here, the main loop, not
+    // from the socket alone (spec §5), and hear sessions change.
+    if let Some(serve) = app.try_state::<kriyon_remote_link::host_runtime::Serve>() {
+        serve.sessions_changed();
+        if tick.is_multiple_of(REMOTE_HEARTBEAT_EVERY_N_TICKS) {
+            serve.heartbeat(now_ms());
+        }
+    }
+}
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+}
+
+/// The computer woke (a sleep, Modern Standby): devices hear the host is
+/// alive at once, the endpoint looks for paths again now (the network may
+/// be another), and this computer's own links to other computers retry
+/// now, rather than each waiting out its own timer (a backoff of up to 30 s).
+fn on_wake(app: &tauri::AppHandle) {
+    if let Some(serve) = app.try_state::<kriyon_remote_link::host_runtime::Serve>() {
+        serve.heartbeat(now_ms());
+    }
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        if let Some(endpoint) = app.try_state::<crate::remote_endpoint::RemoteEndpoint>() {
+            endpoint.network_changed().await;
+        }
+        // After the paths are looked for, so the retry uses them.
+        if let Some(devices) = app.try_state::<kriyon_remote_link::device_runtime::DeviceRuntime>()
+        {
+            devices.wake();
+        }
+    });
 }
 
 /// Emit a liveness heartbeat per live watch, so the frontend can detect a watch
@@ -306,7 +396,17 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_positioner::init())
         .manage(AppState::default())
+        .manage(kriyon_remote_link::host_runtime::RemoteRuntime::default())
+        .manage(kriyon_remote_link::device_runtime::DeviceRuntime::default())
+        .manage(remote_push_rt::PushRt::from_build())
+        // Every interface, on a fixed port (the person's choice, set at
+        // restore), so addresses devices stored at pairing still work.
+        .manage(remote_endpoint::RemoteEndpoint::new(
+            std::net::SocketAddr::from(([0, 0, 0, 0], kriyon_remote::routes::DEFAULT_PORT)),
+        ))
         .manage(attachment_cmd::AttachmentRegistry::default())
+        .manage(folder_cmd::ChosenFolders::default())
+        .manage(folder_cmd::MadeWorktrees::default())
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::DragDrop(drag) = event {
                 if window.label() == "main" {
@@ -348,6 +448,42 @@ pub fn run() {
             let store = Store::open(&data_dir.join("kriyon.db"))
                 .map_err(|e| -> Box<dyn std::error::Error> { Box::new(e) })?;
             app.manage(StoreState(Mutex::new(store)));
+            // Paired devices are served from the first `turn_on` on.
+            let serve = kriyon_remote_link::host_runtime::Serve::new(std::sync::Arc::new(
+                crate::remote_host_rt::AppServeHost(app.handle().clone()),
+            ));
+            app.manage(serve.clone());
+            // Every change of typing control the session writers make (the
+            // host typing, a device taking or letting go) reaches every device.
+            let teller = serve.clone();
+            app.state::<AppState>()
+                .writers
+                .on_change(move |id, change| teller.broadcast_control(&id.0, change));
+            app.state::<kriyon_remote_link::host_runtime::RemoteRuntime>()
+                .serve_with(serve);
+            // Our relay, before remote access comes back up: its pass is
+            // set on the endpoint when it binds.
+            app.manage(kriyon_relay_client::runtime::RelayRuntime::new(
+                // The relay's addresses are this build's; without both,
+                // there is no relay at all.
+                kriyon_relay_client::runtime::RelaySetup::desktop(
+                    option_env!("KRIYON_RELAY_API"),
+                    option_env!("KRIYON_RELAY_WEB"),
+                ),
+                crate::device_key::app_vault(
+                    &app.config().identifier,
+                    "relay",
+                    app.path().app_local_data_dir().ok().as_deref(),
+                ),
+            ));
+            app.manage(kriyon_relay_client::keeper::PassKeeper::default());
+            // The chosen port before anything binds the endpoint.
+            crate::remote_cmd::restore_port(app.handle());
+            crate::relay_cmd::install(app.handle());
+            // Remote access comes back up only if the person left it on.
+            crate::remote_cmd::restore(app.handle());
+            // Reconnect to the computers this one paired with as a device.
+            crate::remote_device_cmd::restore(app.handle());
             crate::activity_rt::open(&data_dir);
             crate::attachment_cmd::init(app.handle());
 
@@ -391,10 +527,17 @@ pub fn run() {
             let handle = app.handle().clone();
             std::thread::spawn(move || {
                 let mut tick: u64 = 0;
+                let mut woke = kriyon_core::resume::ResumeWatch::default();
                 loop {
                     std::thread::sleep(TICK_INTERVAL);
                     tick += 1;
+                    if woke.tick(std::time::SystemTime::now()) {
+                        on_wake(&handle);
+                    }
                     background_tick(&handle, tick);
+                    // Phones hear a session newly needs you, when no device
+                    // is connected to see it (spec §10).
+                    crate::remote_push_rt::tick(&handle);
                 }
             });
 
@@ -432,6 +575,35 @@ pub fn run() {
             commands::close_session,
             commands::sleep_idle_sessions,
             commands::report_drained,
+            relay_cmd::relay_view,
+            relay_cmd::relay_sign_in,
+            relay_cmd::relay_cancel_sign_in,
+            relay_cmd::relay_sign_out,
+            relay_cmd::relay_set_enabled,
+            relay_cmd::relay_account,
+            relay_cmd::relay_remove_device,
+            relay_cmd::relay_this_device,
+            relay_cmd::relay_open_subscriptions,
+            remote_cmd::remote_status,
+            remote_cmd::remote_set_enabled,
+            remote_cmd::remote_set_port,
+            remote_cmd::remote_start_pairing,
+            remote_cmd::remote_pairing_qr,
+            remote_cmd::remote_stop_pairing,
+            remote_cmd::remote_enter_code,
+            remote_cmd::remote_devices,
+            remote_cmd::remote_rename_device,
+            remote_cmd::remote_remove_device,
+            remote_cmd::remote_let_device_type,
+            remote_cmd::remote_set_device_role,
+            remote_device_cmd::remote_host_pair,
+            remote_device_cmd::remote_hosts,
+            remote_device_cmd::remote_host_forget,
+            remote_device_cmd::remote_host_set_view,
+            remote_device_cmd::remote_host_take_control,
+            remote_device_cmd::remote_host_start_session,
+            remote_device_cmd::remote_host_input,
+            remote_device_cmd::remote_hosts_wake,
             commands::watch_transcript,
             git_cmd::repo_status,
             git_cmd::create_worktree,
@@ -441,7 +613,6 @@ pub fn run() {
             git_cmd::diff_worktree,
             git_cmd::diff_working_tree,
             git_cmd::merge_worktree,
-            git_cmd::capture_baseline,
             git_cmd::diff_session_changes,
             git_cmd::repo_toplevel,
             git_cmd::read_baseline,
@@ -456,7 +627,9 @@ pub fn run() {
             git_cmd::unwatch_working_tree,
             commands::worktree_path,
             commands::bootstrap_worktree,
-            commands::seed_prompt,
+            commands::launch_claude,
+            session_start::start_session,
+            commands::start_fresh_claude,
             store_cmd::save_layout,
             store_cmd::load_layout,
             store_cmd::upsert_project,
@@ -497,6 +670,7 @@ pub fn run() {
             window_cmd::session_snapshots,
             links_cmd::open_path,
             attachment_cmd::pick_attachments,
+            folder_cmd::pick_folder,
             attachment_cmd::clipboard_attachments,
             attachment_cmd::save_pasted_image,
             attachment_cmd::attachment_preview,

@@ -12,7 +12,7 @@ use kriyon_core::uds::UnixStream;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use kriyon_core::session::{SessionEngine, SessionId, SpawnSpec};
+use kriyon_core::session::{SessionId, SpawnSpec};
 
 use crate::bootstrap_cmd::{bootstrap_worktree as run_bootstrap, BootstrapReport};
 use crate::daemon_client::DaemonClient;
@@ -241,32 +241,36 @@ fn note_hooks_off(
     );
 }
 
+/// The folder a session's shell starts in: `cwd` from the webview (empty means
+/// HOME), refused unless it is a [Checked folder] inside an [Approved root]
+/// (ADR-0058). Returns the spelling as given, not the canonical form: Claude
+/// keys its transcripts by the folder it starts in, so resuming needs the same
+/// spelling. That is safe because the check refuses `.` and `..` parts, so the
+/// given spelling and the checked canonical form name the same directory.
+fn session_cwd(store: &StoreState, cwd: &str, home: &Path) -> Result<String, String> {
+    let cwd = kriyon_core::shellinit::SpawnPlan::new(cwd, home, None).cwd;
+    crate::folder_cmd::validate_cwd(store, Path::new(&cwd))?;
+    Ok(cwd)
+}
+
 /// Create a new pty-backed session in `cwd`, streaming its output to
-/// `on_output`.
+/// `on_output`. A fresh shell starts only in a [Checked folder] inside an
+/// [Approved root] (see [`session_cwd`]).
 ///
 /// The `id` is supplied by the frontend (the store's session UUID) and is used
 /// verbatim as the `SessionId`, so the pty, the transcript watcher, the status
 /// tracker, and the pending-ask cache all key on the same id and
 /// `close_session(id)` tears them all down together.
 ///
-/// Returns [`SessionOpened`]: whether it reattached to a daemon that survived a
-/// previous app run (its shell — and the `claude` already launched into it —
-/// are still live) or spawned a fresh one, and the language of the session's
-/// shell. The frontend uses the first to avoid re-launching `claude` into a
-/// session that already has it running, and the second to write the launch
-/// line.
+/// Returns `true` if it reattached to a daemon that survived a previous app
+/// run, or took over a session a device started, and `false` if it spawned
+/// a fresh daemon.
 ///
 /// # Errors
-/// Returns an error string if writing the temporary `ZDOTDIR` fails, the daemon
-/// cannot be spawned, or the session id is invalid.
-// The reattach fast-path, the fresh-daemon path, and the full callback wiring
-// are one cohesive lifecycle; splitting them across helpers would scatter the
-// session-creation story rather than clarify it.
-#[allow(clippy::too_many_lines)]
+/// As [`open_session`].
 #[tauri::command]
 pub async fn create_session(
     app: tauri::AppHandle,
-    state: tauri::State<'_, AppState>,
     id: String,
     cwd: String,
     // Channel<Vec<u8>> rather than Channel<&[u8]>: the reader callback is
@@ -282,9 +286,50 @@ pub async fn create_session(
     // the daemon crashed), so the UI can surface it instead of leaving a
     // silently wedged pane. Never fired for an app-initiated close/handover.
     on_exit: tauri::ipc::Channel<bool>,
-) -> Result<SessionOpened, String> {
-    // Every byte the session's pty produces passes here, which makes it the one
-    // place that knows whether the terminal has actually stopped painting. The
+) -> Result<bool, String> {
+    let sink = std::sync::Arc::new(crate::session_start::WindowSink {
+        output: on_output,
+        busy: on_busy,
+        exit: on_exit,
+    });
+    open_session(&app, id, cwd, sink).await
+}
+
+/// Open session `id`'s shell in `cwd`, its output going to `sink`: reattach
+/// to its daemon if one survived, else spawn one. A session already open
+/// whose shell is alive (one a device started) only changes sink: a window
+/// takes over its output and is sent the screen.
+///
+/// Returns `true` if the shell was already running (reattached or taken
+/// over), and `false` if it spawned a fresh daemon.
+///
+/// # Errors
+/// Returns an error string if writing the temporary `ZDOTDIR` fails, the daemon
+/// cannot be spawned, the session id is invalid, or `cwd` fails the
+/// folder check.
+// The reattach fast-path, the fresh-daemon path, and the full callback wiring
+// are one cohesive lifecycle; splitting them across helpers would scatter the
+// session-creation story rather than clarify it.
+#[allow(clippy::too_many_lines)]
+pub(crate) async fn open_session(
+    app: &tauri::AppHandle,
+    id: String,
+    cwd: String,
+    sink: std::sync::Arc<dyn crate::session_start::SessionSink>,
+) -> Result<bool, String> {
+    use tauri::Manager as _;
+    let app = app.clone();
+    let state = app.state::<AppState>();
+    let viewer = sink.viewer();
+    let slot = std::sync::Arc::new(crate::session_start::SinkSlot::new(std::sync::Arc::clone(
+        &sink,
+    )));
+    let busy_slot = std::sync::Arc::clone(&slot);
+    let output_slot = std::sync::Arc::clone(&slot);
+    let exit_slot = std::sync::Arc::clone(&slot);
+    // Every byte the session's pty produces passes here as soon as it is read —
+    // even while the webview is too far behind to take it — which makes it the one
+    // place that knows whether the session has actually stopped printing. The
     // notification path reads that to confirm a turn really settled before it
     // pings — a hook alone cannot tell "done" from "mid-sentence", because hook
     // events and pty bytes arrive on separate channels with no ordering between
@@ -294,24 +339,32 @@ pub async fn create_session(
     // `claude` exits at startup when the org forbids the companion folder; the
     // message is the only sign, so the output is watched for it.
     let refusal = parking_lot::Mutex::new(kriyon_core::integration::RefusalWatch::default());
-    let callback = move |bytes: Vec<u8>| {
-        {
-            use tauri::Manager as _;
-            let state = output_app.state::<AppState>();
-            let mut runtimes = state.runtimes.lock();
-            if let Some(runtime) = runtimes.get_mut(&output_id) {
-                runtime.note_pty_output(Instant::now());
+    // Every frame from the daemon, in order, before the webview's pacing. A
+    // repaint (`Screen`) is not output the session made, so neither the
+    // "still painting" clock nor the refusal watch counts it.
+    let event_callback = move |event: kriyon_core::daemon::DaemonEvent<'_>| {
+        crate::remote_host_rt::on_event(&output_app, &output_id, event);
+        match event {
+            kriyon_core::daemon::DaemonEvent::Output(bytes) => {
+                {
+                    use tauri::Manager as _;
+                    let state = output_app.state::<AppState>();
+                    let mut runtimes = state.runtimes.lock();
+                    if let Some(runtime) = runtimes.get_mut(&output_id) {
+                        runtime.note_pty_output(Instant::now());
+                    }
+                }
+                if refusal.lock().feed(bytes) {
+                    let app = output_app.clone();
+                    std::thread::spawn(move || crate::integration::note_sideload_refused(&app));
+                }
             }
+            kriyon_core::daemon::DaemonEvent::Busy(busy) => busy_slot.busy(busy),
+            _ => {}
         }
-        if refusal.lock().feed(&bytes) {
-            let app = output_app.clone();
-            std::thread::spawn(move || crate::integration::note_sideload_refused(&app));
-        }
-        let _ = on_output.send(bytes);
     };
-    let busy_callback = move |busy: bool| {
-        let _ = on_busy.send(busy);
-    };
+    // Output and repaints on their way to the webview, paced by `report_drained`.
+    let output_callback = move |bytes: Vec<u8>| output_slot.output(bytes);
     // The session died underneath the app. Record it on the [Session runtime]
     // *first*: nothing else can retire the tracker's last word (a killed
     // `claude` fires no closing hook), so until this lands the menu bar counts
@@ -326,14 +379,17 @@ pub async fn create_session(
             let state = exit_app.state::<AppState>();
             let mut runtimes = state.runtimes.lock();
             if let Some(runtime) = runtimes.get_mut(&exit_id) {
-                runtime.note_exited();
+                runtime.note_exited(Instant::now());
             }
         }
         crate::refresh_needs_you_badge(&exit_app);
+        // Devices watching it hear its stream end; a revived session is served
+        // afresh, and they open it again.
+        crate::remote_host_rt::detach(&exit_app, &exit_id);
         if let Ok(home) = crate::commands::resolve_home(&exit_app) {
             crate::activity_rt::note_session_exited(&exit_app, &home, &exit_id.0);
         }
-        let _ = on_exit.send(true);
+        exit_slot.exited();
     };
 
     // Resolve the per-session daemon socket under ~/.claude/kriyon/run. The id
@@ -356,8 +412,16 @@ pub async fn create_session(
     // and the UI must show "unavailable" rather than a confident idle
     // (ADR-0029). Only a scope name crosses back, never file contents. Read
     // from the folder the shell will really start in (an empty `cwd` means
-    // HOME), and only once the id is known to be valid.
-    let shell_cwd = kriyon_core::shellinit::SpawnPlan::new(&cwd, &home, None).cwd;
+    // HOME), only once the id is known to be valid, and never from a folder
+    // that fails the check (ADR-0058).
+    //
+    // A failed check is held until a fresh shell would start: a daemon still
+    // live from the last run already has its shell, so it reattaches even
+    // when its folder has since gone or lost its project.
+    let checked_cwd = {
+        use tauri::Manager as _;
+        session_cwd(&app.state::<StoreState>(), &cwd, &home)
+    };
     let kriyon_off = {
         let integration = state.integration.lock();
         kriyon_core::integration::kriyon_hooks_off(
@@ -370,7 +434,12 @@ pub async fn create_session(
         &app,
         &state,
         &id,
-        kriyon_off.or_else(|| crate::hooks::hooks_off_for(&home, Path::new(&shell_cwd))),
+        kriyon_off.or_else(|| {
+            checked_cwd
+                .as_deref()
+                .ok()
+                .and_then(|folder| crate::hooks::hooks_off_for(&home, Path::new(folder)))
+        }),
     );
 
     // Crash-survival fast path: if a daemon is already live for this id, reattach
@@ -387,6 +456,29 @@ pub async fn create_session(
         .closed_mid_create
         .lock()
         .remove(&SessionId(id.clone()));
+    // Already open with a live shell (a session a device started, or a
+    // window that reloaded): this window takes over its output, from an empty
+    // gate (anything the old sink had in flight will never be reported), and
+    // is sent the screen. It keeps its daemon client, so the devices watching
+    // it see no gap.
+    let taken = {
+        let sessions = state.sessions.lock();
+        sessions.get(&SessionId(id.clone())).and_then(|session| {
+            let live = session.sink.as_ref().filter(|live| !live.is_exited())?;
+            live.replace(std::sync::Arc::clone(&sink));
+            Some(std::sync::Arc::clone(&session.engine))
+        })
+    };
+    if let Some(engine) = taken {
+        engine.set_viewer(viewer);
+        if viewer {
+            let _ = engine.request_repaint();
+        }
+        return Ok(true);
+    }
+    // Served to remote devices from its daemon's first frame on; no longer
+    // if this start fails.
+    let served = crate::remote_host_rt::attach(&app, &SessionId(id.clone()));
     // Open the window a close can mark. Cleared however this returns.
     let _in_flight = CreateInFlight::begin(&state, &SessionId(id.clone()));
     let live = if let Ok(stream) = UnixStream::connect(&socket) {
@@ -405,13 +497,6 @@ pub async fn create_session(
         .await
         .map_err(|e| e.to_string())??
     };
-    // The pure launch policy (cwd, shell, zsh-ness) lives in
-    // kriyon-core::shellinit, unit-tested without a Tauri runtime; the IO
-    // (private ZDOTDIR tempdir, daemon spawn, connect) stays here. A surviving
-    // daemon was started by the same policy, so its shell is this one too.
-    let plan =
-        kriyon_core::shellinit::SpawnPlan::new(&cwd, &home, std::env::var("SHELL").ok().as_deref());
-    let shell = kriyon_core::shellinit::ShellLanguage::of(&plan.shell);
     if let Some(stream) = live {
         // A daemon that survived an app restart serves its bridge, if it was
         // started with one.
@@ -423,20 +508,42 @@ pub async fn create_session(
         let engine = DaemonClient::from_stream(
             stream,
             SessionId(id.clone()),
-            callback,
-            busy_callback,
+            event_callback,
+            output_callback,
             exit_callback,
         )
         .map_err(|e| e.to_string())?;
         engine
             .attach(INITIAL_COLS, INITIAL_ROWS)
             .map_err(|e| e.to_string())?;
-        register_session(&app, &state, SessionId(id), engine, None)?;
-        return Ok(SessionOpened {
-            reattached: true,
-            shell,
-        });
+        // The writer keeps the host's size, to give it back when a device
+        // that resized the session lets go.
+        state
+            .writers
+            .note_host_size(&SessionId(id.clone()), (INITIAL_COLS, INITIAL_ROWS));
+        // A device that holds its own size keeps it across the reattach.
+        state.writers.sync_screen(
+            &SessionId(id.clone()),
+            &engine,
+            (INITIAL_COLS, INITIAL_ROWS),
+        );
+        if !viewer {
+            engine.set_viewer(false);
+        }
+        register_session(&app, &state, SessionId(id), engine, None, true, slot)?;
+        served.keep();
+        return Ok(true);
     }
+
+    // Fresh session: the pure launch policy (cwd, shell, zsh-ness) lives in
+    // kriyon-core::shellinit, unit-tested without a Tauri runtime; the IO
+    // (private ZDOTDIR tempdir, daemon spawn, connect) stays here.
+    let shell_cwd = checked_cwd?;
+    let plan = kriyon_core::shellinit::SpawnPlan::new(
+        &shell_cwd,
+        &home,
+        std::env::var("SHELL").ok().as_deref(),
+    );
 
     // zsh OSC 133 injection: point ZDOTDIR at a private temp dir whose .zshrc
     // sources the user's real config and adds shell-integration hooks. Because
@@ -515,31 +622,31 @@ pub async fn create_session(
     let engine = DaemonClient::connect(
         &socket,
         SessionId(id.clone()),
-        callback,
-        busy_callback,
+        event_callback,
+        output_callback,
         exit_callback,
     )
     .map_err(|e| e.to_string())?;
     engine
         .attach(INITIAL_COLS, INITIAL_ROWS)
         .map_err(|e| e.to_string())?;
-    register_session(&app, &state, SessionId(id), engine, zdotdir)?;
+    // The writer keeps the host's size (see the reattach path).
+    state
+        .writers
+        .note_host_size(&SessionId(id.clone()), (INITIAL_COLS, INITIAL_ROWS));
+    // A device that holds its own size keeps it across the reattach.
+    state.writers.sync_screen(
+        &SessionId(id.clone()),
+        &engine,
+        (INITIAL_COLS, INITIAL_ROWS),
+    );
+    if !viewer {
+        engine.set_viewer(false);
+    }
+    register_session(&app, &state, SessionId(id), engine, zdotdir, false, slot)?;
+    served.keep();
 
-    Ok(SessionOpened {
-        reattached: false,
-        shell,
-    })
-}
-
-/// What [`create_session`] tells the frontend about the session it opened.
-#[derive(Debug, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SessionOpened {
-    /// It reattached to a daemon that survived a previous app run, so `claude`
-    /// is already running in its shell.
-    pub reattached: bool,
-    /// The language the session's shell reads its launch line in.
-    pub shell: kriyon_core::shellinit::ShellLanguage,
+    Ok(false)
 }
 
 /// Register a freshly connected client as `id`'s session — unless the session
@@ -553,29 +660,34 @@ fn register_session(
     id: SessionId,
     engine: DaemonClient,
     zdotdir: Option<tempfile::TempDir>,
+    reattached: bool,
+    sink: std::sync::Arc<crate::session_start::SinkSlot>,
 ) -> Result<(), String> {
     if state.closed_mid_create.lock().remove(&id) {
         crate::daemon_rt::stop_held(crate::daemon_rt::owns_run_dir(app), &engine);
         return Err("session was closed while it was starting".to_string());
     }
     let engine = std::sync::Arc::new(engine);
-    state
-        .sessions
-        .lock()
-        .insert(id, Session { engine, zdotdir });
+    crate::remote_host_rt::note_engine(app, &id, &engine);
+    state.sessions.lock().insert(
+        id,
+        Session {
+            sink: Some(sink),
+            ..Session::new(engine, zdotdir, reattached)
+        },
+    );
     Ok(())
 }
 
-/// Write a [Handoff prompt] to the session's path-contained prompt file and
-/// return its absolute path, so the launcher can seed it via
-/// `claude "$(cat <path>)"`. The id is validated before it touches the path.
-///
-/// # Errors
-/// Returns an error string if HOME cannot be resolved, the id is invalid, or the
-/// write fails.
-#[allow(clippy::needless_pass_by_value)]
-#[tauri::command]
-pub fn seed_prompt(app: tauri::AppHandle, id: String, text: String) -> Result<String, String> {
+/// Write a first prompt (a [Handoff prompt], a follow-up's task) to session
+/// `id`'s path-contained prompt file and return its absolute path, for the
+/// launch command to read (see `kriyon_core::claude_launch`). The id is
+/// validated before it touches the path.
+fn write_seed_prompt<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    id: &str,
+    text: &str,
+) -> Result<String, String> {
     let home = {
         use tauri::Manager as _;
         app.path()
@@ -584,11 +696,176 @@ pub fn seed_prompt(app: tauri::AppHandle, id: String, text: String) -> Result<St
             .or_else(|| std::env::var("HOME").ok().map(PathBuf::from))
             .ok_or_else(|| "cannot resolve HOME".to_string())?
     };
-    let run = run_dir(&app, &home)?;
+    let run = run_dir(app, &home)?;
     std::fs::create_dir_all(&run).map_err(|e| e.to_string())?;
-    let path = seed_prompt_path(&run, &id).ok_or_else(|| "invalid session id".to_string())?;
+    let path = seed_prompt_path(&run, id).ok_or_else(|| "invalid session id".to_string())?;
     std::fs::write(&path, text).map_err(|e| e.to_string())?;
     Ok(path.to_string_lossy().into_owned())
+}
+
+/// A [Nested session]'s report address, from the webview.
+#[derive(Clone, Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReportArg {
+    pub to: String,
+    pub from: String,
+    #[serde(default)]
+    pub split_off: bool,
+}
+
+/// What launching `claude` into a session came to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum LaunchOutcome {
+    /// Launched; `resuming` when it resumes a conversation (which can fail).
+    Launched { resuming: bool },
+    /// Launched fresh, but the seed prompt's file couldn't be written: the
+    /// first prompt was lost.
+    SeedDropped,
+    /// The command never reached the shell; nothing started.
+    WriteFailed,
+    /// The shell outlived the app and already runs `claude`.
+    Reattached,
+    /// No such session, or `claude` was already launched into its shell.
+    Skipped,
+}
+
+/// Launch `claude` into session `id`'s shell, once per shell: resuming its
+/// conversation, or fresh with a seed prompt and a [Nested session]'s report
+/// address. What is typed is decided in `kriyon_core::claude_launch`; ids
+/// that aren't bare tokens are never typed.
+pub(crate) fn launch_claude_in<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    state: &AppState,
+    id: &SessionId,
+    claude_session_id: Option<String>,
+    seed: Option<&str>,
+    report: Option<ReportArg>,
+) -> LaunchOutcome {
+    use kriyon_core::claude_launch::{claude_command, resumes, LaunchPlan, Report};
+    use std::sync::atomic::Ordering;
+    let (engine, reattached) = {
+        let sessions = state.sessions.lock();
+        let Some(session) = sessions.get(id) else {
+            return LaunchOutcome::Skipped;
+        };
+        // Claimed before anything is written, so a second ask is a no-op.
+        if session.launched.swap(true, Ordering::AcqRel) {
+            return LaunchOutcome::Skipped;
+        }
+        (std::sync::Arc::clone(&session.engine), session.reattached)
+    };
+    if reattached {
+        return LaunchOutcome::Reattached;
+    }
+    let mut plan = LaunchPlan {
+        claude_session_id,
+        seed_path: None,
+        report: report.map(|report| Report {
+            to: report.to,
+            from: report.from,
+            split_off: report.split_off,
+        }),
+        shell: session_shell(),
+    };
+    let resuming = resumes(&plan);
+    let mut seed_dropped = false;
+    if let Some(seed) = seed.filter(|seed| !resuming && !seed.trim().is_empty()) {
+        match write_seed_prompt(app, &id.0, seed) {
+            // A path the command couldn't quote safely (a home folder with
+            // `$` in it) is never typed: the prompt is dropped, and said so.
+            Ok(path) if kriyon_core::claude_launch::safe_path(&path, plan.shell) => {
+                plan.seed_path = Some(path);
+            }
+            Ok(path) => {
+                let _ = std::fs::remove_file(path);
+                seed_dropped = true;
+            }
+            Err(_) => seed_dropped = true,
+        }
+    }
+    // Kriyon types it, not the person: control stays where it is, so a
+    // device that started the session may type at once.
+    if state
+        .writers
+        .app_write(id, engine.as_ref(), claude_command(&plan).as_bytes())
+        .is_err()
+    {
+        // Nothing started: the prompt file nothing will read goes, and the
+        // shell may be launched into on the next try.
+        if let Some(path) = &plan.seed_path {
+            let _ = std::fs::remove_file(path);
+        }
+        if let Some(session) = state.sessions.lock().get(id) {
+            session.launched.store(false, Ordering::Release);
+        }
+        return LaunchOutcome::WriteFailed;
+    }
+    if seed_dropped {
+        LaunchOutcome::SeedDropped
+    } else {
+        LaunchOutcome::Launched { resuming }
+    }
+}
+
+/// [`launch_claude_in`], for the webview: off the main thread, since it
+/// writes a file and the shell's socket.
+///
+/// # Errors
+/// Only if the blocking pool fails; what happened is the [`LaunchOutcome`].
+#[tauri::command]
+pub async fn launch_claude(
+    app: tauri::AppHandle,
+    id: String,
+    claude_session_id: Option<String>,
+    seed: Option<String>,
+    report: Option<ReportArg>,
+) -> Result<LaunchOutcome, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        use tauri::Manager as _;
+        launch_claude_in(
+            &app,
+            &app.state::<AppState>(),
+            &SessionId(id),
+            claude_session_id,
+            seed.as_deref(),
+            report,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+/// Start a fresh `claude` in session `id`, whose resume failed (its
+/// conversation expired): the same shell, a plain launch.
+///
+/// # Errors
+/// An unknown session, or a write that failed.
+#[tauri::command]
+pub async fn start_fresh_claude(app: tauri::AppHandle, id: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        use tauri::Manager as _;
+        let state = app.state::<AppState>();
+        let id = SessionId(id);
+        let engine = engine_of(&state, &id)?;
+        let command =
+            kriyon_core::claude_launch::claude_command(&kriyon_core::claude_launch::LaunchPlan {
+                shell: session_shell(),
+                ..kriyon_core::claude_launch::LaunchPlan::default()
+            });
+        state
+            .writers
+            .host_write(&id, engine.as_ref(), command.as_bytes())
+            .map(|_took| ())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// The language of a session's shell, for its launch line (PowerShell on
+/// Windows, or wherever `$SHELL` is pwsh).
+fn session_shell() -> kriyon_core::shellinit::ShellLanguage {
+    kriyon_core::shellinit::session_shell(std::env::var("SHELL").ok().as_deref())
 }
 
 /// Write the raw request body to the session's stdin.
@@ -616,11 +893,26 @@ pub fn write_stdin(
         .get("x-session-id")
         .and_then(|value| value.to_str().ok())
         .ok_or_else(|| "missing x-session-id header".to_string())?;
-    let sessions = state.sessions.lock();
-    let session = sessions
-        .get(&SessionId(id.to_owned()))
-        .ok_or_else(|| "session not found".to_string())?;
-    session.engine.write_stdin(data).map_err(|e| e.to_string())
+    let id = SessionId(id.to_owned());
+    // Cloned out, so the write happens with the sessions lock released.
+    let engine = engine_of(&state, &id)?;
+    state
+        .writers
+        .host_write(&id, engine.as_ref(), data)
+        .map(|_took| ())
+}
+
+/// The engine of session `id`, cloned out from under the sessions lock.
+pub(crate) fn engine_of(
+    state: &AppState,
+    id: &SessionId,
+) -> Result<std::sync::Arc<crate::daemon_client::DaemonClient>, String> {
+    state
+        .sessions
+        .lock()
+        .get(id)
+        .map(|session| std::sync::Arc::clone(&session.engine))
+        .ok_or_else(|| "session not found".to_string())
 }
 
 /// The user stopped the session's turn with Esc (the frontend saw the proof:
@@ -700,7 +992,9 @@ pub fn request_repaint(state: tauri::State<'_, AppState>, id: String) -> Result<
 /// Resize the session's pty to `cols` x `rows`.
 ///
 /// # Errors
-/// Returns an error string if the session is unknown or the resize fails.
+/// Returns an error string if the size is out of range
+/// ([`kriyon_core::session::check_screen_size`]), the session is unknown or
+/// the resize fails.
 // Signature is dictated by Tauri's command macro (State + by-value args).
 #[allow(clippy::needless_pass_by_value)]
 #[tauri::command]
@@ -710,11 +1004,14 @@ pub fn resize_pty(
     cols: u16,
     rows: u16,
 ) -> Result<(), String> {
-    let sessions = state.sessions.lock();
-    let session = sessions
-        .get(&SessionId(id))
-        .ok_or_else(|| "session not found".to_string())?;
-    session.engine.resize(cols, rows).map_err(|e| e.to_string())
+    // Checked here as well as in the daemon, so a bad size from the webview
+    // is refused before a frame is sent, and the command returns the error.
+    kriyon_core::session::check_screen_size(cols, rows).map_err(|e| e.to_string())?;
+    let id = SessionId(id);
+    let engine = engine_of(&state, &id)?;
+    state
+        .writers
+        .host_resize(&id, engine.as_ref(), (cols, rows))
 }
 
 /// Close the session, removing it from state and [Tree stop]ping its daemon —
@@ -740,6 +1037,7 @@ pub async fn close_session(
 
     let session_id = SessionId(id);
     let session = session_registry::forget(&state, &session_id);
+    crate::remote_host_rt::detach(&app, &session_id);
     // Clear the persisted sleep mark too, so a closed session is never restored
     // asleep on the next launch. Best-effort: the launch-time reconcile also
     // drops a mark whose daemon is gone, so a missed write self-heals.
@@ -813,28 +1111,35 @@ pub async fn sleep_idle_sessions(app: tauri::AppHandle) -> Result<usize, String>
 /// Acknowledge that `bytes` of a session's output have drained from the
 /// frontend's terminal sink.
 ///
-/// The pty reader pauses when too much output is sent-but-not-drained (so a
-/// fast-printing child cannot outrun the UI); the frontend calls this as it
-/// flushes bytes into xterm, resuming the reader once enough has drained.
-/// Looking the session up by `id` IS the validation — an unknown id returns an
-/// error and is never trusted further.
+/// The frontend calls this as it flushes bytes into xterm. The session's
+/// [Output gate] then lets the reader go on, releases output it held while the
+/// webview was behind, or asks the daemon for a repaint (ADR-0059). Looking the
+/// session up by `id` IS the validation — an unknown id returns an error and is
+/// never trusted further.
+///
+/// Async, and the work goes to the blocking pool: a sync command runs on the
+/// main thread, and this one can wait on the reader's lock, hand the webview a
+/// slice of held output, or write a repaint request to the daemon.
 ///
 /// # Errors
 /// Returns an error string if the session is unknown.
 // Signature is dictated by Tauri's command macro (State + by-value args).
 #[allow(clippy::needless_pass_by_value)]
 #[tauri::command]
-pub fn report_drained(
+pub async fn report_drained(
     state: tauri::State<'_, AppState>,
     id: String,
     bytes: usize,
 ) -> Result<(), String> {
-    let sessions = state.sessions.lock();
-    let session = sessions
+    let engine = state
+        .sessions
+        .lock()
         .get(&SessionId(id))
+        .map(|session| std::sync::Arc::clone(&session.engine))
         .ok_or_else(|| "session not found".to_string())?;
-    session.engine.report_drained(bytes);
-    Ok(())
+    tauri::async_runtime::spawn_blocking(move || engine.report_drained(bytes))
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// Begin streaming a session's live status and Claude Code transcript.
@@ -866,7 +1171,6 @@ pub fn report_drained(
 #[tauri::command(async)]
 pub fn watch_transcript(
     app: tauri::AppHandle,
-    state: tauri::State<'_, AppState>,
     session_id: String,
     on_event: tauri::ipc::Channel<kriyon_core::transcript::StudioEvent>,
 ) -> Result<(), String> {
@@ -887,14 +1191,33 @@ pub fn watch_transcript(
         return Err("invalid session id".to_string());
     }
 
-    let events_dir = crate::hooks::events_dir(&home);
-    let usage_dir = crate::hooks::usage_dir(&home);
-    let tasks_dir = crate::hooks::tasks_dir(&home);
+    start_watch(&app, &home, SessionId(session_id), move |event| {
+        let _ = on_event.send(event);
+    })
+}
 
-    let id = SessionId(session_id);
+/// Watch session `id` (its hook events, transcript, usage and activity),
+/// whether a window shows it or not: status, the Needs-you list and its
+/// push wakes, the saved [Claude session id] and the readable view all come
+/// from this. `on_transcript` takes the transcript's events (a window's
+/// channel, or nothing). A watch started again replaces the one before.
+///
+/// # Errors
+/// When the watch can't be set up.
+pub(crate) fn start_watch<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    home: &std::path::Path,
+    id: SessionId,
+    on_transcript: impl Fn(kriyon_core::transcript::StudioEvent) + Send + 'static,
+) -> Result<(), String> {
+    use tauri::Manager as _;
+    let events_dir = crate::hooks::events_dir(home);
+    let usage_dir = crate::hooks::usage_dir(home);
+    let tasks_dir = crate::hooks::tasks_dir(home);
 
     // Register a runtime so the session shows an Idle dot immediately, before
     // the first hook fires.
+    let state = app.state::<AppState>();
     session_registry::ensure_runtime(&state, &id);
 
     // One sink for every WatchSignal the watch produces: the named
@@ -904,14 +1227,7 @@ pub fn watch_transcript(
     let cb_id = id.clone();
     let cb_app = app.clone();
     let on_signal = move |signal: crate::watcher::WatchSignal| {
-        crate::watch_route::route(
-            &cb_app,
-            &cb_id,
-            &|event| {
-                let _ = on_event.send(event);
-            },
-            signal,
-        );
+        crate::watch_route::route(&cb_app, &cb_id, &on_transcript, signal);
     };
 
     let dirs = crate::watcher::WatchDirs {
@@ -948,8 +1264,8 @@ pub fn watch_transcript(
     // yields to it. On its own thread: the read + replay must not stack up on
     // the command path when every session re-subscribes at once on launch.
     let seed_app = app.clone();
-    let events_path = crate::hooks::events_file(&home, &id.0);
-    let usage_path = crate::hooks::usage_file(&home, &id.0);
+    let events_path = crate::hooks::events_file(home, &id.0);
+    let usage_path = crate::hooks::usage_file(home, &id.0);
     std::thread::spawn(move || {
         crate::status_rt::seed_from_history(&seed_app, &id, &events_path, &usage_path);
         // Same per-attach hook: restore a [Sleeping session] Kriyon stopped
@@ -978,18 +1294,31 @@ pub fn worktree_path(repo_path: String, branch: String) -> Result<String, String
 /// project's optional setup command. Best-effort — a non-`ok` report is returned
 /// (not an `Err`) so the caller can offer "Open anyway". Runs on a blocking
 /// thread since installs (e.g. `pnpm install`) can take minutes and must not
-/// occupy a Tokio worker.
+/// occupy a Tokio worker. Only for a linked worktree of a saved project's
+/// folder (ADR-0058), checked on that thread too since it runs git; a refused
+/// pair is reported as a failed step that ran nothing.
 ///
 /// # Errors
 /// Returns `Err` only if the blocking task itself fails to join (e.g. panics);
 /// the bootstrap steps are otherwise always reported via `BootstrapReport`.
 #[tauri::command]
 pub async fn bootstrap_worktree(
+    app: tauri::AppHandle,
     repo_path: String,
     worktree_path: String,
     setup_cmd: Option<String>,
 ) -> Result<BootstrapReport, String> {
     tauri::async_runtime::spawn_blocking(move || {
+        use tauri::Manager as _;
+        // A refusal is a failed setup, not an `Err`: the worktree exists by
+        // now, and an `Err` reads as "nothing was made" to the caller.
+        if let Err(refusal) = crate::folder_cmd::check_worktree_setup(
+            &app.state::<StoreState>(),
+            &repo_path,
+            &worktree_path,
+        ) {
+            return BootstrapReport::refused(&refusal);
+        }
         run_bootstrap(
             &repo_path,
             &worktree_path,
@@ -1001,7 +1330,7 @@ pub async fn bootstrap_worktree(
     .map_err(|e| e.to_string())
 }
 
-/// Resolve HOME via Tauri, mirroring `seed_prompt`.
+/// Resolve HOME via Tauri, mirroring `write_seed_prompt`.
 pub(crate) fn resolve_home(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     use tauri::Manager as _;
     app.path()
@@ -1125,6 +1454,162 @@ pub fn home_dir(app: tauri::AppHandle) -> Result<String, String> {
 mod tests {
     use super::*;
 
+    mod launch {
+        use kriyon_core::uds::UnixStream;
+        use std::io::Read as _;
+        use std::time::{Duration, Instant};
+
+        use kriyon_core::wire::{Frame, FrameDecoder};
+        use tauri::Manager as _;
+
+        use super::super::{launch_claude_in, LaunchOutcome};
+        use crate::{AppState, Session, SessionId};
+
+        /// A mock app with session "s" registered over a socket pair; the
+        /// daemon's end, to read what is typed.
+        fn app_with_session(
+            reattached: bool,
+        ) -> (tauri::App<tauri::test::MockRuntime>, UnixStream) {
+            let app = tauri::test::mock_app();
+            app.manage(AppState::default());
+            let (daemon, client) = UnixStream::pair().expect("pair");
+            let engine = crate::daemon_client::DaemonClient::adopt(client, SessionId("s".into()))
+                .expect("client");
+            app.state::<AppState>().sessions.lock().insert(
+                SessionId("s".into()),
+                Session::new(std::sync::Arc::new(engine), None, reattached),
+            );
+            (app, daemon)
+        }
+
+        /// What the daemon was asked to type, within a second.
+        fn typed(daemon: &mut UnixStream) -> Vec<u8> {
+            daemon
+                .set_read_timeout(Some(Duration::from_millis(100)))
+                .expect("timeout");
+            let mut decoder = FrameDecoder::new();
+            let mut out = Vec::new();
+            let deadline = Instant::now() + Duration::from_secs(1);
+            let mut buf = [0u8; 4096];
+            while Instant::now() < deadline {
+                match daemon.read(&mut buf) {
+                    Ok(n) => decoder.push(&buf[..n]),
+                    // Quiet after something came: that was all of it.
+                    Err(_) if !out.is_empty() => break,
+                    Err(_) => {}
+                }
+                while let Ok(Some(frame)) = decoder.next_frame() {
+                    if let Frame::Stdin(bytes) = frame {
+                        out.extend(bytes);
+                    }
+                }
+            }
+            out
+        }
+
+        fn launch(
+            app: &tauri::App<tauri::test::MockRuntime>,
+            claude_id: Option<&str>,
+        ) -> LaunchOutcome {
+            launch_claude_in(
+                app.handle(),
+                &app.state::<AppState>(),
+                &SessionId("s".into()),
+                claude_id.map(str::to_string),
+                None,
+                None,
+            )
+        }
+
+        #[test]
+        fn claude_is_launched_into_a_shell_once() {
+            let (app, mut daemon) = app_with_session(false);
+            assert_eq!(
+                launch(&app, None),
+                LaunchOutcome::Launched { resuming: false }
+            );
+            assert_eq!(launch(&app, None), LaunchOutcome::Skipped);
+            assert_eq!(typed(&mut daemon), b"claude\r");
+        }
+
+        /// Kriyon typing `claude` into a session isn't the person typing:
+        /// a device that just started it may take control at once, and
+        /// isn't shown "Let it type".
+        #[test]
+        fn launching_claude_leaves_a_device_free_to_take_control() {
+            use kriyon_remote::message::Role;
+            let (app, _daemon) = app_with_session(false);
+            let state = app.state::<AppState>();
+            state.writers.set_run(&SessionId("s".into()), 1);
+            assert_eq!(
+                launch(&app, None),
+                LaunchOutcome::Launched { resuming: false }
+            );
+            assert!(matches!(
+                state.writers.take(
+                    &SessionId("s".into()),
+                    [7; 32],
+                    Some(Role::Controller),
+                    Instant::now()
+                ),
+                Some(Ok(_))
+            ));
+        }
+
+        #[test]
+        fn a_known_conversation_is_resumed() {
+            let (app, mut daemon) = app_with_session(false);
+            assert_eq!(
+                launch(&app, Some("claude-abc")),
+                LaunchOutcome::Launched { resuming: true }
+            );
+            assert_eq!(typed(&mut daemon), b"claude --resume claude-abc\r");
+        }
+
+        #[test]
+        fn a_shell_that_outlived_the_app_is_never_launched_into() {
+            let (app, mut daemon) = app_with_session(true);
+            assert_eq!(launch(&app, None), LaunchOutcome::Reattached);
+            assert_eq!(launch(&app, None), LaunchOutcome::Skipped);
+            assert_eq!(typed(&mut daemon), b"");
+        }
+
+        // A write to a socket whose other end is gone fails at once on Unix;
+        // Windows' AF_UNIX can take it into its buffer first.
+        #[cfg(unix)]
+        #[test]
+        fn a_launch_that_never_reached_the_shell_can_be_tried_again() {
+            let (app, daemon) = app_with_session(false);
+            drop(daemon);
+            assert_eq!(launch(&app, None), LaunchOutcome::WriteFailed);
+            assert_eq!(
+                launch(&app, None),
+                LaunchOutcome::WriteFailed,
+                "tried again, not skipped as launched"
+            );
+        }
+
+        #[test]
+        fn a_report_address_from_the_webview_reads_with_its_split_off() {
+            let report: super::super::ReportArg = serde_json::from_value(serde_json::json!({
+                "to": "lead", "from": "child", "splitOff": true
+            }))
+            .expect("reads");
+            assert!(report.split_off);
+            let plain: super::super::ReportArg =
+                serde_json::from_value(serde_json::json!({ "to": "lead", "from": "child" }))
+                    .expect("reads");
+            assert!(!plain.split_off);
+        }
+
+        #[test]
+        fn an_unknown_session_launches_nothing() {
+            let app = tauri::test::mock_app();
+            app.manage(AppState::default());
+            assert_eq!(launch(&app, None), LaunchOutcome::Skipped);
+        }
+    }
+
     #[test]
     fn the_daemon_runs_from_its_own_copy_and_old_copies_go() {
         let app = tempfile::tempdir().expect("app dir");
@@ -1162,5 +1647,63 @@ mod tests {
         // A traversal id is rejected (same guard as the session socket).
         assert!(seed_prompt_path(run.path(), "../evil").is_none());
         assert!(seed_prompt_path(run.path(), "a/b").is_none());
+    }
+
+    fn store_with_project(path: &Path) -> StoreState {
+        let store = crate::store::Store::open_in_memory().unwrap();
+        store
+            .upsert_project(&crate::store::ProjectRow {
+                id: "p1".into(),
+                name: "proj".into(),
+                path: path.to_string_lossy().into_owned(),
+                color: None,
+                setup_command: None,
+                pinned_at: None,
+                folder_id: None,
+            })
+            .unwrap();
+        StoreState(parking_lot::Mutex::new(store))
+    }
+
+    #[test]
+    fn a_session_starts_in_a_folder_inside_a_project_as_given() {
+        let project = tempfile::tempdir().unwrap();
+        std::fs::create_dir(project.path().join("sub")).unwrap();
+        let store = store_with_project(project.path());
+        let given = project.path().join("sub").to_string_lossy().into_owned();
+        // The shell starts in the spelling the session was saved with: Claude
+        // keys its transcripts by that folder, so resuming depends on it.
+        assert_eq!(
+            session_cwd(&store, &given, Path::new("/nowhere")).unwrap(),
+            given
+        );
+    }
+
+    #[test]
+    fn an_empty_cwd_means_home_and_home_must_be_approved_too() {
+        let home = tempfile::tempdir().unwrap();
+        let home_str = home.path().to_string_lossy().into_owned();
+        assert_eq!(
+            session_cwd(&store_with_project(home.path()), "", home.path()).unwrap(),
+            home_str
+        );
+        let other = tempfile::tempdir().unwrap();
+        assert_eq!(
+            session_cwd(&store_with_project(other.path()), "", home.path()).unwrap_err(),
+            "cwd is not a known session or project root"
+        );
+    }
+
+    #[test]
+    fn a_session_in_an_unapproved_folder_is_refused() {
+        let project = tempfile::tempdir().unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+        let err = session_cwd(
+            &store_with_project(project.path()),
+            &elsewhere.path().to_string_lossy(),
+            Path::new("/nowhere"),
+        )
+        .unwrap_err();
+        assert_eq!(err, "cwd is not a known session or project root");
     }
 }

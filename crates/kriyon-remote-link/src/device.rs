@@ -1,0 +1,284 @@
+//! A [Remote device]'s side: pairing, connecting, staying connected.
+
+use std::future::Future;
+
+use iroh::endpoint::{Connection, VarInt};
+use iroh::{Endpoint, EndpointAddr};
+use kriyon_remote::codec::Decoded;
+use kriyon_remote::link_policy::{Backoff, CloseCode};
+use kriyon_remote::message::{
+    EndpointId, FromDevice, PairFromDevice, PairToDevice, RefuseReason, Role, ToDevice,
+};
+use kriyon_remote::pairing::{
+    exporter_context, pair_proof, pairing_code, PairingSecret, EXPORTED_LEN, EXPORTER_LABEL,
+};
+
+use crate::endpoint::{gone, LinkConfig, LinkError, ALPN_PAIR, ALPN_REMOTE};
+use crate::framed::{MessageReader, MessageWriter};
+
+/// A device's endpoint. It only dials out.
+pub struct Device {
+    endpoint: Endpoint,
+}
+
+impl Device {
+    /// # Errors
+    /// [`LinkError::Bind`].
+    pub async fn bind(config: &LinkConfig) -> Result<Self, LinkError> {
+        let endpoint = crate::endpoint::bind(config, Vec::new()).await?;
+        Ok(Self { endpoint })
+    }
+
+    /// Dial from an endpoint this computer already has, which may also host:
+    /// one endpoint, one id, per computer.
+    #[must_use]
+    pub fn from_endpoint(endpoint: Endpoint) -> Self {
+        Self { endpoint }
+    }
+
+    async fn dial(&self, host: EndpointAddr, alpn: &[u8]) -> Result<Connection, LinkError> {
+        self.endpoint
+            .connect(host, alpn)
+            .await
+            .map_err(|e| LinkError::Connect(e.to_string()))
+    }
+
+    #[must_use]
+    pub fn id(&self) -> EndpointId {
+        crate::endpoint::id_bytes(&self.endpoint)
+    }
+
+    /// A bare connection on `kriyon/pair/1` that says nothing: for tests of
+    /// how the host bears many of them.
+    ///
+    /// # Errors
+    /// A [`LinkError`] when the host can't be reached.
+    #[cfg(feature = "test-support")]
+    pub async fn dial_pair_for_tests(&self, host: EndpointAddr) -> Result<Connection, LinkError> {
+        self.dial(host, ALPN_PAIR).await
+    }
+
+    /// Pair with the host in the QR code: prove the secret, wait for the host
+    /// to accept the proof, then show the code this connection derives.
+    ///
+    /// # Errors
+    /// A [`LinkError`]: unreachable, no pairing pending, or refused.
+    pub async fn pair(
+        &self,
+        host: EndpointAddr,
+        secret: &PairingSecret,
+        name: &str,
+    ) -> Result<DevicePairing, LinkError> {
+        let host_id = *host.id.as_bytes();
+        let connection = self.dial(host, ALPN_PAIR).await?;
+        let (send, recv) = connection.open_bi().await.map_err(|e| gone(&e))?;
+        let mut writer = MessageWriter::new(send);
+        let device_id = self.id();
+        writer
+            .send(&PairFromDevice::PairRequest {
+                device_name: name.to_string(),
+                proof: pair_proof(secret, &device_id, &host_id),
+            })
+            .await?;
+        // No code before the host has accepted the proof: a phone that lost
+        // the race to a leaked QR code says pairing failed instead.
+        let mut reader = MessageReader::new(recv);
+        let answer = match reader.next().await? {
+            Some(Decoded::Message(PairToDevice::ProofAccepted {
+                role,
+                expires_in_ms,
+            })) => Ok((role, expires_in_ms)),
+            Some(Decoded::Message(PairToDevice::Refused { reason })) => {
+                Err(LinkError::Refused(reason))
+            }
+            Some(Decoded::Message(PairToDevice::Paired { .. }) | Decoded::Unknown { .. })
+            | None => Err(LinkError::Refused(RefuseReason::UnknownMessage)),
+        };
+        let (role, expires_in_ms) = match answer {
+            Ok(offer) => offer,
+            Err(refused) => {
+                connection.close(VarInt::from_u32(0), b"");
+                return Err(refused);
+            }
+        };
+        let expires_at =
+            std::time::Instant::now() + std::time::Duration::from_millis(expires_in_ms);
+        let mut exported = [0_u8; EXPORTED_LEN];
+        let context = exporter_context(&host_id, &device_id, secret);
+        connection
+            .export_keying_material(&mut exported, EXPORTER_LABEL, &context)
+            .map_err(|e| LinkError::Connect(format!("{e:?}")))?;
+        Ok(DevicePairing {
+            connection,
+            code: pairing_code(&exported),
+            role,
+            expires_at,
+            reader,
+            _writer: writer,
+        })
+    }
+
+    /// Connect to a paired host and open the control stream.
+    ///
+    /// # Errors
+    /// A [`LinkError`]; `Closed(Some(CloseCode::NotPaired))` when the host
+    /// doesn't know this device.
+    pub async fn connect(&self, host: EndpointAddr) -> Result<DeviceLink, LinkError> {
+        let connection = self.dial(host, ALPN_REMOTE).await?;
+        Ok(DeviceLink { connection })
+    }
+
+    /// Whether its endpoint is closed.
+    #[must_use]
+    pub fn is_closed(&self) -> bool {
+        self.endpoint.is_closed()
+    }
+
+    /// Close the endpoint.
+    pub async fn close(&self) {
+        self.endpoint.close().await;
+    }
+}
+
+/// A pairing in progress on the device: show [`DevicePairing::code`], then
+/// wait for the host's answer.
+pub struct DevicePairing {
+    connection: Connection,
+    code: String,
+    role: Role,
+    expires_at: std::time::Instant,
+    reader: MessageReader<PairToDevice>,
+    _writer: MessageWriter<PairFromDevice>,
+}
+
+impl DevicePairing {
+    /// The 6-digit code to show; the person types it into the host.
+    #[must_use]
+    pub fn code(&self) -> &str {
+        &self.code
+    }
+
+    /// The role the computer offers this device.
+    #[must_use]
+    pub fn role(&self) -> Role {
+        self.role
+    }
+
+    /// How long the computer still waits for the code.
+    #[must_use]
+    pub fn time_left(&self) -> std::time::Duration {
+        self.expires_at
+            .saturating_duration_since(std::time::Instant::now())
+    }
+
+    /// Wait for the host. Store the host only on `Ok`.
+    ///
+    /// # Errors
+    /// [`LinkError::Refused`] or a broken connection.
+    pub async fn finish(mut self) -> Result<String, LinkError> {
+        let answer = match self.reader.next().await? {
+            Some(Decoded::Message(PairToDevice::Paired { host_name })) => Ok(host_name),
+            Some(Decoded::Message(PairToDevice::Refused { reason })) => {
+                Err(LinkError::Refused(reason))
+            }
+            Some(
+                Decoded::Message(PairToDevice::ProofAccepted { .. }) | Decoded::Unknown { .. },
+            )
+            | None => Err(LinkError::Refused(RefuseReason::UnknownMessage)),
+        };
+        // Done either way: hang up, which the host waits for.
+        self.connection.close(VarInt::from_u32(0), b"");
+        answer
+    }
+}
+
+/// A connection to a paired host.
+#[derive(Debug)]
+pub struct DeviceLink {
+    connection: Connection,
+}
+
+impl DeviceLink {
+    /// Open a stream: the first is the control stream, then one per session.
+    ///
+    /// # Errors
+    /// A [`LinkError`] once the connection is gone.
+    pub async fn open_stream(
+        &self,
+    ) -> Result<(MessageWriter<FromDevice>, MessageReader<ToDevice>), LinkError> {
+        let (send, recv) = self.connection.open_bi().await.map_err(|e| gone(&e))?;
+        Ok((MessageWriter::new(send), MessageReader::new(recv)))
+    }
+
+    /// The path the link uses now: straight to the host, or through a
+    /// relay; `None` while none is chosen.
+    #[must_use]
+    pub fn path(&self) -> Option<kriyon_remote::device_view::LinkPath> {
+        use kriyon_remote::device_view::LinkPath;
+        let paths = self.connection.paths();
+        let selected = paths.iter().find(iroh::endpoint::Path::is_selected)?;
+        Some(if selected.is_relay() {
+            LinkPath::Relay
+        } else {
+            LinkPath::Direct
+        })
+    }
+
+    /// Hang up: the host stopped answering, or the person left.
+    pub fn close(&self) {
+        self.connection.close(VarInt::from_u32(0), b"");
+    }
+
+    /// Wait until the connection closes, and say why if the host said.
+    pub async fn closed(&self) -> Option<CloseCode> {
+        crate::endpoint::close_code(&self.connection.closed().await)
+    }
+}
+
+/// Stay connected to `host`: connect, hand each link to `run` until it ends,
+/// and reconnect with backoff (up to 30 s). `run` returns whether the link
+/// worked (it got the host's `Welcome`), which starts the backoff over.
+/// Returns only when the host says this device isn't paired.
+pub async fn stay_connected<F, Fut>(device: &Device, host: EndpointAddr, run: F) -> LinkError
+where
+    F: FnMut(DeviceLink) -> Fut,
+    Fut: Future<Output = (bool, Option<CloseCode>)>,
+{
+    stay_connected_waking(device, host, &tokio::sync::Notify::new(), run).await
+}
+
+/// [`stay_connected`], where `wake` cuts a backoff wait short: the app calls
+/// it on a network change or when it comes to the front (spec section 5).
+pub async fn stay_connected_waking<F, Fut>(
+    device: &Device,
+    host: EndpointAddr,
+    wake: &tokio::sync::Notify,
+    run: F,
+) -> LinkError
+where
+    F: FnMut(DeviceLink) -> Fut,
+    Fut: Future<Output = (bool, Option<CloseCode>)>,
+{
+    let mut run = run;
+    let mut backoff = Backoff::default();
+    loop {
+        let code = match device.connect(host.clone()).await {
+            Ok(link) => {
+                let (worked, code) = run(link).await;
+                if worked {
+                    backoff.reset();
+                }
+                code
+            }
+            Err(LinkError::Closed(code)) => code,
+            Err(_) => None,
+        };
+        if code == Some(CloseCode::NotPaired) {
+            return LinkError::Closed(code);
+        }
+        tokio::select! {
+            () = tokio::time::sleep(backoff.next_delay()) => {}
+            () = wake.notified() => {}
+        }
+    }
+}
