@@ -18,7 +18,9 @@ use kriyon_remote::device_view::{EntriesEvent, LinkPath, LinkState, ScreenEvent}
 use kriyon_remote::link_policy::CodeCheck;
 use kriyon_remote::message::Role;
 use kriyon_remote::relay::RelayAction;
-use kriyon_remote_link::device_runtime::{DeviceEvents, DeviceRuntime, HostEntry, Timing};
+use kriyon_remote_link::device_runtime::{
+    DeviceEvents, DeviceRuntime, EntriesSink, HostEntry, ScreenView, SessionView, Timing,
+};
 use kriyon_remote_link::test_support::host_world::{answer, asked, world_on_endpoint, World};
 use kriyon_remote_link::test_support::{run, wait_until, RecordingEvents};
 use kriyon_remote_link::ALPN_PAIR;
@@ -249,12 +251,20 @@ fn a_phone_pairs_and_works_a_session_through_the_relay_alone() {
             key: "a".into(),
             kind: kriyon_remote::message::EntryKind::Note { text: "A".into() },
         }]);
-        rt.open_session(&host, "s", None).await.expect("opens");
         let read: Arc<Mutex<Vec<EntriesEvent>>> = Arc::default();
         let into = Arc::clone(&read);
-        rt.read_entries(&host, "s", Arc::new(move |event| into.lock().push(event)))
-            .await
-            .expect("reads");
+        let reading: EntriesSink = Arc::new(move |event| into.lock().push(event));
+        rt.set_view(
+            &host,
+            "s",
+            1,
+            SessionView::Open {
+                screen: ScreenView::Off,
+                entries: Some(Arc::clone(&reading)),
+            },
+        )
+        .await
+        .expect("opens for its entries");
         wait_until("the entries", || {
             read.lock()
                 .iter()
@@ -263,13 +273,17 @@ fn a_phone_pairs_and_works_a_session_through_the_relay_alone() {
         .await;
         let screen: Arc<Mutex<Vec<ScreenEvent>>> = Arc::default();
         let into = Arc::clone(&screen);
-        rt.set_screen(
+        rt.set_view(
             &host,
             "s",
-            Some(Arc::new(move |event| into.lock().push(event))),
+            2,
+            SessionView::Open {
+                screen: ScreenView::Fresh(Arc::new(move |event| into.lock().push(event))),
+                entries: Some(reading),
+            },
         )
         .await
-        .expect("on");
+        .expect("its screen on");
         let id = asked(&world).await;
         answer(&world, id, b"through the relay");
         wait_until("the screen", || {
@@ -307,7 +321,17 @@ fn a_relay_restarted_mid_session_is_reconnected_through() {
         let https = relay_server.https_addr().expect("https");
         let (world, rt, seen) = paired_over(&url).await;
         let host = world.host.id();
-        rt.open_session(&host, "s", None).await.expect("opens");
+        rt.set_view(
+            &host,
+            "s",
+            1,
+            SessionView::Open {
+                screen: ScreenView::Off,
+                entries: None,
+            },
+        )
+        .await
+        .expect("opens");
         // The relay goes, and comes back on the same address.
         relay_server.shutdown().await.expect("stops");
         wait_until("the link lost or dialing", || {
@@ -326,13 +350,17 @@ fn a_relay_restarted_mid_session_is_reconnected_through() {
         // And the session still answers there.
         let screen: Arc<Mutex<Vec<ScreenEvent>>> = Arc::default();
         let into = Arc::clone(&screen);
-        rt.set_screen(
+        rt.set_view(
             &host,
             "s",
-            Some(Arc::new(move |event| into.lock().push(event))),
+            2,
+            SessionView::Open {
+                screen: ScreenView::Fresh(Arc::new(move |event| into.lock().push(event))),
+                entries: None,
+            },
         )
         .await
-        .expect("on");
+        .expect("its screen on");
         let id = asked(&world).await;
         answer(&world, id, b"after the restart");
         wait_until("the screen", || {
