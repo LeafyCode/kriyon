@@ -26,6 +26,14 @@
     },
     "scheme": "kriyon",
     "plugins": [
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "minSdkVersion": 28
+          }
+        }
+      ],
       "expo-notifications",
       [
         "expo-camera",

@@ -1,6 +1,5 @@
 package com.leafycode.kriyon.nativemodule
 
-import android.os.Build
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import java.security.KeyStore
@@ -11,8 +10,8 @@ import javax.crypto.spec.GCMParameterSpec
 
 /**
  * Seals with an AES key kept in the Android Keystore: made on this phone,
- * never readable by the app and never leaving the phone. From Android 9 it
- * opens only while the phone is unlocked, as the iPhone's keychain item
+ * never readable by the app and never leaving the phone. It opens only
+ * while the phone is unlocked, as the iPhone's keychain item
  * (the spec's choice): nothing reads it while locked, and a start the
  * system made then is tried again when the app comes to the front.
  */
@@ -37,9 +36,8 @@ class KeystoreSealer : Sealer {
         .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
         .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
         .setKeySize(256)
-        .apply {
-          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) setUnlockedDeviceRequired(true)
-        }
+        // Android 9 and up only (the app's minSdk is 28).
+        .setUnlockedDeviceRequired(true)
         .build()
     return KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, KEYSTORE)
       .apply { init(spec) }

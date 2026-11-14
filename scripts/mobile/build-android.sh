@@ -25,8 +25,10 @@ if [[ "${1:-}" == "--debug" ]]; then
   cargo_profile=()
 fi
 
-# React Native 0.88's: minSdk 24 and NDK 27.1 (react-native/gradle/libs.versions.toml).
-api=24
+# The app's minSdk (28, app.json's expo-build-properties: keys that open only
+# while unlocked need Android 9) and React Native 0.88's NDK 27.1
+# (react-native/gradle/libs.versions.toml).
+api=28
 ndk_version=27.1.12297006
 target=aarch64-linux-android
 abi=arm64-v8a

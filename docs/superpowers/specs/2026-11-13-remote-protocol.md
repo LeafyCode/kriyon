@@ -33,6 +33,9 @@ calls while Remote access is off.
 - iroh 1.x endpoint per device. The endpoint id is the device's Ed25519
   public key ([Device key]). The secret stays in the OS keychain, this device
   only (`ThisDeviceOnly` on iPhone), readable only while unlocked; never synced.
+  On Android it is sealed by a Keystore key that never leaves the phone and
+  opens only while it is unlocked (`setUnlockedDeviceRequired`, Android 9),
+  so the phone app needs Android 9 or later (minSdk 28).
 - ALPNs: `kriyon/remote/1` and `kriyon/pair/1`. The number is the major
   version. The host keeps a minimum major and minor it accepts and refuses
   older ones; every security check lives in `authorize` (§8), which doesn't
