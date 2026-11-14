@@ -83,6 +83,8 @@ mod tests {
                 path: "/repo".to_string(),
                 color: None,
                 setup_command: None,
+                pinned_at: None,
+                folder_id: None,
             })
             .expect("project");
         store
@@ -143,6 +145,8 @@ mod tests {
                 path: "/other".to_string(),
                 color: None,
                 setup_command: None,
+                pinned_at: None,
+                folder_id: None,
             })
             .expect("second project");
         let original = save_note(&store, note("Split view")).expect("insert");

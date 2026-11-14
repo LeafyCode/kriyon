@@ -12,6 +12,7 @@ import {
   type MatchedSessions,
   type OrderInputs,
   orderMatched,
+  projectNameMatches,
 } from "./sessionOrder.ts";
 
 /** The session-store slices the ordering cache reads, in one place. */
@@ -59,8 +60,7 @@ export function useOrderedSessions(
 } {
   // A query matching the project name keeps the whole group; otherwise it
   // narrows to sessions whose title matches.
-  const nameMatch =
-    filter !== "" && project.name.toLowerCase().includes(filter);
+  const nameMatch = projectNameMatches(project.name, filter);
   const filtering = filter !== "";
   const mode = useLayout((state) => state.layout.sidebarMode);
   // A filtered rail shows every match as a row (no Done fold), so its ordering

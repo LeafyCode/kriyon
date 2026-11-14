@@ -10,25 +10,18 @@ import { useCommandCenter } from "./commandCenter.ts";
 
 /**
  * When a status update means the session was last active — or `null` when it
- * carries no recency signal at all and must not be recorded.
+ * carries no recency signal and must not be recorded.
  *
- * A live update happened now. A *seeded* one did not: the backend rebuilt it by
- * replaying the events file at launch, so stamping it "now" told the recency
- * projection that every session had just been active. That is what silently
- * disabled the age-based "N older" fold — after every launch, no session was
- * ever old enough to fold. A seeded update reports when its newest replayed
- * event actually happened; if the replay carries no timestamp we record
- * nothing, and the fold falls back to the session's `createdAt`.
+ * A live update happened now. A *seeded* one is history: the backend rebuilt
+ * it by replaying the events file when the session's watch started. Stamping
+ * it "now" told the recency projection that every session had just been
+ * active, so the age fold never fired after a restart; stamping it with its
+ * own replayed time let merely opening a session make it look older than it
+ * was. Past activity has one source instead — the Activity log, seeded for
+ * every session at hydrate (`seedLastChange`) — so a replay records nothing.
  */
 export function statusChangeAt(update: StatusUpdate): number | null {
-  if (!update.seeded) {
-    return Date.now();
-  }
-  if (!update.lastEventAt) {
-    return null;
-  }
-  const parsed = Date.parse(update.lastEventAt);
-  return Number.isNaN(parsed) ? null : parsed;
+  return update.seeded ? null : Date.now();
 }
 
 /**

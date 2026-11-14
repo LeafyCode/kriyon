@@ -57,6 +57,8 @@ export const AUTO_SLEEP_SECS: Record<Exclude<AutoSleepAfter, "off">, number> = {
 export interface Layout {
   /** Sleep a session's `claude` after this much idle time; pushed on change. */
   autoSleepAfter: AutoSleepAfter;
+  /** [Project folder]s whose sidebar group is collapsed; absent = expanded. */
+  collapsedFolderIds: string[];
   /** Projects whose sidebar group is collapsed; absent means expanded. */
   collapsedProjectIds: string[];
   /** Composer hidden to a slim reveal strip (terminal-first working style). */
@@ -64,6 +66,9 @@ export interface Layout {
   /** The Files view's tree column width in px, user-resizable within the
    * clamp range. */
   fileTreeWidth: number;
+  /** The [Project folder] the sidebar is narrowed to ([Folder focus]), or
+   *  null. An id no folder answers to reads as no focus. */
+  focusedFolderId: string | null;
   /** Fold sessions whose last activity predates this cutoff into a per-group
    *  "N older" disclosure; `off` shows all. */
   hideOlderThan: HideOlderThan;
@@ -183,8 +188,10 @@ export function effectiveSessionSort(
 /** The layout every fresh launch starts from, before persisted state hydrates. */
 export const DEFAULT_LAYOUT: Layout = {
   autoSleepAfter: "3h",
+  collapsedFolderIds: [],
   collapsedProjectIds: [],
   composerCollapsed: false,
+  focusedFolderId: null,
   hideOlderThan: "off",
   inspectorChangesOpen: true,
   inspectorCollapsed: false,
@@ -240,6 +247,7 @@ interface LayoutState {
   revealSessionView: () => void;
   setAutoSleepAfter: (value: AutoSleepAfter) => void;
   setFileTreeWidth: (width: number) => void;
+  setFocusedFolder: (folderId: string | null) => void;
   setHideOlderThan: (value: HideOlderThan) => void;
   setInspectorChangesOpen: (open: boolean) => void;
   setInspectorTab: (tab: InspectorTab) => void;
@@ -276,6 +284,7 @@ interface LayoutState {
    */
   showSessionView: () => void;
   toggleComposerCollapsed: () => void;
+  toggleFolderCollapsed: (folderId: string) => void;
   toggleInspectorCollapsed: () => void;
   toggleProjectCollapsed: (projectId: string) => void;
   toggleSidebarCollapsed: () => void;
@@ -318,6 +327,14 @@ export const useLayout = create<LayoutState>((set, get) => ({
         sidebarCollapsed: !state.layout.sidebarCollapsed,
       },
     })),
+  toggleFolderCollapsed: (folderId) =>
+    set((state) => {
+      const collapsed = state.layout.collapsedFolderIds;
+      const collapsedFolderIds = collapsed.includes(folderId)
+        ? collapsed.filter((id) => id !== folderId)
+        : [...collapsed, folderId];
+      return { layout: { ...state.layout, collapsedFolderIds } };
+    }),
   toggleProjectCollapsed: (projectId) =>
     set((state) => {
       const collapsed = state.layout.collapsedProjectIds;
@@ -347,6 +364,8 @@ export const useLayout = create<LayoutState>((set, get) => ({
         terminalDockFullHeight: !state.layout.terminalDockFullHeight,
       },
     })),
+  setFocusedFolder: (focusedFolderId) =>
+    set((state) => ({ layout: { ...state.layout, focusedFolderId } })),
   setManualProjectOrder: (orderedIds) =>
     set((state) => ({
       layout: { ...state.layout, manualProjectOrder: orderedIds },

@@ -39,6 +39,7 @@ import {
   readTagPattern,
   readVersions,
   setVersions,
+  unwrapMarkdown,
   workspaceCrates,
 } from "./release-lib.mjs";
 
@@ -457,6 +458,15 @@ describe("the changelog entry", () => {
       "New entry.\n\n### Added\n\n- A thing\n"
     );
     assert.equal(changelogEntry(two, "0.12.0"), "Old entry.\n");
+  });
+
+  test("unwrapping joins wrapped lines, so GitHub shows no line breaks", () => {
+    assert.equal(
+      unwrapMarkdown(
+        "A summary that\nwraps twice\nhere.\n\n### Added\n\n- **Lead.** An item that\n  wraps.\n- Next item\n  - nested\n    wrap\n1. First\n   wrap\n> quote\n> more\n\n```sh\nkeep\nthis\n```\n"
+      ),
+      "A summary that wraps twice here.\n\n### Added\n\n- **Lead.** An item that wraps.\n- Next item\n  - nested wrap\n1. First wrap\n> quote\n> more\n\n```sh\nkeep\nthis\n```\n"
+    );
   });
 
   test("pre-release notes are the draft without its heading or guidance", () => {

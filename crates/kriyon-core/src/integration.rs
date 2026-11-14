@@ -177,8 +177,8 @@ pub fn plugin_manifest(version: &str) -> String {
 pub fn plugin_hooks(command: Option<&str>, module: Option<&str>) -> String {
     // No command: the hook script can't run on this computer (Windows with no
     // Python), so only the companion module rides in the folder.
-    let hooks: serde_json::Map<String, Value> = command
-        .map(|command| {
+    let hooks: serde_json::Map<String, Value> =
+        command.map_or_else(serde_json::Map::new, |command| {
             REGISTERED_HOOK_EVENTS
                 .iter()
                 .map(|event| {
@@ -188,8 +188,7 @@ pub fn plugin_hooks(command: Option<&str>, module: Option<&str>) -> String {
                     )
                 })
                 .collect()
-        })
-        .unwrap_or_default();
+        });
     let mut doc = json!({ "hooks": hooks });
     if let (Some(module), Some(obj)) = (module, doc.as_object_mut()) {
         obj.insert("modules".to_string(), json!([module]));

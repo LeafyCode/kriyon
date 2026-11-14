@@ -47,8 +47,10 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
   [Session] has folded away under the sidebar's `hideOlderThan` threshold, so the whole
   group leaves the rail for one "N inactive projects" disclosure. The exemptions that keep
   a row visible (the active session, running/waiting/error work, an unread finish) each
-  keep the group visible too, and a filter turns the fold off. _Avoid_: hidden project,
-  stale project.
+  keep the group visible too, and a filter turns the fold off. Age runs from each
+  session's last activity, restored at launch from the [Activity log] for every session
+  (not only the watched one); `createdAt` is the fallback only for a session with no
+  logged turn. _Avoid_: hidden project, stale project.
 - **Parked project** — a [Project (Workspace)] the user has put away for now with *Park
   project*: every [Session] still on its rail group is parked and stopped, and so is every
   [Project terminal] it owns (the same stop archiving uses). Rows, titles, order, [Archived
@@ -65,6 +67,19 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
 - **Parked session** (`parkedAt`) — one [Session] of a [Parked project], stopped and off the
   rail until opened. Put away like an [Archived session] (`isPutAway`), so no surface that
   skips what isn't live — Needs-you, the [Command center], the quit's [Stop cost] — counts it.
+- **Project folder** (`ProjectFolder`, `useProjectFolders`, `folderId`) — a named, one-level
+  bucket of [Project (Workspace)]s in the sidebar, made by the person. A project is in at most
+  one. Sorting only: it stops nothing, unlike a [Parked project]. A folder whose projects are
+  all off the rail is not drawn; one no project has joined yet is drawn empty, with a hint.
+  _Avoid_: group (the code calls one project's block a `ProjectGroup`), category, tag, section.
+- **Pinned** (`pinnedAt`, `isPinnedSession`) — a [Project (Workspace)] or [Session] the person
+  keeps at the top of the sidebar, in the Pinned section, instead of in its usual place. Never
+  folded as an [Inactive project]. Display only: a pinned session runs as before, and a parked
+  or archived one waits with the put-away sessions and returns to Pinned with them.
+  _Avoid_: favourite, starred.
+- **Folder focus** (`focusedFolderId`) — the sidebar narrowed to one [Project folder], with a
+  banner naming it. Pinned and the [Needs-you section] stay global. ⌘⇧F turns it on for the
+  active session's folder, or off.
 - **Project note** (`ProjectNote`, `useProjectNotes`, `project_notes`) — one of the user's
   own todos, ideas or notes for a [Project (Workspace)] (`NoteKind`: `todo` | `idea` |
   `note`). Belongs to the project, not a [Session], so every session in it sees the same

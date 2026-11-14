@@ -17,7 +17,8 @@ function appModifier(event: ChordEvent, mac: boolean): boolean {
 
 /**
  * App-reserved chords that must reach the global `window` keydown listeners
- * (⌘⇧P Prompt picker, ⌘K Command palette, ⌘⇧K Needs-you, ⌘⇧N note capture)
+ * (⌘⇧P Prompt picker, ⌘K Command palette, ⌘⇧K Needs-you, ⌘⇧N note capture,
+ * ⌘⇧F folder focus)
  * rather than be intercepted by a focused xterm. The terminal's custom key handler returns
  * `false` for these so xterm ignores the event entirely and it propagates —
  * fixing the "⌘⇧P doesn't open while a terminal is focused" report.
@@ -44,7 +45,24 @@ export function isReservedAppChord(
   if (key === "p" && event.shiftKey) {
     return true;
   }
-  return isNoteCaptureChord(event, mac);
+  return isNoteCaptureChord(event, mac) || isFolderFocusChord(event, mac);
+}
+
+/**
+ * ⌘⇧F on mac, Ctrl+Shift+F elsewhere — turns [Folder focus] on for the active
+ * session's folder, or off. Reserved so it works with a terminal focused.
+ */
+export function isFolderFocusChord(
+  event: ChordEvent,
+  mac: boolean = isMacPlatform()
+): boolean {
+  return (
+    event.type === "keydown" &&
+    appModifier(event, mac) &&
+    event.shiftKey &&
+    !event.altKey &&
+    event.key.toLowerCase() === "f"
+  );
 }
 
 /**
