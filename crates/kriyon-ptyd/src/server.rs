@@ -23,6 +23,11 @@ use parking_lot::{Condvar, Mutex};
 
 use crate::pty::PtyEngine;
 
+/// How often a Windows client writer wakes to see whether its client was
+/// let go ([`Shared::send`]).
+#[cfg(windows)]
+const WRITER_WAKE: Duration = Duration::from_millis(200);
+
 const READ_BUF_LEN: usize = 8192;
 const REAP_INTERVAL: Duration = Duration::from_millis(500);
 /// How often to sample the tty's foreground process group for the busy signal.
@@ -333,6 +338,11 @@ impl Shared {
         let Ok(out) = stream.try_clone() else {
             return None;
         };
+        // On Windows, shutting a socket down doesn't wake a write blocked on
+        // it, so a writer stuck on a client that stopped reading would leak
+        // past `detach`. It wakes on its own instead ([`Self::send`]).
+        #[cfg(windows)]
+        let _ = out.set_write_timeout(Some(WRITER_WAKE));
         let id = self.next_client.fetch_add(1, Ordering::Relaxed);
         *self.client.lock() = Some(AttachedClient {
             id,
@@ -355,6 +365,37 @@ impl Shared {
         };
         self.lease.lock().note_attached(Instant::now());
         Some(writer)
+    }
+
+    /// Write all of `bytes` to client `id`; false when a write fails or the
+    /// client is let go while one waits. A write that times out (Windows,
+    /// where the writer wakes every [`WRITER_WAKE`]) is carried on while the
+    /// client is still this one: a slow client still gets everything.
+    fn send(&self, id: u64, out: &mut impl Write, mut bytes: &[u8]) -> bool {
+        while !bytes.is_empty() {
+            match out.write(bytes) {
+                Ok(0) => return false,
+                Ok(n) => bytes = &bytes[n..],
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    ) =>
+                {
+                    let current = self
+                        .client
+                        .lock()
+                        .as_ref()
+                        .is_some_and(|attached| attached.id == id);
+                    if !current {
+                        return false;
+                    }
+                }
+                Err(_) => return false,
+            }
+        }
+        true
     }
 
     /// Give the client up to `within` to receive what is still queued for it.
@@ -409,7 +450,7 @@ impl Shared {
                 }
             };
             let bytes = bytes.unwrap_or_else(|requester| self.history_frames(requester));
-            let sent = out.write_all(&bytes).is_ok() && out.flush().is_ok();
+            let sent = self.send(id, &mut out, &bytes) && out.flush().is_ok();
             if let Some(attached) = self
                 .client
                 .lock()
