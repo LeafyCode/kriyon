@@ -17,7 +17,7 @@ import { Pressable, Text, TextInput, View } from "react-native";
 import { WebView, type WebViewProps } from "react-native-webview";
 import { linkLine, noteLine } from "../../../../src/remote/remoteScreen.ts";
 import { KriyonNative } from "../../modules/kriyon-native/index.ts";
-import { Button, IconButton, useLook } from "../kit.tsx";
+import { Button, IconButton, KEY_TEXT_MAX, useLook } from "../kit.tsx";
 import { KEYS, typedLine } from "../state/keys.ts";
 import { toBase64, usePhone } from "../state/phone.ts";
 import { TERMINAL_PAGE } from "../terminal/page.generated.ts";
@@ -203,7 +203,11 @@ export function TerminalView({
         minHeight: 44,
       })}
     >
-      <Text style={{ color: t.ink1, fontFamily: fonts.mono, fontSize: 13 }}>
+      <Text
+        maxFontSizeMultiplier={KEY_TEXT_MAX}
+        numberOfLines={1}
+        style={{ color: t.ink1, fontFamily: fonts.mono, fontSize: 13 }}
+      >
         {label}
       </Text>
     </Pressable>
@@ -252,6 +256,7 @@ export function TerminalView({
         }}
       >
         <Page
+          accessibilityLabel="Terminal screen"
           hideKeyboardAccessoryView
           onContentProcessDidTerminate={() => {
             // iOS ended the page's process: load it again.
@@ -273,6 +278,9 @@ export function TerminalView({
           ref={page}
           source={PAGE_SOURCE}
           style={{ backgroundColor: t.bg }}
+          // The terminal's grid is measured in its own font: Android's
+          // text zoom (the phone's text size) would overlap its rows.
+          textZoom={100}
         />
       </View>
       {note ? (
@@ -301,8 +309,8 @@ export function TerminalView({
             )}
             <Pressable
               accessibilityLabel="Control"
-              accessibilityRole="button"
-              accessibilityState={{ selected: ctrl }}
+              accessibilityRole="switch"
+              accessibilityState={{ checked: ctrl }}
               onPress={() => setCtrl((held) => !held)}
               style={{
                 alignItems: "center",
@@ -316,6 +324,8 @@ export function TerminalView({
               }}
             >
               <Text
+                maxFontSizeMultiplier={KEY_TEXT_MAX}
+                numberOfLines={1}
                 style={{
                   color: ctrl ? t.accentInk : t.ink1,
                   fontFamily: fonts.mono,

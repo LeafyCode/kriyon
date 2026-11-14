@@ -15,6 +15,12 @@ module `modules/kriyon-native` (Swift on iPhone, Kotlin on Android, the same cal
   Shared pieces (pills, buttons, cards) are in `src/kit.tsx`: status is always a word, never
   colour alone, and every tap target is at least 44 points with a label. A text colour pair
   is added to `src/theme.test.ts`, which holds both modes to 4.5:1.
+- **Screen readers, large text and reduced motion.** A control reads its name, role and state
+  (`src/screens/a11y.test.tsx` holds them, queried by role and label); something read as one
+  thing (a card's count, a step) is one `accessible` view. At large text (`useLargeText`) a
+  pill goes under its title instead of squeezing it; motion follows `useReduceMotion`. Check
+  on the emulator with TalkBack and `font_scale` 2.0: Jest renders as iOS, so an Android-only
+  difference (a sheet's scrim, the web view's text zoom) shows only there.
 - **Check Expo against its current docs** (Context7, or `https://docs.expo.dev/llms.txt`):
   Expo changes every SDK, and memory of it goes stale. This is SDK 58.
 - **Add packages by editing `package.json` and running `pnpm install` from the repo root**,

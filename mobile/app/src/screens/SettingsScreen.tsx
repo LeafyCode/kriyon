@@ -4,7 +4,7 @@
  * key as computers show it.
  */
 import { ScrollView, Text, View } from "react-native";
-import { Button, Pill, TopBar, useLook } from "../kit.tsx";
+import { Button, Pill, TopBar, useLargeText, useLook } from "../kit.tsx";
 import { roleWord, shortKey } from "../state/home.ts";
 import { usePhone } from "../state/phone.ts";
 import { alertsWord, pushLine } from "../state/push.ts";
@@ -27,6 +27,7 @@ export function SettingsScreen() {
   const deviceId = usePhone((state) => state.deviceId);
   const { forget, show } = usePhone.getState();
   const alerts = alertsWord(push);
+  const large = useLargeText();
   const box = {
     backgroundColor: t.card,
     borderColor: t.line,
@@ -57,7 +58,8 @@ export function SettingsScreen() {
             style={[
               box,
               {
-                flexDirection: "row",
+                // Large text: the words get the width, the pill goes beneath.
+                flexDirection: large ? "column" : "row",
                 gap: 12,
                 paddingHorizontal: 16,
                 paddingVertical: 12,
@@ -76,7 +78,11 @@ export function SettingsScreen() {
                 </Text>
               ) : null}
             </View>
-            <Pill label={alerts.label} tone={alerts.tone} />
+            <Pill
+              align={large ? "flex-start" : "center"}
+              label={alerts.label}
+              tone={alerts.tone}
+            />
           </View>
         </View>
 
@@ -153,10 +159,13 @@ export function SettingsScreen() {
                 box,
                 {
                   alignItems: "center",
+                  columnGap: 12,
                   flexDirection: "row",
+                  flexWrap: "wrap",
                   justifyContent: "space-between",
                   minHeight: 48,
                   paddingHorizontal: 16,
+                  paddingVertical: 10,
                 },
               ]}
             >

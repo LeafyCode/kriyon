@@ -21,6 +21,7 @@ import {
   Icon,
   IconButton,
   Pill,
+  useLargeText,
   useLook,
   useNow,
 } from "../kit.tsx";
@@ -81,7 +82,12 @@ function Glance({
   const described = parts.map((p) => `${p.count} ${p.label}`).join(", ");
   return (
     <Card style={{ gap: 12 }}>
-      <View style={{ alignItems: "baseline", flexDirection: "row", gap: 8 }}>
+      <View
+        // One reading: "7 sessions, 2 need you", not "7", then the rest.
+        accessibilityLabel={countWords(counts.total, counts.needsYou)}
+        accessible
+        style={{ alignItems: "baseline", flexDirection: "row", gap: 8 }}
+      >
         <Text style={{ color: t.ink, fontFamily: fonts.mono, fontSize: 28 }}>
           {counts.total}
         </Text>
@@ -110,7 +116,12 @@ function Glance({
             />
           ))}
       </View>
-      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 12 }}>
+      <View
+        // The bar above already says these: a screen reader skips them.
+        accessibilityElementsHidden
+        importantForAccessibility="no-hide-descendants"
+        style={{ flexDirection: "row", flexWrap: "wrap", gap: 12 }}
+      >
         {parts.map((p) => (
           <View
             key={p.label}
@@ -135,6 +146,15 @@ function Glance({
       </View>
     </Card>
   );
+}
+
+/** "7 sessions, 2 need you": the glance's count, read as one sentence. */
+function countWords(total: number, needsYou: number): string {
+  const sessions = `${total} ${total === 1 ? "session" : "sessions"}`;
+  if (needsYou === 0) {
+    return sessions;
+  }
+  return `${sessions}, ${needsYou} ${needsYou === 1 ? "needs" : "need"} you`;
 }
 
 function Chips({
@@ -210,6 +230,8 @@ function CardHead({
 }) {
   const { text } = useLook();
   const pill = pillFor(session, now);
+  // Large text: the title gets the whole width, its pill goes beneath.
+  const large = useLargeText();
   return (
     <Pressable
       accessibilityHint="Opens the session"
@@ -219,11 +241,19 @@ function CardHead({
     >
       <View style={{ alignItems: "center", flexDirection: "row", gap: 8 }}>
         <Dot color={dot} />
-        <Text numberOfLines={2} style={[text.title, { flex: 1 }]}>
+        <Text
+          numberOfLines={large ? undefined : 2}
+          style={[text.title, { flex: 1 }]}
+        >
           {session.title}
         </Text>
-        <Pill label={pill.label} tone={pill.tone} />
+        {large ? null : <Pill label={pill.label} tone={pill.tone} />}
       </View>
+      {large ? (
+        <View style={{ paddingLeft: 16 }}>
+          <Pill align="flex-start" label={pill.label} tone={pill.tone} />
+        </View>
+      ) : null}
       <Text style={[text.caption, { paddingLeft: 16 }]}>
         {placeOf(host, summary, session)}
       </Text>
@@ -638,6 +668,10 @@ export function HomeScreen() {
       {filter !== "running" && cards.length > 0 ? (
         <View style={{ gap: 10 }}>
           <View
+            // A heading read with its count: "Needs you, 2".
+            accessibilityLabel={`Needs you, ${cards.length}`}
+            accessibilityRole="header"
+            accessible
             style={{
               alignItems: "center",
               flexDirection: "row",
@@ -645,9 +679,7 @@ export function HomeScreen() {
               paddingHorizontal: 4,
             }}
           >
-            <Text accessibilityRole="header" style={text.h2}>
-              Needs you
-            </Text>
+            <Text style={text.h2}>Needs you</Text>
             <View
               style={{
                 alignItems: "center",

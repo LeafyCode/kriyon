@@ -12,7 +12,7 @@ import type {
   ShownEntry,
   ShownKind,
 } from "../../../../src/remote/readableSummary.ts";
-import { Button, Icon, IconButton, useLook } from "../kit.tsx";
+import { Button, Icon, IconButton, useLook, useReduceMotion } from "../kit.tsx";
 import { readableKey, usePhone } from "../state/phone.ts";
 import { fonts, type Tokens } from "../theme.ts";
 
@@ -53,7 +53,8 @@ function Entry({
     case "you":
       return (
         <View
-          accessibilityLabel="Your prompt"
+          accessibilityLabel={`You said: ${entry.text}`}
+          accessible
           style={{
             alignSelf: "flex-end",
             backgroundColor: t.accentSoft,
@@ -73,7 +74,8 @@ function Entry({
     case "claude":
       return (
         <View
-          accessibilityLabel="Claude"
+          accessibilityLabel={`Claude: ${entry.text}`}
+          accessible
           style={{ flexDirection: "row", gap: 10 }}
           testID={id}
         >
@@ -91,13 +93,13 @@ function Entry({
       const look = looks[entry.state] ?? looks.running;
       return (
         <View
+          // One reading per step: "Read src/login.ts, done".
+          accessibilityLabel={`${entry.name} ${entry.target}, ${look.word.toLowerCase()}`}
+          accessible
           style={{ flexDirection: "row", gap: 8, paddingLeft: 24 }}
           testID={id}
         >
-          <Text
-            accessibilityLabel={look.word}
-            style={[text.mono, { color: look.color, fontSize: 12.5 }]}
-          >
+          <Text style={[text.mono, { color: look.color, fontSize: 12.5 }]}>
             {look.mark}
           </Text>
           <Text style={[text.mono, { fontSize: 12.5 }]}>{entry.name}</Text>
@@ -343,6 +345,7 @@ export function ReadableView({
         ?.dialogOpen
   );
   const scroll = useRef<ComponentRef<typeof ScrollView>>(null);
+  const reduceMotion = useReduceMotion();
   // Following the newest entry, until the person scrolls up to read.
   const following = useRef(true);
 
@@ -357,7 +360,7 @@ export function ReadableView({
         // unless the person scrolled up to read.
         onContentSizeChange={() => {
           if (following.current) {
-            scroll.current?.scrollToEnd();
+            scroll.current?.scrollToEnd({ animated: !reduceMotion });
           }
         }}
         onScroll={({ nativeEvent }) => {

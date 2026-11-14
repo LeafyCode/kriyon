@@ -6,10 +6,12 @@
  */
 import { type ReactNode, useEffect, useState } from "react";
 import {
+  AccessibilityInfo,
   Pressable,
   type StyleProp,
   Text,
   type TextStyle,
+  useWindowDimensions,
   View,
   type ViewStyle,
 } from "react-native";
@@ -144,7 +146,16 @@ export function Icon({
 }
 
 /** A status in a word, in its colour family. */
-export function Pill({ label, tone }: { label: string; tone: Tone }) {
+export function Pill({
+  align = "center",
+  label,
+  tone,
+}: {
+  /** Where it sits across its row: centred beside a title, else at the start. */
+  align?: "center" | "flex-start";
+  label: string;
+  tone: Tone;
+}) {
   const { t } = useLook();
   const look: Record<Tone, { bg: string; fg: string }> = {
     amber: { bg: t.amberChip, fg: t.amberInk },
@@ -157,7 +168,7 @@ export function Pill({ label, tone }: { label: string; tone: Tone }) {
       style={{
         alignItems: "center",
         // Its own height, never the row's.
-        alignSelf: "center",
+        alignSelf: align,
         backgroundColor: look[tone].bg,
         borderRadius: 12,
         justifyContent: "center",
@@ -420,6 +431,7 @@ export function TopBar({
   title: string;
 }) {
   const { t, text } = useLook();
+  const large = useLargeText();
   return (
     <View style={{ alignItems: "center", flexDirection: "row", gap: 4 }}>
       <IconButton
@@ -430,7 +442,11 @@ export function TopBar({
         plain
       />
       <View style={{ flex: 1, minWidth: 0 }}>
-        <Text accessibilityRole="header" numberOfLines={1} style={text.title}>
+        <Text
+          accessibilityRole="header"
+          numberOfLines={large ? 2 : 1}
+          style={text.title}
+        >
           {title}
         </Text>
         {subtitle ? (
@@ -445,6 +461,47 @@ export function TopBar({
 }
 
 /** The time now, again every `everyMs`: for ages and running clocks. */
+/**
+ * Whether the phone asks for less motion (Reduce motion on iPhone, Remove
+ * animations on Android): sheets then appear in place, and scrolls jump.
+ */
+export function useReduceMotion(): boolean {
+  const [reduce, setReduce] = useState(false);
+  useEffect(() => {
+    let live = true;
+    AccessibilityInfo.isReduceMotionEnabled()
+      .then((on) => {
+        if (live) {
+          setReduce(on);
+        }
+      })
+      .catch(() => undefined);
+    const listener = AccessibilityInfo.addEventListener(
+      "reduceMotionChanged",
+      setReduce
+    );
+    return () => {
+      live = false;
+      listener.remove();
+    };
+  }, []);
+  return reduce;
+}
+
+/**
+ * The text-size multiplier past which a key cap stops growing: seven keys
+ * share one row, and a cap's word must stay on one line in it.
+ */
+export const KEY_TEXT_MAX = 1.4;
+
+/**
+ * Whether the phone's text size is large (past 1.3×): a status pill then
+ * goes under its title instead of squeezing it, and titles take two lines.
+ */
+export function useLargeText(): boolean {
+  return useWindowDimensions().fontScale > 1.25;
+}
+
 export function useNow(everyMs = 30_000): number {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {

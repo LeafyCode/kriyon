@@ -60,6 +60,10 @@ term.unicode.activeVersion = "11";
 const host = document.getElementById("terminal");
 if (host) {
   term.open(host);
+  // xterm's own input field takes no typing here (the app's field does):
+  // a screen reader skips it rather than read an unlabelled, dead field.
+  term.textarea?.setAttribute("aria-hidden", "true");
+  term.textarea?.setAttribute("tabindex", "-1");
 }
 
 window.kriyon = {

@@ -13,7 +13,7 @@ import {
   TextInput,
   View,
 } from "react-native";
-import { Button, IconButton, useLook } from "../kit.tsx";
+import { Button, IconButton, useLook, useReduceMotion } from "../kit.tsx";
 import { projectChoices } from "../state/home.ts";
 import { usePhone } from "../state/phone.ts";
 import { fonts } from "../theme.ts";
@@ -38,9 +38,15 @@ export function NewSessionSheet({ hostId }: { hostId: string }) {
     choices[0]?.id ??
     null;
   const close = () => show({ kind: "home" });
+  const reduceMotion = useReduceMotion();
   const startable = Boolean(summary?.mayStart) && picked !== null;
   return (
-    <Modal animationType="slide" onRequestClose={close} transparent visible>
+    <Modal
+      animationType={reduceMotion ? "none" : "slide"}
+      onRequestClose={close}
+      transparent
+      visible
+    >
       <View
         style={{
           backgroundColor: `${t.scrim}cc`,
@@ -49,7 +55,10 @@ export function NewSessionSheet({ hostId }: { hostId: string }) {
         }}
       >
         <Pressable
-          accessibilityLabel="Close"
+          // A tap outside closes the sheet; a screen reader has its Close
+          // button and Back for that, so this second "Close" is skipped.
+          accessibilityElementsHidden
+          importantForAccessibility="no-hide-descendants"
           onPress={close}
           style={{ flex: 1 }}
         />

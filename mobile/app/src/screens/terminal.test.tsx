@@ -185,7 +185,7 @@ test("the extra keys send a terminal's keys, and ctrl makes the next letter a co
     "s1",
     new TextEncoder().encode("\u001b[A")
   );
-  await fireEvent.press(screen.getByRole("button", { name: "Control" }));
+  await fireEvent.press(screen.getByRole("switch", { name: "Control" }));
   await fireEvent.changeText(
     screen.getByLabelText("Type into the terminal"),
     "c"
@@ -194,8 +194,8 @@ test("the extra keys send a terminal's keys, and ctrl makes the next letter a co
   expect(native.input).toHaveBeenLastCalledWith(MAC, "s1", new Uint8Array([3]));
   // Ctrl lets go after one key.
   expect(
-    screen.getByRole("button", { name: "Control" }).props.accessibilityState
-  ).toMatchObject({ selected: false });
+    screen.getByRole("switch", { name: "Control" }).props.accessibilityState
+  ).toMatchObject({ checked: false });
 });
 
 test("a lost link says so and typing is off", async () => {

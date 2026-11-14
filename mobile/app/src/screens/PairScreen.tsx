@@ -24,6 +24,7 @@ function Steps({ second }: { second: boolean }) {
   return (
     <View
       accessibilityLabel={second ? "Step 2 of 2" : "Step 1 of 2"}
+      accessible
       style={{
         flexDirection: "row",
         gap: 8,
