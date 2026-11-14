@@ -27,6 +27,26 @@ pub struct Bound {
     pub relay_expires: Option<u64>,
 }
 
+/// How long a bind waits for its fixed port: a closed endpoint lets go of
+/// it only once its last clone is dropped, a moment after a rebuild.
+const PORT_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Bind `config`, trying its fixed port again for up to [`PORT_WAIT`]: the
+/// endpoint before may still be letting go of it. The last error if it
+/// stays taken.
+async fn bind_waiting(config: &LinkConfig) -> Result<Endpoint, kriyon_remote_link::LinkError> {
+    let deadline = std::time::Instant::now() + PORT_WAIT;
+    loop {
+        match kriyon_remote_link::endpoint::bind(config, Vec::new()).await {
+            Ok(endpoint) => return Ok(endpoint),
+            Err(why) if config.bind.port() == 0 || std::time::Instant::now() >= deadline => {
+                return Err(why);
+            }
+            Err(_) => tokio::time::sleep(std::time::Duration::from_millis(50)).await,
+        }
+    }
+}
+
 /// Called with each endpoint as it is bound.
 pub type OnBind = Arc<dyn Fn(&Bound) + Send + Sync>;
 
@@ -124,7 +144,7 @@ impl RemoteEndpoint {
             ..LinkConfig::new(secret_key)
         };
         let relay = config.relay.clone();
-        let (endpoint, note) = match kriyon_remote_link::endpoint::bind(&config, Vec::new()).await {
+        let (endpoint, note) = match bind_waiting(&config).await {
             Ok(endpoint) => (endpoint, None),
             // Taken by another program: any port, and the person is told,
             // since what devices stored at pairing names the fixed one.
@@ -136,9 +156,10 @@ impl RemoteEndpoint {
                 (
                     endpoint,
                     Some(format!(
-                        "Port {} is in use by another program, so remote access uses a \
-                         different port until it is free. Phones paired over this network \
-                         or Tailscale may not reach this computer until then.",
+                        "Port {} is in use by another program, so remote access uses another \
+                         port until it starts again (turn it off and on, or reopen Kriyon) \
+                         with the port free. Devices paired over this network or Tailscale \
+                         may not reach this computer until then.",
                         bind.port()
                     )),
                 )
@@ -257,6 +278,34 @@ mod tests {
             drop(holder);
             let again = owner.get([3; 32], nobody).await.expect("binds");
             assert_eq!(again.endpoint.bound_sockets()[0].port(), taken.port());
+            assert_eq!(owner.port_note(), None);
+            owner.close_if(true).await;
+        });
+    }
+
+    /// Closed, an endpoint lets go of its port only once its last clone
+    /// (the device side keeps one) is dropped: a rebind waits a moment for
+    /// it rather than taking another port.
+    #[test]
+    fn a_rebind_gets_its_fixed_port_back_once_the_old_endpoint_lets_go() {
+        run(async {
+            let free = std::net::UdpSocket::bind("127.0.0.1:0")
+                .and_then(|socket| socket.local_addr())
+                .expect("a free port");
+            let owner = RemoteEndpoint::new(free);
+            let nobody = || Arc::new(MemoryPaired::default()) as Arc<dyn PairedDevices>;
+            let first = owner.get([3; 32], nobody).await.expect("binds");
+            assert_eq!(first.endpoint.bound_sockets()[0].port(), free.port());
+            let kept = first.endpoint.clone();
+            drop(first);
+            owner.close_if(true).await;
+            // The device side lets go of its clone a little later.
+            tauri::async_runtime::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                drop(kept);
+            });
+            let again = owner.get([3; 32], nobody).await.expect("binds");
+            assert_eq!(again.endpoint.bound_sockets()[0].port(), free.port());
             assert_eq!(owner.port_note(), None);
             owner.close_if(true).await;
         });

@@ -128,6 +128,9 @@ const nameInputStyle: CSSProperties = {
 };
 
 const DIGITS = /^\d+$/;
+/** The ports a person may choose (`kriyon_remote::routes::check_port`). */
+const LOWEST_PORT = 1024;
+const HIGHEST_PORT = 65_535;
 
 const portInputStyle: CSSProperties = {
   ...nameInputStyle,
@@ -144,7 +147,12 @@ function RoutesGroup({ port, routes }: { port: number; routes: RemoteRoutes }) {
   const [typed, setTyped] = useState(String(port));
   useEffect(() => setTyped(String(port)), [port]);
   const wanted = Number(typed);
-  const whole = DIGITS.test(typed) && wanted !== port;
+  // A port Rust takes (1024 to 65535), and a new one.
+  const whole =
+    DIGITS.test(typed) &&
+    wanted >= LOWEST_PORT &&
+    wanted <= HIGHEST_PORT &&
+    wanted !== port;
   return (
     <SettingGroup label="How devices reach this computer">
       <SettingRow
@@ -164,8 +172,8 @@ function RoutesGroup({ port, routes }: { port: number; routes: RemoteRoutes }) {
             <input
               aria-label="Port"
               inputMode="numeric"
-              max={65_535}
-              min={1024}
+              max={HIGHEST_PORT}
+              min={LOWEST_PORT}
               onChange={(event) => setTyped(event.target.value)}
               style={portInputStyle}
               type="number"

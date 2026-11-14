@@ -393,6 +393,12 @@ test("the port can be changed, and only a whole number is sent", async () => {
   render(<RemoteSection />);
   const field = await screen.findByRole("spinbutton", { name: "Port" });
   expect(field).toHaveValue(49_731);
+  const use = screen.getByRole("button", { name: "Use this port" });
+  // Out of range: not offered.
+  for (const value of ["80", "70000"]) {
+    fireEvent.change(field, { target: { value } });
+    expect(use).toBeDisabled();
+  }
   fireEvent.change(field, { target: { value: "50000" } });
   fireEvent.click(screen.getByRole("button", { name: "Use this port" }));
   await waitFor(() => expect(remoteSetPort).toHaveBeenCalledWith(50_000));

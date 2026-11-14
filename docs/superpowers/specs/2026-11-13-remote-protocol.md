@@ -55,8 +55,10 @@ calls while Remote access is off.
 - **A fixed port.** The host listens on UDP port 49731 on every interface
   (IPv6 too on the same port, where it can be had), or the port the person
   chose in Settings (1024 to 65535), so an address a device stored at pairing
-  still works after the host restarts. If another program holds the port, the
-  host takes any port and Settings says so. Settings → Remote access shows
+  still works after the host restarts. A rebind waits up to 2 s for the port
+  (the endpoint before lets go of it a moment late); if another program
+  holds it, the host takes any port until it next starts, and Settings says
+  so. Settings → Remote access shows
   the routes there are now ("Reachable over: this network, Tailscale
   (100.x.y.z), our relay"). A device paired before a port change reaches the
   host only through the relay until it pairs again.

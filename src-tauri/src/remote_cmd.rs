@@ -292,6 +292,10 @@ pub(crate) async fn bound(app: &tauri::AppHandle) -> Result<crate::remote_endpoi
     app.state::<crate::remote_endpoint::RemoteEndpoint>()
         .want_relay(relay)
         .await;
+    // A closed endpoint the device side still holds keeps the fixed port.
+    app.state::<kriyon_remote_link::device_runtime::DeviceRuntime>()
+        .let_go_if_closed()
+        .await;
     let devices = app.clone();
     let bound = app
         .state::<crate::remote_endpoint::RemoteEndpoint>()

@@ -420,6 +420,15 @@ impl DeviceRuntime {
         }
     }
 
+    /// Let go of the endpoint attached, if it was closed: it holds its port
+    /// until its last clone goes, and a rebuilt one wants the same port.
+    pub async fn let_go_if_closed(&self) {
+        let mut device = self.device.lock().await;
+        if device.as_ref().is_some_and(|device| device.is_closed()) {
+            *device = None;
+        }
+    }
+
     async fn attached(&self) -> Result<Arc<Device>, String> {
         self.device
             .lock()
@@ -1705,6 +1714,19 @@ mod tests {
             id: host.id(),
             addr: host.addr(),
         }
+    }
+
+    #[test]
+    fn a_closed_endpoint_is_let_go_and_an_open_one_kept() {
+        run(async {
+            let (rt, _me) = device_runtime().await;
+            rt.let_go_if_closed().await;
+            assert!(rt.attached().await.is_ok(), "open: kept");
+            let device = rt.attached().await.expect("attached");
+            device.close().await;
+            rt.let_go_if_closed().await;
+            assert!(rt.attached().await.is_err(), "closed: let go");
+        });
     }
 
     #[test]
