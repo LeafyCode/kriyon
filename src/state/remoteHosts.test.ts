@@ -2,10 +2,12 @@ import { beforeEach, expect, test, vi } from "vitest";
 import {
   remoteHostCloseSession,
   remoteHostForget,
+  remoteHostHideScreen,
   remoteHostInput,
   remoteHostOpenSession,
   remoteHostPair,
   remoteHostReadEntries,
+  remoteHostShowScreen,
   remoteHostStartSession,
   remoteHostStopEntries,
   remoteHosts,
@@ -25,10 +27,12 @@ vi.mock("../ipc/bridge.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../ipc/bridge.ts")>()),
   remoteHostCloseSession: vi.fn(),
   remoteHostForget: vi.fn(),
+  remoteHostHideScreen: vi.fn(),
   remoteHostInput: vi.fn(),
   remoteHostOpenSession: vi.fn(),
   remoteHostPair: vi.fn(),
   remoteHostReadEntries: vi.fn(),
+  remoteHostShowScreen: vi.fn(),
   remoteHosts: vi.fn(),
   remoteHostStopEntries: vi.fn(),
   remoteHostStartSession: vi.fn(),
@@ -171,9 +175,9 @@ test("opening and closing one session reach Rust in the order asked", async () =
   });
   const store = useRemoteHosts.getState();
   // Shown, hidden and shown again before Rust finished the first open.
-  const first = store.open(HOST, "s1", vi.fn());
+  const first = store.open(HOST, "s1");
   const closed = store.close(HOST, "s1");
-  const second = store.open(HOST, "s1", vi.fn());
+  const second = store.open(HOST, "s1");
   await vi.waitFor(() => expect(remoteHostOpenSession).toHaveBeenCalled());
   expect(remoteHostCloseSession).not.toHaveBeenCalled();
   finishFirstOpen();
@@ -204,7 +208,7 @@ test("reading a session as entries goes after its open and keeps what Rust last 
     return Promise.resolve();
   });
   const store = useRemoteHosts.getState();
-  const opened = store.open(HOST, "s1", vi.fn());
+  const opened = store.open(HOST, "s1");
   const reading = store.readEntries(HOST, "s1");
   await vi.waitFor(() => expect(remoteHostOpenSession).toHaveBeenCalled());
   expect(remoteHostReadEntries).not.toHaveBeenCalled();
@@ -221,9 +225,32 @@ test("reading a session as entries goes after its open and keeps what Rust last 
   expect(readableOf(HOST, "s1")).toBeUndefined();
 });
 
+test("the screen is shown and hidden after the open, in the order asked", async () => {
+  const order: string[] = [];
+  vi.mocked(remoteHostOpenSession).mockImplementation(() => {
+    order.push("open");
+    return Promise.resolve();
+  });
+  vi.mocked(remoteHostShowScreen).mockImplementation(() => {
+    order.push("show");
+    return Promise.resolve();
+  });
+  vi.mocked(remoteHostHideScreen).mockImplementation(() => {
+    order.push("hide");
+    return Promise.resolve();
+  });
+  const store = useRemoteHosts.getState();
+  await Promise.all([
+    store.open(HOST, "s1"),
+    store.showScreen(HOST, "s1", vi.fn()),
+    store.hideScreen(HOST, "s1"),
+  ]);
+  expect(order).toEqual(["open", "show", "hide"]);
+});
+
 test("a failure to open says why", async () => {
   vi.mocked(remoteHostOpenSession).mockRejectedValue("not connected");
-  await useRemoteHosts.getState().open(HOST, "s1", vi.fn());
+  await useRemoteHosts.getState().open(HOST, "s1");
   expect(useRemoteHosts.getState().error).toBe("not connected");
 });
 

@@ -1,9 +1,9 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, expect, test, vi } from "vitest";
 import {
-  remoteHostCloseSession,
+  remoteHostHideScreen,
   remoteHostInput,
-  remoteHostOpenSession,
+  remoteHostShowScreen,
   remoteHostTakeControl,
 } from "../ipc/bridge.ts";
 import { useLayout } from "../state/layout.ts";
@@ -50,9 +50,9 @@ vi.mock("@xterm/xterm", () => ({
 
 vi.mock("../ipc/bridge.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../ipc/bridge.ts")>()),
-  remoteHostCloseSession: vi.fn(() => Promise.resolve()),
+  remoteHostHideScreen: vi.fn(() => Promise.resolve()),
   remoteHostInput: vi.fn(() => Promise.resolve()),
-  remoteHostOpenSession: vi.fn(() => Promise.resolve()),
+  remoteHostShowScreen: vi.fn(() => Promise.resolve()),
   remoteHostTakeControl: vi.fn(() => Promise.resolve()),
 }));
 
@@ -100,9 +100,9 @@ function link(
 }
 
 function frames(): (frame: Uint8Array) => void {
-  const [call] = vi.mocked(remoteHostOpenSession).mock.calls.slice(-1);
+  const [call] = vi.mocked(remoteHostShowScreen).mock.calls.slice(-1);
   if (!call) {
-    throw new Error("not opened");
+    throw new Error("not shown");
   }
   return call[2];
 }
@@ -113,17 +113,17 @@ beforeEach(() => {
   useRemoteHosts.getState().linkChanged(link());
 });
 
-test("opens the session on show and lets it go on close", async () => {
+test("turns the screen on when shown and off when it goes", async () => {
   const { unmount } = render(<RemoteTerminal hostId={HOST} sessionId="s1" />);
   await act(() => Promise.resolve());
-  expect(remoteHostOpenSession).toHaveBeenCalledWith(
+  expect(remoteHostShowScreen).toHaveBeenCalledWith(
     HOST,
     "s1",
     expect.any(Function)
   );
   unmount();
   await vi.waitFor(() =>
-    expect(remoteHostCloseSession).toHaveBeenCalledWith(HOST, "s1")
+    expect(remoteHostHideScreen).toHaveBeenCalledWith(HOST, "s1")
   );
   expect(termHolder.current?.dispose).toHaveBeenCalled();
 });
@@ -217,8 +217,8 @@ test("a refusal and a receipt are said in plain words", async () => {
   expect(screen.getByText("Not sure it arrived.")).toBeTruthy();
 });
 
-test("a failure to open or take control says why", async () => {
-  vi.mocked(remoteHostOpenSession).mockRejectedValueOnce("not connected");
+test("a failure to show the screen or take control says why", async () => {
+  vi.mocked(remoteHostShowScreen).mockRejectedValueOnce("not connected");
   render(<RemoteTerminal hostId={HOST} sessionId="s1" />);
   expect(await screen.findByText("not connected")).toBeTruthy();
 });

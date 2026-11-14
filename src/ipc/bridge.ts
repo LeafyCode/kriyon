@@ -2076,18 +2076,33 @@ export function remoteHostForget(hostId: string): Promise<void> {
   return invoke("remote_host_forget", { hostId });
 }
 
-/**
- * Open a session on a paired computer; its screen arrives as raw frames
- * (see `decodeScreenFrame` in `remote/remoteScreen.ts`).
- */
+/** Open a paired computer's session here, for its [Readable view] entries
+ *  only: its screen comes with {@link remoteHostShowScreen}. */
 export function remoteHostOpenSession(
+  hostId: string,
+  sessionId: string
+): Promise<void> {
+  return invoke("remote_host_open_session", { hostId, sessionId });
+}
+
+/** Show an open session's screen: its frames come to `onFrame`, from a
+ *  fresh one. */
+export function remoteHostShowScreen(
   hostId: string,
   sessionId: string,
   onFrame: (frame: Uint8Array) => void
 ): Promise<void> {
   const onScreen = new Channel<ArrayBuffer>();
   onScreen.onmessage = (message) => onFrame(new Uint8Array(message));
-  return invoke("remote_host_open_session", { hostId, onScreen, sessionId });
+  return invoke("remote_host_show_screen", { hostId, onScreen, sessionId });
+}
+
+/** Stop showing an open session's screen; it stays open. */
+export function remoteHostHideScreen(
+  hostId: string,
+  sessionId: string
+): Promise<void> {
+  return invoke("remote_host_hide_screen", { hostId, sessionId });
 }
 
 /** Read an open session there as [Readable view] entries too: each change

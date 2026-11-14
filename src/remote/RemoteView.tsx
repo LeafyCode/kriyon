@@ -86,9 +86,10 @@ const MODES = [
 ] as const;
 
 /**
- * The chosen session: its terminal, or read as entries. The terminal stays
- * open underneath, so going back is instant and a question can be answered
- * there. With no entries to read, the terminal shows with why.
+ * The chosen session: its terminal, or read as entries. The session stays
+ * open whichever is shown; reading, its screen is off, so no terminal
+ * frames cross the link (or the relay). With no entries to read, the
+ * terminal shows with why.
  */
 function RemoteSession({
   hostId,
@@ -101,6 +102,14 @@ function RemoteSession({
   const summary = useRemoteHosts(
     (state) => state.readable[`${hostId}:${sessionId}`]
   );
+  // Open while it is chosen, whichever is shown: switching never closes it.
+  useEffect(() => {
+    const store = useRemoteHosts.getState();
+    store.open(hostId, sessionId).catch(() => undefined);
+    return () => {
+      store.close(hostId, sessionId).catch(() => undefined);
+    };
+  }, [hostId, sessionId]);
   useEffect(() => {
     if (mode !== "readable") {
       return;
@@ -131,9 +140,12 @@ function RemoteSession({
           summary={summary}
         />
       ) : null}
-      <div style={reading ? hiddenStyle : screenStyle}>
-        <RemoteTerminal hostId={hostId} sessionId={sessionId} />
-      </div>
+      {/* Only while shown: reading, no screen crosses the link. */}
+      {reading ? null : (
+        <div style={screenStyle}>
+          <RemoteTerminal hostId={hostId} sessionId={sessionId} />
+        </div>
+      )}
     </div>
   );
 }
@@ -346,11 +358,6 @@ const screenStyle: CSSProperties = {
   flex: 1,
   minHeight: 0,
   minWidth: 0,
-};
-
-const hiddenStyle: CSSProperties = {
-  ...screenStyle,
-  display: "none",
 };
 
 const sessionStyle: CSSProperties = {

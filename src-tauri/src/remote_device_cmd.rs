@@ -239,8 +239,9 @@ pub async fn remote_host_forget(app: tauri::AppHandle, host_id: String) -> Resul
     Ok(())
 }
 
-/// Open a host's session; its screen comes on `on_screen` as raw frames
-/// (see [`screen_frame`]).
+/// Open a host's session, for its [Readable view] entries only: no screen
+/// crosses the link until [`remote_host_show_screen`]. It stays open,
+/// whichever is shown, until closed.
 ///
 /// # Errors
 /// For a bad id, or a host not connected now.
@@ -249,17 +250,56 @@ pub async fn remote_host_open_session(
     app: tauri::AppHandle,
     host_id: String,
     session_id: String,
+) -> Result<(), String> {
+    let id = parse_device_id(&host_id)?;
+    check_session_id(&session_id)?;
+    runtime(&app)
+        .open_session(&id, &session_id, None)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Show an open host session's screen: it comes on `on_screen` as raw
+/// frames (see [`screen_frame`]), from a fresh snapshot.
+///
+/// # Errors
+/// For a bad id, a session not open here, or a link failure.
+#[tauri::command]
+pub async fn remote_host_show_screen(
+    app: tauri::AppHandle,
+    host_id: String,
+    session_id: String,
     on_screen: tauri::ipc::Channel<Vec<u8>>,
 ) -> Result<(), String> {
     let id = parse_device_id(&host_id)?;
     check_session_id(&session_id)?;
-    let sink = Arc::new(move |event: ScreenEvent| {
-        if let Some(frame) = screen_frame(&event) {
-            let _ = on_screen.send(frame);
-        }
-    });
+    let sink: kriyon_remote_link::device_runtime::ScreenSink =
+        Arc::new(move |event: ScreenEvent| {
+            if let Some(frame) = screen_frame(&event) {
+                let _ = on_screen.send(frame);
+            }
+        });
     runtime(&app)
-        .open_session(&id, &session_id, Some(sink))
+        .set_screen(&id, &session_id, Some(sink))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Stop showing a host session's screen; the session stays open (its
+/// entries go on).
+///
+/// # Errors
+/// For a bad id, a session not open here, or a link failure.
+#[tauri::command]
+pub async fn remote_host_hide_screen(
+    app: tauri::AppHandle,
+    host_id: String,
+    session_id: String,
+) -> Result<(), String> {
+    let id = parse_device_id(&host_id)?;
+    check_session_id(&session_id)?;
+    runtime(&app)
+        .set_screen(&id, &session_id, None)
         .await
         .map_err(|e| e.to_string())
 }

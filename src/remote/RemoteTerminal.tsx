@@ -59,7 +59,7 @@ export function RemoteTerminal({
     // The store sends this session's open and close to Rust in turn, so the
     // close below never overtakes it.
     store
-      .open(hostId, sessionId, (raw) => {
+      .showScreen(hostId, sessionId, (raw) => {
         const frame = decodeScreenFrame(raw);
         if (!frame || closed) {
           return;
@@ -75,9 +75,10 @@ export function RemoteTerminal({
       typed.dispose();
       termRef.current = null;
       term.dispose();
+      // The session stays open (its view owns that): only its screen stops.
       useRemoteHosts
         .getState()
-        .close(hostId, sessionId)
+        .hideScreen(hostId, sessionId)
         .catch(() => undefined);
     };
   }, [hostId, sessionId]);

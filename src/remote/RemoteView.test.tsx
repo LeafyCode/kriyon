@@ -116,9 +116,13 @@ test("choosing a session shows its screen", () => {
 test("a session can be read as entries, and goes back to its terminal", () => {
   const readEntries = vi.fn(() => Promise.resolve());
   const stopEntries = vi.fn(() => Promise.resolve());
+  const open = vi.fn(() => Promise.resolve());
+  const close = vi.fn(() => Promise.resolve());
   useRemoteHosts.setState({
+    close,
     hosts: [{ hostId: HOST, name: "Studio", pairedAt: 0 }],
     links: { [HOST]: link() },
+    open,
     readEntries,
     stopEntries,
   });
@@ -137,10 +141,15 @@ test("a session can be read as entries, and goes back to its terminal", () => {
     })
   );
   expect(screen.getByText("Context compacted")).toBeInTheDocument();
-  expect(screen.getByTestId("remote-terminal")).not.toBeVisible();
+  // Reading: no terminal, so no screen crosses the link; the session stays
+  // open, by the view, not the terminal.
+  expect(screen.queryByTestId("remote-terminal")).toBeNull();
+  expect(open).toHaveBeenCalledTimes(1);
   fireEvent.click(screen.getByRole("tab", { name: "Terminal" }));
   expect(stopEntries).toHaveBeenCalledWith(HOST, "s2");
   expect(screen.getByTestId("remote-terminal")).toBeVisible();
+  expect(open).toHaveBeenCalledTimes(1);
+  expect(close).not.toHaveBeenCalled();
 });
 
 test("with no entries to read there, the terminal shows with why", () => {

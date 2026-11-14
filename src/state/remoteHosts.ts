@@ -6,10 +6,12 @@ import {
   type PairedHost,
   remoteHostCloseSession,
   remoteHostForget,
+  remoteHostHideScreen,
   remoteHostInput,
   remoteHostOpenSession,
   remoteHostPair,
   remoteHostReadEntries,
+  remoteHostShowScreen,
   remoteHostStartSession,
   remoteHostStopEntries,
   remoteHosts,
@@ -45,16 +47,16 @@ interface RemoteHostsStore {
   /** Why the last command failed, if it did. */
   error: string | null;
   forget: (hostId: string) => Promise<void>;
+  /** Stop showing its screen; the session stays open. */
+  hideScreen: (hostId: string, sessionId: string) => Promise<void>;
   hosts: PairedHost[];
   /** A paired computer's link changed (`remote-host-changed`). */
   linkChanged: (link: HostSummary) => void;
   links: Record<string, HostSummary>;
   load: () => Promise<void>;
-  open: (
-    hostId: string,
-    sessionId: string,
-    onFrame: (frame: Uint8Array) => void
-  ) => Promise<void>;
+  /** Open a session here (its entries; its screen with `showScreen`); it
+   *  stays open, whichever is shown, until `close`. */
+  open: (hostId: string, sessionId: string) => Promise<void>;
   pair: (invite: string) => Promise<void>;
   pairing: HostPairing;
   /** A pairing started here ended (`remote-host-pairing-ended`). */
@@ -64,6 +66,12 @@ interface RemoteHostsStore {
   /** Read an open session as entries too, after its open. */
   readEntries: (hostId: string, sessionId: string) => Promise<void>;
   resetPairing: () => void;
+  /** Show an open session's screen: its frames come to `onFrame`. */
+  showScreen: (
+    hostId: string,
+    sessionId: string,
+    onFrame: (frame: Uint8Array) => void
+  ) => Promise<void>;
   /** Why the last start on each computer was refused, in its words. */
   startErrors: Record<string, string>;
   /** The session a start made, for the view to open; taken once. */
@@ -157,9 +165,17 @@ export const useRemoteHosts = create<RemoteHostsStore>((set, get) => {
       attempt(async () => {
         set({ hosts: await remoteHosts() });
       }),
-    open: (hostId, sessionId, onFrame) =>
+    hideScreen: (hostId, sessionId) =>
       inTurn(hostId, sessionId, () =>
-        attempt(() => remoteHostOpenSession(hostId, sessionId, onFrame))
+        attempt(() => remoteHostHideScreen(hostId, sessionId))
+      ),
+    open: (hostId, sessionId) =>
+      inTurn(hostId, sessionId, () =>
+        attempt(() => remoteHostOpenSession(hostId, sessionId))
+      ),
+    showScreen: (hostId, sessionId, onFrame) =>
+      inTurn(hostId, sessionId, () =>
+        attempt(() => remoteHostShowScreen(hostId, sessionId, onFrame))
       ),
     readable: {},
     readEntries: (hostId, sessionId) =>
