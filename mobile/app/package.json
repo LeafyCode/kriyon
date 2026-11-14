@@ -18,14 +18,18 @@
     "preset": "jest-expo"
   },
   "dependencies": {
+    "@expo-google-fonts/geist": "0.4.2",
+    "@expo-google-fonts/jetbrains-mono": "0.4.1",
     "@xterm/addon-unicode11": "0.10.0-beta.301",
     "@xterm/xterm": "6.1.0-beta.304",
     "expo": "~58.0.25",
     "expo-camera": "~58.0.14",
     "expo-dev-client": "~58.0.20",
     "expo-device": "~58.0.5",
+    "expo-font": "~58.0.12",
     "expo-notifications": "~58.1.9",
     "expo-status-bar": "~58.0.5",
+    "expo-system-ui": "~58.0.7",
     "react": "19.3.0",
     "react-native": "0.88.1",
     "react-native-safe-area-context": "~5.11.1",
