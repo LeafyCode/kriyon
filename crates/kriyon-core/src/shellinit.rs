@@ -94,6 +94,14 @@ impl ShellLanguage {
     }
 }
 
+/// The language of the shell a session starts in ([`user_shell`] of
+/// `shell_env`, `$SHELL`), for its launch line. A daemon that survived a
+/// restart was started the same way, so it reads the same.
+#[must_use]
+pub fn session_shell(shell_env: Option<&str>) -> ShellLanguage {
+    ShellLanguage::of(&user_shell(shell_env))
+}
+
 /// True when the shell path's basename ends with `zsh` (`zsh`, `/bin/zsh`, …).
 #[must_use]
 pub fn is_zsh(shell: &str) -> bool {
@@ -309,6 +317,32 @@ mod tests {
             super::sh_quote("C:/Users/O'Neil/x.py"),
             r"'C:/Users/O'\''Neil/x.py'"
         );
+    }
+
+    /// The launch line follows the session's shell on every OS: a Mac whose
+    /// `$SHELL` is pwsh gets PowerShell's, an unset one zsh's (sh's).
+    #[cfg(not(windows))]
+    #[test]
+    fn a_session_shell_of_pwsh_on_a_mac_reads_powershell() {
+        use super::{session_shell, ShellLanguage};
+        assert_eq!(
+            session_shell(Some("/opt/homebrew/bin/pwsh")),
+            ShellLanguage::PowerShell
+        );
+        assert_eq!(session_shell(Some("/bin/zsh")), ShellLanguage::Posix);
+        assert_eq!(session_shell(None), ShellLanguage::Posix);
+    }
+
+    /// Windows sessions start in PowerShell whatever `$SHELL` says.
+    #[cfg(windows)]
+    #[test]
+    fn a_windows_session_shell_reads_powershell() {
+        use super::{session_shell, ShellLanguage};
+        assert_eq!(
+            session_shell(Some("/usr/bin/bash")),
+            ShellLanguage::PowerShell
+        );
+        assert_eq!(session_shell(None), ShellLanguage::PowerShell);
     }
 
     #[test]
