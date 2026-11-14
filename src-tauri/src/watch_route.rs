@@ -277,9 +277,11 @@ mod tests {
 
         let seen = seen.lock();
         assert_eq!(seen.len(), 1, "one card per finished handoff turn");
-        let canonical = std::fs::canonicalize(&file).expect("canon");
+        let canonical = kriyon_core::paths::canonicalize(&file).expect("canon");
         assert!(seen[0].contains("\"sessionId\":\"s1\""));
-        assert!(seen[0].contains(&*canonical.to_string_lossy()));
+        // As the payload's JSON spells it (a Windows path's `\` escaped).
+        let spelled = serde_json::to_string(&canonical.to_string_lossy()).expect("json");
+        assert!(seen[0].contains(spelled.trim_matches('"')));
     }
 
     #[test]

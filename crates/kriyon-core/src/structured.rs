@@ -136,7 +136,7 @@ fn step_target(input: &Value) -> Option<String> {
     if let Some(path) =
         input_field(input, "file_path").or_else(|| input_field(input, "notebook_path"))
     {
-        let name = path.rsplit('/').next().filter(|n| !n.is_empty());
+        let name = path.rsplit(['/', '\\']).next().filter(|n| !n.is_empty());
         return Some(name.map_or(path.clone(), str::to_string));
     }
     ["pattern", "query", "url"]
@@ -181,7 +181,7 @@ fn block(value: &Value) -> Block {
         "tool_result" => Block::ToolResult {
             id: field("tool_use_id").to_string(),
             is_error: value.get("is_error").and_then(Value::as_bool) == Some(true),
-            content: cap(&value.get("content").map(text_of).unwrap_or_default()),
+            content: cap(&value.get("content").map_or_else(String::new, text_of)),
         },
         _ => Block::Other,
     }

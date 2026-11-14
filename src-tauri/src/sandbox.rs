@@ -38,6 +38,7 @@
 //! byte-identical string its previous home produced, including the
 //! [`tagged_failure`] `kind:` leader on the missing-path failure.
 
+use kriyon_core::paths::Canonical as _;
 use std::path::{Path, PathBuf};
 
 use kriyon_core::completion::path_within_roots;
@@ -118,7 +119,7 @@ fn canonical_path_to_str(path: &Path) -> Result<&str, String> {
 fn resolve_within(root_canonical: &Path, path: &str) -> Result<PathBuf, String> {
     let joined = root_canonical.join(path);
     let canonical = joined
-        .canonicalize()
+        .canonical()
         .map_err(|_| tagged_failure(FILE_MISSING, WRITE_MISSING_ERROR))?;
     if path_within_roots(
         &canonical,
@@ -389,12 +390,16 @@ impl SandboxedPath {
     /// `path escapes cwd` if this target is somehow not under `root` (it
     /// always is, by construction — the check is kept so the invariant is
     /// enforced rather than assumed), or `path is not valid UTF-8`.
-    pub(crate) fn relative_to(&self, root: &SandboxRoot) -> Result<&str, String> {
-        self.0
+    pub(crate) fn relative_to(&self, root: &SandboxRoot) -> Result<String, String> {
+        let relative = self
+            .0
             .strip_prefix(root.as_path())
-            .map_err(|_| "path escapes cwd".to_string())?
+            .map_err(|_| "path escapes cwd".to_string())?;
+        relative
             .to_str()
-            .ok_or_else(|| "path is not valid UTF-8".to_string())
+            .ok_or_else(|| "path is not valid UTF-8".to_string())?;
+        // Git names repo paths with `/` on every platform.
+        Ok(kriyon_core::paths::slash_path(relative))
     }
 
     pub(crate) fn file_metadata(&self) -> Result<std::fs::Metadata, String> {
@@ -447,7 +452,45 @@ pub(crate) fn valid_leaf_name(name: &str) -> Result<(), String> {
     if name.eq_ignore_ascii_case(".git") {
         return Err("refusing to use .git as a name".to_string());
     }
+    if cfg!(windows) {
+        if let Some(problem) = windows_name_problem(name) {
+            return Err(problem.to_string());
+        }
+    }
     Ok(())
+}
+
+/// Device names Windows reserves in every folder, with or without an extension.
+const WINDOWS_DEVICE_NAMES: [&str; 22] = [
+    "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
+    "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+];
+
+/// Why Windows would not take `name` as the file name it says, or `None`.
+///
+/// Windows reads some names as something else: it drops a trailing `.` or
+/// space (`.git.` would make `.git`, the one folder the sandbox refuses), it
+/// reads `a:b` as stream `b` of file `a`, and `NUL` or `con.txt` as a device.
+/// Other characters it refuses outright. Checked only on Windows, where these
+/// rules apply; on macOS each is an ordinary name.
+fn windows_name_problem(name: &str) -> Option<&'static str> {
+    if name.ends_with('.') || name.ends_with(' ') {
+        return Some("name must not end with a dot or a space");
+    }
+    if name
+        .chars()
+        .any(|c| c < ' ' || matches!(c, '<' | '>' | ':' | '"' | '|' | '?' | '*'))
+    {
+        return Some(r#"name must not contain < > : " | ? * or a control character"#);
+    }
+    let stem = name.split('.').next().unwrap_or(name).trim_end();
+    if WINDOWS_DEVICE_NAMES
+        .iter()
+        .any(|device| stem.eq_ignore_ascii_case(device))
+    {
+        return Some("name is reserved by Windows");
+    }
+    None
 }
 
 /// A path proven to land inside a [`SandboxRoot`] via the parent/leaf split —
@@ -516,6 +559,39 @@ mod tests {
     }
 
     #[test]
+    fn windows_refuses_names_it_would_read_as_something_else() {
+        for name in [
+            ".git.",
+            ".git ",
+            ".git::$INDEX_ALLOCATION",
+            "a:b",
+            "NUL",
+            "con.txt",
+            "Com1",
+            "x?",
+            "tab\t",
+        ] {
+            assert!(
+                windows_name_problem(name).is_some(),
+                "{name:?} should be refused"
+            );
+        }
+        for name in [
+            "notes.md",
+            ".gitignore",
+            "console.log",
+            "my file.txt",
+            "COM10",
+        ] {
+            assert_eq!(
+                windows_name_problem(name),
+                None,
+                "{name:?} is an ordinary name"
+            );
+        }
+    }
+
+    #[test]
     fn validate_refuses_an_empty_cwd() {
         let dir = tempfile::tempdir().unwrap();
         let store = store_with_project_root(&dir.path().to_string_lossy());
@@ -579,7 +655,7 @@ mod tests {
     #[test]
     fn validate_canonicalizes_the_accepted_root() {
         let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().canonicalize().unwrap();
+        let root = dir.path().canonical().unwrap();
         let store = store_with_project_root(&root.to_string_lossy());
 
         let sandbox = SandboxRoot::validate(&store, dir.path().to_str().unwrap()).unwrap();
@@ -713,10 +789,7 @@ mod tests {
 
         assert_eq!(
             target.as_path(),
-            root.path()
-                .canonicalize()
-                .expect("canon")
-                .join("src/new.ts")
+            root.path().canonical().expect("canon").join("src/new.ts")
         );
         assert!(
             !target.exists(),
@@ -774,7 +847,7 @@ mod tests {
             .resolve_new("short/../new.txt", "write")
             .expect("resolve");
 
-        let canonical_root = root.path().canonicalize().expect("canon");
+        let canonical_root = root.path().canonical().expect("canon");
         assert_eq!(target.as_path(), canonical_root.join("a/b/new.txt"));
         assert!(
             target.as_path().starts_with(&canonical_root),
@@ -794,7 +867,7 @@ mod tests {
 
         assert_eq!(
             target.as_path(),
-            root.path().canonicalize().expect("canon").join("top.txt")
+            root.path().canonical().expect("canon").join("top.txt")
         );
     }
 

@@ -4,6 +4,10 @@
 //! fresh xterm starts blank — the client asks for the screen instead of relying
 //! on never being remounted.
 
+// Drives a POSIX shell through the daemon; the Windows path is covered by
+// `windows_daemon.rs`.
+#![cfg(unix)]
+
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
 use std::time::{Duration, Instant};

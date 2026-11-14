@@ -1,4 +1,5 @@
 import type { CSSProperties } from "react";
+import { pathBasename } from "../platform/path.ts";
 import { button } from "../theme/recipes.ts";
 import { tokens } from "../theme/tokens.ts";
 import { Terminal } from "./Terminal.tsx";
@@ -73,7 +74,7 @@ function SplitIcon() {
 }
 
 function basename(path: string): string {
-  return path.split("/").filter(Boolean).pop() ?? path;
+  return pathBasename(path);
 }
 
 const deadOverlayStyle: CSSProperties = {

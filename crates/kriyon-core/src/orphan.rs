@@ -378,6 +378,8 @@ mod tests {
         );
     }
 
+    // POSIX run-dir fixture; the Windows join is covered in `proc`.
+    #[cfg(unix)]
     #[test]
     fn a_daemon_nothing_owns_is_an_orphan_and_an_owned_one_is_not() {
         let rows = vec![daemon(100, RUN_DIR, "live"), daemon(200, RUN_DIR, "gone")];

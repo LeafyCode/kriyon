@@ -22,6 +22,7 @@ import type {
   SavedPrompt,
   SessionActivity,
   SessionDiff,
+  SessionOpened,
   SessionRow,
   SessionStatus,
   StudioEvent,
@@ -80,10 +81,10 @@ export interface StatusUpdate {
 }
 
 /**
- * Open (or reattach to) the session's pty daemon. Resolves to `true` when it
- * reattached to a daemon that survived a previous app run — meaning `claude` is
- * already running in its shell and must NOT be re-launched — and `false` for a
- * freshly spawned daemon.
+ * Open (or reattach to) the session's pty daemon. Resolves with `reattached`
+ * true when it reattached to a daemon that survived a previous app run —
+ * meaning `claude` is already running in its shell and must NOT be re-launched
+ * — and with the language of the session's shell, for the launch line.
  */
 export function createSession(
   id: string,
@@ -91,9 +92,9 @@ export function createSession(
   onBytes: (bytes: Uint8Array) => void,
   onBusy: (busy: boolean) => void,
   onExit: () => void
-): Promise<boolean> {
+): Promise<SessionOpened> {
   if (!hasTauri()) {
-    return Promise.resolve(false);
+    return Promise.resolve({ reattached: false, shell: "posix" });
   }
   const channel = new Channel<ArrayBuffer>();
   channel.onmessage = (msg) => onBytes(new Uint8Array(msg));
@@ -103,7 +104,7 @@ export function createSession(
   // crashed) — never for an app-initiated close or client handover.
   const exitChannel = new Channel<boolean>();
   exitChannel.onmessage = () => onExit();
-  return invoke<boolean>("create_session", {
+  return invoke<SessionOpened>("create_session", {
     id,
     cwd,
     onBusy: busyChannel,

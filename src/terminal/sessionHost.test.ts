@@ -54,12 +54,12 @@ beforeEach(() => {
   onBytes = undefined;
   onBusy = undefined;
   onExit = undefined;
-  // Resolves to `reattached`: false = freshly spawned daemon (default).
+  // A freshly spawned daemon (default), in a POSIX shell.
   mockedCreateSession.mockImplementation((_id, _cwd, cb, busy, exit) => {
     onBytes = cb;
     onBusy = busy;
     onExit = exit;
-    return Promise.resolve(false);
+    return Promise.resolve({ reattached: false, shell: "posix" });
   });
   mockedCloseSession.mockResolvedValue(undefined);
   mockedWriteStdin.mockResolvedValue(undefined);
@@ -107,7 +107,7 @@ test("ensureSession resolves once the pty exists, so callers can size it after",
   mockedCreateSession.mockImplementationOnce((_id, _cwd, cb) => {
     onBytes = cb;
     return new Promise((resolve) => {
-      finishCreate = () => resolve(false);
+      finishCreate = () => resolve({ reattached: false, shell: "posix" });
     });
   });
 
@@ -470,7 +470,7 @@ test("launchClaudeOnce reports skipped when there is no host", async () => {
 test("launchClaudeOnce does not relaunch a reattached session", async () => {
   mockedCreateSession.mockImplementationOnce((_id, _cwd, cb) => {
     onBytes = cb;
-    return Promise.resolve(true);
+    return Promise.resolve({ reattached: true, shell: "posix" });
   });
   ensureSession("re1", "/work", noop);
 
@@ -507,6 +507,20 @@ test("a seeded launch reads the prompt file and self-cleans", async () => {
     )
   );
   disposeSession("s1");
+});
+
+test("the launch line is written in the shell language Rust reported", async () => {
+  mockedCreateSession.mockImplementationOnce((_id, _cwd, cb) => {
+    onBytes = cb;
+    return Promise.resolve({ reattached: false, shell: "powerShell" });
+  });
+  ensureSession("ps1", "C:\\work", noop);
+  await launchClaudeOnce("ps1", null, "Continue the work");
+
+  const [, typedBytes] = mockedWriteStdin.mock.lastCall ?? [];
+  const typed = new TextDecoder().decode(typedBytes);
+  expect(typed.startsWith("$p = Get-Content -Raw -Encoding UTF8")).toBe(true);
+  disposeSession("ps1");
 });
 
 test("a nested session starts under its own id, told where to report", async () => {

@@ -576,15 +576,14 @@ fn map_ask_user_question(input: Option<&Value>) -> Option<StructuredEvent> {
         let options = q
             .get("options")
             .and_then(Value::as_array)
-            .map(|opts| {
+            .map_or_else(Vec::new, |opts| {
                 opts.iter()
                     .map(|o| QuestionOption {
                         label: opt_input_str(Some(o), "label").unwrap_or_default(),
                         description: opt_input_str(Some(o), "description").unwrap_or_default(),
                     })
                     .collect()
-            })
-            .unwrap_or_default();
+            });
         items.push(QuestionItem {
             header,
             question,

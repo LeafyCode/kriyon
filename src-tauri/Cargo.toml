@@ -72,6 +72,17 @@ libproc = "0.14"
 [target."cfg(unix)".dependencies]
 libc = "0.2.189"
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Wdk_System_Threading",
+    "Win32_Foundation",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_ProcessStatus",
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
+    "Win32_UI_Shell",
+] }
+
 [dev-dependencies]
 # The mock runtime behind `tauri::test`, so the watch-signal route (state
 # mutation + event emits) is unit-testable without a real webview/tray.
