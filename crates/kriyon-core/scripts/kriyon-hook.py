@@ -97,7 +97,9 @@ def cap_ends(text, n):
 
 
 try:
-    data = json.load(sys.stdin)
+    # The bytes, not text: Claude Code sends UTF-8, and Windows' Python would
+    # read text in the legacy code page, mangling anything non-ASCII.
+    data = json.load(sys.stdin.buffer)
 except Exception:
     sys.exit(0)
 

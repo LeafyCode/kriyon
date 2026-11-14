@@ -2,6 +2,10 @@
 //! running and its output keeps feeding the daemon's screen. When the client
 //! reads again, it gets a fresh screen ([Skip ahead]) instead of the backlog.
 
+// Drives a POSIX shell through the daemon; the Windows path is covered by
+// `windows_daemon.rs`.
+#![cfg(unix)]
+
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::Path;
