@@ -156,6 +156,8 @@ export function Pill({ label, tone }: { label: string; tone: Tone }) {
     <View
       style={{
         alignItems: "center",
+        // Its own height, never the row's.
+        alignSelf: "center",
         backgroundColor: look[tone].bg,
         borderRadius: 12,
         justifyContent: "center",

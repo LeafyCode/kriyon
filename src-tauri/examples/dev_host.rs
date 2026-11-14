@@ -36,6 +36,12 @@ use kriyon_remote_link::host_runtime::{EntriesBuilt, LiveSession, RemoteStart, S
 use kriyon_remote_link::LinkConfig;
 use parking_lot::Mutex;
 
+/// This dev host's name: `KRIYON_DEV_HOST_NAME`, so a second one can be
+/// told apart (say, as the one that goes away), else "Dev host".
+fn dev_host_name() -> String {
+    std::env::var("KRIYON_DEV_HOST_NAME").unwrap_or_else(|_| "Dev host".into())
+}
+
 /// The one session's id.
 const SESSION: &str = "dev";
 /// Its screen size.
@@ -186,8 +192,7 @@ impl PairedDevices for DevApp {
 
 impl ServeHost for DevApp {
     fn host_name(&self) -> String {
-        // A second dev host can be told apart (say, as the one that goes away).
-        std::env::var("KRIYON_DEV_HOST_NAME").unwrap_or_else(|_| "Dev host".into())
+        dev_host_name()
     }
 
     fn sessions(&self) -> Vec<SessionInfo> {
@@ -498,7 +503,7 @@ async fn run(invite_file: Option<String>) {
     while let Some(code) = codes.recv().await {
         let keep = Arc::clone(&app);
         let outcome = runtime
-            .enter_code(&code, "Dev host", |device, _name, role| {
+            .enter_code(&code, &dev_host_name(), |device, _name, role| {
                 keep.paired.lock().insert(device, role);
                 true
             })

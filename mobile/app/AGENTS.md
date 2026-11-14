@@ -10,8 +10,11 @@ module `modules/kriyon-native` (Swift on iPhone, Kotlin on Android, the same cal
 - **Logic lives in Rust.** Pairing, reconnects, screen state, typing control and push sealing
   are `kriyon-mobile`'s. The module is a thin pass-through with no logic; the screens render
   what Rust reports. Derive and decide in a store (`src/state/`), not in a component.
-- **One look with the desktop.** Colours come from the desktop's theme files
-  (`src/theme/themes/`), not literals.
+- **One look, light and dark.** Colours and fonts come from `src/theme.ts` (the mobile design's
+  tokens, sharing the desktop's Steel accent) through `useTheme`/`useLook`, never as literals.
+  Shared pieces (pills, buttons, cards) are in `src/kit.tsx`: status is always a word, never
+  colour alone, and every tap target is at least 44 points with a label. A text colour pair
+  is added to `src/theme.test.ts`, which holds both modes to 4.5:1.
 - **Check Expo against its current docs** (Context7, or `https://docs.expo.dev/llms.txt`):
   Expo changes every SDK, and memory of it goes stale. This is SDK 58.
 - **Add packages by editing `package.json` and running `pnpm install` from the repo root**,

@@ -87,7 +87,12 @@ window.kriyon = {
       ...terminalTheme(mode === "light" ? steelLight : steel),
       background,
     };
-    document.body.style.background = background;
+    // The page's own sheet paints these three; all follow the phone.
+    for (const box of [document.documentElement, document.body, host]) {
+      if (box) {
+        box.style.background = background;
+      }
+    }
   },
   typing: (on) => {
     term.options.disableStdin = !on;
