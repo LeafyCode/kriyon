@@ -1,0 +1,65 @@
+name: Windows (crates)
+
+# The crates remote access is built from, on Windows: clippy and the tests,
+# so remote access's Windows work can go ahead before the app runs there
+# (docs/superpowers/plans/2026-11-14-remote-windows.md, step 2). The daemon
+# (kriyon-ptyd) and the app (src-tauri) join once PR #48 brings them to
+# Windows; so do kriyon-core's own tests, which #48 ports. No secrets.
+on:
+  push:
+    branches: [dev, main]
+    paths:
+      - crates/kriyon-core/**
+      - crates/kriyon-remote/**
+      - crates/kriyon-remote-link/**
+      - crates/kriyon-relay-client/**
+      - crates/kriyon-push/**
+      - Cargo.toml
+      - Cargo.lock
+      - .github/workflows/windows.yml
+  pull_request:
+    branches: [dev, main]
+    paths:
+      - crates/kriyon-core/**
+      - crates/kriyon-remote/**
+      - crates/kriyon-remote-link/**
+      - crates/kriyon-relay-client/**
+      - crates/kriyon-push/**
+      - Cargo.toml
+      - Cargo.lock
+      - .github/workflows/windows.yml
+  workflow_dispatch:
+
+# Nothing by default; each job asks for what it needs.
+permissions: {}
+
+# A new push to the same branch or pull request cancels the run it replaces.
+concurrency:
+  group: windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  crates:
+    name: Remote crates on Windows (clippy, test)
+    runs-on: windows-2025
+    timeout-minutes: 40
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The runner's own rustup, as CI's other Rust jobs.
+      - run: |
+          rustup toolchain install stable --profile minimal --component clippy
+          rustup default stable
+        shell: bash
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Clippy
+        shell: bash
+        run: >-
+          cargo clippy -p kriyon-core -p kriyon-remote -p kriyon-remote-link
+          -p kriyon-relay-client -p kriyon-push --all-targets -- -D warnings
+      - name: Tests (the remote crates; kriyon-core's come with PR #48)
+        shell: bash
+        run: cargo test -p kriyon-remote -p kriyon-remote-link -p kriyon-relay-client -p kriyon-push

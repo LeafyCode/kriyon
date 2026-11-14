@@ -354,6 +354,8 @@ mod tests {
         assert_eq!(err, FolderRefusal::NotADirectory);
     }
 
+    // Windows makes symlinks only with a privilege; the rule is the same.
+    #[cfg(unix)]
     #[test]
     fn a_symlink_inside_a_root_that_points_outside_is_refused() {
         let root = tempfile::tempdir().unwrap();
@@ -364,6 +366,7 @@ mod tests {
         assert_eq!(err, FolderRefusal::OutsideApprovedRoots);
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_symlink_to_a_folder_inside_a_root_passes_as_its_target() {
         let root = tempfile::tempdir().unwrap();
@@ -374,6 +377,7 @@ mod tests {
         assert_eq!(folder.canonical(), canon(root.path()).join("real"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_root_spelled_through_a_symlink_still_contains_its_folders() {
         // macOS: `/var/folders/...` is a symlink to `/private/var/...`. A root
@@ -416,6 +420,7 @@ mod tests {
         assert_eq!(err, FolderRefusal::NotChosen);
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_chosen_folder_matches_through_a_symlinked_spelling() {
         let real = tempfile::tempdir().unwrap();
