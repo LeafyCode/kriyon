@@ -10,6 +10,8 @@ description = "The network link of Kriyon's remote access, over iroh: endpoints,
 iroh = { version = "1.4.1", default-features = false, features = ["tls-ring"] }
 kriyon-core = { path = "../kriyon-core", optional = true }
 kriyon-remote = { path = "../kriyon-remote" }
+# The interfaces, for this computer's Tailscale addresses: iroh's own.
+netwatch = "0.19.3"
 parking_lot = { version = "0.12", optional = true }
 tokio = { version = "1", default-features = false, features = ["macros", "rt", "sync", "time"] }
 

@@ -899,3 +899,59 @@ async fn a_host_that_stopped_accepting_refuses_and_drops_its_links() {
         Accepted::Remote(_)
     ));
 }
+
+#[tokio::test]
+async fn an_invite_lists_the_hosts_tailscale_addresses_on_its_port() {
+    use kriyon_remote_link::invite::invite_on;
+
+    let store = Arc::new(Store::default());
+    let host = host(&store, 10).await;
+    let port = host
+        .bound_sockets()
+        .iter()
+        .find(|addr| addr.is_ipv4())
+        .expect("an IPv4 socket")
+        .port();
+    let tailscale: std::net::IpAddr = "100.101.102.103".parse().expect("an address");
+    let invite = invite_on(&host, SECRET, &[tailscale]);
+    assert!(
+        invite.addrs.contains(&format!("100.101.102.103:{port}")),
+        "{:?}",
+        invite.addrs
+    );
+    // And what the endpoint itself reported, first.
+    assert!(
+        invite.addrs[0].starts_with("127.0.0.1:"),
+        "{:?}",
+        invite.addrs
+    );
+}
+
+/// The host's LAN address changed (the old one answers nothing now) but its
+/// Tailscale one didn't: the device still gets through, trying each address
+/// it stored at pairing. Loopback stands in for the Tailscale address.
+#[tokio::test]
+async fn a_paired_device_gets_through_on_its_tailscale_address_when_the_lan_one_changed() {
+    use kriyon_remote_link::invite::endpoint_addr;
+
+    let store = Arc::new(Store::default());
+    let host = Arc::new(host(&store, 10).await);
+    let phone = device(2).await;
+    pair(Arc::clone(&host), &store, &phone, Role::Controller).await;
+    let port = host.addr().ip_addrs().next().expect("an address").port();
+    let stored = endpoint_addr(
+        &host.id(),
+        &[
+            // The LAN address it had at pairing: TEST-NET, nothing answers.
+            format!("192.0.2.1:{port}"),
+            // Its "Tailscale" address, unchanged.
+            format!("127.0.0.1:{port}"),
+        ],
+        None,
+    )
+    .expect("an address");
+    let (link, accepted) = tokio::join!(timeout(WAIT, phone.connect(stored)), next_accepted(&host));
+    let link = link.expect("in time").expect("connected");
+    assert!(matches!(accepted, Accepted::Remote(_)), "a remote link");
+    link.open_stream().await.expect("a stream");
+}

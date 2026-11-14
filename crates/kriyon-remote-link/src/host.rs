@@ -162,6 +162,12 @@ impl Host {
         self.shared.endpoint.addr()
     }
 
+    /// The sockets the host's endpoint listens on.
+    #[must_use]
+    pub fn bound_sockets(&self) -> Vec<std::net::SocketAddr> {
+        self.shared.endpoint.bound_sockets()
+    }
+
     /// The person pressed "Pair a device": serve `kriyon/pair/1` for this
     /// secret and role until it is used, burned, expired or stopped. A new
     /// pairing replaces one still pending.

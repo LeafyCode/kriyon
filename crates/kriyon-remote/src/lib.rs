@@ -19,6 +19,7 @@ pub mod pairing;
 pub use kriyon_push_seal as push;
 pub mod queue;
 pub mod relay;
+pub mod routes;
 pub mod screen;
 pub mod text;
 pub mod writer;

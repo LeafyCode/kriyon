@@ -168,7 +168,9 @@ impl RemoteRuntime {
             attempt: None,
             burned: false,
         };
-        Ok(crate::invite::invite(&running.host, secret))
+        // A device on the same tailnet reaches this computer from anywhere.
+        let tailscale = crate::invite::tailscale_ips().await;
+        Ok(crate::invite::invite_on(&running.host, secret, &tailscale))
     }
 
     /// Stop the pairing in progress, if any.

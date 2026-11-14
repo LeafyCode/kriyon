@@ -2,7 +2,7 @@
 
 use std::net::SocketAddr;
 
-use iroh::endpoint::{presets, QuicTransportConfig, VarInt};
+use iroh::endpoint::{presets, BindOpts, QuicTransportConfig, VarInt};
 use iroh::{Endpoint, RelayConfig, RelayMode, RelayUrl, SecretKey};
 use kriyon_remote::codec::CodecError;
 use kriyon_remote::link_policy::CloseCode;
@@ -116,9 +116,13 @@ pub async fn bind(config: &LinkConfig, alpns: Vec<Vec<u8>>) -> Result<Endpoint, 
         .max_concurrent_uni_streams(VarInt::from_u32(0))
         .build();
     let relay = relay_mode(config);
+    // On every IPv4 interface, IPv6 too on the same port where it can be
+    // had (Tailscale's IPv6 addresses, say); a missing IPv6 is no error.
+    let also_v6 = (config.bind.ip() == std::net::Ipv4Addr::UNSPECIFIED)
+        .then(|| SocketAddr::from((std::net::Ipv6Addr::UNSPECIFIED, config.bind.port())));
     // The minimal preset: no address lookup of any kind. Devices learn the
     // host's addresses at pairing.
-    let endpoint = Endpoint::builder(presets::Minimal)
+    let builder = Endpoint::builder(presets::Minimal)
         .secret_key(SecretKey::from_bytes(&config.secret_key))
         .alpns(alpns)
         .relay_mode(relay)
@@ -130,10 +134,14 @@ pub async fn bind(config: &LinkConfig, alpns: Vec<Vec<u8>>) -> Result<Endpoint, 
         .transport_config(transport)
         .clear_ip_transports()
         .bind_addr(config.bind)
-        .map_err(|e| bind_err(&e))?
-        .bind()
-        .await
         .map_err(|e| bind_err(&e))?;
+    let builder = match also_v6 {
+        Some(v6) => builder
+            .bind_addr_with_opts(v6, BindOpts::default().set_is_required(false))
+            .map_err(|e| bind_err(&e))?,
+        None => builder,
+    };
+    let endpoint = builder.bind().await.map_err(|e| bind_err(&e))?;
     Ok(endpoint)
 }
 

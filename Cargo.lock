@@ -3549,6 +3549,7 @@ dependencies = [
  "kriyon-core",
  "kriyon-remote",
  "kriyon-remote-link",
+ "netwatch",
  "parking_lot",
  "tokio",
  "windows-sys 0.61.2",
