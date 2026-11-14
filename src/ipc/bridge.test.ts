@@ -274,11 +274,11 @@ describe.each(eventCases)("$name", ({ subscribe, event, payload, verify }) => {
 });
 
 describe("bridge", () => {
-  test("createSession invokes create_session with id, cwd and channel and resolves to the reattached flag", async () => {
-    invoke.mockResolvedValueOnce(true);
+  test("createSession invokes create_session with id, cwd and channel and resolves to what it opened", async () => {
+    invoke.mockResolvedValueOnce({ reattached: true, shell: "powerShell" });
     const onBytes = vi.fn();
 
-    const reattached = await createSession(
+    const opened = await createSession(
       "uuid-1",
       "/home/u",
       onBytes,
@@ -286,7 +286,7 @@ describe("bridge", () => {
       vi.fn()
     );
 
-    expect(reattached).toBe(true);
+    expect(opened).toEqual({ reattached: true, shell: "powerShell" });
     expect(invoke).toHaveBeenCalledTimes(1);
     const [command, payload] = invoke.mock.calls[0] as [
       string,

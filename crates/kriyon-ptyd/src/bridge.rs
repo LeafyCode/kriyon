@@ -10,8 +10,6 @@
 //! `kriyon_core::bridge`.
 
 use std::io::{Read as _, Write as _};
-use std::os::unix::fs::MetadataExt as _;
-use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Duration;
@@ -20,14 +18,15 @@ use kriyon_core::bridge::{
     check_poster, is_partial, parse_request, spool_line, PosterRefusal, Request, BAD_REQUEST,
     MAX_BODY, NO_CONTENT,
 };
+use kriyon_core::private_fs::file_identity;
 use kriyon_core::proc::TerminalSeat;
+use kriyon_core::uds::{UnixListener, UnixStream};
 
 /// Serve the bridge for session `id` if the app asked for one (it put the
 /// socket path in this daemon's env). Best-effort: the terminal works the same
 /// without it.
 pub fn spawn(id: &str) {
-    let (Ok(socket), Ok(home)) = (std::env::var("KRIYON_BRIDGE_SOCKET"), std::env::var("HOME"))
-    else {
+    let (Ok(socket), Some(home)) = (std::env::var("KRIYON_BRIDGE_SOCKET"), home_dir()) else {
         return;
     };
     if !kriyon_core::daemon::is_valid_session_id(id) {
@@ -55,8 +54,8 @@ static OWNER: Mutex<Owner> = Mutex::new(Owner {
 });
 
 struct Owner {
-    /// The socket file this daemon bound: its path, device and inode.
-    bound: Option<(PathBuf, u64, u64)>,
+    /// The socket file this daemon bound: its path and file identity.
+    bound: Option<(PathBuf, (u64, u64))>,
     /// The daemon is on its way out: a bind that hasn't happened yet doesn't.
     stopped: bool,
 }
@@ -71,10 +70,10 @@ pub fn remove_socket() {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     owner.stopped = true;
-    let Some((socket, dev, ino)) = owner.bound.take() else {
+    let Some((socket, identity)) = owner.bound.take() else {
         return;
     };
-    let ours = std::fs::symlink_metadata(&socket).is_ok_and(|m| m.dev() == dev && m.ino() == ino);
+    let ours = file_identity(&socket).is_ok_and(|now| now == identity);
     if ours {
         let _ = std::fs::remove_file(socket);
     }
@@ -104,7 +103,6 @@ fn serve(socket: &Path, files: &Files) -> std::io::Result<()> {
 
 /// Bind `socket` owner-only, replacing a stale file (never a live one).
 fn bind(socket: &Path) -> std::io::Result<UnixListener> {
-    use std::os::unix::fs::PermissionsExt as _;
     if UnixStream::connect(socket).is_ok() {
         return Err(std::io::Error::new(
             std::io::ErrorKind::AddrInUse,
@@ -119,7 +117,7 @@ fn bind(socket: &Path) -> std::io::Result<UnixListener> {
     }
     let _ = std::fs::remove_file(socket);
     let listener = UnixListener::bind(socket)?;
-    let bound = match std::fs::symlink_metadata(socket) {
+    let bound = match file_identity(socket) {
         Ok(bound) => bound,
         Err(e) => {
             // Just made, so ours: nothing would remove it later.
@@ -127,10 +125,24 @@ fn bind(socket: &Path) -> std::io::Result<UnixListener> {
             return Err(e);
         }
     };
-    owner.bound = Some((socket.to_path_buf(), bound.dev(), bound.ino()));
+    owner.bound = Some((socket.to_path_buf(), bound));
     drop(owner);
-    std::fs::set_permissions(socket, std::fs::Permissions::from_mode(0o600))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(socket, std::fs::Permissions::from_mode(0o600))?;
+    }
     Ok(listener)
+}
+
+/// The home folder the spool lives under: `HOME` on Unix, the profile folder
+/// on Windows (where `HOME`, if set at all, is Git Bash's idea of it).
+fn home_dir() -> Option<String> {
+    #[cfg(windows)]
+    let var = "USERPROFILE";
+    #[cfg(not(windows))]
+    let var = "HOME";
+    std::env::var(var).ok()
 }
 
 fn handle(mut stream: UnixStream, files: &Files) {
@@ -340,7 +352,6 @@ mod tests {
 
     #[test]
     fn posted_events_land_in_the_spool_one_redacted_line_each() {
-        use std::os::unix::fs::PermissionsExt as _;
         let tmp = tempfile::tempdir().expect("tempdir");
         let socket = tmp.path().join("s.b.sock");
         let spool = tmp.path().join("bridge/s.jsonl");
@@ -366,20 +377,28 @@ mod tests {
         );
         assert!(send(&socket, r#"{"kind":"row","text":"password=x"}"#).starts_with("HTTP/1.1 204"));
         assert!(send(&socket, "not json").starts_with("HTTP/1.1 400"));
-        let mode = |p: &Path| std::fs::metadata(p).expect("exists").permissions().mode() & 0o777;
+        #[cfg(unix)]
+        let mode = |p: &Path| {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::metadata(p).expect("exists").permissions().mode() & 0o777
+        };
         // A partial reply replaces the last one and never joins the spool.
         send(&socket, r#"{"kind":"partial","text":"Hel"}"#);
         send(&socket, r#"{"kind":"partial","text":"Hello"}"#);
         let newest = std::fs::read_to_string(&partial).expect("partial");
         assert!(newest.contains(r#""text":"Hello""#) && !newest.contains("Hel\""));
+        #[cfg(unix)]
         assert_eq!(mode(&partial), 0o600);
 
         let text = std::fs::read_to_string(&spool).expect("spool");
         let lines: Vec<&str> = text.lines().collect();
         assert_eq!(lines.len(), 2);
         assert!(lines[1].contains("password=[REDACTED]"));
-        assert_eq!(mode(&spool), 0o600);
-        assert_eq!(mode(&socket), 0o600);
+        #[cfg(unix)]
+        {
+            assert_eq!(mode(&spool), 0o600);
+            assert_eq!(mode(&socket), 0o600);
+        }
     }
 
     #[cfg(any(target_os = "macos", target_os = "linux"))]

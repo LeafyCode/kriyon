@@ -1,6 +1,7 @@
 import type { CSSProperties, KeyboardEvent } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { readClipboard } from "../ipc/bridge.ts";
+import { shortcutLabel } from "../platform/shortcut.ts";
 import { useDrafts } from "../state/drafts.ts";
 import { useLayout } from "../state/layout.ts";
 import {
@@ -515,7 +516,9 @@ export function PromptPicker() {
                   {renderPromptRows()}
                 </div>
                 <div style={legendStyle}>
-                  Enter insert · ⌘F favourite · ⌘E edit · ⌘⌫ delete
+                  {shortcutLabel(
+                    "Enter insert · ⌘F favourite · ⌘E edit · ⌘⌫ delete"
+                  )}
                 </div>
               </>
             ) : (

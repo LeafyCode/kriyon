@@ -13,59 +13,93 @@
 //! GNOME Keyring, `KWallet`; `keyring_vault`), which keeps them encrypted and
 //! readable while the person's session is unlocked. A keyring that is
 //! missing or stays locked is an error; nothing falls back to a file.
+//!
+//! On Windows, in the person's Credential Manager, kept on this PC only;
+//! a secret too big for a credential (a long relay sign-in) is sealed with
+//! DPAPI, the person's own Windows encryption, into the app's local data
+//! folder (`kriyon_remote_link::keys::windows`). Never a plain file.
+
+use std::path::Path;
 
 use kriyon_remote_link::keys::KeyVault;
 use kriyon_remote_link::keys::SecretVault;
 
 /// The app's secret `account`: the keychain item (macOS), the keyring item
-/// (Linux); elsewhere, none yet: reads find nothing and writes fail.
+/// (Linux), the credential or sealed file (Windows, which needs
+/// `local_data`, the app's local data folder); elsewhere, none yet: reads
+/// find nothing and writes fail.
 #[must_use]
-pub fn app_vault(identifier: &str, account: &'static str) -> Box<dyn SecretVault> {
+pub fn app_vault(
+    identifier: &str,
+    account: &'static str,
+    local_data: Option<&Path>,
+) -> Box<dyn SecretVault> {
     #[cfg(target_os = "macos")]
     {
+        let _ = local_data;
         Box::new(Keychain::item(identifier, account))
     }
     #[cfg(target_os = "linux")]
     {
+        let _ = local_data;
         Box::new(crate::keyring_vault::KeyringVault::new(
             crate::keyring_vault::SecretServiceKeyring,
             identifier,
             account,
         ))
     }
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    #[cfg(windows)]
     {
-        let _ = (identifier, account);
-        Box::new(NoVault)
+        match local_data {
+            Some(dir) => Box::new(kriyon_remote_link::keys::windows::app_vault(
+                identifier, account, dir,
+            )),
+            None => Box::new(NoVault("this app has no local data folder")),
+        }
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
+    {
+        let _ = (identifier, account, local_data);
+        Box::new(NoVault("no keychain on this platform yet"))
     }
 }
 
-/// Where the host's [Device key] is kept, or `None` on a platform with no
-/// keychain support yet.
+/// Where the host's [Device key] is kept (`local_data` as for
+/// [`app_vault`]), or `None` on a platform with no keychain support yet.
 #[must_use]
-pub fn key_vault(identifier: &str) -> Option<Box<dyn KeyVault>> {
+pub fn key_vault(identifier: &str, local_data: Option<&Path>) -> Option<Box<dyn KeyVault>> {
     #[cfg(target_os = "macos")]
     {
+        let _ = local_data;
         Some(Box::new(Keychain::for_app(identifier)))
     }
     #[cfg(target_os = "linux")]
     {
+        let _ = local_data;
         Some(Box::new(crate::keyring_vault::KeyringVault::new(
             crate::keyring_vault::SecretServiceKeyring,
             identifier,
             "device-key",
         )))
     }
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    #[cfg(windows)]
     {
-        let _ = identifier;
+        Some(Box::new(kriyon_remote_link::keys::windows::app_vault(
+            identifier,
+            "device-key",
+            local_data?,
+        )))
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
+    {
+        let _ = (identifier, local_data);
         None
     }
 }
 
-/// No keychain on this platform yet.
+/// No store for a secret here: reads find nothing, writes fail saying why.
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-struct NoVault;
+struct NoVault(&'static str);
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
 impl SecretVault for NoVault {
@@ -73,7 +107,7 @@ impl SecretVault for NoVault {
         Ok(None)
     }
     fn write(&self, _secret: &[u8]) -> Result<(), String> {
-        Err("no keychain on this platform yet".into())
+        Err(self.0.into())
     }
     fn remove(&self) -> Result<(), String> {
         Ok(())

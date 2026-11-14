@@ -4,8 +4,8 @@
 //! window draws — the [Output gate] paces it by a webview that drains, and
 //! holds or drops what a stalled one can't take yet.
 
+use kriyon_core::uds::UnixStream;
 use std::io::{Read, Write};
-use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -31,6 +31,10 @@ pub const WINDOW_SNAPSHOT: u32 = u32::MAX;
 /// and freeze the app's exit behind it.
 const WRITE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 const ACCEPT_POLL: std::time::Duration = std::time::Duration::from_millis(10);
+
+/// How often a Windows reader wakes to see whether it was told to leave.
+#[cfg(windows)]
+const READER_WAKE: std::time::Duration = std::time::Duration::from_millis(200);
 
 fn io_err<E: std::fmt::Display>(e: E) -> EngineError {
     EngineError::Pty(e.to_string())
@@ -158,6 +162,9 @@ impl DaemonClient {
         )
     }
 
+    // One reader thread's whole loop (frames, the output gate, Windows'
+    // wake-to-leave); split, its shared state would be passed piecemeal.
+    #[allow(clippy::too_many_lines)]
     fn build<E, F, H>(
         stream: UnixStream,
         id: SessionId,
@@ -172,6 +179,12 @@ impl DaemonClient {
         H: FnOnce() + Send + 'static,
     {
         let mut reader = stream.try_clone().map_err(io_err)?;
+        // On Windows, shutting down a connection the daemon never accepted (one
+        // still queued behind another instance's client) does not wake a
+        // reader blocked on it, so `disconnect` would wait on it forever. The
+        // reader wakes on its own instead, and leaves once told to.
+        #[cfg(windows)]
+        let _ = reader.set_read_timeout(Some(READER_WAKE));
         // Bounds the writer only: the option lives on the shared socket, but the
         // reader never writes.
         let _ = stream.set_write_timeout(Some(WRITE_TIMEOUT));
@@ -199,6 +212,16 @@ impl DaemonClient {
             let mut buf = [0u8; READ_BUF_LEN];
             'connection: loop {
                 match reader.read(&mut buf) {
+                    Err(e)
+                        if matches!(
+                            e.kind(),
+                            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                        ) =>
+                    {
+                        if reader_closing.load(Ordering::Relaxed) {
+                            break;
+                        }
+                    }
                     Ok(0) | Err(_) => break,
                     Ok(n) => {
                         dec.push(&buf[..n]);
@@ -503,8 +526,8 @@ impl SessionEngine for DaemonClient {
 
 #[cfg(test)]
 pub(crate) mod test_support {
+    use kriyon_core::uds::UnixListener;
     use std::io::{Read as _, Write as _};
-    use std::os::unix::net::UnixListener;
     use std::path::Path;
     use std::sync::{Arc, Mutex as StdMutex};
 
@@ -619,7 +642,7 @@ mod tests {
             })
         );
     }
-    use std::os::unix::net::UnixListener;
+    use kriyon_core::uds::UnixListener;
     use std::sync::Mutex as StdMutex;
     use std::time::{Duration, Instant};
 

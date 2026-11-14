@@ -74,6 +74,9 @@ pub enum HooksOff {
     User,
     /// The user turned Kriyon's hooks off in Kriyon's own Settings.
     Kriyon,
+    /// Not a settings file: the hooks are on, but this computer has no Python
+    /// to run them with (Windows ships none), so Kriyon left them out.
+    Python,
 }
 
 /// The parsed settings that decide whether Kriyon's hooks run for a session,
@@ -514,6 +517,10 @@ pub fn is_idle_prompt_message(message: Option<&str>) -> bool {
 
 #[cfg(test)]
 mod tests {
+    /// The Python the hook scripts run under: `python3` on macOS; on Windows
+    /// `python`, since `python3` there is the Microsoft Store stub.
+    const PYTHON: &str = if cfg!(windows) { "python" } else { "python3" };
+
     use super::*;
 
     fn layer(json: &str) -> Option<Value> {
@@ -944,9 +951,10 @@ mod tests {
         let tmp = home;
         let script = tmp.join("kriyon-hook.py");
         std::fs::write(&script, HOOK_SCRIPT).expect("write script");
-        let out = std::process::Command::new("python3")
+        let out = std::process::Command::new(PYTHON)
             .arg(&script)
             .env("HOME", tmp)
+            .env("USERPROFILE", tmp)
             // A test run from a Kriyon terminal inherits the real session's
             // values; each case sets only the ones it means to.
             .env_remove("CLAUDE_PID")
@@ -992,6 +1000,7 @@ mod tests {
         let status = std::process::Command::new("script")
             .args(["-q", "/dev/null", "sh", "-c", &inner])
             .env("HOME", tmp.path())
+            .env("USERPROFILE", tmp.path())
             .env("KRIYON_SESSION", "sess-1")
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
@@ -1017,6 +1026,9 @@ mod tests {
         assert!(run_hook_script_on_a_terminal(Some("/dev/ttys999")).is_none());
     }
 
+    // Reads the session's terminal device; Windows has none and the scripts
+    // fail open there.
+    #[cfg(unix)]
     #[test]
     fn the_hook_script_drops_a_claude_with_no_terminal() {
         // A `claude -p` from a Bash command: Claude Code runs each command in a
@@ -1499,10 +1511,11 @@ mod tests {
         let script = tmp.path().join("kriyon-usage.py");
         std::fs::write(&script, USAGE_SCRIPT).expect("write script");
         let payload = br#"{"session_id":"s","model":{"display_name":"Claude"},"context_window":{"used_percentage":12.5,"context_window_size":200000,"total_input_tokens":10,"total_output_tokens":20}}"#;
-        let out = std::process::Command::new("python3")
+        let out = std::process::Command::new(PYTHON)
             .arg(&script)
             .arg("sess-1")
             .env("HOME", tmp.path())
+            .env("USERPROFILE", tmp.path())
             .stdin(std::process::Stdio::piped())
             .spawn()
             .and_then(|mut child| {
@@ -1547,10 +1560,11 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         let script = tmp.path().join("kriyon-usage.py");
         std::fs::write(&script, USAGE_SCRIPT).expect("write script");
-        let out = std::process::Command::new("python3")
+        let out = std::process::Command::new(PYTHON)
             .arg(&script)
             .arg(sid)
             .env("HOME", tmp.path())
+            .env("USERPROFILE", tmp.path())
             .env_remove("KRIYON_SESSION")
             .envs(env.iter().copied())
             .stdin(std::process::Stdio::piped())
@@ -1616,6 +1630,9 @@ mod tests {
             .exists());
     }
 
+    // Reads the session's terminal device; Windows has none and the scripts
+    // fail open there.
+    #[cfg(unix)]
     #[test]
     fn the_usage_script_drops_a_nested_claudes_context_but_keeps_its_limits() {
         // A nested interactive `claude` renders a status line too. Its context

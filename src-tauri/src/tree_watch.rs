@@ -15,6 +15,7 @@
 //! [`kriyon_core::tree_watch`] — pure and unit-tested there. This module is the
 //! thread, the `notify` subscription, and the refcounted registry.
 
+use kriyon_core::paths::Canonical as _;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -78,7 +79,7 @@ where
     // rather than erroring, which is the worst shape a bug like this can take.
     // `watch()` below still gets the caller's path; only matching is canonical.
     let root = repo_root
-        .canonicalize()
+        .canonical()
         .unwrap_or_else(|_| repo_root.to_path_buf());
     let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
         let Ok(event) = res else {

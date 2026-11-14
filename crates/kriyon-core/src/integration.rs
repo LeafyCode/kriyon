@@ -72,6 +72,27 @@ pub fn hook_route(prefs: IntegrationPrefs, policy: SideloadPolicy) -> HookRoute 
     }
 }
 
+/// Whether Kriyon itself keeps a session's hooks from running, and why: the
+/// user turned them off in Kriyon's Settings, or they are on but there is no
+/// Python to run them (`can_run_hooks` false). `None` when Kriyon's side is
+/// fine, or before consent, when there is nothing to report.
+#[must_use]
+pub fn kriyon_hooks_off(
+    prefs: IntegrationPrefs,
+    route: HookRoute,
+    can_run_hooks: bool,
+) -> Option<crate::hooks::HooksOff> {
+    if !prefs.consented {
+        None
+    } else if route == HookRoute::Off {
+        Some(crate::hooks::HooksOff::Kriyon)
+    } else if can_run_hooks {
+        None
+    } else {
+        Some(crate::hooks::HooksOff::Python)
+    }
+}
+
 /// Why the hooks are on the route they are — what the UI explains, decided
 /// by the same rule as [`hook_route`] so the two can't disagree.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -153,16 +174,20 @@ pub fn plugin_manifest(version: &str) -> String {
 /// The companion folder's `hooks/hooks.json`: Kriyon's command hook for every
 /// registered event, plus the companion mod module when `module` is given.
 #[must_use]
-pub fn plugin_hooks(command: &str, module: Option<&str>) -> String {
-    let hooks: serde_json::Map<String, Value> = REGISTERED_HOOK_EVENTS
-        .iter()
-        .map(|event| {
-            (
-                (*event).to_string(),
-                json!([{ "hooks": [{ "type": "command", "command": command }] }]),
-            )
-        })
-        .collect();
+pub fn plugin_hooks(command: Option<&str>, module: Option<&str>) -> String {
+    // No command: the hook script can't run on this computer (Windows with no
+    // Python), so only the companion module rides in the folder.
+    let hooks: serde_json::Map<String, Value> = command.map_or_default(|command| {
+        REGISTERED_HOOK_EVENTS
+            .iter()
+            .map(|event| {
+                (
+                    (*event).to_string(),
+                    json!([{ "hooks": [{ "type": "command", "command": command }] }]),
+                )
+            })
+            .collect()
+    });
     let mut doc = json!({ "hooks": hooks });
     if let (Some(module), Some(obj)) = (module, doc.as_object_mut()) {
         obj.insert("modules".to_string(), json!([module]));
@@ -352,6 +377,34 @@ impl RefusalWatch {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn hooks_with_nothing_to_run_them_are_reported_as_off_for_python() {
+        use crate::hooks::HooksOff;
+        let consented = IntegrationPrefs {
+            consented: true,
+            ..IntegrationPrefs::default()
+        };
+        assert_eq!(kriyon_hooks_off(consented, HookRoute::Plugin, true), None);
+        assert_eq!(
+            kriyon_hooks_off(consented, HookRoute::Plugin, false),
+            Some(HooksOff::Python)
+        );
+        assert_eq!(
+            kriyon_hooks_off(consented, HookRoute::Settings, false),
+            Some(HooksOff::Python)
+        );
+        // Turned off in Kriyon says so, Python or not.
+        assert_eq!(
+            kriyon_hooks_off(consented, HookRoute::Off, false),
+            Some(HooksOff::Kriyon)
+        );
+        // Before consent nothing is installed, so nothing is reported.
+        assert_eq!(
+            kriyon_hooks_off(IntegrationPrefs::default(), HookRoute::Off, false),
+            None
+        );
+    }
+
     use super::*;
 
     fn prefs(consented: bool, status_hooks: bool) -> IntegrationPrefs {
@@ -438,13 +491,14 @@ mod tests {
 
     #[test]
     fn plugin_hooks_register_every_event_and_the_mod_only_when_asked() {
-        let doc: Value = serde_json::from_str(&plugin_hooks("python3 'x'", None)).expect("JSON");
+        let doc: Value =
+            serde_json::from_str(&plugin_hooks(Some("python3 'x'"), None)).expect("JSON");
         for event in REGISTERED_HOOK_EVENTS {
             assert_eq!(doc["hooks"][event][0]["hooks"][0]["command"], "python3 'x'");
         }
         assert!(doc.get("modules").is_none());
         let doc: Value =
-            serde_json::from_str(&plugin_hooks("c", Some("./companion.js"))).expect("JSON");
+            serde_json::from_str(&plugin_hooks(Some("c"), Some("./companion.js"))).expect("JSON");
         assert_eq!(doc["modules"], json!(["./companion.js"]));
         let manifest: Value = serde_json::from_str(&plugin_manifest("1.2.3")).expect("JSON");
         assert_eq!(manifest["name"], PLUGIN_NAME);

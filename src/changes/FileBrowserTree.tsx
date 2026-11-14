@@ -19,6 +19,7 @@ import {
   revealPath,
 } from "../ipc/bridge.ts";
 import { failureMessage } from "../ipc/failures.ts";
+import { fileManagerName } from "../platform/os.ts";
 import { EMPTY_EXPANDED_DIRS, useChanges } from "../state/changes.ts";
 import { requestRefresh, useRevalidateOn } from "../state/changesRefresh.ts";
 import type { TreeDecorations } from "../state/changesView.ts";
@@ -1117,7 +1118,7 @@ export function FileBrowserTree({
       });
     }
     items.push({
-      label: "Reveal in Finder",
+      label: `Reveal in ${fileManagerName()}`,
       onSelect: () => reportFailure(revealPath(cwd, entry.path)),
       separatorBefore: entry.isDir,
     });

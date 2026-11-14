@@ -1,4 +1,5 @@
 import type { CSSProperties, ReactNode } from "react";
+import { platformKeys } from "../platform/shortcut.ts";
 import { formatCpu, formatMb } from "../sidebar/memoryChip.ts";
 import { button, iconButton, sectionLabel } from "../theme/recipes.ts";
 import { statusDotStyle, statusMeta } from "../theme/status.ts";
@@ -485,15 +486,18 @@ export default function TrayPanel(props: TrayPanelProps) {
           type="button"
         >
           New session{" "}
-          <span
-            style={{
-              fontFamily: tokens.font.mono,
-              fontSize: 10,
-              opacity: 0.75,
-            }}
-          >
-            ⌘N
-          </span>
+          {platformKeys(["⌘N"]).map((key) => (
+            <span
+              key={key}
+              style={{
+                fontFamily: tokens.font.mono,
+                fontSize: 10,
+                opacity: 0.75,
+              }}
+            >
+              {key}
+            </span>
+          ))}
         </button>
       </footer>
     </div>

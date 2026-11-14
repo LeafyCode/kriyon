@@ -10,6 +10,8 @@ import {
 } from "../ipc/bridge.ts";
 import { failureMessage } from "../ipc/failures.ts";
 import { ViewHeader } from "../layout/ViewHeader.tsx";
+import { thisComputer } from "../platform/os.ts";
+import { platformCopy } from "../platform/shortcut.ts";
 import { useIntegration } from "../state/integration.ts";
 import {
   isNestedCap,
@@ -536,8 +538,8 @@ function ActivityGroup() {
   };
   useEffect(load, []);
   const hint = stats
-    ? `${keptFor(stats.retentionDays)} and up to ${megabytes(stats.sizeCapBytes)}, only on this Mac. Now ${stats.sessions} sessions, ${megabytes(stats.sizeBytes)}. Known secrets are hidden on a best-effort basis.`
-    : "Kept only on this Mac.";
+    ? `${keptFor(stats.retentionDays)} and up to ${megabytes(stats.sizeCapBytes)}, only on ${thisComputer()}. Now ${stats.sessions} sessions, ${megabytes(stats.sizeBytes)}. Known secrets are hidden on a best-effort basis.`
+    : `Kept only on ${thisComputer()}.`;
   return (
     <SettingGroup hideLabel label="Activity log">
       <SettingRow
@@ -787,7 +789,9 @@ function LayoutSection() {
               Take the tour
             </button>
           }
-          hint="A one-minute look at every part of the window. Also in Help → Kriyon Tour."
+          hint={platformCopy(
+            "A one-minute look at every part of the window.{mac: Also in Help → Kriyon Tour.}"
+          )}
           label="App tour"
         />
       </SettingGroup>
@@ -963,7 +967,7 @@ function ActivitySection() {
   return (
     <SectionPage
       id="activity"
-      lead="What Kriyon records about each session, kept on this Mac."
+      lead={`What Kriyon records about each session, kept on ${thisComputer()}.`}
     >
       <ActivityGroup />
     </SectionPage>

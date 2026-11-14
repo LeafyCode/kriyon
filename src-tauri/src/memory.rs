@@ -76,7 +76,29 @@ mod mach {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+/// Windows counts process times in 100 ns units: the FILETIME a process's
+/// creation, CPU times and the clock are all read in.
+#[cfg(windows)]
+mod mach {
+    pub fn timebase() -> kriyon_core::memory::Timebase {
+        kriyon_core::memory::Timebase {
+            numer: 100,
+            denom: 1,
+        }
+    }
+
+    pub fn now_ticks() -> u64 {
+        // SAFETY: plain-old-data out parameter.
+        let mut now = unsafe { std::mem::zeroed() };
+        // SAFETY: `now` is valid for writes.
+        unsafe {
+            windows_sys::Win32::System::SystemInformation::GetSystemTimeAsFileTime(&raw mut now);
+        };
+        super::win::ticks(now)
+    }
+}
+
+#[cfg(not(any(target_os = "macos", windows)))]
 mod mach {
     pub fn timebase() -> kriyon_core::memory::Timebase {
         kriyon_core::memory::Timebase::IDENTITY
@@ -84,6 +106,68 @@ mod mach {
 
     pub fn now_ticks() -> u64 {
         0
+    }
+}
+
+/// The Windows ends of a reading: one process's memory and times.
+#[cfg(windows)]
+mod win {
+    use windows_sys::Win32::Foundation::{CloseHandle, FILETIME};
+    use windows_sys::Win32::System::ProcessStatus::{
+        GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS, PROCESS_MEMORY_COUNTERS_EX,
+    };
+    use windows_sys::Win32::System::Threading::{
+        GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+
+    pub fn ticks(time: FILETIME) -> u64 {
+        (u64::from(time.dwHighDateTime) << 32) | u64::from(time.dwLowDateTime)
+    }
+
+    /// Private bytes (memory only this process holds, what Task Manager's
+    /// commit size shows), CPU time and creation time, in 100 ns ticks.
+    pub fn read(pid: i32) -> Option<(u64, u64, u64)> {
+        let pid = u32::try_from(pid).ok()?;
+        // SAFETY: opening a process by id; a null handle is the error case.
+        let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+        if process.is_null() {
+            return None;
+        }
+        // SAFETY: plain-old-data structs; all zeroes is valid.
+        let mut counters: PROCESS_MEMORY_COUNTERS_EX = unsafe { std::mem::zeroed() };
+        let size = u32::try_from(std::mem::size_of_val(&counters)).unwrap_or(0);
+        counters.cb = size;
+        // SAFETY: as above.
+        let (mut created, mut exited, mut kernel, mut user): (
+            FILETIME,
+            FILETIME,
+            FILETIME,
+            FILETIME,
+        ) = unsafe { std::mem::zeroed() };
+        // SAFETY: every out pointer is valid for writes; `counters` is `size` bytes.
+        let ok = unsafe {
+            GetProcessMemoryInfo(
+                process,
+                (&raw mut counters).cast::<PROCESS_MEMORY_COUNTERS>(),
+                size,
+            ) != 0
+                && GetProcessTimes(
+                    process,
+                    &raw mut created,
+                    &raw mut exited,
+                    &raw mut kernel,
+                    &raw mut user,
+                ) != 0
+        };
+        // SAFETY: `process` came from `OpenProcess` and is closed once.
+        unsafe { CloseHandle(process) };
+        ok.then(|| {
+            (
+                u64::try_from(counters.PrivateUsage).unwrap_or(u64::MAX),
+                ticks(kernel).saturating_add(ticks(user)),
+                ticks(created),
+            )
+        })
     }
 }
 
@@ -101,7 +185,17 @@ fn read_pid(pid: i32) -> Option<PidReading> {
     })
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(windows)]
+fn read_pid(pid: i32) -> Option<PidReading> {
+    let (footprint_bytes, cpu_ticks, start_ticks) = win::read(pid)?;
+    Some(PidReading {
+        footprint_bytes,
+        cpu_ticks,
+        start_ticks,
+    })
+}
+
+#[cfg(not(any(target_os = "macos", windows)))]
 fn read_pid(_pid: i32) -> Option<PidReading> {
     None
 }
@@ -200,7 +294,20 @@ fn env_cache() -> &'static parking_lot::Mutex<EnvCache> {
     CACHE.get_or_init(parking_lot::Mutex::default)
 }
 
-#[cfg(not(target_os = "macos"))]
+/// Windows has no controlling terminals or zombies, and a process another
+/// user owns can't be opened at all — so one that reads is the user's own.
+#[cfg(windows)]
+fn read_bsd(pid: i32) -> Option<BsdFacts> {
+    let (_, _, created) = win::read(pid)?;
+    Some(BsdFacts {
+        tty: None,
+        zombie: false,
+        same_uid: true,
+        start: (created, 0),
+    })
+}
+
+#[cfg(not(any(target_os = "macos", windows)))]
 fn read_bsd(_pid: i32) -> Option<BsdFacts> {
     None
 }

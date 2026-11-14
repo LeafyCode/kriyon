@@ -487,6 +487,9 @@ fn write_file_sync(
     if sniff_contains_nul(&mut existing_file)? {
         return Err("refusing to write a binary file".to_string());
     }
+    // Closed before the rename below: Windows refuses to rename over a file
+    // that is still open ("Access is denied"), so every save would fail there.
+    drop(existing_file);
 
     // Conflict guard: both fields must match (see the doc comment above and
     // the blind-spot note on `mtime_millis`). Reuses the metadata fetched

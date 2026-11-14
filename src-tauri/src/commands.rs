@@ -8,8 +8,7 @@
 //! family because `completion_cmd`, `git_cmd`, and `links_cmd` all depend on
 //! it too.
 
-use std::os::unix::net::UnixStream;
-use std::os::unix::process::CommandExt as _;
+use kriyon_core::uds::UnixStream;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -25,16 +24,71 @@ const INITIAL_ROWS: u16 = 24;
 /// How long to wait for a freshly-spawned daemon's socket to become connectable.
 const DAEMON_READY_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// The daemon's file name beside the app: `kriyon-ptyd`, `.exe` on Windows.
+const PTYD_NAME: &str = if cfg!(windows) {
+    "kriyon-ptyd.exe"
+} else {
+    "kriyon-ptyd"
+};
+
 /// Resolve the `kriyon-ptyd` binary: `$KRIYON_PTYD_BIN`, else a sibling of the
-/// app executable (where the bundler and the dev build both place it).
-fn ptyd_binary() -> PathBuf {
+/// app executable (where the bundler and the dev build both place it). On
+/// Windows the sibling is run from its per-build copy in the run dir
+/// ([`staged_ptyd`]), so an update can replace the installed one.
+fn ptyd_binary(run: &Path) -> PathBuf {
     if let Ok(path) = std::env::var("KRIYON_PTYD_BIN") {
         return PathBuf::from(path);
     }
-    std::env::current_exe()
+    let beside_app = std::env::current_exe()
         .ok()
-        .and_then(|exe| exe.parent().map(|dir| dir.join("kriyon-ptyd")))
-        .unwrap_or_else(|| PathBuf::from("kriyon-ptyd"))
+        .and_then(|exe| exe.parent().map(|dir| dir.join(PTYD_NAME)))
+        .unwrap_or_else(|| PathBuf::from(PTYD_NAME));
+    if cfg!(windows) {
+        staged_ptyd(&beside_app, run).unwrap_or(beside_app)
+    } else {
+        let _ = run;
+        beside_app
+    }
+}
+
+/// The daemon to run on Windows: a copy of `source` kept in the run dir, one
+/// folder per build of it (`<run>/bin/<size>-<modified>/kriyon-ptyd.exe`).
+///
+/// A daemon outlives the app — through a crash, a quit with work running, an
+/// update. Windows can't replace a running program's file, so a daemon run
+/// from the install folder would make every update fail for as long as any
+/// session is open. Run from its own copy, the install folder is always free
+/// to update; a newer build gets a new folder, and older folders go once no
+/// daemon runs from them (removing a running program fails, and is skipped).
+/// `None` when the copy can't be made; the caller then runs `source` itself.
+fn staged_ptyd(source: &Path, run: &Path) -> Option<PathBuf> {
+    let meta = std::fs::metadata(source).ok()?;
+    let modified = meta
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_nanos();
+    let bin = run.join("bin");
+    let key = format!("{}-{modified:x}", meta.len());
+    let dir = bin.join(&key);
+    let staged = dir.join(PTYD_NAME);
+    if !staged.is_file() {
+        std::fs::create_dir_all(&dir).ok()?;
+        // Copied beside, then renamed in: a daemon is never started from a
+        // half-written file.
+        let partial = dir.join(format!("{PTYD_NAME}.partial"));
+        std::fs::copy(source, &partial).ok()?;
+        std::fs::rename(&partial, &staged).ok()?;
+    }
+    if let Ok(entries) = std::fs::read_dir(&bin) {
+        for entry in entries.flatten() {
+            if entry.file_name() != key.as_str() {
+                let _ = std::fs::remove_dir_all(entry.path());
+            }
+        }
+    }
+    Some(staged)
 }
 
 /// This app's daemon run directory under `~/.claude/kriyon/` — `run` for the
@@ -81,17 +135,17 @@ fn spawn_daemon(socket: &Path, run: &Path, id: &str, spec: &SpawnSpec) -> Result
         let _ = std::fs::remove_file(bridge);
     }
 
-    let mut cmd = std::process::Command::new(ptyd_binary());
+    let mut cmd = std::process::Command::new(ptyd_binary(run));
     cmd.arg("--socket")
         .arg(socket)
         .args(["--id", id, "--cwd", &spec.cwd, "--shell", &spec.shell]);
     for (key, value) in &spec.env {
         cmd.env(key, value);
     }
-    // Detach into its own process group so the daemon outlives the app, with no
-    // inherited stdio pipe tying it to the parent.
-    cmd.process_group(0)
-        .stdin(std::process::Stdio::null())
+    // Detach so the daemon outlives the app, with no inherited stdio pipe tying
+    // it to the parent.
+    detach_daemon(&mut cmd);
+    cmd.stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null());
     // Keep the daemon's stderr for field diagnosis rather than discarding it.
     match std::fs::File::create(run.join(format!("{id}.log"))) {
@@ -114,6 +168,24 @@ fn spawn_daemon(socket: &Path, run: &Path, id: &str, spec: &SpawnSpec) -> Result
         }
         std::thread::sleep(Duration::from_millis(50));
     }
+}
+
+/// Start the daemon in its own process group, so a signal to the app's group
+/// (a dev build's Ctrl-C) never reaches it.
+#[cfg(unix)]
+fn detach_daemon(cmd: &mut std::process::Command) {
+    use std::os::unix::process::CommandExt as _;
+    cmd.process_group(0);
+}
+
+/// Start the daemon with no console window and in its own process group, so a
+/// console Ctrl-C aimed at the app never reaches it. Windows doesn't end a child
+/// with its parent, so this is all detaching takes.
+#[cfg(windows)]
+fn detach_daemon(cmd: &mut std::process::Command) {
+    use std::os::windows::process::CommandExt as _;
+    const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+    cmd.creation_flags(CREATE_NEW_PROCESS_GROUP | crate::spawn::CREATE_NO_WINDOW);
 }
 
 /// Write `<dir>/<name>` with owner-only permissions (`0600` on unix).
@@ -352,21 +424,22 @@ pub(crate) async fn open_session(
     };
     let kriyon_off = {
         let integration = state.integration.lock();
-        integration.prefs.consented
-            && integration.applied.route == kriyon_core::integration::HookRoute::Off
+        kriyon_core::integration::kriyon_hooks_off(
+            integration.prefs,
+            integration.applied.route,
+            crate::hooks::hook_command_for(&home).is_some(),
+        )
     };
     note_hooks_off(
         &app,
         &state,
         &id,
-        if kriyon_off {
-            Some(kriyon_core::hooks::HooksOff::Kriyon)
-        } else {
+        kriyon_off.or_else(|| {
             checked_cwd
                 .as_deref()
                 .ok()
                 .and_then(|folder| crate::hooks::hooks_off_for(&home, Path::new(folder)))
-        },
+        }),
     );
 
     // Crash-survival fast path: if a daemon is already live for this id, reattach
@@ -693,6 +766,7 @@ pub(crate) fn launch_claude_in<R: tauri::Runtime>(
             from: report.from,
             split_off: report.split_off,
         }),
+        shell: session_shell(),
     };
     let resuming = resumes(&plan);
     let mut seed_dropped = false;
@@ -700,7 +774,7 @@ pub(crate) fn launch_claude_in<R: tauri::Runtime>(
         match write_seed_prompt(app, &id.0, seed) {
             // A path the command couldn't quote safely (a home folder with
             // `$` in it) is never typed: the prompt is dropped, and said so.
-            Ok(path) if kriyon_core::claude_launch::safe_path(&path) => {
+            Ok(path) if kriyon_core::claude_launch::safe_path(&path, plan.shell) => {
                 plan.seed_path = Some(path);
             }
             Ok(path) => {
@@ -774,9 +848,11 @@ pub async fn start_fresh_claude(app: tauri::AppHandle, id: String) -> Result<(),
         let state = app.state::<AppState>();
         let id = SessionId(id);
         let engine = engine_of(&state, &id)?;
-        let command = kriyon_core::claude_launch::claude_command(
-            &kriyon_core::claude_launch::LaunchPlan::default(),
-        );
+        let command =
+            kriyon_core::claude_launch::claude_command(&kriyon_core::claude_launch::LaunchPlan {
+                shell: session_shell(),
+                ..kriyon_core::claude_launch::LaunchPlan::default()
+            });
         state
             .writers
             .host_write(&id, engine.as_ref(), command.as_bytes())
@@ -784,6 +860,15 @@ pub async fn start_fresh_claude(app: tauri::AppHandle, id: String) -> Result<(),
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// The language of a session's shell, for its launch line: the shell every
+/// session starts in (`SpawnPlan`'s, PowerShell on Windows). A daemon that
+/// survived a restart was started the same way.
+fn session_shell() -> kriyon_core::shellinit::ShellLanguage {
+    kriyon_core::shellinit::ShellLanguage::of(&kriyon_core::shellinit::user_shell(
+        std::env::var("SHELL").ok().as_deref(),
+    ))
 }
 
 /// Write the raw request body to the session's stdin.
@@ -1523,6 +1608,30 @@ mod tests {
             app.manage(AppState::default());
             assert_eq!(launch(&app, None), LaunchOutcome::Skipped);
         }
+    }
+
+    #[test]
+    fn the_daemon_runs_from_its_own_copy_and_old_copies_go() {
+        let app = tempfile::tempdir().expect("app dir");
+        let run = tempfile::tempdir().expect("run dir");
+        let source = app.path().join(PTYD_NAME);
+        std::fs::write(&source, b"daemon v1").expect("write");
+
+        let first = staged_ptyd(&source, run.path()).expect("staged");
+        assert_ne!(first, source, "never the install folder's own file");
+        assert_eq!(std::fs::read(&first).expect("read"), b"daemon v1");
+        assert_eq!(
+            staged_ptyd(&source, run.path()).expect("staged"),
+            first,
+            "the same build reuses its copy"
+        );
+
+        // An update replaces the daemon beside the app.
+        std::fs::write(&source, b"daemon v2, longer").expect("write");
+        let second = staged_ptyd(&source, run.path()).expect("staged");
+        assert_ne!(second, first);
+        assert_eq!(std::fs::read(&second).expect("read"), b"daemon v2, longer");
+        assert!(!first.exists(), "an unused older copy is removed");
     }
 
     #[test]

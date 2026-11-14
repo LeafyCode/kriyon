@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use parking_lot::Mutex;
 
 use kriyon_core::folder::{check_folder, CheckedFolder, FolderRefusal};
+use kriyon_core::paths::Canonical as _;
 
 use crate::StoreState;
 
@@ -171,7 +172,7 @@ pub(crate) fn known_roots(store: &StoreState) -> Vec<PathBuf> {
     };
     roots
         .into_iter()
-        .filter_map(|r| r.canonicalize().ok())
+        .filter_map(|r| r.canonical().ok())
         .collect()
 }
 
@@ -261,14 +262,14 @@ mod tests {
     #[test]
     fn validate_cwd_accepts_a_known_root_and_its_descendants() {
         let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().canonicalize().unwrap();
+        let root = dir.path().canonical().unwrap();
         std::fs::create_dir(root.join("sub")).unwrap();
         let state = store_with_project_root(&root.to_string_lossy());
 
         assert_eq!(validate_cwd(&state, &root).unwrap(), root);
         assert_eq!(
             validate_cwd(&state, &root.join("sub")).unwrap(),
-            root.join("sub").canonicalize().unwrap()
+            root.join("sub").canonical().unwrap()
         );
     }
 
@@ -285,7 +286,7 @@ mod tests {
     #[test]
     fn validate_cwd_rejects_a_dot_dot_spelling_even_inside_a_known_root() {
         let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().canonicalize().unwrap();
+        let root = dir.path().canonical().unwrap();
         std::fs::create_dir(root.join("sub")).unwrap();
         let state = store_with_project_root(&root.to_string_lossy());
         let err = validate_cwd(&state, &root.join("sub/..")).unwrap_err();
@@ -322,7 +323,7 @@ mod tests {
         assert!(matches!(
             project_folder(&store, "p"),
             Ok(ProjectFolderCheck::Approved(folder))
-                if folder.canonical() == project.path().canonicalize().unwrap()
+                if folder.canonical() == project.path().canonical().unwrap()
         ));
         assert!(matches!(
             project_folder(&store, "nope"),

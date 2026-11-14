@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import { type CSSProperties, type ReactNode, useMemo } from "react";
 import { TOP_BAND_HEIGHT, TRAFFIC_LIGHT_CLEARANCE } from "../layout/topBand.ts";
+import { shortcutLabel } from "../platform/shortcut.ts";
 import { useLayout } from "../state/layout.ts";
 import { remoteNeedsYouCount, useRemoteHosts } from "../state/remoteHosts.ts";
 import { isPutAway, useSessions } from "../state/sessions.ts";
@@ -294,10 +295,10 @@ export function SidebarHeader({ query, setQuery }: SidebarHeaderProps) {
           data-tour="palette"
           onClick={openPalette}
           style={paletteChipStyle}
-          title="Command palette (⌘K)"
+          title={shortcutLabel("Command palette (⌘K)")}
           type="button"
         >
-          ⌘K
+          {shortcutLabel("⌘K")}
         </button>
       </div>
 

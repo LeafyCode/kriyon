@@ -120,4 +120,7 @@ test("a session whose hooks are off says its status is unavailable", () => {
   expect(contextLine("idle", "", undefined, "kriyon")?.text).toBe(
     "Status unavailable · hooks off in Kriyon settings"
   );
+  expect(contextLine("idle", "", undefined, "python")?.text).toBe(
+    "Status unavailable · hooks need Python, which isn't installed"
+  );
 });

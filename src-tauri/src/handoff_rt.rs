@@ -36,7 +36,7 @@ struct HandoffPayload {
 pub fn handoff_places(tmpdir: Option<&str>, home: Option<PathBuf>) -> HandoffPlaces {
     let canonical = home
         .as_deref()
-        .and_then(|home| std::fs::canonicalize(home).ok());
+        .and_then(|home| kriyon_core::paths::canonicalize(home).ok());
     HandoffPlaces::new(temp_roots(tmpdir), home.into_iter().chain(canonical))
 }
 
@@ -47,12 +47,12 @@ fn canonical_places(places: &HandoffPlaces) -> HandoffPlaces {
         places
             .temp()
             .iter()
-            .filter_map(|root| std::fs::canonicalize(root).ok())
+            .filter_map(|root| kriyon_core::paths::canonicalize(root).ok())
             .collect(),
         places
             .homes()
             .iter()
-            .filter_map(|home| std::fs::canonicalize(home).ok()),
+            .filter_map(|home| kriyon_core::paths::canonicalize(home).ok()),
     )
 }
 
@@ -67,7 +67,7 @@ pub fn validate_handoff_file(
     places: &HandoffPlaces,
     origin: HandoffOrigin,
 ) -> Option<PathBuf> {
-    let canonical = std::fs::canonicalize(path).ok()?;
+    let canonical = kriyon_core::paths::canonicalize(path).ok()?;
     if !canonical_places(places).allows(&canonical, origin) {
         return None;
     }
@@ -136,6 +136,19 @@ fn prompt_for(path: &Path, focus: Option<&str>) -> String {
     start_prompt(path, &content, focus)
 }
 
+/// The person's temp folder: `$TMPDIR` on macOS. On Windows the profile's
+/// `Temp` folder, resolved — `%TEMP%` often names it by its short 8.3 form
+/// (`JANEDO~1`), which no path Claude writes would ever start with.
+fn temp_dir() -> Option<String> {
+    if cfg!(windows) {
+        kriyon_core::paths::canonicalize(std::env::temp_dir())
+            .ok()
+            .map(|dir| dir.to_string_lossy().into_owned())
+    } else {
+        std::env::var("TMPDIR").ok()
+    }
+}
+
 /// Observe one live hook event for `session_id`; on the turn's end with a
 /// handoff, emit `session-handoff` with the validated path.
 pub fn note_hook_event<R: tauri::Runtime>(
@@ -143,7 +156,7 @@ pub fn note_hook_event<R: tauri::Runtime>(
     session_id: &SessionId,
     event: &HookEvent,
 ) {
-    let tmpdir = std::env::var("TMPDIR").ok();
+    let tmpdir = temp_dir();
     let places = handoff_places(tmpdir.as_deref(), app.path().home_dir().ok());
     let turn = {
         let state = app.state::<AppState>();
@@ -192,9 +205,13 @@ mod tests {
         let file = dir.path().join("handoff-1.md");
         std::fs::write(&file, "# Handoff").expect("write");
         let got = validate_handoff_file(&file, &places_for(dir.path()), HandoffOrigin::Written);
-        assert_eq!(got, Some(std::fs::canonicalize(&file).expect("canon")));
+        assert_eq!(
+            got,
+            Some(kriyon_core::paths::canonicalize(&file).expect("canon"))
+        );
     }
 
+    #[cfg(unix)]
     #[test]
     fn files_outside_the_roots_too_big_or_not_files_are_rejected() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -254,7 +271,7 @@ mod tests {
         };
         assert_eq!(
             resolve(shell(before), &places),
-            Some(std::fs::canonicalize(&file).expect("canon"))
+            Some(kriyon_core::paths::canonicalize(&file).expect("canon"))
         );
         let later = SystemTime::now() + Duration::from_secs(60);
         assert_eq!(resolve(shell(later), &places), None, "an old file");
@@ -278,10 +295,11 @@ mod tests {
         std::fs::write(&file, "# Handoff").expect("write");
         assert_eq!(
             resolve(HandoffFound::Written(file.clone()), &places),
-            Some(std::fs::canonicalize(&file).expect("canon"))
+            Some(kriyon_core::paths::canonicalize(&file).expect("canon"))
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_symlinked_home_is_matched_in_its_real_form_too() {
         // Test dirs live under the temp roots, so asking `allows` would pass
@@ -291,10 +309,11 @@ mod tests {
         let home = links.path().join("me");
         std::os::unix::fs::symlink(real.path(), &home).expect("symlink");
         let places = handoff_places(None, Some(home.clone()));
-        let physical = std::fs::canonicalize(real.path()).expect("canon");
+        let physical = kriyon_core::paths::canonicalize(real.path()).expect("canon");
         assert_eq!(places.homes(), [home, physical]);
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_home_handoff_in_a_hidden_folder_or_linked_out_of_home_is_rejected() {
         let (home, _temp, places) = home_and_temp();
@@ -347,7 +366,10 @@ mod tests {
         let file = dir.path().join("handoff-x.md");
         std::fs::write(&file, "x").expect("write");
         let got = resolve(HandoffFound::AskedSince(before), &places);
-        assert_eq!(got, Some(std::fs::canonicalize(&file).expect("canon")));
+        assert_eq!(
+            got,
+            Some(kriyon_core::paths::canonicalize(&file).expect("canon"))
+        );
 
         let later = SystemTime::now() + Duration::from_secs(60);
         assert_eq!(resolve(HandoffFound::AskedSince(later), &places), None);

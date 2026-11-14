@@ -9,6 +9,7 @@ import {
   worktreePathFor,
 } from "../ipc/bridge.ts";
 import { failureMessage } from "../ipc/failures.ts";
+import { pathBasename } from "../platform/path.ts";
 import {
   disposeSession,
   ensureSession,
@@ -197,7 +198,7 @@ export function setDefaultCwd(path: string): void {
 
 /** Last path segment of an absolute path, e.g. `/a/b/c` → `c`. */
 export function basename(path: string): string {
-  return path.split("/").filter(Boolean).pop() ?? path;
+  return pathBasename(path);
 }
 
 /**

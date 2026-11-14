@@ -55,6 +55,7 @@ pub mod transcript;
 pub mod tray_badge;
 pub mod tree_stop;
 pub mod tree_watch;
+pub mod uds;
 pub mod update;
 pub mod wire;
 pub mod work_report;

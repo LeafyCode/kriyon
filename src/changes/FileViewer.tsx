@@ -2,6 +2,7 @@ import { ChevronRight, ExternalLink, Undo2, X } from "lucide-react";
 import { type CSSProperties, Fragment, useMemo, useState } from "react";
 import { discardFileChanges, openInEditor, openPath } from "../ipc/bridge.ts";
 import { failureMessage } from "../ipc/failures.ts";
+import { shortcutLabel } from "../platform/shortcut.ts";
 import type { EditState } from "../state/changes.ts";
 import { requestRefresh } from "../state/changesRefresh.ts";
 import { button, iconButton } from "../theme/recipes.ts";
@@ -219,7 +220,7 @@ function HeaderActions({
         disabled={saving}
         onClick={onSave}
         style={saveButtonStyle}
-        title="Save (⌘S)"
+        title={shortcutLabel("Save (⌘S)")}
         type="button"
       >
         {saving ? "Saving…" : "Save"}

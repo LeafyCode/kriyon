@@ -2,7 +2,13 @@ export type SessionStatus = "idle" | "running" | "waiting" | "done" | "error";
 
 /** The settings scope whose `disableAllHooks` / `allowManagedHooksOnly` turns
  *  Kriyon's hooks off for a session — [Hooks off] (mirrors Rust `HooksOff`). */
-export type HooksOffScope = "managed" | "local" | "project" | "user" | "kriyon";
+export type HooksOffScope =
+  | "managed"
+  | "local"
+  | "project"
+  | "user"
+  | "kriyon"
+  | "python";
 
 /**
  * The vocabulary the command center renders for a {@link SessionStanding}

@@ -112,12 +112,30 @@ items 3 and 7.
        never asked for them.
    - Fixes go in the daemon, not the devices.
 
-## Done so far (branch `feat/remote-windows-prep`)
+## Done so far
 
-- **Step 2, the crates part:** `.github/workflows/windows.yml` runs clippy on kriyon-core,
-  kriyon-remote, kriyon-remote-link, kriyon-relay-client and kriyon-push on Windows, and the
-  four remote crates' tests. kriyon-core builds for Windows (PR #48's `private_fs`, taken as it
-  is). Left for after #48: kriyon-ptyd, src-tauri and kriyon-core's own tests in that job.
+On `feat/remote-windows-prep` (in `feat/remote-access`), then `feat/windows-remote`:
+
+- **Step 1, the merge (`feat/windows-remote`):** `origin/feat/windows` (#48) merged into
+  `feat/remote-access` as a merge, so #48's history stays as it is. #48's branch is not
+  changed. Ten files conflicted; the rest merged on their own.
+  - **The daemon and its client** (`server.rs`, `bridge.rs`, `daemon_client.rs`): only the
+    imports conflicted. Remote access's code is kept, on #48's `kriyon_core::uds` sockets, with
+    #48's Windows reader wake.
+  - **Launching `claude`:** remote access launches it from Rust (`launch_claude_in`), not the
+    window, so #48's PowerShell launch line (`src/terminal/launchCommand.ts`) moved into
+    `kriyon_core::claude_launch`. Its tests came along, with #48's own expected lines. The
+    window no longer learns the shell's language (`SessionOpened` is gone); the launch reads it
+    from the session shell (`ShellLanguage::of(user_shell(..))`, PowerShell on Windows).
+    `safe_path` takes the shell, so a Windows seed path (backslashes, `'`) is typed.
+  - **Folder checks:** #48's switch to `kriyon_core::paths::Canonical` (no `\\?\` paths) is
+    applied where remote access moved `validate_cwd` and `known_roots` (`folder_cmd.rs`).
+  - **Session start** (`create_session`, `startSession`, `sessionHost.ts`): remote access's
+    shape, with #48's Windows parts that merged on their own (the daemon's per-build copy,
+    `detach_daemon`, `.exe` names, the Python hooks-off scope).
+- **Step 2:** `.github/workflows/windows.yml` runs clippy and the tests on Windows for every
+  crate, the daemon and the app (`kriyon-ptyd`, `src-tauri`, and kriyon-core's own tests, which
+  #48 ported), on `dev`, `main` and every `feat/windows-*` push. No secrets.
 - **Step 3:** `kriyon_core::host::computer_name` (`gethostname` on Unix,
   `GetComputerNameExW` on Windows); the app uses it everywhere it named this computer.
 - **Step 4, the vault:** `kriyon_remote_link::keys::windows`.
@@ -129,8 +147,9 @@ items 3 and 7.
   - Measured: the relay record is 354 bytes of JSON plus its access token, which the contract
     leaves open. It outgrows a credential only past a token of about 2.2 KB, and the vault
     handles either.
-  - Left for after #48: `device_key` choosing it on Windows (it needs the app's local data
-    folder).
+  - `device_key` chooses it on Windows (`feat/windows-remote`), with the app's local data
+    folder (`app_local_data_dir`) for the sealed files, for the Device key and the relay
+    sign-in alike.
 
 
 

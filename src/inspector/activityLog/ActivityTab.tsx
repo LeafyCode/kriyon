@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { type CSSProperties, type ReactNode, useState } from "react";
 import type { ActivityStep, ActivityTurn, StepKind } from "../../ipc/bridge.ts";
+import { thisComputer } from "../../platform/os.ts";
 import { useSessions } from "../../state/sessions.ts";
 import { tokens } from "../../theme/tokens.ts";
 import {
@@ -556,7 +557,9 @@ export function ActivityTab({
       />
       {body}
       <footer style={footerStyle}>
-        <span>{stats ? retentionNote(stats) : "Only on this Mac"}</span>
+        <span>
+          {stats ? retentionNote(stats) : `Only on ${thisComputer()}`}
+        </span>
         <span>Secrets are hidden on a best-effort basis.</span>
       </footer>
       {open ? (

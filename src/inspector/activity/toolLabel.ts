@@ -1,3 +1,4 @@
+import { pathBasename } from "../../platform/path.ts";
 import type { ToolActivity } from "../../types.ts";
 
 /** Present-tense verb per common tool; falls back to the tool name itself. */
@@ -9,14 +10,9 @@ const VERB: Record<string, string> = {
   Write: "Writing",
 };
 
-/** Trailing slashes, stripped before taking a path's basename. */
-const TRAILING_SLASHES = /\/+$/;
-
 /** The basename of a path-like target, else the target unchanged. */
 function basename(target: string): string {
-  const trimmed = target.replace(TRAILING_SLASHES, "");
-  const slash = trimmed.lastIndexOf("/");
-  return slash === -1 ? trimmed : trimmed.slice(slash + 1);
+  return pathBasename(target);
 }
 
 /** "Editing foo.tsx" / "Running" — a short label for an in-flight tool. */

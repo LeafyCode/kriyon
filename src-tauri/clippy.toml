@@ -2,3 +2,8 @@ msrv = "1.88.0"
 allow-expect-in-tests = true
 # Apple framework and class names Kriyon's macOS modules name in prose.
 doc-valid-idents = ["AppKit", "NSException", "WKWebView", ".."]
+# Verbatim `\\?\` paths on Windows; use `kriyon_core::paths::Canonical`.
+disallowed-methods = [
+    { path = "std::fs::canonicalize", reason = "returns \\\\?\\ paths on Windows; use kriyon_core::paths::Canonical" },
+    { path = "std::path::Path::canonicalize", reason = "returns \\\\?\\ paths on Windows; use kriyon_core::paths::Canonical" },
+]

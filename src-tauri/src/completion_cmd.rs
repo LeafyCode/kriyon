@@ -41,7 +41,10 @@ fn collect_commands(dir: &Path, prefix: &str, out: &mut Vec<(String, Frontmatter
             continue;
         };
         let stem = rel.with_extension("");
-        let name = format!("{prefix}{}", stem.to_string_lossy().replace('/', ":"));
+        let name = format!(
+            "{prefix}{}",
+            kriyon_core::paths::slash_path(&stem).replace('/', ":")
+        );
         let frontmatter = std::fs::read_to_string(path)
             .map(|c| parse_frontmatter(&c))
             .unwrap_or_default();
@@ -273,8 +276,8 @@ mod tests {
         std::fs::write(
             home.path().join(".claude/plugins/installed_plugins.json"),
             format!(
-                r#"{{"version":2,"plugins":{{"acme@market":[{{"installPath":"{}"}}]}}}}"#,
-                install.to_string_lossy()
+                r#"{{"version":2,"plugins":{{"acme@market":[{{"installPath":{}}}]}}}}"#,
+                serde_json::Value::String(install.to_string_lossy().into_owned())
             ),
         )
         .unwrap();
@@ -543,7 +546,7 @@ fn walk_matches(root: &Path, query: &str, visit_cap: usize) -> (Vec<FileEntry>, 
             if rel.as_os_str().is_empty() {
                 return None; // skip the root itself
             }
-            let path = rel.to_string_lossy().to_string();
+            let path = kriyon_core::paths::slash_path(rel);
             if !needle.is_empty() && !path.to_lowercase().contains(&needle) {
                 return None;
             }

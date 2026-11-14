@@ -2,6 +2,10 @@
 //! app crash) and a fresh client can reattach and drive the same child — the
 //! automated proxy for the plan's `v-crash` acceptance test.
 
+// Drives a POSIX shell through the daemon; the Windows path is covered by
+// `windows_daemon.rs`.
+#![cfg(unix)]
+
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
 use std::time::{Duration, Instant};

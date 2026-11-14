@@ -3432,6 +3432,7 @@ dependencies = [
  "tokio",
  "uuid",
  "window-vibrancy",
+ "windows-sys 0.61.2",
  "zbus",
 ]
 
@@ -3439,6 +3440,7 @@ dependencies = [
 name = "kriyon-core"
 version = "0.16.0"
 dependencies = [
+ "dunce",
  "libc",
  "regex",
  "semver",
@@ -3446,6 +3448,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror 2.0.21",
+ "uds_windows",
  "windows-sys 0.61.2",
 ]
 
@@ -3479,6 +3482,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "vt100",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
