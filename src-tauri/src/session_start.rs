@@ -379,13 +379,27 @@ async fn start_remote_once(
     // Before claude starts, so its first hooks are heard.
     watch_remote(app, &id).await;
     launch_remote_claude(app, &id).await;
-    let _ = app.emit(
-        SESSION_ADDED_EVENT,
-        crate::store::SessionRow {
-            baseline_oid: started.baseline_oid,
-            ..session
-        },
-    );
+    // The baseline as kept now: one that came after the start's wait may be
+    // saved by now, its own event sent before the window knew the session.
+    // Read and told under the store's lock, which a late baseline's save
+    // takes too, so its event (sent after the save) follows this one.
+    {
+        let store = store(app);
+        let store = store.0.lock();
+        let baseline_oid = store
+            .session_row(&id)
+            .ok()
+            .flatten()
+            .and_then(|row| row.baseline_oid)
+            .or(started.baseline_oid);
+        let _ = app.emit(
+            SESSION_ADDED_EVENT,
+            crate::store::SessionRow {
+                baseline_oid,
+                ..session
+            },
+        );
+    }
     Ok(id)
 }
 

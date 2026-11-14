@@ -582,12 +582,20 @@ impl RelayRuntime {
         ))
     }
 
-    /// Whether a pass may be fetched at all: signed in, and the relay on.
-    /// Asked before this device is (its key read), so an app never signed in
-    /// leaves the keychain alone.
-    pub async fn may_renew(&self) -> bool {
+    /// Whether [`Self::renew`] would fetch at `now_s` (`force`: the relay
+    /// said the pass is out of date): signed in, the relay on, and a pass
+    /// due. Asked before this device is (its key read), so the keychain is
+    /// read only when a pass is fetched.
+    pub async fn may_renew(&self, now_s: u64, force: bool) -> bool {
         let saved = self.saved().await;
-        saved.on && saved.token.is_some()
+        if !saved.on || saved.token.is_none() {
+            return false;
+        }
+        let renew_after = saved
+            .pass
+            .as_ref()
+            .and_then(|pass| parse_utc(&pass.renew_after));
+        force || pass_due(now_s, renew_after)
     }
 
     /// Fetch a new pass when one is due (`force`: now, after the relay said

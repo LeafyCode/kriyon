@@ -112,8 +112,9 @@ impl PassKeeper {
                 }
                 allowed
             };
-            // Signed in first: this device (its key) is read only then.
-            if rebind.relay().may_renew().await {
+            // Signed in with a pass due first: this device (its key) is read
+            // only then.
+            if rebind.relay().may_renew(now_s, force).await {
                 if let Some(this) = rebind.this_device() {
                     if rebind.relay().renew(now_s, &this, force).await {
                         rebind.changed();
@@ -434,6 +435,21 @@ mod tests {
             keeper.check(NOV_15 - 1, &endpoint).await;
             assert_eq!(endpoint.asked_who.load(Ordering::Relaxed), 0);
             assert_eq!(endpoint.rebuilds(), 0);
+        });
+    }
+
+    /// Signed in, with no pass due: the minute's check still leaves the key
+    /// alone. It is read when a pass is due.
+    #[test]
+    fn the_device_key_is_read_only_when_a_pass_is_due() {
+        let (api, _) = passes();
+        run(async {
+            let keeper = PassKeeper::default();
+            let endpoint = Endpoint::bound(&api).await;
+            keeper.check(NOV_15 - 3600, &endpoint).await;
+            assert_eq!(endpoint.asked_who.load(Ordering::Relaxed), 0, "not due");
+            keeper.check(NOV_15, &endpoint).await;
+            assert_eq!(endpoint.asked_who.load(Ordering::Relaxed), 1, "due");
         });
     }
 
