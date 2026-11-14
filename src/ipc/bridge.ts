@@ -343,6 +343,12 @@ export function remoteLetDeviceType(
 /** A session started without the window (by a remote device): its row. */
 export const onSessionAdded = subscribe<SessionRow>("session-added");
 
+/** A session's git baseline that came after its start returned (a slow repository). */
+export const onSessionBaseline = subscribe<{
+  baselineOid: string;
+  sessionId: string;
+}>("session-baseline");
+
 /** What the user agreed Kriyon adds to Claude Code (mirrors Rust `IntegrationPrefs`). */
 export interface IntegrationPrefs {
   companion: boolean;
@@ -1185,8 +1191,9 @@ export function writeFile(
 }
 
 /**
- * Diff a session's working-tree changes against its `baselineOid` (from
- * {@link captureBaseline}), rather than against a committed ref. Catches
+ * Diff a session's working-tree changes against its `baselineOid` (taken
+ * in Rust while its shell opened, `session_start::start`), rather than
+ * against a committed ref. Catches
  * edits made by any means and self-corrects when a file is reverted.
  */
 export function diffSessionChanges(

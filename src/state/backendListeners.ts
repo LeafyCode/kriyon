@@ -4,6 +4,7 @@ import {
   onPlanLimits,
   onSessionActivity,
   onSessionAdded,
+  onSessionBaseline,
   onSessionClaudeId,
   onSessionHandoff,
   onSessionHooksOff,
@@ -39,6 +40,10 @@ export function installSessionListeners(): () => void {
     }),
     // A device started a session: it joins the sidebar.
     onEvent(onSessionAdded, (row) => sessions().noteSessionAdded(row)),
+    // A baseline slower than the start's wait (ADR 0015) came later.
+    onEvent(onSessionBaseline, (u) =>
+      sessions().setBaseline(u.sessionId, u.baselineOid)
+    ),
     onEvent(onSessionStatus, (u) =>
       sessions().applyStatus(u.sessionId, u.status, u.summary, u.seeded)
     ),

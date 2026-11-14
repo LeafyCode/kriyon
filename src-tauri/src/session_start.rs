@@ -123,7 +123,8 @@ pub struct Started {
 /// Start a session from the desktop: save its rows (its project's first,
 /// when given), then open its shell with the window's channels, capturing
 /// its git baseline at the same time when `baseline`. It returns once both
-/// are done, so `claude`, launched after (`launch_claude`), never edits the
+/// are done, or the baseline has taken [`BASELINE_WAIT`] (it then comes
+/// later), so `claude`, launched after (`launch_claude`), doesn't edit the
 /// tree before the baseline is taken. One ordering, here, so no shell
 /// starts before the rows that approve its folder.
 ///
@@ -179,25 +180,81 @@ pub async fn start(
     });
     let opened =
         crate::commands::open_session(app, session.id.clone(), session.cwd.clone(), sink).await;
+    // Waited for up to BASELINE_WAIT, so claude (launched after) doesn't
+    // edit the tree first; a slower one (a huge repository) isn't, and is
+    // kept and told to the window when it comes.
     let baseline_oid = match capture {
-        Some(capture) => capture.await.ok().flatten(),
+        Some(capture) => {
+            let (late_app, late_id) = (app.clone(), session.id.clone());
+            baseline_within(capture, BASELINE_WAIT, move |oid| {
+                keep_baseline(&late_app, &late_id, &oid);
+                let _ = tauri::Emitter::emit(
+                    &late_app,
+                    SESSION_BASELINE_EVENT,
+                    LateBaseline {
+                        session_id: late_id,
+                        baseline_oid: oid,
+                    },
+                );
+            })
+            .await
+        }
         None => None,
     };
     let reattached = opened?;
     if let Some(oid) = &baseline_oid {
-        use tauri::Manager as _;
-        // Kept with the row, alone: a rename or a pin made while the shell
-        // opened stays. The window records it too.
-        let _ = app
-            .state::<crate::StoreState>()
-            .0
-            .lock()
-            .set_baseline_oid(&session.id, oid);
+        keep_baseline(app, &session.id, oid);
     }
     Ok(Started {
         reattached,
         baseline_oid,
     })
+}
+
+/// How long a start waits for its git baseline (ADR 0015): past it, claude
+/// launches and the baseline comes later ([`SESSION_BASELINE_EVENT`]).
+pub const BASELINE_WAIT: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// The event that tells the window a session's baseline came after its
+/// start returned.
+pub const SESSION_BASELINE_EVENT: &str = "session-baseline";
+
+/// A session's baseline that came late.
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LateBaseline {
+    session_id: String,
+    baseline_oid: String,
+}
+
+/// The baseline `capture` gives within `wait`; past it, `None`, and `late`
+/// gets the baseline when (if) it comes.
+async fn baseline_within(
+    capture: tauri::async_runtime::JoinHandle<Option<String>>,
+    wait: std::time::Duration,
+    late: impl FnOnce(String) + Send + 'static,
+) -> Option<String> {
+    let mut capture = Box::pin(capture);
+    if let Ok(done) = tokio::time::timeout(wait, capture.as_mut()).await {
+        return done.ok().flatten();
+    }
+    tauri::async_runtime::spawn(async move {
+        if let Ok(Some(oid)) = capture.await {
+            late(oid);
+        }
+    });
+    None
+}
+
+/// Keep session `id`'s baseline with its row, alone: a rename or a pin
+/// made while the shell opened stays. The window records it too.
+fn keep_baseline<R: tauri::Runtime>(app: &tauri::AppHandle<R>, id: &str, oid: &str) {
+    use tauri::Manager as _;
+    let _ = app
+        .state::<crate::StoreState>()
+        .0
+        .lock()
+        .set_baseline_oid(id, oid);
 }
 
 /// The event that tells the window a session was started without it (by a
@@ -410,6 +467,38 @@ fn remote_session_row(
 
 #[cfg(test)]
 mod tests {
+    /// A baseline that comes in time is the start's; a slow one isn't
+    /// waited for past the cap, and is handed on when it comes.
+    #[test]
+    fn a_slow_baseline_is_not_waited_for_and_comes_later() {
+        use std::time::Duration;
+        tauri::async_runtime::block_on(async {
+            let quick = tauri::async_runtime::spawn(async { Some("quick".to_string()) });
+            let got =
+                super::baseline_within(quick, Duration::from_secs(1), |_| panic!("not late")).await;
+            assert_eq!(got.as_deref(), Some("quick"));
+
+            let slow = tauri::async_runtime::spawn(async {
+                tokio::time::sleep(Duration::from_millis(300)).await;
+                Some("slow".to_string())
+            });
+            let (late_tx, late_rx) = std::sync::mpsc::channel();
+            let started = std::time::Instant::now();
+            let got = super::baseline_within(slow, Duration::from_millis(50), move |oid| {
+                let _ = late_tx.send(oid);
+            })
+            .await;
+            assert_eq!(got, None, "not waited for");
+            assert!(started.elapsed() < Duration::from_millis(250));
+            let late = tauri::async_runtime::spawn_blocking(move || {
+                late_rx.recv_timeout(Duration::from_secs(5))
+            })
+            .await
+            .expect("joined");
+            assert_eq!(late.as_deref(), Ok("slow"));
+        });
+    }
+
     /// A session a device started is watched with no window showing it:
     /// its hooks move its status, so it is on the Needs-you list the push
     /// wake reads, before the desktop ever opens it.

@@ -236,16 +236,19 @@ function startAndWarm(
   // saved, no shell starts before the rows that approve its folder
   // (ADR-0058), and the launch that follows (it waits on this same open)
   // comes after the baseline, so claude's first edits show in the Changes
-  // view. A baseline that can't be taken (not a git repo) leaves
-  // `baselineOid` null: the Changes view then diffs the whole working tree.
+  // view. A baseline slower than 3 s isn't waited for: it comes later, as
+  // `session-baseline` (ADR 0015). One that can't be taken (not a git repo)
+  // leaves `baselineOid` null: the Changes view then diffs the whole working
+  // tree.
   ensureSession(session.id, session.cwd, () => undefined, {
     baseline,
     onBaseline: (oid) => useSessions.getState().setBaseline(session.id, oid),
     project,
     session,
   }).then(warm, (err: unknown) => {
-    // A refusal says why here, where the reason is known; nothing else runs
-    // against rows that were never saved.
+    // A refusal (a folder refused, a failed save, a shell that couldn't
+    // open) says why here, where the reason is known; nothing warms a
+    // session that never started.
     showToast(`Could not start the session: ${failureMessage(err)}`, "error");
   });
 }

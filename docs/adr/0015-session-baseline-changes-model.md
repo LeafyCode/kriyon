@@ -29,8 +29,18 @@ not on `touchedFiles`:
   honoring `.gitignore`) into a dangling tree object via `git add -A` +
   `git write-tree` against a throwaway `GIT_INDEX_FILE` — no commit, no ref,
   no HEAD move, no hooks fired (`snapshot_tree`, `git_cmd.rs`). Captured once,
-  shortly after `createSession`, and persisted on the session row
-  (`baseline_oid`). **Carve-out as shipped:** `createSession` skips
+  in Rust while the session's shell opens (`session_start::start`, for the
+  desktop and for a remote device alike), and persisted on the session row
+  (`baseline_oid`, saved alone so a rename made meanwhile stays). **Timing
+  (amended 2026-11-14):** the start waits for it up to `BASELINE_WAIT` (3 s)
+  before `claude` launches, so claude's first edits come after the baseline
+  and show in the Changes view. A slower capture (a very large repository)
+  isn't waited for: `claude` launches, the capture finishes in the
+  background, and its oid is saved and sent to the window then
+  (`session-baseline`). The trade-off: in that case an edit claude makes
+  before the capture ends is part of the baseline, so it doesn't show as a
+  change. Waiting without a limit had left the person with no `claude` for
+  as long as git took. **Carve-out as shipped:** `createSession` skips
   `capture_baseline` entirely when `cwd === defaultCwd` (`src/state/
   actions.ts`), so a Home-project session never gets a baseline. `git add -A`
   over a `$HOME` that is itself a git repo (a dotfiles checkout — common)
