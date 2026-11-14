@@ -52,12 +52,16 @@ pub trait Rebind: Send + Sync {
     /// through it, nothing watched.
     fn quiet(&self) -> impl Future<Output = bool> + Send;
 
-    /// Bring the endpoint back with the relay wanted, everything on it
-    /// moving to the new one.
+    /// Bring the endpoint back with `relay` (as [`Self::want`] last had it),
+    /// everything on it moving to the new one.
     ///
     /// # Errors
-    /// Why it couldn't be bound; the old one stays.
-    fn rebind(&self) -> impl Future<Output = Result<(), String>> + Send;
+    /// Why it couldn't be brought back. The old endpoint may be gone by
+    /// then (the desktop closes it first), so the settings are told.
+    fn rebind(
+        &self,
+        relay: Option<(RelayAccess, u64)>,
+    ) -> impl Future<Output = Result<(), String>> + Send;
 
     /// The relay's state changed: the settings read it again.
     fn changed(&self);
@@ -83,7 +87,9 @@ impl PassKeeper {
             .last_forced_s
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if last.is_some_and(|at| now_s.saturating_sub(at) < FORCED_RENEW_GAP_S) {
+        // A clock moved back is no reason to wait: only time gone forward,
+        // under the gap, is.
+        if last.is_some_and(|at| now_s >= at && now_s - at < FORCED_RENEW_GAP_S) {
             return false;
         }
         *last = Some(now_s);
@@ -98,22 +104,38 @@ impl PassKeeper {
         if self.busy.swap(true, Ordering::AcqRel) {
             return;
         }
-        let force = self.force_wanted.swap(false, Ordering::AcqRel) && {
-            let allowed = self.may_force(now_s);
-            if !allowed {
-                self.force_wanted.store(true, Ordering::Release);
+        loop {
+            let force = self.force_wanted.swap(false, Ordering::AcqRel) && {
+                let allowed = self.may_force(now_s);
+                if !allowed {
+                    self.force_wanted.store(true, Ordering::Release);
+                }
+                allowed
+            };
+            if let Some(this) = rebind.this_device() {
+                if rebind.relay().renew(now_s, &this, force).await {
+                    rebind.changed();
+                }
             }
-            allowed
-        };
-        if let Some(this) = rebind.this_device() {
-            if rebind.relay().renew(now_s, &this, force).await {
-                rebind.changed();
+            if let Err(why) = self.apply(now_s, rebind, force).await {
+                eprintln!("kriyon: couldn't put the new relay pass to use: {why}");
             }
-        }
-        if let Err(why) = self.apply(now_s, rebind, force).await {
-            eprintln!("kriyon: couldn't put the new relay pass to use: {why}");
+            // A refusal that came during this check (which it left to this
+            // one) is acted on now, not at the next.
+            if !(self.force_wanted.load(Ordering::Acquire) && self.force_allowed(now_s)) {
+                break;
+            }
         }
         self.busy.store(false, Ordering::Release);
+    }
+
+    /// Whether a forced renewal could run at `now_s`, without counting one.
+    fn force_allowed(&self, now_s: u64) -> bool {
+        let last = self
+            .last_forced_s
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        !last.is_some_and(|at| now_s >= at && now_s - at < FORCED_RENEW_GAP_S)
     }
 
     /// Put the relay as it stands to use: the next bind takes it, and an
@@ -122,7 +144,7 @@ impl PassKeeper {
     /// runs low. Returns whether it was rebuilt.
     ///
     /// # Errors
-    /// Why the new endpoint couldn't be bound; the old one stays.
+    /// Why the endpoint couldn't be brought back (the settings are told).
     pub async fn apply<R: Rebind>(
         &self,
         now_s: u64,
@@ -130,13 +152,16 @@ impl PassKeeper {
         now: bool,
     ) -> Result<bool, String> {
         let _applying = self.applying.lock().await;
-        let in_use = rebind.want(rebind.relay().access().await).await;
+        let relay = rebind.relay().access().await;
+        let in_use = rebind.want(relay.clone()).await;
         if !in_use.stale {
             return Ok(false);
         }
         if now || rebuild_due(now_s, in_use.expires_s, true, rebind.quiet().await) {
-            rebind.rebind().await?;
+            // Told either way: a failed rebuild may have left none.
+            let rebuilt = rebind.rebind(relay).await;
             rebind.changed();
+            rebuilt?;
             return Ok(true);
         }
         Ok(false)
@@ -230,6 +255,8 @@ mod tests {
         bound_at_all: AtomicBool,
         busy: AtomicBool,
         rebuilds: AtomicUsize,
+        fail: AtomicBool,
+        changes: AtomicUsize,
     }
 
     impl Endpoint {
@@ -253,6 +280,8 @@ mod tests {
                 bound_at_all: AtomicBool::new(false),
                 busy: AtomicBool::new(false),
                 rebuilds: AtomicUsize::new(0),
+                fail: AtomicBool::new(false),
+                changes: AtomicUsize::new(0),
             }
         }
 
@@ -290,13 +319,17 @@ mod tests {
         async fn quiet(&self) -> bool {
             !self.busy.load(Ordering::Relaxed)
         }
-        async fn rebind(&self) -> Result<(), String> {
-            let wanted = self.wanted.lock().expect("wanted").clone();
-            *self.bound.lock().expect("bound") = wanted;
+        async fn rebind(&self, relay: Option<(RelayAccess, u64)>) -> Result<(), String> {
+            if self.fail.load(Ordering::Relaxed) {
+                return Err("can't bind".into());
+            }
+            *self.bound.lock().expect("bound") = relay;
             self.rebuilds.fetch_add(1, Ordering::Relaxed);
             Ok(())
         }
-        fn changed(&self) {}
+        fn changed(&self) {
+            self.changes.fetch_add(1, Ordering::Relaxed);
+        }
     }
 
     fn device() -> ThisDevice {
@@ -416,6 +449,59 @@ mod tests {
             let after_gap = NOV_15 - 3000 + FORCED_RENEW_GAP_S;
             keeper.check(after_gap, &endpoint).await;
             assert_eq!(handed.load(Ordering::Relaxed), before + 2, "its turn");
+        });
+    }
+
+    #[test]
+    fn a_clock_moved_back_does_not_hold_a_forced_renewal_off() {
+        let (api, handed) = passes();
+        run(async {
+            let keeper = PassKeeper::default();
+            let endpoint = Endpoint::bound(&api).await;
+            keeper.check(NOV_15 - 3600, &endpoint).await;
+            keeper
+                .refused(NOV_15 - 3000, RelayAction::Renew, &endpoint)
+                .await;
+            let before = handed.load(Ordering::Relaxed);
+            // The clock went back a day: not "within the gap" for a day.
+            keeper
+                .refused(NOV_15 - 3000 - 86_400, RelayAction::Renew, &endpoint)
+                .await;
+            assert_eq!(handed.load(Ordering::Relaxed), before + 1, "forced");
+        });
+    }
+
+    #[test]
+    fn a_refusal_during_a_check_is_acted_on_by_that_check() {
+        let (api, handed) = passes();
+        run(async {
+            let keeper = PassKeeper::default();
+            let endpoint = Endpoint::bound(&api).await;
+            keeper.check(NOV_15 - 3600, &endpoint).await;
+            let before = handed.load(Ordering::Relaxed);
+            // The refusal comes while a check is fetching; the check, once
+            // done, fetches the new pass, not the next minute's.
+            tokio::join!(
+                keeper.check(NOV_15, &endpoint),
+                keeper.refused(NOV_15, RelayAction::Renew, &endpoint),
+            );
+            assert_eq!(
+                handed.load(Ordering::Relaxed),
+                before + 2,
+                "due, then forced"
+            );
+        });
+    }
+
+    #[test]
+    fn a_rebuild_that_failed_still_tells_the_settings() {
+        let (api, _) = passes();
+        run(async {
+            let keeper = PassKeeper::default();
+            let endpoint = Endpoint::bound(&api).await;
+            endpoint.fail.store(true, Ordering::Relaxed);
+            assert!(keeper.apply(NOV_15 - 1, &endpoint, true).await.is_err());
+            assert_eq!(endpoint.changes.load(Ordering::Relaxed), 1);
         });
     }
 

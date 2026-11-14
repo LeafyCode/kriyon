@@ -74,10 +74,11 @@ impl Rebind for AppEndpoint {
                 .await
     }
 
-    /// Close the endpoint and bring it back with the relay it wants. Remote
-    /// access comes back up if it was on; the device side binds again when
-    /// it next dials.
-    async fn rebind(&self) -> Result<(), String> {
+    /// Close the endpoint and bring it back with the relay it wants (as
+    /// [`Rebind::want`] gave it to the [`RemoteEndpoint`], which binds with
+    /// it). Remote access comes back up if it was on; the device side binds
+    /// again when it next dials.
+    async fn rebind(&self, _relay: Option<(RelayAccess, u64)>) -> Result<(), String> {
         let app = &self.0;
         let remote = app.state::<kriyon_remote_link::host_runtime::RemoteRuntime>();
         let was_on = remote.is_on().await;

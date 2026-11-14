@@ -257,8 +257,6 @@ pub(crate) struct Shared {
     /// expires: iroh reads the pass only then, so a new one needs a new
     /// endpoint.
     link: tokio::sync::Mutex<(iroh::Endpoint, Option<(RelayAccess, u64)>)>,
-    /// The relay the next endpoint is bound with, as the keeper last said.
-    wanted: std::sync::Mutex<Option<(RelayAccess, u64)>>,
     secret: [u8; 32],
     bind: SocketAddr,
     /// This phone as the relay account knows it.
@@ -294,21 +292,19 @@ impl Rebind for PhoneEndpoint {
 
     async fn want(&self, relay: Option<(RelayAccess, u64)>) -> InUse {
         let link = self.shared.link.lock().await;
-        let in_use = InUse {
+        InUse {
             stale: link.1.as_ref().map(|(access, _)| access)
                 != relay.as_ref().map(|(access, _)| access),
             expires_s: link.1.as_ref().map(|(_, expires)| *expires),
-        };
-        *locked(&self.shared.wanted) = relay;
-        in_use
+        }
     }
 
     async fn quiet(&self) -> bool {
         !self.shared.device.has_open_sessions().await
     }
 
-    async fn rebind(&self) -> Result<(), String> {
-        Arc::clone(&self.shared).rebind_endpoint().await
+    async fn rebind(&self, relay: Option<(RelayAccess, u64)>) -> Result<(), String> {
+        Arc::clone(&self.shared).rebind_endpoint(relay).await
     }
 
     /// The app reads the relay when it shows it: nothing to tell.
@@ -349,6 +345,9 @@ impl Shared {
         };
         let shared = Arc::clone(self);
         self.on_runtime(async move {
+            // A pass that is due is fetched first, so the new endpoint
+            // doesn't take one about to be replaced.
+            endpoint.relay.renew(now_s(), &shared.this, false).await;
             shared
                 .keeper
                 .apply(now_s(), &endpoint, now)
@@ -367,10 +366,12 @@ impl Shared {
         }
     }
 
-    /// Bind a new endpoint with the relay the keeper wants, and move every
-    /// computer and the sessions open here to it.
-    async fn rebind_endpoint(self: Arc<Self>) -> Result<(), String> {
-        let wanted = locked(&self.wanted).clone();
+    /// Bind a new endpoint with `wanted`, and move every computer and the
+    /// sessions open here to it.
+    async fn rebind_endpoint(
+        self: Arc<Self>,
+        wanted: Option<(RelayAccess, u64)>,
+    ) -> Result<(), String> {
         let mut link = self.link.lock().await;
         // The new endpoint first: if it can't be bound, nothing changes.
         let config = LinkConfig {
@@ -774,14 +775,15 @@ impl MobileDevice {
             alerts_off: std::sync::atomic::AtomicBool::new(alerts_off),
             relay,
             link: tokio::sync::Mutex::new(link),
-            wanted: std::sync::Mutex::new(None),
             secret,
             bind,
             this,
             keeper: PassKeeper::default(),
         });
         // The pass is checked every minute while the app runs, as on the
-        // desktop; the loop ends with the device.
+        // desktop. Other tasks hold the device too, so the loop really ends
+        // when the device's runtime shuts down (its drop); the weak handle
+        // only keeps this loop from holding it as well.
         if shared.relay.is_some() {
             let weak = Arc::downgrade(&shared);
             runtime.spawn(async move {
