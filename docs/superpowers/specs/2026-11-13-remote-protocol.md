@@ -42,9 +42,24 @@ calls while Remote access is off.
   depend on the version.
 - **No 0-RTT** on either ALPN: 0-RTT data can be replayed.
 - Address lookup: none by default (iroh's minimal preset). Each device stores
-  the host's endpoint id plus the ways to reach it learned at pairing: LAN
-  addresses, an optional Tailscale address with the host's fixed port, and the
-  relay URL when the person subscribes.
+  the host's endpoint id plus the ways to reach it learned at pairing, and
+  dials them all, directly where it can:
+  - **This network:** the addresses the host's endpoint reports.
+  - **Tailscale:** the host's own Tailscale addresses, read from its network
+    interfaces (`100.64.0.0/10` and `fd7a:115c:a1e0::/48`,
+    `kriyon_remote::routes::is_tailscale`; no Tailscale API or command), on
+    the port it listens on. A device on the same tailnet reaches it from any
+    network, with no relay. One whose LAN address changed is still reached
+    there.
+  - **Our relay:** its URL, when the person subscribes.
+- **A fixed port.** The host listens on UDP port 49731 on every interface
+  (IPv6 too on the same port, where it can be had), or the port the person
+  chose in Settings (1024 to 65535), so an address a device stored at pairing
+  still works after the host restarts. If another program holds the port, the
+  host takes any port and Settings says so. Settings → Remote access shows
+  the routes there are now ("Reachable over: this network, Tailscale
+  (100.x.y.z), our relay"). A device paired before a port change reaches the
+  host only through the relay until it pairs again.
 - The host checks the peer's endpoint id at accept time, before it opens or
   accepts any stream. Handshakes from unpaired ids are rate-limited by source
   address (the id is only known after the handshake), so during an attack from
@@ -501,9 +516,10 @@ end in the behaviour above, with no lost session and no replayed input.
 
 ## Open
 
-- Exact Tailscale port and how the host learns its Tailscale address (spike).
+None open now.
 
-Decided since: the phone's app lock. A stolen Controller phone could type
+Decided since: the Tailscale route, its fixed port and how the host learns
+its Tailscale addresses (§2). The phone's app lock. A stolen Controller phone could type
 into its computer's terminal until the person removes it there, so the app
 asks for Face ID, Touch ID, the fingerprint or the phone's passcode before
 any session shows: on opening, and after it was in the background longer

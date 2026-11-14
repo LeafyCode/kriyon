@@ -95,6 +95,15 @@ impl Rebind for AppEndpoint {
     }
 }
 
+/// Rebuild the endpoint now (a new port), in turn with the relay's own
+/// rebuilds.
+pub(crate) async fn rebuild_in_turn(app: &tauri::AppHandle) {
+    let keeper = app.state::<PassKeeper>();
+    if let Err(why) = keeper.rebind_in_turn(&AppEndpoint(app.clone())).await {
+        eprintln!("kriyon: remote access didn't come back up on the new port: {why}");
+    }
+}
+
 /// Put the relay as it stands to use now: the person changed it.
 async fn apply_now(app: &tauri::AppHandle) {
     let keeper = app.state::<PassKeeper>();

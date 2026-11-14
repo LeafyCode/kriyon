@@ -167,6 +167,20 @@ impl PassKeeper {
         Ok(false)
     }
 
+    /// Rebuild the endpoint now for a reason of the app's own (a new port,
+    /// say), in turn with the relay's own rebuilds, so two never close each
+    /// other's endpoint.
+    ///
+    /// # Errors
+    /// Why the endpoint couldn't be brought back (the settings are told).
+    pub async fn rebind_in_turn<R: Rebind>(&self, rebind: &R) -> Result<(), String> {
+        let _applying = self.applying.lock().await;
+        let relay = rebind.relay().access().await;
+        let rebuilt = rebind.rebind(relay).await;
+        rebind.changed();
+        rebuilt
+    }
+
     /// The relay said `action` about the endpoint (the contract's table):
     /// remembered for the settings, and a pass it won't take replaced.
     pub async fn refused<R: Rebind>(&self, now_s: u64, action: RelayAction, rebind: &R) {

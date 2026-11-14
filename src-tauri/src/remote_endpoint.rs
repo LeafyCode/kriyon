@@ -32,7 +32,10 @@ pub type OnBind = Arc<dyn Fn(&Bound) + Send + Sync>;
 
 /// The owner of this computer's one endpoint.
 pub struct RemoteEndpoint {
-    config_bind: std::net::SocketAddr,
+    /// Where to listen: every interface, on the port the person chose.
+    config_bind: std::sync::Mutex<std::net::SocketAddr>,
+    /// Why the endpoint bound now isn't on that port, if it isn't.
+    port_note: std::sync::Mutex<Option<String>>,
     bound: Mutex<Option<Bound>>,
     /// The relay the next bind uses, and when its pass expires.
     wanted_relay: std::sync::Mutex<Option<(RelayAccess, u64)>>,
@@ -44,11 +47,31 @@ impl RemoteEndpoint {
     #[must_use]
     pub fn new(bind: std::net::SocketAddr) -> Self {
         Self {
-            config_bind: bind,
+            config_bind: std::sync::Mutex::new(bind),
+            port_note: std::sync::Mutex::new(None),
             bound: Mutex::new(None),
             wanted_relay: std::sync::Mutex::new(None),
             on_bind: std::sync::Mutex::new(None),
         }
+    }
+
+    /// Listen on `port` from the next bind on (the person's setting).
+    pub fn set_port(&self, port: u16) {
+        if let Ok(mut bind) = self.config_bind.lock() {
+            bind.set_port(port);
+        }
+    }
+
+    /// The port the person chose.
+    #[must_use]
+    pub fn port(&self) -> u16 {
+        self.config_bind.lock().map_or(0, |bind| bind.port())
+    }
+
+    /// Why the endpoint bound now isn't on the chosen port: it was taken.
+    #[must_use]
+    pub fn port_note(&self) -> Option<String> {
+        self.port_note.lock().ok().and_then(|note| note.clone())
     }
 
     /// Call `hook` with each endpoint as it is bound.
@@ -91,15 +114,40 @@ impl RemoteEndpoint {
             .lock()
             .ok()
             .and_then(|wanted| wanted.clone());
-        let config = LinkConfig {
-            bind: self.config_bind,
+        let bind = self
+            .config_bind
+            .lock()
+            .map_or(std::net::SocketAddr::from(([0, 0, 0, 0], 0)), |bind| *bind);
+        let mut config = LinkConfig {
+            bind,
             relay: wanted.clone().map(|(access, _)| access),
             ..LinkConfig::new(secret_key)
         };
         let relay = config.relay.clone();
-        let endpoint = kriyon_remote_link::endpoint::bind(&config, Vec::new())
-            .await
-            .map_err(|e| e.to_string())?;
+        let (endpoint, note) = match kriyon_remote_link::endpoint::bind(&config, Vec::new()).await {
+            Ok(endpoint) => (endpoint, None),
+            // Taken by another program: any port, and the person is told,
+            // since what devices stored at pairing names the fixed one.
+            Err(_) if bind.port() != 0 => {
+                config.bind.set_port(0);
+                let endpoint = kriyon_remote_link::endpoint::bind(&config, Vec::new())
+                    .await
+                    .map_err(|e| e.to_string())?;
+                (
+                    endpoint,
+                    Some(format!(
+                        "Port {} is in use by another program, so remote access uses a \
+                         different port until it is free. Phones paired over this network \
+                         or Tailscale may not reach this computer until then.",
+                        bind.port()
+                    )),
+                )
+            }
+            Err(e) => return Err(e.to_string()),
+        };
+        if let Ok(mut slot) = self.port_note.lock() {
+            *slot = note;
+        }
         let host = Arc::new(Host::on_endpoint(
             endpoint.clone(),
             paired(),
@@ -188,6 +236,46 @@ mod tests {
             assert!(owner.is_bound().await, "still in use");
             owner.close_if(true).await;
             assert!(!owner.is_bound().await);
+        });
+    }
+
+    #[test]
+    fn a_port_taken_falls_back_to_any_and_says_so() {
+        run(async {
+            // Another program holds the port.
+            let holder = std::net::UdpSocket::bind("127.0.0.1:0").expect("a socket");
+            let taken = holder.local_addr().expect("its address");
+            let owner = RemoteEndpoint::new(taken);
+            let nobody = || Arc::new(MemoryPaired::default()) as Arc<dyn PairedDevices>;
+            let bound = owner.get([3; 32], nobody).await.expect("binds anyway");
+            let port = bound.endpoint.bound_sockets()[0].port();
+            assert_ne!(port, taken.port());
+            let note = owner.port_note().expect("said");
+            assert!(note.contains(&taken.port().to_string()), "{note}");
+            owner.close_if(true).await;
+            // Free again: the next bind takes it, and the note goes.
+            drop(holder);
+            let again = owner.get([3; 32], nobody).await.expect("binds");
+            assert_eq!(again.endpoint.bound_sockets()[0].port(), taken.port());
+            assert_eq!(owner.port_note(), None);
+            owner.close_if(true).await;
+        });
+    }
+
+    #[test]
+    fn a_new_port_takes_effect_at_the_next_bind() {
+        run(async {
+            let owner = RemoteEndpoint::new(std::net::SocketAddr::from(([127, 0, 0, 1], 0)));
+            let nobody = || Arc::new(MemoryPaired::default()) as Arc<dyn PairedDevices>;
+            let free = std::net::UdpSocket::bind("127.0.0.1:0")
+                .and_then(|socket| socket.local_addr())
+                .expect("a free port")
+                .port();
+            owner.set_port(free);
+            let bound = owner.get([3; 32], nobody).await.expect("binds");
+            assert_eq!(bound.endpoint.bound_sockets()[0].port(), free);
+            assert_eq!(owner.port(), free);
+            owner.close_if(true).await;
         });
     }
 

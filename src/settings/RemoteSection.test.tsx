@@ -14,6 +14,7 @@ import {
   remoteRenameDevice,
   remoteSetDeviceRole,
   remoteSetEnabled,
+  remoteSetPort,
   remoteStartPairing,
   remoteStatus,
 } from "../ipc/bridge.ts";
@@ -35,6 +36,7 @@ vi.mock("../ipc/bridge.ts", async (importOriginal) => ({
   remoteRenameDevice: vi.fn(),
   remoteSetDeviceRole: vi.fn(),
   remoteSetEnabled: vi.fn(),
+  remoteSetPort: vi.fn(),
   remoteStartPairing: vi.fn(),
   remoteStatus: vi.fn(),
   remoteStopPairing: vi.fn(),
@@ -54,6 +56,8 @@ const off: RemoteStatus = {
   enabled: false,
   hostId: null,
   pairing: { state: "idle" },
+  port: 49_731,
+  routes: null,
 };
 const on: RemoteStatus = { ...off, enabled: true, hostId: "ab".repeat(32) };
 const phone = {
@@ -354,4 +358,42 @@ test("a pairing can be copied as text for a computer that can't scan", async () 
     await screen.findByRole("button", { name: "Copy pairing code" })
   );
   expect(writeText).toHaveBeenCalledWith("kriyon-pair:1:ab");
+});
+
+test("while on, it says which ways devices can reach it, and why the port isn't the chosen one", async () => {
+  vi.mocked(remoteStatus).mockResolvedValue({
+    ...on,
+    routes: {
+      portNote: "Port 49731 is in use by another program.",
+      relay: false,
+      tailscale: ["100.101.102.103"],
+    },
+  });
+  render(<RemoteSection />);
+  expect(
+    await screen.findByText(
+      "Reachable over: this network, Tailscale (100.101.102.103)."
+    )
+  ).toBeInTheDocument();
+  expect(
+    screen.getByText("Port 49731 is in use by another program.")
+  ).toBeInTheDocument();
+});
+
+test("the port can be changed, and only a whole number is sent", async () => {
+  vi.mocked(remoteStatus).mockResolvedValue({
+    ...on,
+    routes: { portNote: null, relay: false, tailscale: [] },
+  });
+  vi.mocked(remoteSetPort).mockResolvedValue({
+    ...on,
+    port: 50_000,
+    routes: { portNote: null, relay: false, tailscale: [] },
+  });
+  render(<RemoteSection />);
+  const field = await screen.findByRole("spinbutton", { name: "Port" });
+  expect(field).toHaveValue(49_731);
+  fireEvent.change(field, { target: { value: "50000" } });
+  fireEvent.click(screen.getByRole("button", { name: "Use this port" }));
+  await waitFor(() => expect(remoteSetPort).toHaveBeenCalledWith(50_000));
 });

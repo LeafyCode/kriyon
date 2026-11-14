@@ -16,9 +16,15 @@ import {
   type RemoteDevice,
   type RemotePairing,
   type RemoteRole,
+  type RemoteRoutes,
 } from "../ipc/bridge.ts";
 import { consentLines, useRelay } from "../state/relay.ts";
-import { codeResultLine, countdownText, useRemote } from "../state/remote.ts";
+import {
+  codeResultLine,
+  countdownText,
+  reachableLine,
+  useRemote,
+} from "../state/remote.ts";
 import { type HostPairing, useRemoteHosts } from "../state/remoteHosts.ts";
 import { button, inputBox } from "../theme/recipes.ts";
 import { tokens } from "../theme/tokens.ts";
@@ -120,6 +126,73 @@ const nameInputStyle: CSSProperties = {
   fontSize: "13px",
   padding: "4px 8px",
 };
+
+const DIGITS = /^\d+$/;
+
+const portInputStyle: CSSProperties = {
+  ...nameInputStyle,
+  fontFamily: tokens.font.mono,
+  width: "9ch",
+};
+
+/**
+ * How devices can reach this computer while remote access is on, and the
+ * port it listens on: fixed, so the addresses a device stored at pairing
+ * keep working.
+ */
+function RoutesGroup({ port, routes }: { port: number; routes: RemoteRoutes }) {
+  const [typed, setTyped] = useState(String(port));
+  useEffect(() => setTyped(String(port)), [port]);
+  const wanted = Number(typed);
+  const whole = DIGITS.test(typed) && wanted !== port;
+  return (
+    <SettingGroup label="How devices reach this computer">
+      <SettingRow
+        control={null}
+        hint={
+          routes.portNote ? (
+            <span style={errorTextStyle}>{routes.portNote}</span>
+          ) : (
+            "Devices on the same Tailscale network reach this computer from anywhere, directly."
+          )
+        }
+        label={reachableLine(routes)}
+      />
+      <SettingRow
+        control={
+          <div style={actionsStyle}>
+            <input
+              aria-label="Port"
+              inputMode="numeric"
+              max={65_535}
+              min={1024}
+              onChange={(event) => setTyped(event.target.value)}
+              style={portInputStyle}
+              type="number"
+              value={typed}
+            />
+            <button
+              className="kr-hover-surface"
+              disabled={!whole}
+              onClick={() => {
+                useRemote
+                  .getState()
+                  .setPort(wanted)
+                  .catch(() => undefined);
+              }}
+              style={button("secondary")}
+              type="button"
+            >
+              Use this port
+            </button>
+          </div>
+        }
+        hint="The UDP port remote access listens on. Devices paired before a change reach this computer only through our relay until you pair them again."
+        label="Port"
+      />
+    </SettingGroup>
+  );
+}
 
 /** A pairing invite's QR code, from the grid Rust drew. */
 function QrCode({ grid }: { grid: QrGrid }) {
@@ -642,6 +715,9 @@ export function RemoteSection() {
         />
         {error ? <span style={errorTextStyle}>{error}</span> : null}
       </SettingGroup>
+      {enabled && status?.routes ? (
+        <RoutesGroup port={status.port} routes={status.routes} />
+      ) : null}
       {enabled && status ? <PairingGroup pairing={status.pairing} /> : null}
       {/* Always: a lost device must be removable without turning access on. */}
       <RelaySection />

@@ -8,6 +8,7 @@ import {
   remoteRenameDevice,
   remoteSetDeviceRole,
   remoteSetEnabled,
+  remoteSetPort,
   remoteStartPairing,
   remoteStatus,
   remoteStopPairing,
@@ -16,6 +17,7 @@ import {
   CONSENT_LINES,
   codeResultLine,
   countdownText,
+  reachableLine,
   useRemote,
 } from "./remote.ts";
 
@@ -28,6 +30,7 @@ vi.mock("../ipc/bridge.ts", async (importOriginal) => ({
   remoteRenameDevice: vi.fn(),
   remoteSetDeviceRole: vi.fn(),
   remoteSetEnabled: vi.fn(),
+  remoteSetPort: vi.fn(),
   remoteStartPairing: vi.fn(),
   remoteStatus: vi.fn(),
   remoteStopPairing: vi.fn(),
@@ -41,6 +44,8 @@ const off: RemoteStatus = {
   enabled: false,
   hostId: null,
   pairing: { state: "idle" },
+  port: 49_731,
+  routes: null,
 };
 const on: RemoteStatus = { ...off, enabled: true, hostId: "ab".repeat(32) };
 const phone = {
@@ -229,4 +234,36 @@ test("the consent screen says what changes, plainly", () => {
   expect(text).toContain("this computer");
   expect(text).toContain("end-to-end encrypted");
   expect(text).not.toMatch(PROMISES_TOO_MUCH);
+});
+
+test("the routes devices can use are said plainly", () => {
+  const routes = { portNote: null, relay: false, tailscale: [] };
+  expect(reachableLine(routes)).toBe("Reachable over: this network.");
+  expect(
+    reachableLine({ ...routes, relay: true, tailscale: ["100.101.102.103"] })
+  ).toBe(
+    "Reachable over: this network, Tailscale (100.101.102.103), our relay."
+  );
+  expect(
+    reachableLine({
+      ...routes,
+      tailscale: ["100.101.102.103", "fd7a:115c:a1e0::5"],
+    })
+  ).toBe(
+    "Reachable over: this network, Tailscale (100.101.102.103, fd7a:115c:a1e0::5)."
+  );
+});
+
+test("a new port is sent to Rust, and what it refuses is shown", async () => {
+  vi.mocked(remoteSetPort).mockResolvedValueOnce({ ...on, port: 50_000 });
+  await useRemote.getState().setPort(50_000);
+  expect(remoteSetPort).toHaveBeenCalledWith(50_000);
+  expect(useRemote.getState().status?.port).toBe(50_000);
+  vi.mocked(remoteSetPort).mockRejectedValueOnce(
+    new Error(
+      "Choose a port from 1024 to 65535: the lower ones are the system's."
+    )
+  );
+  await useRemote.getState().setPort(22);
+  expect(useRemote.getState().error).toContain("1024");
 });

@@ -4,6 +4,7 @@ import {
   type RemoteCodeResult,
   type RemoteDevice,
   type RemoteRole,
+  type RemoteRoutes,
   type RemoteStatus,
   remoteDevices,
   remoteEnterCode,
@@ -12,6 +13,7 @@ import {
   remoteRenameDevice,
   remoteSetDeviceRole,
   remoteSetEnabled,
+  remoteSetPort,
   remoteStartPairing,
   remoteStatus,
   remoteStopPairing,
@@ -47,6 +49,8 @@ interface RemoteStore {
   refresh: () => Promise<void>;
   remove: (id: string) => Promise<void>;
   rename: (id: string, name: string) => Promise<void>;
+  /** Listen on another port; what Rust refuses is shown in `error`. */
+  setPort: (port: number) => Promise<void>;
   setRole: (id: string, role: RemoteRole) => Promise<void>;
   startPairing: (role: RemoteRole) => Promise<void>;
   status: RemoteStatus | null;
@@ -144,6 +148,10 @@ export const useRemote = create<RemoteStore>((set, get) => {
         .then((status) => set({ status }))
         .catch(() => undefined);
     },
+    setPort: (port) =>
+      attempt(async () => {
+        set({ status: await remoteSetPort(port) });
+      }),
     status: null,
     stopPairing: () =>
       attempt(async () => {
@@ -168,6 +176,21 @@ export const useRemote = create<RemoteStore>((set, get) => {
     },
   };
 });
+
+/**
+ * The ways devices can reach this computer, in a line: this network always
+ * (while on), Tailscale with its addresses, and our relay.
+ */
+export function reachableLine(routes: RemoteRoutes): string {
+  const ways = ["this network"];
+  if (routes.tailscale.length > 0) {
+    ways.push(`Tailscale (${routes.tailscale.join(", ")})`);
+  }
+  if (routes.relay) {
+    ways.push("our relay");
+  }
+  return `Reachable over: ${ways.join(", ")}.`;
+}
 
 /**
  * What the consent screen says before remote access turns on: what changes,

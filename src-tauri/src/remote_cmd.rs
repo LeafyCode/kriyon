@@ -233,6 +233,8 @@ mod tests {
 
 /// The switch's setting in the store; absent means off.
 const SETTING: &str = "remoteAccess";
+/// The UDP port remote access listens on, when the person chose one.
+const PORT_SETTING: &str = "remoteAccessPort";
 
 /// The event telling the UI a device took the pairing and its code is wanted.
 pub const CODE_WANTED_EVENT: &str = "remote-pairing-code-wanted";
@@ -343,6 +345,24 @@ pub(crate) async fn turn_on(app: &tauri::AppHandle) -> Result<(), String> {
         .await
 }
 
+/// Listen on the port the person chose, if they did: before anything binds.
+pub fn restore_port(app: &tauri::AppHandle) {
+    use tauri::Manager as _;
+    let port = app
+        .state::<crate::StoreState>()
+        .0
+        .lock()
+        .load_layout(PORT_SETTING)
+        .ok()
+        .flatten()
+        .and_then(|value| value.parse::<u16>().ok())
+        .and_then(|port| kriyon_remote::routes::check_port(port).ok());
+    if let Some(port) = port {
+        app.state::<crate::remote_endpoint::RemoteEndpoint>()
+            .set_port(port);
+    }
+}
+
 /// Bring remote access back up at launch if the person left it on.
 pub fn restore(app: &tauri::AppHandle) {
     use tauri::Manager as _;
@@ -372,6 +392,22 @@ pub struct RemoteStatus {
     /// The host's endpoint id while on.
     pub host_id: Option<String>,
     pub pairing: PairingView,
+    /// How devices can reach this computer, while on.
+    pub routes: Option<Routes>,
+    /// The UDP port remote access listens on (the person's choice).
+    pub port: u16,
+}
+
+/// The ways a device can reach this computer now (spec §2).
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Routes {
+    /// Its Tailscale addresses: devices on the same tailnet dial them.
+    pub tailscale: Vec<String>,
+    /// Bound with our relay.
+    pub relay: bool,
+    /// Why it isn't on the chosen port, if it isn't.
+    pub port_note: Option<String>,
 }
 
 /// The pairing in progress.
@@ -392,8 +428,11 @@ pub enum PairingView {
     Burned,
 }
 
-async fn status(rt: &kriyon_remote_link::host_runtime::RemoteRuntime) -> RemoteStatus {
+async fn status(app: &tauri::AppHandle) -> RemoteStatus {
     use kriyon_remote_link::host_runtime::PairingStatus;
+    use tauri::Manager as _;
+    let rt = app.state::<kriyon_remote_link::host_runtime::RemoteRuntime>();
+    let endpoint = app.state::<crate::remote_endpoint::RemoteEndpoint>();
     let pairing = match rt.pairing_status().await {
         PairingStatus::Idle => PairingView::Idle,
         PairingStatus::Waiting {
@@ -415,10 +454,26 @@ async fn status(rt: &kriyon_remote_link::host_runtime::RemoteRuntime) -> RemoteS
         PairingStatus::Expired => PairingView::Expired,
         PairingStatus::Burned => PairingView::Burned,
     };
+    let enabled = rt.is_on().await;
+    let routes = if enabled {
+        Some(Routes {
+            tailscale: kriyon_remote_link::invite::tailscale_ips()
+                .await
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
+            relay: endpoint.bound_relay().await.is_some(),
+            port_note: endpoint.port_note(),
+        })
+    } else {
+        None
+    };
     RemoteStatus {
-        enabled: rt.is_on().await,
+        enabled,
         host_id: rt.host_id().await.map(|id| hex(&id)),
         pairing,
+        routes,
+        port: endpoint.port(),
     }
 }
 
@@ -427,10 +482,33 @@ async fn status(rt: &kriyon_remote_link::host_runtime::RemoteRuntime) -> RemoteS
 /// # Errors
 /// Never; `Result` for the command's async form.
 #[tauri::command]
-pub async fn remote_status(
-    rt: tauri::State<'_, kriyon_remote_link::host_runtime::RemoteRuntime>,
-) -> Result<RemoteStatus, String> {
-    Ok(status(&rt).await)
+pub async fn remote_status(app: tauri::AppHandle) -> Result<RemoteStatus, String> {
+    Ok(status(&app).await)
+}
+
+/// Listen on UDP `port` for remote access from now on, and remember it. An
+/// endpoint up now comes back up on it. Devices paired before keep the old
+/// port's addresses: they reach this computer only through the relay until
+/// paired again.
+///
+/// # Errors
+/// A port the system keeps, or the setting couldn't be saved.
+#[tauri::command]
+pub async fn remote_set_port(app: tauri::AppHandle, port: u16) -> Result<RemoteStatus, String> {
+    use tauri::Manager as _;
+    let port = kriyon_remote::routes::check_port(port)?;
+    app.state::<crate::StoreState>()
+        .0
+        .lock()
+        .save_layout(PORT_SETTING, &port.to_string())
+        .map_err(|e| e.to_string())?;
+    let endpoint = app.state::<crate::remote_endpoint::RemoteEndpoint>();
+    let changed = endpoint.port() != port;
+    endpoint.set_port(port);
+    if changed && endpoint.is_bound().await {
+        crate::relay_cmd::rebuild_in_turn(&app).await;
+    }
+    Ok(status(&app).await)
 }
 
 /// Turn remote access on (the host endpoint comes up) or off (no endpoint at
@@ -458,7 +536,7 @@ pub async fn remote_set_enabled(
         .lock()
         .save_layout(SETTING, if enabled { "true" } else { "false" })
         .map_err(|e| e.to_string())?;
-    Ok(status(&app.state::<kriyon_remote_link::host_runtime::RemoteRuntime>()).await)
+    Ok(status(&app).await)
 }
 
 /// Start pairing a device as `role`; returns the QR code's text.

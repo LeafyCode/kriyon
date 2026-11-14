@@ -1815,6 +1815,20 @@ export interface RemoteStatus {
   /** The host's endpoint id while on. */
   hostId: string | null;
   pairing: RemotePairing;
+  /** The UDP port remote access listens on (the person's choice). */
+  port: number;
+  /** How devices can reach this computer, while on. */
+  routes: RemoteRoutes | null;
+}
+
+/** The ways a device can reach this computer now (spec §2). */
+export interface RemoteRoutes {
+  /** Why it isn't on the chosen port, if it isn't. */
+  portNote: string | null;
+  /** Bound with our relay. */
+  relay: boolean;
+  /** Its Tailscale addresses: devices on the same tailnet dial them. */
+  tailscale: string[];
 }
 
 /** What typing a pairing code did. */
@@ -1845,9 +1859,19 @@ export function remoteStatus(): Promise<RemoteStatus> {
       enabled: false,
       hostId: null,
       pairing: { state: "idle" },
+      port: 49_731,
+      routes: null,
     });
   }
   return invoke("remote_status");
+}
+
+/**
+ * Listen on UDP `port` for remote access from now on. Devices paired before
+ * keep the old port's addresses.
+ */
+export function remoteSetPort(port: number): Promise<RemoteStatus> {
+  return invoke("remote_set_port", { port });
 }
 
 /** Turn remote access on (the host endpoint comes up) or off (none at all). */

@@ -367,8 +367,10 @@ pub fn run() {
         .manage(kriyon_remote_link::host_runtime::RemoteRuntime::default())
         .manage(kriyon_remote_link::device_runtime::DeviceRuntime::default())
         .manage(remote_push_rt::PushRt::from_build())
+        // Every interface, on a fixed port (the person's choice, set at
+        // restore), so addresses devices stored at pairing still work.
         .manage(remote_endpoint::RemoteEndpoint::new(
-            std::net::SocketAddr::from(([0, 0, 0, 0], 0)),
+            std::net::SocketAddr::from(([0, 0, 0, 0], kriyon_remote::routes::DEFAULT_PORT)),
         ))
         .manage(attachment_cmd::AttachmentRegistry::default())
         .manage(folder_cmd::ChosenFolders::default())
@@ -434,6 +436,8 @@ pub fn run() {
                 crate::device_key::app_vault(&app.config().identifier, "relay"),
             ));
             app.manage(kriyon_relay_client::keeper::PassKeeper::default());
+            // The chosen port before anything binds the endpoint.
+            crate::remote_cmd::restore_port(app.handle());
             crate::relay_cmd::install(app.handle());
             // Remote access comes back up only if the person left it on.
             crate::remote_cmd::restore(app.handle());
@@ -537,6 +541,7 @@ pub fn run() {
             relay_cmd::relay_open_subscriptions,
             remote_cmd::remote_status,
             remote_cmd::remote_set_enabled,
+            remote_cmd::remote_set_port,
             remote_cmd::remote_start_pairing,
             remote_cmd::remote_pairing_qr,
             remote_cmd::remote_stop_pairing,
