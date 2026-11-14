@@ -335,6 +335,24 @@ impl Writers {
         Ok(took)
     }
 
+    /// Kriyon itself types `bytes` into session `id` (a wake's resume, as a
+    /// device opened it): in turn with every other write, but not as the
+    /// person at the host, so control stays where it is and nobody is held
+    /// off.
+    ///
+    /// # Errors
+    /// The write's error.
+    pub fn app_write(
+        &self,
+        id: &SessionId,
+        engine: &dyn SessionEngine,
+        bytes: &[u8],
+    ) -> Result<(), String> {
+        let gate = self.gate(id);
+        let _turn = gate.lock();
+        engine.write_stdin(bytes).map_err(|e| e.to_string())
+    }
+
     /// The desktop's window gave session `id` a new size. Applied unless a
     /// device's size stands; then it is kept for when control comes back.
     ///
@@ -642,6 +660,41 @@ mod tests {
                 ("s".to_string(), Holder::Host)
             ]
         );
+    }
+
+    /// Kriyon waking a sleeping session (a device opened it) types into it,
+    /// but isn't the person at the host: control stays where it is, and a
+    /// Controller may still take it at once.
+    #[test]
+    fn kriyon_typing_a_wake_leaves_control_where_it_is() {
+        let writers = Writers::default();
+        let heard = Arc::new(Mutex::new(Vec::new()));
+        let hook = Arc::clone(&heard);
+        writers.on_change(move |_id, change| hook.lock().push(change.holder));
+        let id = SessionId("s".into());
+        let (engine, _daemon) = engine();
+        writers.set_run(&id, 1);
+        let now = Instant::now() + std::time::Duration::from_secs(60);
+        writers
+            .take(&id, PHONE, Some(Role::Controller), now)
+            .expect("live")
+            .expect("taken");
+        writers
+            .app_write(&id, &engine, b"claude --resume x\r")
+            .expect("typed");
+        assert_eq!(
+            heard.lock().as_slice(),
+            [Holder::Device(PHONE)],
+            "no change"
+        );
+        // With control at the host, a Controller isn't held off ten seconds.
+        let other = SessionId("t".into());
+        writers.set_run(&other, 1);
+        writers.app_write(&other, &engine, b"wake").expect("typed");
+        assert!(matches!(
+            writers.take(&other, PHONE, Some(Role::Controller), Instant::now()),
+            Some(Ok(_))
+        ));
     }
 
     #[test]

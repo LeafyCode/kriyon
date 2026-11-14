@@ -626,15 +626,14 @@ fn type_resume<R: tauri::Runtime>(
     // shell owns the terminal, not that its input line is empty. Without it a
     // wake that races the user's keystrokes would run `<their text>claude
     // --resume …` as one garbled command.
-    // Through the session's writer, as the host typing.
-    app.state::<AppState>()
-        .writers
-        .host_write(
-            &SessionId(id.to_string()),
-            engine.as_ref(),
-            format!("\x15claude --resume {claude_id}\r").as_bytes(),
-        )
-        .map(|_took| ())
+    // Through the session's writer, in turn with any typing, but as Kriyon,
+    // not the person: a Viewer opening a sleeping session must not take
+    // control from a Controller, or hold it off for ten seconds.
+    app.state::<AppState>().writers.app_write(
+        &SessionId(id.to_string()),
+        engine.as_ref(),
+        format!("\x15claude --resume {claude_id}\r").as_bytes(),
+    )
 }
 
 #[cfg(test)]
