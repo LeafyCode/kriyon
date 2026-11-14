@@ -204,6 +204,8 @@ pub struct AppState {
     pub plan_limits: Mutex<crate::plan_limits_rt::LimitsReader>,
     /// What each session's [Session digest] is built from.
     pub digests: crate::session_digest_rt::DigestSources,
+    /// The turns behind the [Readable view]s read lately.
+    pub readable_turns: crate::readable_rt::TurnsCache,
 }
 
 /// Managed handle to the [`Store`]. The connection is not `Sync`, so it is

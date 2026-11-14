@@ -19,31 +19,35 @@ const TURNS_KEPT: usize = 4;
 
 /// The turns of the sessions read lately, by session, with the stamp of the
 /// files they came from: a reply streaming changes only the partial file,
-/// and need not read the transcript again.
-static TURNS: Mutex<Vec<(String, u64, Vec<StructuredTurn>)>> = Mutex::new(Vec::new());
+/// and need not read the transcript again. Kept in [`crate::AppState`].
+#[derive(Debug, Default)]
+pub struct TurnsCache(Mutex<Vec<(String, u64, Vec<StructuredTurn>)>>);
 
-/// Session `id`'s turns, from the cache while `files_stamp` is the same.
-fn turns(
-    id: &str,
-    files_stamp: u64,
-    load: impl FnOnce() -> Vec<StructuredTurn>,
-) -> Vec<StructuredTurn> {
-    {
-        let cache = TURNS.lock();
-        if let Some((_, _, turns)) = cache
-            .iter()
-            .find(|(session, stamp, _)| session == id && *stamp == files_stamp)
+impl TurnsCache {
+    /// Session `id`'s turns, from the cache while `files_stamp` is the same.
+    fn turns(
+        &self,
+        id: &str,
+        files_stamp: u64,
+        load: impl FnOnce() -> Vec<StructuredTurn>,
+    ) -> Vec<StructuredTurn> {
         {
-            return turns.clone();
+            let cache = self.0.lock();
+            if let Some((_, _, turns)) = cache
+                .iter()
+                .find(|(session, stamp, _)| session == id && *stamp == files_stamp)
+            {
+                return turns.clone();
+            }
         }
+        let turns = load();
+        let mut cache = self.0.lock();
+        cache.retain(|(session, _, _)| session != id);
+        cache.push((id.to_string(), files_stamp, turns.clone()));
+        let extra = cache.len().saturating_sub(TURNS_KEPT);
+        cache.drain(..extra);
+        turns
     }
-    let turns = load();
-    let mut cache = TURNS.lock();
-    cache.retain(|(session, _, _)| session != id);
-    cache.push((id.to_string(), files_stamp, turns.clone()));
-    let extra = cache.len().saturating_sub(TURNS_KEPT);
-    cache.drain(..extra);
-    turns
 }
 
 /// What the entries come from, as cheap to look at as can be: the files'
@@ -120,7 +124,7 @@ pub fn entries(app: &tauri::AppHandle, id: &str, last: Option<u64>) -> EntriesBu
     if last == Some(now) {
         return EntriesBuilt::Unchanged;
     }
-    let turns = turns(id, turns_stamp, || {
+    let turns = state.readable_turns.turns(id, turns_stamp, || {
         crate::structured_cmd::load_turns(app, &home, id, Some(&row))
     });
     EntriesBuilt::Built {
@@ -157,10 +161,11 @@ mod tests {
             loads.set(loads.get() + 1);
             Vec::new()
         };
-        turns("cache-test", 1, load);
-        turns("cache-test", 1, load);
+        let cache = TurnsCache::default();
+        cache.turns("cache-test", 1, load);
+        cache.turns("cache-test", 1, load);
         assert_eq!(loads.get(), 1, "kept");
-        turns("cache-test", 2, load);
+        cache.turns("cache-test", 2, load);
         assert_eq!(loads.get(), 2, "the files changed");
     }
 
