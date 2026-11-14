@@ -3516,6 +3516,7 @@ dependencies = [
 name = "kriyon-relay-client"
 version = "0.16.0"
 dependencies = [
+ "iroh",
  "kriyon-remote",
  "kriyon-remote-link",
  "reqwest",

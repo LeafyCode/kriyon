@@ -433,7 +433,7 @@ pub fn run() {
                 ),
                 crate::device_key::app_vault(&app.config().identifier, "relay"),
             ));
-            app.manage(crate::relay_cmd::RelayGlue::default());
+            app.manage(kriyon_relay_client::keeper::PassKeeper::default());
             crate::relay_cmd::install(app.handle());
             // Remote access comes back up only if the person left it on.
             crate::remote_cmd::restore(app.handle());

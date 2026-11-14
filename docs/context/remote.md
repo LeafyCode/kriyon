@@ -73,6 +73,11 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
   key], that our relay checks by itself. Opaque to the app: stored, sent, never parsed. Its format
   is the relay contract's (`docs/superpowers/specs/2026-11-13-relay-pass-contract.md`). _Avoid_:
   ticket (iroh uses that for addresses), token.
+- **Pass keeper** (`kriyon_relay_client::keeper::PassKeeper`) — keeps this device's [Relay pass]
+  fresh and in use, the same on the desktop and the phone: renews it when due (or once per ten
+  minutes when the relay refused it), and rebuilds the endpoint with a newer one at a quiet moment
+  or before the one in use runs out. Each app binds its endpoint through `Rebind`. _Avoid_: pass
+  manager, renewer.
 - **Relay account** — the BisBig subscriber a [Relay pass] names (16 random bytes, not the BisBig
   user id). Our relay only forwards between devices of the same relay account, so a [Host] and
   every [Remote device] that reaches it through our relay sign in with the same BisBig account.

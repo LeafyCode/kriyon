@@ -6,4 +6,5 @@
 //! `kriyon_remote::relay`'s.
 
 pub mod api;
+pub mod keeper;
 pub mod runtime;

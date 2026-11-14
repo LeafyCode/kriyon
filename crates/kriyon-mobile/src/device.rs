@@ -8,11 +8,11 @@ use kriyon_remote::device_view::LinkState;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+use kriyon_relay_client::keeper::{now_s, InUse, PassKeeper, Rebind, CHECK_EVERY};
 use kriyon_relay_client::runtime::{RelayRuntime, RelaySetup, ThisDevice};
 use kriyon_remote::device_view::{host_summary, name_of, HostView, LinkFacts};
 use kriyon_remote::message::{hex, parse_id_hex, EndpointId, Role};
 use kriyon_remote::pairing::PairingInvite;
-use kriyon_remote::relay::RelayAction;
 use kriyon_remote_link::device::DevicePairing;
 use kriyon_remote_link::device_runtime::{
     screen_frame, DeviceError, DeviceEvents, DeviceRuntime, EntriesSink, HostEntry, ScreenSink,
@@ -250,29 +250,66 @@ pub(crate) struct Shared {
     alerts_off: std::sync::atomic::AtomicBool,
     /// Our relay (`KRIYON_RELAY_API` at build time); none: no relay.
     pub(crate) relay: Option<Arc<RelayRuntime>>,
-    /// The endpoint, and the relay it was bound with: iroh reads the pass
-    /// only then, so a new one needs a new endpoint.
-    link: tokio::sync::Mutex<(iroh::Endpoint, Option<RelayAccess>)>,
+    /// The endpoint, and the relay it was bound with and when that pass
+    /// expires: iroh reads the pass only then, so a new one needs a new
+    /// endpoint.
+    link: tokio::sync::Mutex<(iroh::Endpoint, Option<(RelayAccess, u64)>)>,
+    /// The relay the next endpoint is bound with, as the keeper last said.
+    wanted: std::sync::Mutex<Option<(RelayAccess, u64)>>,
     secret: [u8; 32],
     bind: SocketAddr,
     /// This phone as the relay account knows it.
     pub(crate) this: ThisDevice,
-    /// When a new pass was last fetched because the relay refused one: at
-    /// most one such fetch every [`FORCED_RENEW_GAP`], so a relay that
-    /// refuses every pass is not asked in a loop.
-    last_forced: std::sync::Mutex<Option<std::time::Instant>>,
+    /// When to renew the pass and rebuild the endpoint: the desktop's
+    /// rules, shared.
+    keeper: PassKeeper,
 }
 
-/// The least time between two passes fetched because the relay refused one.
-const FORCED_RENEW_GAP: std::time::Duration = std::time::Duration::from_mins(10);
-
-/// The relay this phone's endpoint should use now: none without a relay,
-/// while off, or without a pass.
-async fn wanted_relay(relay: Option<&Arc<RelayRuntime>>) -> Option<RelayAccess> {
+/// The relay this phone's endpoint should use now, with when its pass
+/// expires: none without a relay, while off, or without a pass.
+async fn wanted_relay(relay: Option<&Arc<RelayRuntime>>) -> Option<(RelayAccess, u64)> {
     match relay {
-        Some(relay) => relay.access().await.map(|(access, _)| access),
+        Some(relay) => relay.access().await,
         None => None,
     }
+}
+
+/// This phone's endpoint as the [`PassKeeper`] rebuilds it.
+struct PhoneEndpoint {
+    shared: Arc<Shared>,
+    relay: Arc<RelayRuntime>,
+}
+
+impl Rebind for PhoneEndpoint {
+    fn relay(&self) -> &RelayRuntime {
+        &self.relay
+    }
+
+    fn this_device(&self) -> Option<ThisDevice> {
+        Some(self.shared.this.clone())
+    }
+
+    async fn want(&self, relay: Option<(RelayAccess, u64)>) -> InUse {
+        let link = self.shared.link.lock().await;
+        let in_use = InUse {
+            stale: link.1.as_ref().map(|(access, _)| access)
+                != relay.as_ref().map(|(access, _)| access),
+            expires_s: link.1.as_ref().map(|(_, expires)| *expires),
+        };
+        *locked(&self.shared.wanted) = relay;
+        in_use
+    }
+
+    async fn quiet(&self) -> bool {
+        !self.shared.device.has_open_sessions().await
+    }
+
+    async fn rebind(&self) -> Result<(), String> {
+        Arc::clone(&self.shared).rebind_endpoint().await
+    }
+
+    /// The app reads the relay when it shows it: nothing to tell.
+    fn changed(&self) {}
 }
 
 /// The platform the relay account lists this phone as.
@@ -290,49 +327,57 @@ fn locked<T>(mutex: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-fn now_s() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs())
-}
-
 impl Shared {
-    /// Put the relay as it stands to use: renew the pass if it is due,
-    /// then, if the endpoint uses another relay or pass, rebuild it — at
-    /// once when `now` (the person asked), else only with no session open.
-    /// Returns whether it was rebuilt.
-    pub(crate) async fn apply_relay(self: &Arc<Self>, now: bool) -> Result<bool, MobileError> {
-        let shared = Arc::clone(self);
-        self.on_runtime(async move { shared.apply_relay_here(now).await })
-            .await?
+    /// This phone's endpoint for the keeper; none without a relay.
+    fn pass_endpoint(self: &Arc<Self>) -> Option<PhoneEndpoint> {
+        self.relay.as_ref().map(|relay| PhoneEndpoint {
+            shared: Arc::clone(self),
+            relay: Arc::clone(relay),
+        })
     }
 
-    async fn apply_relay_here(self: Arc<Self>, now: bool) -> Result<bool, MobileError> {
-        if let Some(relay) = &self.relay {
-            relay.renew(now_s(), &self.this, false).await;
+    /// Put the relay as it stands to use: if the endpoint uses another relay
+    /// or pass, rebuild it at once when `now` (the person asked), else at a
+    /// quiet moment or before the pass in use runs out. Returns whether it
+    /// was rebuilt.
+    pub(crate) async fn apply_relay(self: &Arc<Self>, now: bool) -> Result<bool, MobileError> {
+        let Some(endpoint) = self.pass_endpoint() else {
+            return Ok(false);
+        };
+        let shared = Arc::clone(self);
+        self.on_runtime(async move {
+            shared
+                .keeper
+                .apply(now_s(), &endpoint, now)
+                .await
+                .map_err(|reason| MobileError::Link { reason })
+        })
+        .await?
+    }
+
+    /// Renew the pass if it is due (or the relay refused it), and put a new
+    /// one to use when it is time: on every wake, and every
+    /// [`CHECK_EVERY`] while the app runs.
+    async fn check_relay(self: Arc<Self>) {
+        if let Some(endpoint) = self.pass_endpoint() {
+            self.keeper.check(now_s(), &endpoint).await;
         }
-        let wanted = wanted_relay(self.relay.as_ref()).await;
+    }
+
+    /// Bind a new endpoint with the relay the keeper wants, and move every
+    /// computer and the sessions open here to it.
+    async fn rebind_endpoint(self: Arc<Self>) -> Result<(), String> {
+        let wanted = locked(&self.wanted).clone();
         let mut link = self.link.lock().await;
-        if link.1 == wanted {
-            return Ok(false);
-        }
-        // Unless the person asked, only while nothing is open here; checked
-        // under the lock, so nothing opens in between.
-        if !now && self.device.has_open_sessions().await {
-            return Ok(false);
-        }
         // The new endpoint first: if it can't be bound, nothing changes.
         let config = LinkConfig {
             bind: self.bind,
-            relay: wanted.clone(),
+            relay: wanted.as_ref().map(|(access, _)| access.clone()),
             ..LinkConfig::new(self.secret)
         };
         let endpoint = kriyon_remote_link::endpoint::bind(&config, Vec::new())
             .await
-            .map_err(|e| MobileError::Link {
-                reason: e.to_string(),
-            })?;
-        // Every computer moves to it, with the sessions open here.
+            .map_err(|e| e.to_string())?;
         self.device.rebind(endpoint.clone()).await;
         let old = std::mem::replace(&mut *link, (endpoint.clone(), wanted.clone()));
         drop(link);
@@ -340,65 +385,24 @@ impl Shared {
         if wanted.is_some() {
             Arc::clone(&self).watch_relay(endpoint);
         }
-        Ok(true)
+        Ok(())
     }
 
     /// Watch what the relay says about `endpoint` until it closes, and act
-    /// on a refusal (the contract's table): the problem is shown, and an
-    /// out-of-date pass is replaced.
+    /// on a refusal (the contract's table), as the keeper says.
     fn watch_relay(self: Arc<Self>, endpoint: iroh::Endpoint) {
         let handle = self.handle.clone();
         handle.spawn(async move {
-            use iroh::Watcher as _;
-            let Some(relay) = self.relay.clone() else {
-                return;
-            };
-            let mut status = endpoint.home_relay_status();
-            let mut last = None;
-            loop {
-                let relays = tokio::select! {
-                    () = endpoint.closed() => return,
-                    next = status.updated() => match next {
-                        Ok(relays) => relays,
-                        Err(_) => return,
-                    },
-                };
-                let action = relays.iter().find_map(|one| {
-                    let error = one.last_error().map(|e| format!("{e:#}"));
-                    RelayAction::from_status(one.auth_denied_reason(), error.as_deref())
-                });
-                if action == last {
-                    continue;
-                }
-                last = action;
-                let Some(action) = action else {
-                    continue;
-                };
-                if relay.relay_refused(action).await && self.may_force() {
-                    relay.renew(now_s(), &self.this, true).await;
-                    // This endpoint is replaced; the next one is watched.
-                    let _ = Arc::clone(&self).apply_relay_here(true).await;
-                    return;
-                }
+            if let Some(pass_endpoint) = self.pass_endpoint() {
+                self.keeper.watch(&endpoint, &pass_endpoint).await;
             }
         });
-    }
-
-    /// Whether a pass may be fetched now because the relay refused one.
-    fn may_force(&self) -> bool {
-        let mut last = locked(&self.last_forced);
-        let now = std::time::Instant::now();
-        if last.is_some_and(|at| now.duration_since(at) < FORCED_RENEW_GAP) {
-            return false;
-        }
-        *last = Some(now);
-        true
     }
 
     /// The relay the endpoint uses now.
     #[cfg(test)]
     pub(crate) async fn bound_relay(&self) -> Option<RelayAccess> {
-        self.link.lock().await.1.clone()
+        self.link.lock().await.1.clone().map(|(access, _)| access)
     }
 
     /// Give `host` the push token in the background; one computer that
@@ -736,7 +740,7 @@ impl MobileDevice {
             let wanted = wanted_relay(relay.as_ref()).await;
             let config = LinkConfig {
                 bind,
-                relay: wanted.clone(),
+                relay: wanted.as_ref().map(|(access, _)| access.clone()),
                 ..LinkConfig::new(secret)
             };
             let endpoint = kriyon_remote_link::endpoint::bind(&config, Vec::new())
@@ -765,11 +769,26 @@ impl MobileDevice {
             alerts_off: std::sync::atomic::AtomicBool::new(false),
             relay,
             link: tokio::sync::Mutex::new(link),
+            wanted: std::sync::Mutex::new(None),
             secret,
             bind,
             this,
-            last_forced: std::sync::Mutex::new(None),
+            keeper: PassKeeper::default(),
         });
+        // The pass is checked every minute while the app runs, as on the
+        // desktop; the loop ends with the device.
+        if shared.relay.is_some() {
+            let weak = Arc::downgrade(&shared);
+            runtime.spawn(async move {
+                loop {
+                    tokio::time::sleep(CHECK_EVERY).await;
+                    let Some(shared) = weak.upgrade() else {
+                        return;
+                    };
+                    shared.check_relay().await;
+                }
+            });
+        }
         // The pass bound at start is watched like any later one.
         if link_relay {
             let endpoint = runtime.block_on(async { shared.link.lock().await.0.clone() });
@@ -953,12 +972,10 @@ impl MobileDevice {
     /// The app came to the front, or the network changed: dial now.
     pub fn wake(&self) {
         self.shared.device.wake();
-        // A due pass is fetched, and used if nothing is open now.
+        // A due pass is fetched, and used when it is time.
         if self.shared.relay.is_some() {
             let shared = Arc::clone(&self.shared);
-            self.shared.handle.spawn(async move {
-                let _ = shared.apply_relay_here(false).await;
-            });
+            self.shared.handle.spawn(shared.check_relay());
         }
     }
 

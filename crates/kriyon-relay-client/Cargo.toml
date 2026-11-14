@@ -13,6 +13,8 @@ test-support = ["tokio/rt-multi-thread"]
 [dependencies]
 kriyon-remote = { path = "../kriyon-remote" }
 kriyon-remote-link = { path = "../kriyon-remote-link" }
+# Already in the tree through kriyon-remote-link: the keeper watches the relay's status on the endpoint.
+iroh = { version = "1.4.1", default-features = false, features = ["tls-ring"] }
 # Both already in the tree through iroh.
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls-no-provider"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
