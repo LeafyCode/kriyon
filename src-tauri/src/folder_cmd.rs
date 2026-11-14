@@ -313,8 +313,10 @@ mod tests {
 
     #[test]
     fn validate_cwd_rejects_a_nonexistent_path() {
-        let state = store_with_project_root("/tmp");
-        let err = validate_cwd(&state, Path::new("/no/such/dir/anywhere")).unwrap_err();
+        // Absolute on every platform (a bare `/x` has no drive on Windows).
+        let dir = tempfile::tempdir().unwrap();
+        let state = store_with_project_root(&dir.path().to_string_lossy());
+        let err = validate_cwd(&state, &dir.path().join("no-such-dir")).unwrap_err();
         assert_eq!(err, "cwd is not a directory");
     }
 

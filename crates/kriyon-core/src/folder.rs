@@ -9,6 +9,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::completion::path_within_roots;
+use crate::paths::Canonical as _;
 
 /// Why a folder path was refused, in the order the rules are checked. The
 /// `Display` text is what the person sees.
@@ -80,14 +81,14 @@ pub fn check_folder(
 ) -> Result<CheckedFolder, FolderRefusal> {
     check_spelling(path)?;
     let canonical = Path::new(path)
-        .canonicalize()
+        .canonical()
         .map_err(|_| FolderRefusal::NotADirectory)?;
     if !canonical.is_dir() {
         return Err(FolderRefusal::NotADirectory);
     }
     let roots: Vec<PathBuf> = approved_roots
         .iter()
-        .filter_map(|root| root.canonicalize().ok())
+        .filter_map(|root| root.canonical().ok())
         .collect();
     if path_within_roots(&canonical, &roots) {
         Ok(CheckedFolder(canonical))
@@ -124,7 +125,7 @@ pub fn check_chosen_folder(path: &str, chosen: &[PathBuf]) -> Result<CheckedFold
     })?;
     let is_chosen = chosen
         .iter()
-        .filter_map(|root| root.canonicalize().ok())
+        .filter_map(|root| root.canonical().ok())
         .any(|root| root == folder.canonical());
     if is_chosen {
         Ok(folder)
@@ -238,7 +239,7 @@ pub fn check_worktree_to_set_up(
         other => other,
     })?;
     let is_repo = Path::new(repo)
-        .canonicalize()
+        .canonical()
         .is_ok_and(|repo| repo == folder.canonical());
     if is_repo {
         Err(FolderRefusal::NotLinkedWorktree)
@@ -252,7 +253,7 @@ mod tests {
     use super::*;
 
     fn canon(p: &Path) -> PathBuf {
-        p.canonicalize().expect("canonicalize")
+        p.canonical().expect("canonicalize")
     }
 
     fn approved(dir: &tempfile::TempDir) -> Vec<PathBuf> {

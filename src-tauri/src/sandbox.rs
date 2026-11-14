@@ -616,7 +616,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = store_with_project_root(&dir.path().to_string_lossy());
         assert_eq!(
-            SandboxRoot::validate(&store, "/no/such/dir/anywhere").unwrap_err(),
+            SandboxRoot::validate(&store, &dir.path().join("no-such-dir").to_string_lossy())
+                .unwrap_err(),
             "cwd is not a directory"
         );
     }

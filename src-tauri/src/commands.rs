@@ -1574,6 +1574,9 @@ mod tests {
             assert_eq!(typed(&mut daemon), b"");
         }
 
+        // A write to a socket whose other end is gone fails at once on Unix;
+        // Windows' AF_UNIX can take it into its buffer first.
+        #[cfg(unix)]
         #[test]
         fn a_launch_that_never_reached_the_shell_can_be_tried_again() {
             let (app, daemon) = app_with_session(false);
