@@ -13,6 +13,14 @@ kriyon-remote = { path = "../kriyon-remote" }
 parking_lot = { version = "0.12", optional = true }
 tokio = { version = "1", default-features = false, features = ["macros", "rt", "sync", "time"] }
 
+[target.'cfg(windows)'.dependencies]
+# Credential Manager and DPAPI, for the app's secrets on Windows (keys::windows).
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security_Credentials",
+    "Win32_Security_Cryptography",
+] }
+
 [features]
 # The host side (`host_runtime`): serving paired devices. The desktop's;
 # the phone's library leaves it out.

@@ -112,7 +112,27 @@ items 3 and 7.
        never asked for them.
    - Fixes go in the daemon, not the devices.
 
-## Order of work
+## Done so far (branch `feat/remote-windows-prep`)
+
+- **Step 2, the crates part:** `.github/workflows/windows.yml` runs clippy on kriyon-core,
+  kriyon-remote, kriyon-remote-link, kriyon-relay-client and kriyon-push on Windows, and the
+  four remote crates' tests. kriyon-core builds for Windows (PR #48's `private_fs`, taken as it
+  is). Left for after #48: kriyon-ptyd, src-tauri and kriyon-core's own tests in that job.
+- **Step 3:** `kriyon_core::host::computer_name` (`gethostname` on Unix,
+  `GetComputerNameExW` on Windows); the app uses it everywhere it named this computer.
+- **Step 4, the vault:** `kriyon_remote_link::keys::windows`.
+  - A secret goes in Credential Manager while it fits (`CRED_PERSIST_LOCAL_MACHINE`).
+  - A bigger one is DPAPI-sealed into `<app local data>/<account>.sealed`, with the app's and
+    the secret's name as entropy.
+  - `SizedVault` holds which store: it is platform-neutral and tested everywhere, and the stores
+    are tested for real on Windows CI.
+  - Measured: the relay record is 354 bytes of JSON plus its access token, which the contract
+    leaves open. It outgrows a credential only past a token of about 2.2 KB, and the vault
+    handles either.
+  - Left for after #48: `device_key` choosing it on Windows (it needs the app's local data
+    folder).
+
+
 
 Sizes are for one person: S is 1–2 days, M is 3–5 days, L is 1–2 weeks.
 

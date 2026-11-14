@@ -3,6 +3,9 @@
 //! on the phone. A stored key that doesn't read back is an error, never
 //! silently replaced: its public half is the endpoint id every paired peer
 //! stores.
+#[cfg(windows)]
+pub mod windows;
+
 /// Where a device key is kept.
 pub trait KeyVault {
     /// The stored secret, or `None` when there is none yet.
@@ -78,6 +81,53 @@ pub fn load_or_create(
     Ok(secret)
 }
 
+/// A secret kept in `small` while it is at most `limit` bytes, and in
+/// `large` when it is bigger: Windows' Credential Manager holds 2,560 bytes
+/// a credential, and the relay sign-in can be longer. Either way it is kept
+/// in one of them only.
+pub struct SizedVault<S, L> {
+    pub small: S,
+    pub large: L,
+    pub limit: usize,
+}
+
+impl<S: SecretVault, L: SecretVault> SecretVault for SizedVault<S, L> {
+    fn read(&self) -> Result<Option<Vec<u8>>, String> {
+        match self.small.read()? {
+            Some(secret) => Ok(Some(secret)),
+            None => self.large.read(),
+        }
+    }
+
+    fn write(&self, secret: &[u8]) -> Result<(), String> {
+        if secret.len() <= self.limit {
+            // `small` is read first: the old large copy can't shadow it.
+            self.small.write(secret)?;
+            self.large.remove()
+        } else {
+            // Cleared first, so an old small copy never shadows the new one;
+            // stopped between, the secret is gone, never stale.
+            self.small.remove()?;
+            self.large.write(secret)
+        }
+    }
+
+    fn remove(&self) -> Result<(), String> {
+        self.small.remove()?;
+        self.large.remove()
+    }
+}
+
+impl<S: SecretVault, L: SecretVault> KeyVault for SizedVault<S, L> {
+    fn read(&self) -> Result<Option<Vec<u8>>, String> {
+        SecretVault::read(self)
+    }
+
+    fn write(&self, secret: &[u8; 32]) -> Result<(), String> {
+        SecretVault::write(self, secret)
+    }
+}
+
 /// The macOS keychain, under `<bundle identifier>.remote` / an item name
 /// (`device-key` for the device key).
 #[cfg(test)]
@@ -148,5 +198,97 @@ mod tests {
             load_or_create(&vault, || panic!("never made")),
             Err(DeviceKeyError::Vault(_))
         ));
+    }
+
+    type Log = std::sync::Arc<std::sync::Mutex<Vec<String>>>;
+
+    /// A store in memory, logging what was done to it.
+    struct Store {
+        name: &'static str,
+        stored: std::sync::Mutex<Option<Vec<u8>>>,
+        log: Log,
+    }
+
+    impl Store {
+        fn named(name: &'static str, log: &Log) -> Self {
+            Self {
+                name,
+                stored: std::sync::Mutex::default(),
+                log: std::sync::Arc::clone(log),
+            }
+        }
+
+        fn held(&self) -> Option<Vec<u8>> {
+            self.stored.lock().expect("store").clone()
+        }
+    }
+
+    impl SecretVault for Store {
+        fn read(&self) -> Result<Option<Vec<u8>>, String> {
+            Ok(self.held())
+        }
+        fn write(&self, secret: &[u8]) -> Result<(), String> {
+            self.log
+                .lock()
+                .expect("log")
+                .push(format!("{} write", self.name));
+            *self.stored.lock().expect("store") = Some(secret.to_vec());
+            Ok(())
+        }
+        fn remove(&self) -> Result<(), String> {
+            self.log
+                .lock()
+                .expect("log")
+                .push(format!("{} remove", self.name));
+            *self.stored.lock().expect("store") = None;
+            Ok(())
+        }
+    }
+
+    fn sized(log: &Log) -> SizedVault<Store, Store> {
+        SizedVault {
+            small: Store::named("small", log),
+            large: Store::named("large", log),
+            limit: 4,
+        }
+    }
+
+    fn taken(log: &Log) -> Vec<String> {
+        std::mem::take(&mut *log.lock().expect("log"))
+    }
+
+    #[test]
+    fn a_secret_that_fits_is_kept_small_and_a_bigger_one_large() {
+        let log = Log::default();
+        let vault = sized(&log);
+        SecretVault::write(&vault, &[1; 4]).expect("kept");
+        assert_eq!(vault.small.held(), Some(vec![1; 4]));
+        assert_eq!(vault.large.held(), None);
+        assert_eq!(SecretVault::read(&vault), Ok(Some(vec![1; 4])));
+        SecretVault::write(&vault, &[2; 5]).expect("kept");
+        assert_eq!(vault.small.held(), None);
+        assert_eq!(vault.large.held(), Some(vec![2; 5]));
+        assert_eq!(SecretVault::read(&vault), Ok(Some(vec![2; 5])));
+    }
+
+    #[test]
+    fn going_large_clears_small_first_so_an_old_secret_never_shadows_the_new() {
+        let log = Log::default();
+        let vault = sized(&log);
+        SecretVault::write(&vault, &[1; 4]).expect("kept");
+        taken(&log);
+        SecretVault::write(&vault, &[2; 5]).expect("kept");
+        assert_eq!(taken(&log), ["small remove", "large write"]);
+        SecretVault::write(&vault, &[3; 4]).expect("kept");
+        assert_eq!(taken(&log), ["small write", "large remove"]);
+    }
+
+    #[test]
+    fn removing_clears_both_and_nothing_reads_back() {
+        let log = Log::default();
+        let vault = sized(&log);
+        SecretVault::write(&vault, &[2; 5]).expect("kept");
+        SecretVault::remove(&vault).expect("removed");
+        assert_eq!(SecretVault::read(&vault), Ok(None));
     }
 }
