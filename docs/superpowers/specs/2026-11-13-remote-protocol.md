@@ -311,8 +311,10 @@ and resets every reader.
   takes it from another remote device at once. It takes it from the host only
   when nobody has typed at the host for 10 seconds, or the person clicks
   "Let <device> type" on the host. Typing at the host's own keyboard always
-  takes control back and bumps the epoch. Every device hears
-  `Control { holder, epoch }`.
+  takes control back and bumps the epoch. `ReleaseControl { session_id }`
+  gives it back from the device that holds it: the host holds it again and
+  bumps the epoch, as when that device goes away (giving back what it doesn't
+  hold changes nothing). Every device hears `Control { holder, epoch }`.
 - `Input { run, epoch, seen_seq, bytes }`, `Compose { run, epoch, seen_seq, text }`
   and `Resize { run, epoch, cols, rows }` must carry the current run and epoch.
   `seen_seq` is the last screen update the device had drawn. The host refuses
@@ -343,6 +345,7 @@ removal or new dialog between the check and the write still wins.
 | `Compose` | Controller | session | as `Input`, plus no dialog showing (`DialogOpen`) |
 | `StartSession` | Controller | control | role; project exists and its folder is inside an approved root (`FolderNotAllowed`) |
 | `PushToken` | Viewer, Controller | control | size (`OutOfRange`) |
+| `ReleaseControl`, `ForgetPushToken` | Viewer, Controller | control | paired (`NotPaired`) |
 | anything else | — | — | `UnknownMessage` |
 
 Refusals are answered with `Refused { reason }`, rate-limited, and logged on
@@ -451,17 +454,21 @@ for remote starts, because it runs scripts.
    token hash (1 a minute, 30 a day) and a cap on the sealed size, opens the
    token in memory, sends one visible alert "A session needs you" through APNs
    or FCM, and forgets it.
-5. **Key rotation.** The sender keeps retired secrets by `key_id` and opens
+5. **Alerts off.** A phone whose person turns its alerts off sends each
+   connected host `ForgetPushToken`, and the host deletes its sealed token;
+   it gives no token again until they are on, when it sends `PushToken` to
+   each connected host as on a connect.
+6. **Key rotation.** The sender keeps retired secrets by `key_id` and opens
    tokens sealed to them until the longest token expiry (60 days); the host
    sends the token's own `key_id` in the wake. Phones reseal to the newest key
    on their next connect. Unknown ids are refused.
-6. Field types: `key_id` u32; `request_id` 16 random bytes; `at` and
+7. Field types: `key_id` u32; `request_id` 16 random bytes; `at` and
    `expires` Unix seconds; `platform` APNs = 0, FCM = 1. `sealed` is
    `enc (32 bytes) ‖ ciphertext`, at most 1 KiB. Test vectors made
    independently of our code are in `crates/kriyon-remote/tests/push_vectors.json`.
-7. The sender could notice one phone's token arriving from several hosts. Not
+8. The sender could notice one phone's token arriving from several hosts. Not
    linking them is a policy promise; the crypto doesn't prevent it.
-8. Alerts are a hint. The app re-checks the host each time it opens.
+9. Alerts are a hint. The app re-checks the host each time it opens.
 
 ## 11. Fault tests (CI)
 

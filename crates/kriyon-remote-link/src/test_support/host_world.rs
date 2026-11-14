@@ -257,6 +257,11 @@ impl ServeHost for FakeHost {
         let change = self.gate.lock().release(*device).change;
         self.tell(change);
     }
+    fn give_back(&self, id: &str, device: &EndpointId) {
+        if id == "s" {
+            self.release(device);
+        }
+    }
     fn project_folder(&self, project_id: &str) -> ProjectFolder {
         self.called();
         self.folders
@@ -308,6 +313,10 @@ impl ServeHost for FakeHost {
     fn set_push_token(&self, device: &EndpointId, key_id: u32, sealed: Vec<u8>) {
         self.called();
         self.push_tokens.lock().push((*device, key_id, sealed));
+    }
+    fn forget_push_token(&self, device: &EndpointId) {
+        self.called();
+        self.push_tokens.lock().retain(|(kept, ..)| kept != device);
     }
     fn set_onlooked(&self, id: &str, onlooked: bool) {
         self.called();

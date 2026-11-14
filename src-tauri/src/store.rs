@@ -618,6 +618,18 @@ impl Store {
         Ok(())
     }
 
+    /// Forget device `device`'s sealed push token: it turned its alerts off.
+    ///
+    /// # Errors
+    /// Returns [`StoreError::Sqlite`] if the statement fails.
+    pub fn forget_push_token(&self, device: &[u8; 32]) -> Result<(), StoreError> {
+        self.conn.execute(
+            "DELETE FROM sealed_push_tokens WHERE device_id = ?1",
+            [hex(device)],
+        )?;
+        Ok(())
+    }
+
     /// Every paired device's sealed push token.
     ///
     /// # Errors
@@ -1286,6 +1298,15 @@ mod tests {
             assert_eq!(s.push_tokens().expect("lists"), vec![]);
             s.set_push_token(&PHONE, 1, b"again").expect("keeps");
             assert!(s.remove_paired_device(&PHONE).expect("removes"));
+            assert_eq!(s.push_tokens().expect("lists"), vec![]);
+        }
+
+        #[test]
+        fn a_push_token_goes_when_its_device_turns_alerts_off() {
+            let s = store();
+            s.add_paired_device(&phone()).expect("adds");
+            s.set_push_token(&PHONE, 1, b"sealed").expect("keeps");
+            s.forget_push_token(&PHONE).expect("forgets");
             assert_eq!(s.push_tokens().expect("lists"), vec![]);
         }
 

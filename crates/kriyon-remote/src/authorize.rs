@@ -300,6 +300,11 @@ pub fn authorize(
             }
             Ok(())
         }
+        // Giving back control, or alerts going off, takes nothing: any
+        // paired device's own, even one it doesn't hold.
+        (FromDevice::ReleaseControl { .. } | FromDevice::ForgetPushToken, Stream::Control) => {
+            Ok(())
+        }
         // A known message on a stream it doesn't belong to.
         _ => Err(RefuseReason::NotAllowed),
     }
@@ -640,6 +645,31 @@ mod tests {
     }
 
     // Row: TakeControl — role, control rules.
+
+    #[test]
+    fn any_paired_device_may_give_back_control_and_forget_its_push_token() {
+        let (h, _) = host();
+        let give_back = || FromDevice::ReleaseControl {
+            session_id: S.into(),
+        };
+        for device in [VIEWER, PHONE] {
+            // Giving back what it doesn't hold changes nothing.
+            assert_eq!(check(&h, device, Stream::Control, give_back()), Ok(()));
+            assert_eq!(
+                check(&h, device, Stream::Control, FromDevice::ForgetPushToken),
+                Ok(())
+            );
+        }
+        assert_eq!(
+            check(&h, STRANGER, Stream::Control, give_back()),
+            Err(RefuseReason::NotPaired)
+        );
+        assert_eq!(
+            check(&h, PHONE, SESSION, give_back()),
+            Err(RefuseReason::NotAllowed),
+            "only on the control stream"
+        );
+    }
 
     #[test]
     fn a_viewer_may_not_take_control() {

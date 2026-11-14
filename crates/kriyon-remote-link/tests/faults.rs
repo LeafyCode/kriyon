@@ -404,6 +404,43 @@ fn a_phone_reads_a_session_as_entries_across_a_dropped_link() {
 }
 
 #[test]
+fn a_phone_gives_back_control_and_turns_its_alerts_off_and_on() {
+    run(async {
+        let world = world().await;
+        let phone = Phone::connect(&world, 3, Role::Controller).await;
+        phone.take_control().await;
+        phone
+            .rt
+            .give_back(&phone.host, "s")
+            .await
+            .expect("gives back");
+        wait_until("the host holds it", || {
+            phone.seen.last().is_some_and(|(_, view)| {
+                view.control
+                    .get("s")
+                    .is_some_and(|control| control.holder == Holder::Host)
+            })
+        })
+        .await;
+
+        phone
+            .rt
+            .send_push_token(&phone.host, 4, b"sealed".to_vec())
+            .await
+            .expect("sent");
+        wait_until("the token kept", || {
+            !world.fake.push_tokens.lock().is_empty()
+        })
+        .await;
+        phone.rt.forget_push_token(&phone.host).await.expect("sent");
+        wait_until("the token gone", || {
+            world.fake.push_tokens.lock().is_empty()
+        })
+        .await;
+    });
+}
+
+#[test]
 fn a_host_asleep_past_the_heartbeat_shows_lost_then_recovers() {
     run(async {
         let world = world().await;

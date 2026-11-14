@@ -88,6 +88,8 @@ pub trait ServeHost: Send + Sync + 'static {
     /// Keep paired `device`'s push token, sealed to the sender's key
     /// `key_id` (spec §10), in place of any it gave before.
     fn set_push_token(&self, device: &EndpointId, key_id: u32, sealed: Vec<u8>);
+    /// Delete `device`'s sealed push token: it turned its alerts off.
+    fn forget_push_token(&self, device: &EndpointId);
     /// A Controller asked for control of session `id` and the host's
     /// ten-second rule refused it: the person can let it type. Called at
     /// most once per `CONTROL_ASK_EVERY` for a device and session.
@@ -169,6 +171,9 @@ pub trait ServeHost: Send + Sync + 'static {
     /// `device` went away: control of every session it held goes back to the
     /// host, which tells every device. May block.
     fn release(&self, device: &EndpointId);
+    /// `device` gives back control of session `id`, if it holds it: as
+    /// [`ServeHost::release`] for that one session. May block.
+    fn give_back(&self, id: &str, device: &EndpointId);
 }
 
 /// What a daemon event changed that the session's gate must hear.
@@ -1025,6 +1030,16 @@ impl Serve {
                     .unwrap_or(Err(RefuseReason::NotAllowed)),
                 (Ok(()), Decoded::Message(FromDevice::PushToken { key_id, sealed })) => {
                     self.blocking(move |host| host.set_push_token(&device, key_id, sealed))
+                        .await;
+                    Ok(())
+                }
+                (Ok(()), Decoded::Message(FromDevice::ForgetPushToken)) => {
+                    self.blocking(move |host| host.forget_push_token(&device))
+                        .await;
+                    Ok(())
+                }
+                (Ok(()), Decoded::Message(FromDevice::ReleaseControl { session_id })) => {
+                    self.blocking(move |host| host.give_back(&session_id, &device))
                         .await;
                     Ok(())
                 }
@@ -2330,6 +2345,68 @@ mod tests {
                 matches!(next(&mut cr).await, ToDevice::Heartbeat { at: 5, .. }),
                 "no refusal came first"
             );
+        });
+    }
+
+    #[test]
+    fn a_device_gives_back_control_and_every_device_hears_the_host_holds_it() {
+        run(async {
+            let world = world().await;
+            let (phone, _link, mut cw, mut cr) = device(&world, 3, Role::Controller).await;
+            cw.send(&FromDevice::TakeControl {
+                session_id: "s".into(),
+            })
+            .await
+            .expect("take");
+            let took = loop {
+                if let ToDevice::Control { holder, epoch, .. } = next(&mut cr).await {
+                    assert_eq!(holder, Holder::Device(phone.id()));
+                    break epoch;
+                }
+            };
+            cw.send(&FromDevice::ReleaseControl {
+                session_id: "s".into(),
+            })
+            .await
+            .expect("give back");
+            loop {
+                if let ToDevice::Control { holder, epoch, .. } = next(&mut cr).await {
+                    assert_eq!(holder, Holder::Host);
+                    assert!(epoch.counter > took.counter, "a new epoch");
+                    break;
+                }
+            }
+        });
+    }
+
+    #[test]
+    fn a_device_turning_alerts_off_has_its_push_token_forgotten() {
+        run(async {
+            let world = world().await;
+            let (phone, _link, mut cw, mut cr) = device(&world, 3, Role::Viewer).await;
+            cw.send(&FromDevice::PushToken {
+                key_id: 4,
+                sealed: b"sealed".to_vec(),
+            })
+            .await
+            .expect("sent");
+            cw.send(&FromDevice::ForgetPushToken).await.expect("sent");
+            world.serve.heartbeat(5);
+            assert!(
+                matches!(next(&mut cr).await, ToDevice::Heartbeat { at: 5, .. }),
+                "no refusal came first"
+            );
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while world
+                .fake
+                .push_tokens
+                .lock()
+                .iter()
+                .any(|(device, ..)| *device == phone.id())
+            {
+                assert!(Instant::now() < deadline, "the token was kept");
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
         });
     }
 

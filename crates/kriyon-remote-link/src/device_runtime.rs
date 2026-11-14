@@ -660,6 +660,20 @@ impl DeviceRuntime {
         .await
     }
 
+    /// Give back typing control of `session`: the host holds it again.
+    ///
+    /// # Errors
+    /// [`DeviceError::NotConnected`] or a link failure.
+    pub async fn give_back(&self, host: &EndpointId, session: &str) -> Result<(), DeviceError> {
+        self.send_control(
+            host,
+            &FromDevice::ReleaseControl {
+                session_id: session.to_string(),
+            },
+        )
+        .await
+    }
+
     /// Send `message` on `host`'s control stream.
     async fn send_control(
         &self,
@@ -744,6 +758,14 @@ impl DeviceRuntime {
     ) -> Result<(), DeviceError> {
         self.send_control(host, &FromDevice::PushToken { key_id, sealed })
             .await
+    }
+
+    /// Have `host` forget this device's push token: its alerts are off.
+    ///
+    /// # Errors
+    /// [`DeviceError::NotConnected`], or the link failed.
+    pub async fn forget_push_token(&self, host: &EndpointId) -> Result<(), DeviceError> {
+        self.send_control(host, &FromDevice::ForgetPushToken).await
     }
 
     /// Type `bytes` into `session`, which this device must control.

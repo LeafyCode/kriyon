@@ -303,6 +303,16 @@ impl ServeHost for AppServeHost {
         let _ = state.writers.release_device(device, &engines);
     }
 
+    fn give_back(&self, id: &str, device: &EndpointId) {
+        let state = self.0.state::<AppState>();
+        let engines: Vec<_> = crate::session_registry::live_engines(&state)
+            .into_iter()
+            .filter(|(session, _)| session.0 == id)
+            .collect();
+        // As a release, for this one session; the writers tell every device.
+        let _ = state.writers.release_device(device, &engines);
+    }
+
     fn projects(&self) -> Vec<kriyon_remote::message::ProjectInfo> {
         let store = self.0.state::<StoreState>();
         let (projects, sessions) = {
@@ -380,6 +390,16 @@ impl ServeHost for AppServeHost {
             .0
             .lock()
             .set_push_token(device, key_id, &sealed);
+    }
+
+    fn forget_push_token(&self, device: &EndpointId) {
+        // One that couldn't be deleted goes when the device is removed.
+        let _ = self
+            .0
+            .state::<StoreState>()
+            .0
+            .lock()
+            .forget_push_token(device);
     }
 
     fn set_onlooked(&self, id: &str, onlooked: bool) {

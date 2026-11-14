@@ -310,6 +310,13 @@ impl ServeHost for DevApp {
         );
     }
 
+    fn forget_push_token(&self, device: &EndpointId) {
+        println!(
+            "dev host: alerts off for {}",
+            kriyon_remote::message::hex(device)
+        );
+    }
+
     fn entries(&self, id: &str, stamp: Option<u64>) -> EntriesBuilt {
         if id != SESSION {
             return EntriesBuilt::Unavailable(
@@ -420,6 +427,13 @@ impl ServeHost for DevApp {
     fn release(&self, device: &EndpointId) {
         let change = self.gate.lock().release(*device).change;
         self.tell(change);
+    }
+
+    fn give_back(&self, id: &str, device: &EndpointId) {
+        if id == SESSION {
+            println!("dev host: the phone gave control back");
+            self.release(device);
+        }
     }
 }
 

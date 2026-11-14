@@ -256,6 +256,12 @@ pub enum FromDevice {
     /// Session stream: send the screen (a snapshot, then updates) or stop
     /// sending it; the stream and its entries go on (spec §6).
     Screen { on: bool },
+    /// Control stream: give back [Typing control] of a session this device
+    /// holds; the host bumps the epoch, as for any release (spec §5).
+    ReleaseControl { session_id: SessionId },
+    /// Control stream: this device turned its alerts off; the host deletes
+    /// its sealed push token (spec §10).
+    ForgetPushToken,
 }
 
 /// The kind of a [`FromDevice`] message; its number is the message's tag on
@@ -274,10 +280,12 @@ pub enum FromDeviceKind {
     PushToken = 9,
     StopEntries = 10,
     Screen = 11,
+    ReleaseControl = 12,
+    ForgetPushToken = 13,
 }
 
 impl FromDeviceKind {
-    const ALL: [Self; 12] = [
+    const ALL: [Self; 14] = [
         Self::Hello,
         Self::Open,
         Self::Resync,
@@ -290,6 +298,8 @@ impl FromDeviceKind {
         Self::PushToken,
         Self::StopEntries,
         Self::Screen,
+        Self::ReleaseControl,
+        Self::ForgetPushToken,
     ];
 
     /// The kind with wire tag `tag`, if this side knows it.
@@ -318,6 +328,8 @@ impl FromDevice {
             Self::PushToken { .. } => FromDeviceKind::PushToken,
             Self::StopEntries => FromDeviceKind::StopEntries,
             Self::Screen { .. } => FromDeviceKind::Screen,
+            Self::ReleaseControl { .. } => FromDeviceKind::ReleaseControl,
+            Self::ForgetPushToken => FromDeviceKind::ForgetPushToken,
         }
     }
 }
@@ -642,7 +654,7 @@ mod tests {
         }
     }
 
-    fn device_samples() -> [(FromDevice, u8); 12] {
+    fn device_samples() -> [(FromDevice, u8); 14] {
         let s = || "s".to_string();
         [
             (
@@ -707,6 +719,8 @@ mod tests {
             ),
             (FromDevice::StopEntries, 10),
             (FromDevice::Screen { on: true }, 11),
+            (FromDevice::ReleaseControl { session_id: s() }, 12),
+            (FromDevice::ForgetPushToken, 13),
         ]
     }
 
