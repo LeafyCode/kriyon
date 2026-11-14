@@ -2,6 +2,10 @@
 //! and the session carries on for the next client. Before the limit existed the
 //! daemon waited for the whole frame, buffering everything the client sent.
 
+// Drives a POSIX shell through the daemon; the Windows path is covered by
+// `windows_daemon.rs`.
+#![cfg(unix)]
+
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
 use std::time::{Duration, Instant};

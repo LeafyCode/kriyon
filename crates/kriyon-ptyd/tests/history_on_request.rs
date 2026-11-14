@@ -2,6 +2,10 @@
 //! same connection, as `History` frames closed by a `HistoryEnd`, including
 //! output that has long scrolled off the screen.
 
+// Drives a POSIX shell through the daemon; the Windows path is covered by
+// `windows_daemon.rs`.
+#![cfg(unix)]
+
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
 use std::time::{Duration, Instant};

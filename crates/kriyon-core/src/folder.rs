@@ -263,6 +263,16 @@ mod tests {
         p.to_str().unwrap()
     }
 
+    /// A made-up absolute path: `/work/x` here, `C:/work/x` on Windows,
+    /// where a path without a drive isn't absolute.
+    fn abs(path: &str) -> String {
+        if cfg!(windows) {
+            format!("C:{path}")
+        } else {
+            path.to_string()
+        }
+    }
+
     #[test]
     fn an_approved_root_itself_passes_as_its_canonical_form() {
         let root = tempfile::tempdir().unwrap();
@@ -396,7 +406,7 @@ mod tests {
         let gone = tempfile::tempdir().unwrap();
         let gone_path = gone.path().to_path_buf();
         drop(gone);
-        let err = check_folder("/", &[gone_path]).unwrap_err();
+        let err = check_folder(&abs("/"), &[gone_path]).unwrap_err();
         assert_eq!(err, FolderRefusal::OutsideApprovedRoots);
     }
 
@@ -567,7 +577,7 @@ mod tests {
     #[test]
     fn a_new_worktree_may_go_in_the_default_sibling_folder() {
         assert_eq!(
-            check_new_worktree_path("/work/repo", "/work/repo-worktrees/feat-x", &[]),
+            check_new_worktree_path(&abs("/work/repo"), &abs("/work/repo-worktrees/feat-x"), &[]),
             Ok(())
         );
     }
@@ -577,7 +587,7 @@ mod tests {
         let chosen = tempfile::tempdir().unwrap();
         let path = chosen.path().join("feat-x");
         assert_eq!(
-            check_new_worktree_path("/work/repo", s(&path), &approved(&chosen)),
+            check_new_worktree_path(&abs("/work/repo"), s(&path), &approved(&chosen)),
             Ok(())
         );
     }
@@ -588,7 +598,7 @@ mod tests {
         let chosen = tempfile::tempdir().unwrap();
         assert_eq!(
             check_new_worktree_path(
-                "/work/repo",
+                &abs("/work/repo"),
                 s(&chosen.path().join("feat-x")),
                 &approved(&chosen)
             ),
@@ -602,7 +612,7 @@ mod tests {
         let elsewhere = tempfile::tempdir().unwrap();
         assert_eq!(
             check_new_worktree_path(
-                "/work/repo",
+                &abs("/work/repo"),
                 s(&elsewhere.path().join("feat-x")),
                 &approved(&chosen)
             ),
@@ -610,12 +620,12 @@ mod tests {
         );
         // Beside the repo, but not in its worktrees folder.
         assert_eq!(
-            check_new_worktree_path("/work/repo", "/work/x", &approved(&chosen)),
+            check_new_worktree_path(&abs("/work/repo"), &abs("/work/x"), &approved(&chosen)),
             Err(FolderRefusal::NotWorktreeLocation)
         );
         // Deeper than one level under the worktrees folder.
         assert_eq!(
-            check_new_worktree_path("/work/repo", "/work/repo-worktrees/a/x", &[]),
+            check_new_worktree_path(&abs("/work/repo"), &abs("/work/repo-worktrees/a/x"), &[]),
             Err(FolderRefusal::NotWorktreeLocation)
         );
     }
@@ -623,11 +633,11 @@ mod tests {
     #[test]
     fn a_new_worktree_path_must_be_spelled_plainly() {
         assert_eq!(
-            check_new_worktree_path("/work/repo", "/work/repo-worktrees/../x", &[]),
+            check_new_worktree_path(&abs("/work/repo"), &abs("/work/repo-worktrees/../x"), &[]),
             Err(FolderRefusal::NotNormal)
         );
         assert_eq!(
-            check_new_worktree_path("/work/repo", "repo-worktrees/x", &[]),
+            check_new_worktree_path(&abs("/work/repo"), "repo-worktrees/x", &[]),
             Err(FolderRefusal::NotAbsolute)
         );
     }
