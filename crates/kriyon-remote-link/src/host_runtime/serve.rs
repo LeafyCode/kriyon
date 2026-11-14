@@ -434,10 +434,16 @@ impl ControlOut {
     }
 }
 
+/// How often a served link's path is looked at.
+const PATH_LOOK: Duration = Duration::from_secs(10);
+
 struct Inner {
     host: Arc<dyn ServeHost>,
     sessions: Mutex<HashMap<String, Arc<Served>>>,
     controls: Mutex<HashMap<EndpointId, Arc<ControlOut>>>,
+    /// Whether device links ever ran direct (spec §2): a hint that
+    /// something blocks direct links when they never do.
+    direct: Mutex<kriyon_remote::routes::DirectWatch>,
     heartbeat_seq: AtomicU64,
     /// The session list as devices last heard it, in the host's order;
     /// `None` while no device is connected.
@@ -525,6 +531,7 @@ impl Serve {
             host,
             sessions: Mutex::new(HashMap::new()),
             controls: Mutex::new(HashMap::new()),
+            direct: Mutex::default(),
             heartbeat_seq: AtomicU64::new(0),
             heard: Mutex::new(None),
             heard_projects: Mutex::new(None),
@@ -607,6 +614,18 @@ impl Serve {
             .filter(|(_, served)| served.fanout.lock().open_count() > 0)
             .map(|(id, _)| id)
             .collect()
+    }
+
+    /// Whether direct links look blocked: devices have reached this host only
+    /// through the relay for a while ([`kriyon_remote::routes::DirectWatch`]).
+    #[must_use]
+    pub fn direct_links_blocked(&self) -> bool {
+        self.0.direct.lock().blocked(Instant::now())
+    }
+
+    /// Start the direct-link watch over: remote access came on again.
+    pub fn watch_direct_links_again(&self) {
+        *self.0.direct.lock() = kriyon_remote::routes::DirectWatch::default();
     }
 
     /// Whether any device is connected now: it sees what needs you for
@@ -901,6 +920,9 @@ impl Serve {
         let Some((out, tasks)) = self.welcome(&link, device, role, writer, reader).await else {
             return;
         };
+        // Which path the link runs over, now and then: a direct one can form
+        // after the link starts on the relay.
+        let mut look = tokio::time::interval(PATH_LOOK);
         loop {
             tokio::select! {
                 stream = link.accept_stream() => match stream {
@@ -909,6 +931,11 @@ impl Serve {
                     }
                     Err(_) => break,
                 },
+                _ = look.tick() => {
+                    if let Some(path) = link.path() {
+                        self.0.direct.lock().note(path, Instant::now());
+                    }
+                }
                 () = link.closed() => break,
             }
         }

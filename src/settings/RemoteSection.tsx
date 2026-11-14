@@ -22,6 +22,7 @@ import { consentLines, useRelay } from "../state/relay.ts";
 import {
   codeResultLine,
   countdownText,
+  DIRECT_BLOCKED_LINE,
   reachableLine,
   useRemote,
 } from "../state/remote.ts";
@@ -166,6 +167,13 @@ function RoutesGroup({ port, routes }: { port: number; routes: RemoteRoutes }) {
         }
         label={reachableLine(routes)}
       />
+      {routes.directBlocked ? (
+        <SettingRow
+          control={null}
+          hint={DIRECT_BLOCKED_LINE}
+          label="Only through the relay"
+        />
+      ) : null}
       <SettingRow
         control={
           <div style={actionsStyle}>
@@ -253,6 +261,10 @@ function ConsentDialog() {
   const relayOn = useRelay(
     (state) => state.view?.available === true && state.view.on
   );
+  // Said where the firewall asks, before it does (Windows).
+  const firewallAsks = useRemote(
+    (state) => state.status?.firewallAsks === true
+  );
   return (
     <DialogPanel
       actions={
@@ -283,7 +295,7 @@ function ConsentDialog() {
       wide
     >
       <ul style={consentListStyle}>
-        {consentLines(relayOn).map((line) => (
+        {consentLines(relayOn, firewallAsks).map((line) => (
           <li key={line}>{line}</li>
         ))}
       </ul>

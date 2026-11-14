@@ -14,7 +14,7 @@ import {
 } from "../ipc/bridge.ts";
 import { failureMessage } from "../ipc/failures.ts";
 import { subscriptionWords } from "../remote/relayWords.ts";
-import { CONSENT_LINES } from "./remote.ts";
+import { CONSENT_LINES, FIREWALL_CONSENT_LINE } from "./remote.ts";
 
 /**
  * The frontend's copy of our relay (the relay pass contract). Rust signs in,
@@ -110,9 +110,17 @@ export const useRelay = create<RelayStore>((set) => {
 export const RELAY_CONSENT_LINE =
   "Through our relay, traffic passes a server that can't read it. It only joins devices signed in to the same relay account.";
 
-/** What the consent screen says: the relay's line only while it is on. */
-export function consentLines(relayOn: boolean): readonly string[] {
-  return relayOn ? [...CONSENT_LINES, RELAY_CONSENT_LINE] : CONSENT_LINES;
+/** What the consent screen says: the relay's line only while it is on, and
+ * the firewall's where one asks (Windows). */
+export function consentLines(
+  relayOn: boolean,
+  firewallAsks = false
+): readonly string[] {
+  return [
+    ...CONSENT_LINES,
+    ...(relayOn ? [RELAY_CONSENT_LINE] : []),
+    ...(firewallAsks ? [FIREWALL_CONSENT_LINE] : []),
+  ];
 }
 
 /** Both computers need the same account, or the relay can't join them. */

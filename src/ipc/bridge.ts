@@ -1819,6 +1819,8 @@ export type RemotePairing =
 /** Remote access as the settings show it. */
 export interface RemoteStatus {
   enabled: boolean;
+  /** Windows Defender Firewall asks before Kriyon may accept connections. */
+  firewallAsks: boolean;
   /** The host's endpoint id while on. */
   hostId: string | null;
   pairing: RemotePairing;
@@ -1830,6 +1832,9 @@ export interface RemoteStatus {
 
 /** The ways a device can reach this computer now (spec §2). */
 export interface RemoteRoutes {
+  /** Devices have reached it only through the relay for a while, where a
+   * firewall may be blocking direct links (Windows). */
+  directBlocked: boolean;
   /** Why it isn't on the chosen port, if it isn't. */
   portNote: string | null;
   /** Bound with our relay. */
@@ -1864,6 +1869,7 @@ export function remoteStatus(): Promise<RemoteStatus> {
   if (!hasTauri()) {
     return Promise.resolve({
       enabled: false,
+      firewallAsks: false,
       hostId: null,
       pairing: { state: "idle" },
       port: 49_731,
