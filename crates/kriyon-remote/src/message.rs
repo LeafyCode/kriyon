@@ -127,7 +127,12 @@ impl From<SessionListEntry> for SessionInfo {
         } = digest;
         Self {
             id,
-            title,
+            // The person's words or Claude's: redacted and cut, as every
+            // other text a device is sent.
+            title: kriyon_core::readable::cut(
+                &kriyon_core::redact::redact(&title),
+                crate::authorize::MAX_TITLE,
+            ),
             project_id,
             status,
             standing,
@@ -591,6 +596,35 @@ mod tests {
             turn_summary: None,
             diff: None,
         }
+    }
+
+    /// A session's title is the person's, or Claude's: it may carry a
+    /// secret, and any length. Devices get it redacted and cut.
+    #[test]
+    fn a_session_title_reaches_devices_redacted_and_cut() {
+        let entry = |title: String| SessionListEntry {
+            id: "s1".into(),
+            title,
+            project_id: "p1".into(),
+            status: SessionStatus::Idle,
+            standing: StandingState::Idle,
+            needs_you: false,
+            dialog_open: false,
+            last_change_ms: 0,
+            digest: SessionDigest::default(),
+        };
+        let secret = SessionInfo::from(entry("use sk-ant-abcdefghijklmnop".into()));
+        assert!(
+            !secret.title.contains("sk-ant-abcdefghijklmnop"),
+            "{}",
+            secret.title
+        );
+        let long = SessionInfo::from(entry("x".repeat(5_000)));
+        assert!(
+            long.title.len() <= crate::authorize::MAX_TITLE,
+            "{}",
+            long.title.len()
+        );
     }
 
     /// A device shows what the desktop's list shows, field for field.

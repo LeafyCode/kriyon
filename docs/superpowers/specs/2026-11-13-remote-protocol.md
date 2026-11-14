@@ -182,7 +182,8 @@ never waits on a network write. A full session queue means [Skip ahead]
 
 - `SessionList` lists sessions as `SessionInfo { id, title, project_id, status,
   standing, needs_you, dialog_open, last_change_ms }`, the host's Session list
-  computed in Rust (`kriyon_core::standing`). `standing` carries "unknown" when
+  computed in Rust (`kriyon_core::standing`), its title redacted and cut to
+  200 bytes as every text a device is sent. `standing` carries "unknown" when
   hooks are off or status is stale, so a device never shows a confident "idle"
   the desktop wouldn't. The list is in the host's order (the desktop's:
   longest-waiting first), and devices keep it. `SessionStatus { session }`
