@@ -917,6 +917,20 @@ impl Store {
         Ok(())
     }
 
+    /// Keep session `id`'s baseline commit, alone: whatever else changed in
+    /// its row since (a rename, a pin, an archive) stays. No-op if the row
+    /// does not exist.
+    ///
+    /// # Errors
+    /// Returns [`StoreError::Sqlite`] if the statement fails.
+    pub fn set_baseline_oid(&self, id: &str, oid: &str) -> Result<(), StoreError> {
+        self.conn.execute(
+            "UPDATE sessions SET baseline_oid = ?2 WHERE id = ?1",
+            rusqlite::params![id, oid],
+        )?;
+        Ok(())
+    }
+
     /// One session's [Sleeping session] mark (`"asleep"`/`"stuck"`), or `None`
     /// when it is not marked or the row does not exist.
     ///
@@ -1544,6 +1558,29 @@ mod tests {
             Some(json.to_string())
         );
         assert_eq!(store.load_layout("missing").expect("load missing"), None);
+    }
+
+    /// The baseline, captured while the shell opened, is saved alone: a
+    /// rename or a pin made meanwhile stays.
+    #[test]
+    fn saving_a_baseline_leaves_the_rest_of_the_row_as_it_is_now() {
+        let store = Store::open_in_memory().expect("open in-memory store");
+        store
+            .upsert_project(&sample_project())
+            .expect("upsert project");
+        let session = sample_session();
+        store.upsert_session(&session).expect("upsert session");
+        let renamed = SessionRow {
+            title: "Renamed meanwhile".to_string(),
+            ..session.clone()
+        };
+        store.upsert_session(&renamed).expect("renamed");
+        store
+            .set_baseline_oid(&session.id, "deadbeef")
+            .expect("baseline");
+        let kept = store.list_sessions().expect("list");
+        assert_eq!(kept[0].title, "Renamed meanwhile");
+        assert_eq!(kept[0].baseline_oid.as_deref(), Some("deadbeef"));
     }
 
     #[test]

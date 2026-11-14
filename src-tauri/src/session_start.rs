@@ -156,7 +156,7 @@ pub async fn start_session(
 pub async fn start(
     app: &tauri::AppHandle,
     project: Option<crate::store::ProjectRow>,
-    mut session: crate::store::SessionRow,
+    session: crate::store::SessionRow,
     baseline: bool,
     sink: Arc<dyn SessionSink>,
 ) -> Result<Started, String> {
@@ -186,13 +186,13 @@ pub async fn start(
     let reattached = opened?;
     if let Some(oid) = &baseline_oid {
         use tauri::Manager as _;
-        session.baseline_oid = Some(oid.clone());
-        // Kept with the row; the window records it too.
+        // Kept with the row, alone: a rename or a pin made while the shell
+        // opened stays. The window records it too.
         let _ = app
             .state::<crate::StoreState>()
             .0
             .lock()
-            .upsert_session(&session);
+            .set_baseline_oid(&session.id, oid);
     }
     Ok(Started {
         reattached,
