@@ -42,7 +42,6 @@ tauri-plugin-fs = "2"
 tauri-plugin-shell = "2"
 tauri-plugin-deep-link = "2"
 tauri-plugin-dialog = "2"
-portable-pty = "0.9"
 parking_lot = "0.12"
 tempfile = "3"
 rusqlite = { version = "0.41.1", features = ["bundled"] }
@@ -103,6 +102,8 @@ windows-sys = { version = "0.61", features = [
 ] }
 
 [dev-dependencies]
+# A real pty for the macOS process-table test (memory.rs).
+portable-pty = "0.9"
 kriyon-remote-link = { path = "../crates/kriyon-remote-link", features = ["host-runtime", "test-support"] }
 # The real push sender, so host-side wakes are tested against it.
 kriyon-push = { path = "../crates/kriyon-push" }
