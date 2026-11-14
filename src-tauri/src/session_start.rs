@@ -317,6 +317,10 @@ async fn start_remote_once(
             return Err(RefuseReason::StartFailed);
         }
     };
+    // Watched from now, window or not: its status, the Needs-you list and
+    // its phone alerts, its saved claude id and its readable view need it.
+    // Before claude starts, so its first hooks are heard.
+    watch_remote(app, &id).await;
     launch_remote_claude(app, &id).await;
     let _ = app.emit(
         SESSION_ADDED_EVENT,
@@ -326,6 +330,26 @@ async fn start_remote_once(
         },
     );
     Ok(id)
+}
+
+/// Watch session `id`, a device started, as the desktop watches what it
+/// shows: with no window, its transcript events go nowhere. Opening it on the
+/// desktop later watches it again, for the window.
+async fn watch_remote(app: &tauri::AppHandle, id: &str) {
+    let Ok(home) = crate::commands::resolve_home(app) else {
+        eprintln!("kriyon: a session a device started can't be watched: no home folder");
+        return;
+    };
+    let watching = (app.clone(), id.to_string());
+    // Its seed reads the events file's tail: off the async runtime.
+    let watched = tauri::async_runtime::spawn_blocking(move || {
+        let (app, id) = watching;
+        crate::commands::start_watch(&app, &home, kriyon_core::session::SessionId(id), |_| {})
+    })
+    .await;
+    if let Ok(Err(why)) = watched {
+        eprintln!("kriyon: a session a device started can't be watched: {why}");
+    }
 }
 
 /// Launch a fresh `claude` into a session a device started. Tried once more
@@ -386,6 +410,95 @@ fn remote_session_row(
 
 #[cfg(test)]
 mod tests {
+    /// A session a device started is watched with no window showing it:
+    /// its hooks move its status, so it is on the Needs-you list the push
+    /// wake reads, before the desktop ever opens it.
+    #[test]
+    fn a_session_nobody_opened_on_the_desktop_is_watched_and_can_need_you() {
+        use std::io::Write as _;
+        use tauri::Manager as _;
+        let home = tempfile::tempdir().expect("tempdir");
+        let app = tauri::test::mock_app();
+        app.manage(crate::AppState::default());
+        app.manage(crate::StoreState(parking_lot::Mutex::new(
+            crate::store::Store::open_in_memory().expect("in-memory store"),
+        )));
+        let id = "started-from-a-phone";
+        {
+            let store = app.state::<crate::StoreState>();
+            let store = store.0.lock();
+            store
+                .upsert_project(&crate::store::ProjectRow {
+                    id: "p1".into(),
+                    name: "demo".into(),
+                    path: "/x".into(),
+                    color: None,
+                    setup_command: None,
+                    pinned_at: None,
+                    folder_id: None,
+                })
+                .expect("project");
+            store
+                .upsert_session(&crate::store::SessionRow {
+                    id: id.into(),
+                    project_id: "p1".into(),
+                    title: "From the phone".into(),
+                    cwd: "/x".into(),
+                    worktree_path: None,
+                    created_at: 1,
+                    claude_session_id: None,
+                    archived_at: None,
+                    baseline_oid: None,
+                    title_locked: false,
+                    parent_session_id: None,
+                    nested_under: None,
+                    parked_at: None,
+                    pinned_at: None,
+                })
+                .expect("session");
+        }
+        let events = kriyon_core::paths::events_file(home.path(), id);
+        std::fs::create_dir_all(events.parent().expect("dir")).expect("mkdir");
+        std::fs::write(&events, "").expect("events file");
+        crate::commands::start_watch(
+            app.handle(),
+            home.path(),
+            kriyon_core::session::SessionId(id.into()),
+            |_| {},
+        )
+        .expect("watched");
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&events)
+            .expect("open");
+        writeln!(file, r#"{{"event":"UserPromptSubmit","session_id":"c1"}}"#).expect("write");
+        writeln!(
+            file,
+            r#"{{"event":"Notification","session_id":"c1","message":"Claude needs your permission to use Bash"}}"#
+        )
+        .expect("write");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            let listed = crate::session_list_rt::current(
+                &app.state::<crate::AppState>(),
+                &app.state::<crate::StoreState>(),
+                None,
+            )
+            .expect("listed");
+            if listed
+                .iter()
+                .any(|session| session.id == id && session.needs_you)
+            {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "never needed you: {listed:?}"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+    }
+
     use parking_lot::Mutex;
 
     use super::*;

@@ -1087,7 +1087,6 @@ pub async fn report_drained(
 #[tauri::command(async)]
 pub fn watch_transcript(
     app: tauri::AppHandle,
-    state: tauri::State<'_, AppState>,
     session_id: String,
     on_event: tauri::ipc::Channel<kriyon_core::transcript::StudioEvent>,
 ) -> Result<(), String> {
@@ -1108,14 +1107,33 @@ pub fn watch_transcript(
         return Err("invalid session id".to_string());
     }
 
-    let events_dir = crate::hooks::events_dir(&home);
-    let usage_dir = crate::hooks::usage_dir(&home);
-    let tasks_dir = crate::hooks::tasks_dir(&home);
+    start_watch(&app, &home, SessionId(session_id), move |event| {
+        let _ = on_event.send(event);
+    })
+}
 
-    let id = SessionId(session_id);
+/// Watch session `id` (its hook events, transcript, usage and activity),
+/// whether a window shows it or not: status, the Needs-you list and its
+/// push wakes, the saved [Claude session id] and the readable view all come
+/// from this. `on_transcript` takes the transcript's events (a window's
+/// channel, or nothing). A watch started again replaces the one before.
+///
+/// # Errors
+/// When the watch can't be set up.
+pub(crate) fn start_watch<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    home: &std::path::Path,
+    id: SessionId,
+    on_transcript: impl Fn(kriyon_core::transcript::StudioEvent) + Send + 'static,
+) -> Result<(), String> {
+    use tauri::Manager as _;
+    let events_dir = crate::hooks::events_dir(home);
+    let usage_dir = crate::hooks::usage_dir(home);
+    let tasks_dir = crate::hooks::tasks_dir(home);
 
     // Register a runtime so the session shows an Idle dot immediately, before
     // the first hook fires.
+    let state = app.state::<AppState>();
     session_registry::ensure_runtime(&state, &id);
 
     // One sink for every WatchSignal the watch produces: the named
@@ -1125,14 +1143,7 @@ pub fn watch_transcript(
     let cb_id = id.clone();
     let cb_app = app.clone();
     let on_signal = move |signal: crate::watcher::WatchSignal| {
-        crate::watch_route::route(
-            &cb_app,
-            &cb_id,
-            &|event| {
-                let _ = on_event.send(event);
-            },
-            signal,
-        );
+        crate::watch_route::route(&cb_app, &cb_id, &on_transcript, signal);
     };
 
     let dirs = crate::watcher::WatchDirs {
@@ -1169,8 +1180,8 @@ pub fn watch_transcript(
     // yields to it. On its own thread: the read + replay must not stack up on
     // the command path when every session re-subscribes at once on launch.
     let seed_app = app.clone();
-    let events_path = crate::hooks::events_file(&home, &id.0);
-    let usage_path = crate::hooks::usage_file(&home, &id.0);
+    let events_path = crate::hooks::events_file(home, &id.0);
+    let usage_path = crate::hooks::usage_file(home, &id.0);
     std::thread::spawn(move || {
         crate::status_rt::seed_from_history(&seed_app, &id, &events_path, &usage_path);
         // Same per-attach hook: restore a [Sleeping session] Kriyon stopped
