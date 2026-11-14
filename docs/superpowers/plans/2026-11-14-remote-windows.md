@@ -167,6 +167,14 @@ On `feat/remote-windows-prep` (in `feat/remote-access`), then `feat/windows-remo
   - `device_key` chooses it on Windows (`feat/windows-remote`), with the app's local data
     folder (`app_local_data_dir`) for the sealed files, for the Device key and the relay
     sign-in alike.
+- **Step 5, the bridge owner check (without a PC):** the poster's pid comes from the socket
+  (`SIO_AF_UNIX_GETPEERPID`, in `kriyon-ptyd`'s `bridge::peer_pid`). It owns the session when
+  it is a member of the session's Job Object whose parent is the session's shell
+  (`kriyon_core::proc::windows_seat`); a nested `claude` is deeper and is refused. The engine
+  shares its job with the bridge through a weak handle (`pty::hosted_job`), so the engine still
+  owns its kill-on-close. Windows CI runs a real session: a PowerShell poster run by the shell
+  is kept, the same poster under a second `cmd` is not. Left for a PC: a real companion
+  session, from a Mac and a phone (step 7).
 
 
 

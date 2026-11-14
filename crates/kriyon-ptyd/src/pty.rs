@@ -49,15 +49,45 @@ static HOSTED_SHELL: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32
 /// The device number of this daemon's PTY, or `0` before one is opened: the
 /// terminal an [Owning claude] must hold. Process-wide for the [Companion
 /// bridge], which starts before the engine and reads it per post.
+#[cfg(unix)]
 static HOSTED_TTY: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// The device number of the session's terminal, once this daemon has one.
+#[cfg(unix)]
 #[must_use]
 pub fn hosted_tty() -> Option<u64> {
     match HOSTED_TTY.load(std::sync::atomic::Ordering::SeqCst) {
         0 => None,
         rdev => Some(rdev),
     }
+}
+
+/// The hosted shell's pid and its Job Object, once the shell is in the job:
+/// on Windows, what an [Owning claude] must be a child of and a member of.
+/// Process-wide for the [Companion bridge], which starts before the engine and
+/// reads it per post. Weak, so the engine still owns the job and its
+/// kill-on-close.
+#[cfg(windows)]
+static HOSTED_JOB: std::sync::Mutex<Option<(i32, std::sync::Weak<crate::job::Job>)>> =
+    std::sync::Mutex::new(None);
+
+/// Windows has no terminal device to name, so the session's terminal is named
+/// by its shell's pid, known once the shell is in its job.
+#[cfg(windows)]
+#[must_use]
+pub fn hosted_tty() -> Option<u64> {
+    hosted_job().and_then(|(shell, _)| u64::try_from(shell).ok())
+}
+
+/// The hosted shell's pid and its job, while the engine holding them lives.
+#[cfg(windows)]
+#[must_use]
+pub fn hosted_job() -> Option<(i32, std::sync::Arc<crate::job::Job>)> {
+    let hosted = HOSTED_JOB
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (shell, job) = hosted.as_ref()?;
+    Some((*shell, job.upgrade()?))
 }
 
 /// [Tree stop] whatever this daemon hosts, without going through the engine.
@@ -118,7 +148,7 @@ pub struct PtyEngine {
     /// The Job Object holding the shell and everything it starts: the Windows
     /// [Tree stop], and the busy signal (see [`PtyEngine::foreground_busy`]).
     #[cfg(windows)]
-    job: crate::job::Job,
+    job: std::sync::Arc<crate::job::Job>,
     /// Serializes `close`: a `Shutdown` frame and the child-exit reaper can both
     /// reach it at once, and the [Tree stop] must run exactly once. A second
     /// caller blocks until the first has finished.
@@ -186,7 +216,7 @@ impl PtyEngine {
         // The job exists before the shell does, so a failure to make one fails
         // the spawn instead of leaving a shell nothing could stop as a tree.
         #[cfg(windows)]
-        let job = crate::job::Job::new().map_err(pty_err)?;
+        let job = std::sync::Arc::new(crate::job::Job::new().map_err(pty_err)?);
         let child = pair.slave.spawn_command(cmd).map_err(pty_err)?;
         if let Some(pid) = child.process_id().and_then(|pid| i32::try_from(pid).ok()) {
             HOSTED_SHELL.store(pid, std::sync::atomic::Ordering::SeqCst);
@@ -196,6 +226,12 @@ impl PtyEngine {
         #[cfg(windows)]
         if let Some(pid) = child.process_id() {
             job.assign(pid).map_err(pty_err)?;
+            if let Ok(shell) = i32::try_from(pid) {
+                *HOSTED_JOB
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                    Some((shell, std::sync::Arc::downgrade(&job)));
+            }
         }
         // Drop the slave right after spawning to avoid hangs.
         drop(pair.slave);
@@ -290,6 +326,19 @@ impl PtyEngine {
         let shell_pid = i32::try_from(self.child.lock().process_id()?).ok()?;
         let members = self.job.members()?;
         Some(kriyon_core::proc::windows_command_of(shell_pid, members).is_some())
+    }
+}
+
+#[cfg(all(windows, test))]
+impl PtyEngine {
+    /// The hosted shell's pid, for tests that check posts against it.
+    pub fn shell_pid(&self) -> Option<i32> {
+        i32::try_from(self.child.lock().process_id()?).ok()
+    }
+
+    /// The shell's job, for tests that check posts against it.
+    pub fn job(&self) -> std::sync::Arc<crate::job::Job> {
+        std::sync::Arc::clone(&self.job)
     }
 }
 

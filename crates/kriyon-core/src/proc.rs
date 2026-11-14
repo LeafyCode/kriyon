@@ -621,6 +621,36 @@ pub fn windows_command_of(shell: i32, procs: impl IntoIterator<Item = (i32, i32)
         .map(|(pid, _)| pid)
 }
 
+/// Where a Windows poster sits in its session: process `poster` against the
+/// session's `shell` and the `(pid, parent pid)` members of the shell's Job
+/// Object.
+///
+/// Windows has no terminal foreground, so [`windows_command_of`]'s rule stands
+/// in for it: the session's [Owning claude] is a member whose parent is the
+/// shell. A `claude` nested under it (through its tool shell) is a grandchild
+/// or deeper, so it never owns the session, and neither does anything outside
+/// the job.
+#[must_use]
+pub fn windows_seat(
+    poster: i32,
+    shell: i32,
+    members: impl IntoIterator<Item = (i32, i32)>,
+) -> TerminalSeat {
+    let mut in_job = false;
+    let mut shells_child = false;
+    for (pid, ppid) in members {
+        if pid == poster {
+            in_job = true;
+            shells_child = ppid == shell && pid != shell;
+        }
+    }
+    TerminalSeat {
+        pgid: poster,
+        foreground_pgid: if shells_child { poster } else { 0 },
+        on_session_tty: in_job,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -636,6 +666,26 @@ mod tests {
         );
         // A process is never its own command.
         assert_eq!(windows_command_of(10, [(10, 10)]), None);
+    }
+
+    #[test]
+    fn a_windows_poster_owns_the_session_only_as_the_shells_own_child_in_its_job() {
+        // Shell 10 running claude (20); claude's tool shell (30) runs a nested
+        // claude (40). 50 is a process outside the session's job.
+        let job = [(10, 5), (20, 10), (30, 20), (40, 30)];
+        assert!(
+            windows_seat(20, 10, job).owns_session(),
+            "the session's claude"
+        );
+        assert!(!windows_seat(40, 10, job).owns_session(), "a nested claude");
+        assert!(
+            !windows_seat(10, 10, job).owns_session(),
+            "the shell itself"
+        );
+        assert!(!windows_seat(50, 10, job).owns_session(), "outside the job");
+        // A process whose parent pid is the shell's but who is not in the job
+        // (a pid the shell's could be reused by) is outside the session.
+        assert!(!windows_seat(60, 10, [(10, 5)]).owns_session());
     }
 
     fn seat(pgid: i32, foreground_pgid: i32, on_session_tty: bool) -> TerminalSeat {

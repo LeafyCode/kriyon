@@ -25,6 +25,12 @@ because a check was skipped.
 - **Linux gets the check too.** The kernel names the peer (`SO_PEERCRED`) and its
   `/proc/<pid>/stat` line gives its process group, terminal and foreground group; the
   parsing is `kriyon_core::proc::seat_from_proc_stat`.
+- **Windows gets the check too** (added 14 Nov 2026). Windows has no terminal foreground, so
+  the rule the daemon already uses for "the shell is busy" stands in for it: the poster's pid
+  comes from the socket (`SIO_AF_UNIX_GETPEERPID`), and it owns the session when it is in the
+  session's Job Object and its parent is the session's shell. A `claude` nested under the
+  owner is a grandchild or deeper, and is refused. The rule is
+  `kriyon_core::proc::windows_seat`.
 - **Each refusal reason is logged,** at most once every ten minutes per reason, so a nested
   `claude` posting on every event does not flood the daemon's log.
 
@@ -35,5 +41,7 @@ bridge only.
 
 - If the daemon cannot record its terminal, or the OS cannot place the poster, the
   companion stays silent for that session. The daemon's log says why.
-- Windows (PR #48) has no owner check yet, so the bridge refuses every post there until one
-  is written.
+- On Windows, a `claude` started through a launcher process (a `.cmd` shim run by `cmd.exe`)
+  is the shell's grandchild, so its posts are refused like a nested one's. PowerShell, the
+  session shell, runs npm's `.ps1` shim in-process and the native `claude.exe` directly, so
+  the usual installs are the shell's child.

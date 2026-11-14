@@ -292,7 +292,66 @@ fn peer_seat(stream: &UnixStream, session_tty: u64) -> Result<TerminalSeat, Post
     kriyon_core::proc::seat_from_proc_stat(&stat, session_tty).ok_or(PosterRefusal::LookupFailed)
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+/// Where the peer of `stream` sits in the session: its pid from the socket
+/// (`SIO_AF_UNIX_GETPEERPID`), against the members of the session's Job
+/// Object (see [`kriyon_core::proc::windows_seat`]). `session_shell` is the
+/// hosted shell's pid ([`crate::pty::hosted_tty`] on Windows).
+#[cfg(windows)]
+fn peer_seat(stream: &UnixStream, session_shell: u64) -> Result<TerminalSeat, PosterRefusal> {
+    let (shell, job) = crate::pty::hosted_job().ok_or(PosterRefusal::LookupFailed)?;
+    seat_in_job(stream, session_shell, shell, &job)
+}
+
+/// [`peer_seat`] against a given shell and job: the job the bridge reads must
+/// be the one whose shell the post was checked against.
+#[cfg(windows)]
+fn seat_in_job(
+    stream: &UnixStream,
+    session_shell: u64,
+    shell: i32,
+    job: &crate::job::Job,
+) -> Result<TerminalSeat, PosterRefusal> {
+    const FAILED: PosterRefusal = PosterRefusal::LookupFailed;
+    if u64::try_from(shell).ok() != Some(session_shell) {
+        return Err(FAILED);
+    }
+    let poster = peer_pid(stream).ok_or(FAILED)?;
+    let members = job.members().ok_or(FAILED)?;
+    Ok(kriyon_core::proc::windows_seat(poster, shell, members))
+}
+
+/// The pid of the process at the other end of `stream`, as Windows recorded
+/// it when that process connected.
+#[cfg(windows)]
+fn peer_pid(stream: &UnixStream) -> Option<i32> {
+    use std::os::windows::io::AsRawSocket as _;
+    use windows_sys::Win32::Networking::WinSock::{WSAIoctl, SIO_AF_UNIX_GETPEERPID, SOCKET};
+    let socket = SOCKET::try_from(stream.as_raw_socket()).ok()?;
+    let mut pid: u32 = 0;
+    let mut written: u32 = 0;
+    let size = u32::try_from(std::mem::size_of::<u32>()).ok()?;
+    // SAFETY: no input buffer; `pid` is valid for `size` bytes of writes and
+    // `written` for one `u32`; no overlapped I/O, so the call is synchronous.
+    let rc = unsafe {
+        WSAIoctl(
+            socket,
+            SIO_AF_UNIX_GETPEERPID,
+            std::ptr::null(),
+            0,
+            (&raw mut pid).cast(),
+            size,
+            &raw mut written,
+            std::ptr::null_mut(),
+            None,
+        )
+    };
+    if rc != 0 || written != size || pid == 0 {
+        return None;
+    }
+    i32::try_from(pid).ok()
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
 fn peer_seat(_stream: &UnixStream, _session_tty: u64) -> Result<TerminalSeat, PosterRefusal> {
     Err(PosterRefusal::NoCheckOnThisPlatform)
 }
@@ -531,6 +590,107 @@ mod tests {
         );
         assert!(send(&socket, r#"{"kind":"row"}"#).starts_with("HTTP/1.1 204"));
         assert!(!spool.exists());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn the_socket_names_the_process_that_connected() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let socket = tmp.path().join("s.b.sock");
+        let listener = bind(&socket).expect("binds");
+        let _client = UnixStream::connect(&socket).expect("connects");
+        let (accepted, _) = listener.accept().expect("accepts");
+        assert_eq!(
+            peer_pid(&accepted).and_then(|pid| u32::try_from(pid).ok()),
+            Some(std::process::id())
+        );
+    }
+
+    /// The session engine [`windows_owner_posts`] checks posts against.
+    #[cfg(windows)]
+    static TEST_ENGINE: std::sync::Mutex<Option<(i32, std::sync::Arc<crate::job::Job>)>> =
+        std::sync::Mutex::new(None);
+
+    #[cfg(windows)]
+    fn test_engine_seat(stream: &UnixStream, shell: u64) -> Result<TerminalSeat, PosterRefusal> {
+        let held = TEST_ENGINE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        let (pid, job) = held.ok_or(PosterRefusal::LookupFailed)?;
+        seat_in_job(stream, shell, pid, &job)
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_owner_posts() {
+        use kriyon_core::session::SessionEngine as _;
+        use std::time::{Duration, Instant};
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let engine = crate::pty::PtyEngine::spawn(
+            kriyon_core::session::SessionId("bridge-owner".to_string()),
+            &kriyon_core::session::SpawnSpec {
+                cwd: tmp.path().to_string_lossy().into_owned(),
+                shell: "cmd.exe".to_string(),
+                env: std::collections::HashMap::new(),
+            },
+            |_| {},
+        )
+        .expect("spawns");
+        let shell = engine.shell_pid().expect("a shell pid");
+        *TEST_ENGINE.lock().expect("lock") = Some((shell, engine.job()));
+        let spool = tmp.path().join("bridge/s.jsonl");
+        let socket = serve_test_bridge(
+            tmp.path(),
+            Files {
+                spool: spool.clone(),
+                partial: tmp.path().join("bridge/s.partial.json"),
+                session_tty: || {
+                    TEST_ENGINE
+                        .lock()
+                        .ok()?
+                        .as_ref()
+                        .and_then(|(pid, _)| u64::try_from(*pid).ok())
+                },
+                peer: test_engine_seat,
+            },
+        );
+        // A PowerShell 7 script posts like the companion would.
+        let script = tmp.path().join("post.ps1");
+        std::fs::write(
+            &script,
+            format!(
+                "$s = [System.Net.Sockets.Socket]::new('Unix', 'Stream', 'Unspecified')\n\
+                 $s.Connect([System.Net.Sockets.UnixDomainSocketEndPoint]::new('{}'))\n\
+                 $b = [Text.Encoding]::ASCII.GetBytes(\"POST /event HTTP/1.1`r`nContent-Length: 14`r`n`r`n{{`\"kind`\":`\"row`\"}}\")\n\
+                 [void]$s.Send($b)\n\
+                 $r = [byte[]]::new(256); [void]$s.Receive($r); $s.Close()\n",
+                socket.display()
+            ),
+        )
+        .expect("writes the script");
+        let idle_after = |line: String| {
+            engine.write_stdin(line.as_bytes()).expect("types");
+            let deadline = Instant::now() + Duration::from_secs(30);
+            std::thread::sleep(Duration::from_millis(500));
+            while engine.foreground_busy() == Some(true) && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        };
+
+        // Through a second cmd, the poster is the shell's grandchild, as a
+        // `claude` nested under the session's own is: not kept.
+        idle_after(format!(
+            "cmd /c pwsh -NoProfile -File \"{}\"\r",
+            script.display()
+        ));
+        assert!(!spool.exists(), "a nested poster is not kept");
+
+        // Run by the shell itself, the poster is the shell's own command.
+        idle_after(format!("pwsh -NoProfile -File \"{}\"\r", script.display()));
+        let text = std::fs::read_to_string(&spool).expect("the owner's post is kept");
+        assert_eq!(text.lines().count(), 1);
+        engine.close().expect("closes");
     }
 
     #[test]
