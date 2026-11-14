@@ -173,7 +173,11 @@ export function linkWords(
   }
   const role = roleWord(summary.role);
   const parts: string[] = [];
-  switch (summary.link) {
+  // A computer heard from before and connecting again (it went away and its
+  // link closed) is reconnecting, as one that went quiet is.
+  const link =
+    summary.link === "connecting" && summary.lastSeenMs ? "lost" : summary.link;
+  switch (link) {
     case "connected":
       parts.push("Connected");
       if (summary.path === "direct") {

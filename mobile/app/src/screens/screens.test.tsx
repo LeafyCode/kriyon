@@ -1,5 +1,8 @@
 import { beforeEach, expect, jest, test } from "@jest/globals";
 import { fireEvent, render, screen } from "@testing-library/react-native";
+import fixture from "../../../../src/remote/fixtures/summaries.json" with {
+  type: "json",
+};
 import type { HostSummary } from "../../../../src/remote/hostSummary.ts";
 import {
   KriyonNative,
@@ -319,4 +322,39 @@ test("a computer can be forgotten from settings, and this phone's key shows", as
   await fireEvent.press(screen.getByRole("button", { name: "Forget Mac" }));
   expect(native.forget).toHaveBeenCalledWith(MAC);
   expect(usePhone.getState().hosts).toEqual([]);
+});
+
+// The computer's own words, from the fixture Rust writes and checks.
+test("home shows every part a computer sends, from Rust's own fixture", async () => {
+  const sent = fixture.hostSummary as HostSummary;
+  usePhone.setState({ hosts: [paired], states: { [MAC]: sent } });
+  await render(<HomeScreen />);
+  // The question and its options, the running tool, how the link runs, the plan's use.
+  expect(screen.getByText("Which db?")).toBeOnTheScreen();
+  expect(screen.getByText("Postgres", { exact: false })).toBeOnTheScreen();
+  expect(screen.getByText("SQLite", { exact: false })).toBeOnTheScreen();
+  expect(screen.getByText("Bash · pnpm test")).toBeOnTheScreen();
+  expect(screen.getByText("Connected · direct · Controller")).toBeOnTheScreen();
+  expect(screen.getByText("Claude usage · 5-hour limit")).toBeOnTheScreen();
+  expect(screen.getByLabelText("40 percent used")).toBeOnTheScreen();
+});
+
+test("a finished turn from Rust's fixture shows its summary and diff", async () => {
+  const sent = fixture.hostSummary as HostSummary;
+  const [asking, ...rest] = sent.sessions;
+  // The same session, its dialog closed: a turn waiting for a reply.
+  const turn = {
+    ...asking,
+    dialogOpen: false,
+    question: null,
+  } as HostSummary["sessions"][number];
+  usePhone.setState({
+    hosts: [paired],
+    states: { [MAC]: { ...sent, sessions: [turn, ...rest] } },
+  });
+  await render(<HomeScreen />);
+  expect(screen.getByText("Fixed it.")).toBeOnTheScreen();
+  expect(
+    screen.getByLabelText("2 files changed, 10 lines added, 3 removed")
+  ).toBeOnTheScreen();
 });

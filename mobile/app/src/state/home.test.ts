@@ -169,6 +169,17 @@ test("a computer's line says how it is linked, by which path, and its role", () 
   expect(linkWords(host({ link: "connecting", role: null }), NOW)).toBe(
     "Connecting…"
   );
+  // Heard from before (it went away, its link closed): it reconnects.
+  expect(
+    linkWords(
+      host({
+        lastSeenMs: NOW - 2 * 60_000,
+        link: "connecting",
+        role: "controller",
+      }),
+      NOW
+    )
+  ).toBe("Reconnecting · last seen 2m ago · Controller");
   expect(linkWords(host({ link: "removed" }), NOW)).toBe(
     "Removed from that computer · pair again to use it"
   );

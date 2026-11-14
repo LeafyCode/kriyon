@@ -29,7 +29,10 @@ use kriyon_core::standing::StandingState;
 use kriyon_core::work_report::ReportOutcome;
 use kriyon_remote::authorize::{PendingWrite, ProjectFolder};
 use kriyon_remote::control::{Change, HostIsTyping};
-use kriyon_remote::message::{EndpointId, ProjectInfo, RefuseReason, Role, SessionInfo};
+use kriyon_remote::message::{
+    Diff, EndpointId, PlanUsage, ProjectInfo, Question, RefuseReason, Role, SessionInfo,
+    UsageWindow,
+};
 use kriyon_remote::writer::SessionGate;
 use kriyon_remote_link::host::{Host, PairedDevices};
 use kriyon_remote_link::host_runtime::{CodeOutcome, HostSetup, RemoteRuntime};
@@ -192,6 +195,16 @@ impl PairedDevices for DevApp {
     }
 }
 
+/// The time now, in Unix milliseconds.
+fn now_ms() -> i64 {
+    i64::try_from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |since| since.as_millis()),
+    )
+    .unwrap_or(0)
+}
+
 impl ServeHost for DevApp {
     fn host_name(&self) -> String {
         dev_host_name()
@@ -199,12 +212,7 @@ impl ServeHost for DevApp {
 
     fn sessions(&self) -> Vec<SessionInfo> {
         // One of each kind a phone's Home shows; only `SESSION` is live.
-        let now = i64::try_from(
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0, |since| since.as_millis()),
-        )
-        .unwrap_or(0);
+        let now = now_ms();
         let minutes_ago = |minutes: i64| now - minutes * 60_000;
         let listed = |id: &str, title: &str, project: &str, standing: StandingState, ago: i64| {
             let needs_you = standing == StandingState::AwaitingInput;
@@ -228,9 +236,25 @@ impl ServeHost for DevApp {
                 diff: None,
             }
         };
+        // Every part of a Home card has something to show: the question and
+        // its options, a finished turn's summary and diff, a running tool
+        // and its clock.
+        let running = |id: &str, title: &str, project: &str, ago: i64, tool: &str| SessionInfo {
+            activity: Some(tool.into()),
+            running_since_ms: Some(minutes_ago(ago)),
+            ..listed(id, title, project, StandingState::Running, ago)
+        };
         vec![
             SessionInfo {
                 dialog_open: true,
+                question: Some(Question {
+                    text: "The form sends before the token is ready. Wait for the token, or retry once on a 401?".into(),
+                    options: vec![
+                        "Wait for the token".into(),
+                        "Retry once on a 401".into(),
+                        "Both".into(),
+                    ],
+                }),
                 ..listed(
                     SESSION,
                     "Fix the login bug",
@@ -239,26 +263,37 @@ impl ServeHost for DevApp {
                     4,
                 )
             },
-            listed(
-                "turn",
-                "Add rate limits to /login",
-                "api",
-                StandingState::AwaitingInput,
-                12,
-            ),
-            listed(
+            SessionInfo {
+                turn_summary: Some(
+                    "Added a token bucket to /login: 5 tries a minute per address, with tests."
+                        .into(),
+                ),
+                diff: Some(Diff {
+                    files: 3,
+                    added: 84,
+                    removed: 12,
+                }),
+                ..listed(
+                    "turn",
+                    "Add rate limits to /login",
+                    "api",
+                    StandingState::AwaitingInput,
+                    12,
+                )
+            },
+            running(
                 "run1",
                 "Migrate auth to OAuth 2.1",
                 "api",
-                StandingState::Running,
                 3,
+                "Bash · pnpm test auth",
             ),
-            listed(
+            running(
                 "run2",
                 "Docs: release notes 0.17",
                 "web",
-                StandingState::Running,
                 1,
+                "Edit · docs/release-notes.md",
             ),
             listed("idle1", "Tidy the logs", "api", StandingState::Idle, 90),
             listed(
@@ -276,6 +311,21 @@ impl ServeHost for DevApp {
                 2_000,
             ),
         ]
+    }
+
+    fn usage(&self) -> PlanUsage {
+        // Nearest its limit: the 5-hour window, resetting in 2 h 10 m.
+        let in_minutes = |minutes: i64| now_ms() + minutes * 60_000;
+        PlanUsage {
+            five_hour: Some(UsageWindow {
+                used_percent: 62,
+                resets_at_ms: Some(in_minutes(130)),
+            }),
+            weekly: Some(UsageWindow {
+                used_percent: 28,
+                resets_at_ms: Some(in_minutes(3 * 24 * 60)),
+            }),
+        }
     }
 
     fn session(&self, id: &str) -> Option<LiveSession> {
