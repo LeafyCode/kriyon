@@ -220,6 +220,21 @@ impl RemoteEndpoint {
             .and_then(|bound| bound.relay_expires)
     }
 
+    /// Tell the endpoint the network may have changed (the computer woke):
+    /// it looks for paths again now rather than on its own schedule. A
+    /// no-op while unbound.
+    pub async fn network_changed(&self) {
+        let endpoint = self
+            .bound
+            .lock()
+            .await
+            .as_ref()
+            .map(|bound| bound.endpoint.clone());
+        if let Some(endpoint) = endpoint {
+            endpoint.network_change().await;
+        }
+    }
+
     /// Whether it is bound now.
     pub async fn is_bound(&self) -> bool {
         self.bound.lock().await.is_some()

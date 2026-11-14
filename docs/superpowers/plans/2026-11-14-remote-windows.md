@@ -136,6 +136,19 @@ On `feat/remote-windows-prep` (in `feat/remote-access`), then `feat/windows-remo
   - **Session start** (`create_session`, `startSession`, `sessionHost.ts`): remote access's
     shape, with #48's Windows parts that merged on their own (the daemon's per-build copy,
     `detach_daemon`, `.exe` names, the Python hooks-off scope).
+- **Step 6, the firewall (without a PC):** on Windows the consent screen says Windows Defender
+  Firewall will ask, and what saying no means (`status.firewallAsks`). The host notes each
+  device link's path (`RemoteLink::path`, every 10 s) in `kriyon_remote::routes::DirectWatch`;
+  when devices have reached it only through the relay for two minutes and never directly since
+  remote access came on, Settings says so on Windows, with how to allow Kriyon
+  (`routes.directBlocked`). Left for a PC: the prompt itself, and the line seen after a "no".
+- **Step 8, sleep (without a PC):** `kriyon_core::resume::ResumeWatch` tells a wake from the
+  main loop's tick (the wall clock 10 s past the last tick). On a wake the host sends devices a
+  heartbeat at once and tells iroh the network may have changed (`network_change`), so links
+  find a path again without waiting out their timers. Left: keeping the PC awake while a
+  device is connected (a product choice), this computer's own device side reconnecting at once
+  on a wake (it waits out its backoff, up to 30 s), and the copy that a sleeping PC can't be
+  reached; all checked on a real PC.
 - **Step 2:** `.github/workflows/windows.yml` runs clippy and the tests on Windows for every
   crate, the daemon and the app (`kriyon-ptyd`, `src-tauri`, and kriyon-core's own tests, which
   #48 ported), on `dev`, `main` and every `feat/windows-*` push. No secrets.

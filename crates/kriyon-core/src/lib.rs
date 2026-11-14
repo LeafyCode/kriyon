@@ -42,6 +42,7 @@ pub mod prompt_history;
 pub mod quit;
 pub mod readable;
 pub mod redact;
+pub mod resume;
 pub mod runtime;
 pub mod session;
 pub mod session_digest;
