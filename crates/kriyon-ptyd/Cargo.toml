@@ -12,8 +12,8 @@ path = "src/main.rs"
 [dependencies]
 kriyon-core = { path = "../kriyon-core" }
 portable-pty = "0.9"
-parking_lot = "0.12"
-vt100 = "0.16.2"
+parking_lot = "0.13"
+vt100 = "0.18.1"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

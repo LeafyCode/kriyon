@@ -33,7 +33,7 @@ tauri-plugin-shell = "2"
 tauri-plugin-deep-link = "2"
 tauri-plugin-dialog = "2"
 portable-pty = "0.9"
-parking_lot = "0.12"
+parking_lot = "0.13"
 tempfile = "3"
 rusqlite = { version = "0.41.1", features = ["bundled"] }
 thiserror = "2.0.18"
@@ -67,7 +67,7 @@ objc2-user-notifications = { version = "0.3", features = [
 ] }
 block2 = "0.6"
 uuid = { version = "1", features = ["v4"] }
-libproc = "0.14"
+libproc = "0.15"
 
 [target."cfg(unix)".dependencies]
 libc = "0.2.189"
