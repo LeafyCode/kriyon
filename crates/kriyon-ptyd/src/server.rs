@@ -826,10 +826,10 @@ mod tests {
     use kriyon_core::output_history::OutputHistory;
     use kriyon_core::session::{EngineError, SessionEngine, SessionId};
     use kriyon_core::skip_ahead::{Next, SkipAheadQueue};
+    use kriyon_core::uds::UnixStream;
     use kriyon_core::wire::{Frame, FrameDecoder};
     use parking_lot::Mutex;
     use std::io::{self, Write};
-    use std::os::unix::net::UnixStream;
     use std::sync::atomic::AtomicBool;
     use std::time::{Duration, Instant};
 
@@ -1438,12 +1438,12 @@ mod tests {
     /// end and the writer thread.
     fn attached() -> (
         std::sync::Arc<Shared>,
-        std::os::unix::net::UnixStream,
-        std::os::unix::net::UnixStream,
+        kriyon_core::uds::UnixStream,
+        kriyon_core::uds::UnixStream,
         std::thread::JoinHandle<()>,
     ) {
         let shared = std::sync::Arc::new(shared());
-        let (daemon_end, client_end) = std::os::unix::net::UnixStream::pair().expect("socket pair");
+        let (daemon_end, client_end) = kriyon_core::uds::UnixStream::pair().expect("socket pair");
         let writer = shared.attach(&daemon_end).expect("writer started");
         (shared, daemon_end, client_end, writer)
     }
