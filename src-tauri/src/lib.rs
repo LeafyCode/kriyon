@@ -311,12 +311,30 @@ fn background_tick<R: tauri::Runtime>(app: &tauri::AppHandle<R>, tick: u64) {
     if let Some(serve) = app.try_state::<kriyon_remote_link::host_runtime::Serve>() {
         serve.sessions_changed();
         if tick.is_multiple_of(REMOTE_HEARTBEAT_EVERY_N_TICKS) {
-            let now_ms = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX));
-            serve.heartbeat(now_ms);
+            serve.heartbeat(now_ms());
         }
     }
+}
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+}
+
+/// The computer woke (a sleep, Modern Standby): devices hear the host is
+/// alive at once, and the endpoint looks for paths again now (the network
+/// may be another), rather than each waiting out its own timer.
+fn on_wake(app: &tauri::AppHandle) {
+    if let Some(serve) = app.try_state::<kriyon_remote_link::host_runtime::Serve>() {
+        serve.heartbeat(now_ms());
+    }
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        if let Some(endpoint) = app.try_state::<crate::remote_endpoint::RemoteEndpoint>() {
+            endpoint.network_changed().await;
+        }
+    });
 }
 
 /// Emit a liveness heartbeat per live watch, so the frontend can detect a watch
@@ -503,9 +521,13 @@ pub fn run() {
             let handle = app.handle().clone();
             std::thread::spawn(move || {
                 let mut tick: u64 = 0;
+                let mut woke = kriyon_core::resume::ResumeWatch::default();
                 loop {
                     std::thread::sleep(TICK_INTERVAL);
                     tick += 1;
+                    if woke.tick(std::time::SystemTime::now()) {
+                        on_wake(&handle);
+                    }
                     background_tick(&handle, tick);
                     // Phones hear a session newly needs you, when no device
                     // is connected to see it (spec §10).
