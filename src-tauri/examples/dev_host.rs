@@ -359,6 +359,8 @@ async fn run(invite_file: Option<String>) {
     serve.attach(
         SESSION,
         move |requester| {
+            // A device's screen is wanted: none while it only reads entries.
+            println!("dev host: a screen asked for ({requester})");
             let screen = snapshots.snapshot();
             let _ = answer.on_event(
                 SESSION,
@@ -406,16 +408,7 @@ async fn run(invite_file: Option<String>) {
         println!("dev host: written to {path}");
     }
 
-    // The session talks every two seconds.
-    let talker = Arc::clone(&app);
-    tauri::async_runtime::spawn(async move {
-        let mut line = 0_u64;
-        loop {
-            line += 1;
-            talker.output(&format!("dev session line {line}\r\n"));
-            tokio::time::sleep(Duration::from_secs(2)).await;
-        }
-    });
+    talk_and_beat(&app, &serve);
 
     // Codes typed here, one a line.
     let (codes_in, mut codes) = tokio::sync::mpsc::unbounded_channel::<String>();
@@ -439,4 +432,32 @@ async fn run(invite_file: Option<String>) {
             other => println!("dev host: {other:?}"),
         }
     }
+}
+
+/// The session talks every two seconds, and devices hear the host's
+/// heartbeat as the app's main loop sends it.
+fn talk_and_beat(app: &Arc<DevApp>, serve: &Serve) {
+    // The session talks every two seconds.
+    let talker = Arc::clone(app);
+    tauri::async_runtime::spawn(async move {
+        let mut line = 0_u64;
+        loop {
+            line += 1;
+            talker.output(&format!("dev session line {line}\r\n"));
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        }
+    });
+
+    // Heartbeats, as the app's main loop sends them (every 7th 2 s tick):
+    // without them a device counts this host lost after 40 s and reconnects.
+    let beating = serve.clone();
+    tauri::async_runtime::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_secs(14)).await;
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX));
+            beating.heartbeat(now_ms);
+        }
+    });
 }
