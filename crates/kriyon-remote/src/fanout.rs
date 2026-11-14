@@ -63,6 +63,9 @@ struct DeviceStream {
     /// It wants the screen. Off (reading entries only), it gets no
     /// snapshot and no updates, but still has the session open.
     screen: bool,
+    /// The newest update `seq` given to it in this run (a snapshot's, or an
+    /// update's queued or held): what it can have drawn, at most.
+    sent_seq: Option<u64>,
 }
 
 /// Updates waiting for the snapshot of `requester` to be packed.
@@ -164,8 +167,11 @@ impl SessionFanout {
             return Vec::new();
         }
         self.seq = Some(ScreenSeq::new(run));
-        // Another daemon counts its dialogs afresh.
+        // Another daemon counts its dialogs afresh, and its updates.
         self.dialog_generation = None;
+        for stream in self.devices.values_mut() {
+            stream.sent_seq = None;
+        }
         // A screen names the run in its snapshot; one off is told it.
         let off: Vec<EndpointId> = self
             .devices
@@ -213,6 +219,7 @@ impl SessionFanout {
             if !stream.screen || stream.awaiting.is_some() {
                 continue;
             }
+            stream.sent_seq = Some(number);
             if let Some(held) = stream.held.as_mut() {
                 // Waits for its snapshot; too much of it, and the device
                 // starts over from a fresh one instead.
@@ -330,7 +337,17 @@ impl SessionFanout {
         for frame in frames.into_iter().chain(held.frames) {
             stream.queue.push(frame);
         }
+        // Held updates came after the snapshot: the newest of both.
+        stream.sent_seq = stream.sent_seq.max(Some(snapshot.head.seq));
         None
+    }
+
+    /// The newest update `seq` given to `device` in this run; `None` before
+    /// any. A write's `seen_seq` is held to it: a device can't have drawn
+    /// what it was never sent.
+    #[must_use]
+    pub fn sent_seq(&self, device: &EndpointId) -> Option<u64> {
+        self.devices.get(device).and_then(|stream| stream.sent_seq)
     }
 
     /// A device opened this session: the requester id to ask for its
@@ -441,6 +458,7 @@ impl SessionFanout {
                 held: None,
                 dropped: false,
                 screen,
+                sent_seq: None,
             },
         );
     }
@@ -721,6 +739,22 @@ mod tests {
         fanout.output(b"unseen again");
         assert_eq!(drain(&mut fanout, &A).0, vec![ToDevice::Run { run: 8 }]);
         assert_eq!(fanout.resync(&A, Instant::now()), None);
+    }
+
+    /// What each device was given, for holding its `seen_seq` to it.
+    #[test]
+    fn the_newest_update_given_each_device_is_known() {
+        let mut fanout = SessionFanout::new(1 << 20).expect("fanout");
+        fanout.hello(7);
+        assert_eq!(fanout.sent_seq(&A), None, "not open");
+        following(&mut fanout, A, b"x");
+        let after_snapshot = fanout.sent_seq(&A).expect("its snapshot's");
+        fanout.output(b"one");
+        fanout.output(b"two");
+        assert_eq!(fanout.sent_seq(&A), Some(after_snapshot + 2));
+        // A new run starts the count again.
+        fanout.hello(8);
+        assert_eq!(fanout.sent_seq(&A), None);
     }
 
     #[test]

@@ -46,6 +46,28 @@ fn is_write(message: &Decoded<FromDevice>) -> bool {
     write_id(message).is_some()
 }
 
+/// `message` with an `Input`'s `seen_seq` held to `sent`, the newest update
+/// the device was given (none: 0): a device can't have drawn more, so it
+/// can't claim to have seen a dialog it never got.
+fn held_to_sent(message: Decoded<FromDevice>, sent: Option<u64>) -> Decoded<FromDevice> {
+    match message {
+        Decoded::Message(FromDevice::Input {
+            run,
+            epoch,
+            seen_seq,
+            bytes,
+            write_id,
+        }) => Decoded::Message(FromDevice::Input {
+            run,
+            epoch,
+            seen_seq: seen_seq.min(sent.unwrap_or(0)),
+            bytes,
+            write_id,
+        }),
+        other => other,
+    }
+}
+
 /// The device's id for `message` if it is a write: its answer carries it.
 fn write_id(message: &Decoded<FromDevice>) -> Option<u32> {
     match message {
@@ -1279,6 +1301,8 @@ impl Serve {
             answered,
         ));
         while let Ok(Some(message)) = reader.next().await {
+            // What it says it drew, held to what it was sent.
+            let message = held_to_sent(message, served.fanout.lock().sent_seq(&device));
             let facts = self.facts(device, role, Some(&id), false).await;
             let checked = authorize(
                 &device,
@@ -2743,6 +2767,32 @@ mod tests {
                 changed_at_seq: Some(5),
             });
             sw.send(&typing(epoch, 3, b"1")).await.expect("input");
+            assert_eq!(
+                next(&mut sr).await,
+                ToDevice::WriteRefused {
+                    write_id: 1,
+                    reason: RefuseReason::Stale
+                }
+            );
+            assert_eq!(world.fake.typed.lock().as_slice(), b"");
+        });
+    }
+
+    /// A device claiming it drew more than it was ever sent can't answer a
+    /// dialog it never saw: its `seen_seq` counts only up to what it got.
+    #[test]
+    fn a_seen_seq_past_what_was_sent_is_held_to_what_was() {
+        run(async {
+            let world = world().await;
+            let (_a, link, mut cw, mut cr) = device(&world, 3, Role::Controller).await;
+            let (mut sw, mut sr, epoch) = in_control(&world, &link, &mut cw, &mut cr).await;
+            world.fake.gate.lock().set_dialog(Dialog {
+                showing: true,
+                changed_at_seq: Some(5),
+            });
+            sw.send(&typing(epoch, u64::MAX, b"1"))
+                .await
+                .expect("input");
             assert_eq!(
                 next(&mut sr).await,
                 ToDevice::WriteRefused {
