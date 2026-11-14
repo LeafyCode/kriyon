@@ -20,7 +20,8 @@ export type Filter = "all" | "needsYou" | "running";
 export type Tone = "amber" | "green" | "blue" | "plain";
 
 export function kindOf(session: SessionSummary): Kind {
-  if (session.dialogOpen) {
+  // A dialog that isn't asking you (a menu open) isn't a question.
+  if (session.dialogOpen && session.needsYou) {
     return "asking";
   }
   if (session.needsYou) {
@@ -147,11 +148,20 @@ export function pillFor(
         tone: "blue",
       };
     default:
-      return { label: "Idle", tone: "plain" };
+      // Not known (the computer's hooks are off) is never said as Idle.
+      return {
+        label: session.standing === "unknown" ? "Unknown" : "Idle",
+        tone: "plain",
+      };
   }
 }
 
 const ROLE_WORDS = { controller: "Controller", viewer: "Viewer" } as const;
+
+/** This device's role on a computer, in a word; `null` while not known. */
+export function roleWord(role: "controller" | "viewer" | null): string | null {
+  return role ? ROLE_WORDS[role] : null;
+}
 
 /** A computer's line under its name: its link, path and this phone's role. */
 export function linkWords(
@@ -161,7 +171,7 @@ export function linkWords(
   if (!summary) {
     return "Connecting…";
   }
-  const role = summary.role ? ROLE_WORDS[summary.role] : null;
+  const role = roleWord(summary.role);
   const parts: string[] = [];
   switch (summary.link) {
     case "connected":

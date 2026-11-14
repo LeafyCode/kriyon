@@ -111,6 +111,19 @@ test("a session opens on its readable view, which reads its entries", async () =
   expect(native.closeSession).toHaveBeenCalledWith(MAC, "s1");
 });
 
+test("opened straight on the terminal, the session opens before its screen comes on", async () => {
+  await render(
+    <SessionScreen hostId={MAC} initialView="terminal" sessionId="s1" />
+  );
+  await act(() => Promise.resolve());
+  await act(() => Promise.resolve());
+  expect(native.openSession).toHaveBeenCalledWith(MAC, "s1");
+  expect(native.setScreen).toHaveBeenCalledWith(MAC, "s1", true);
+  expect(native.openSession.mock.invocationCallOrder[0]).toBeLessThan(
+    native.setScreen.mock.invocationCallOrder[0] ?? 0
+  );
+});
+
 test("switching to the terminal and back keeps the session open", async () => {
   await render(<SessionScreen hostId={MAC} sessionId="s1" />);
   await act(() => send(CONVERSATION));

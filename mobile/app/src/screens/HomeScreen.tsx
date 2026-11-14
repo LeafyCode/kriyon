@@ -559,7 +559,11 @@ export function HomeScreen() {
   const states = usePhone((state) => state.states);
   const { show } = usePhone.getState();
   const { t, text } = useLook();
-  const now = useNow();
+  // Each second while a running clock shows ("Running 3:12"), else each 30 s.
+  const clock = Object.values(states).some((summary) =>
+    summary.sessions.some((one) => Boolean(one.runningSinceMs))
+  );
+  const now = useNow(clock ? 1000 : 30_000);
   const [filter, setFilter] = useState<Filter>("all");
   const counts = glance(hosts, states);
   const cards = needsYouCards(hosts, states);

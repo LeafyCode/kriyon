@@ -9,6 +9,7 @@ import {
   KriyonNative,
   type PairedHost,
 } from "../../modules/kriyon-native/index.ts";
+import { messageSteps } from "./keys.ts";
 import { type PushStatus, registerPush } from "./push.ts";
 
 /** Which screen shows. */
@@ -97,6 +98,15 @@ interface PhoneStore {
   /** Read a session's entries again, after it had none. */
   retryReadable: (hostId: string, sessionId: string) => void;
   screen: Screen;
+  /**
+   * Send `text` to Claude in a session, as typed then Enter, the way the
+   * desktop sends a prompt.
+   */
+  sendMessage: (
+    hostId: string,
+    sessionId: string,
+    text: string
+  ) => Promise<void>;
   show: (screen: Screen) => void;
   /** Turn an open session's screen on, after what was asked before it. */
   showScreen: (hostId: string, sessionId: string) => Promise<void>;
@@ -312,6 +322,20 @@ export const usePhone = create<PhoneStore>((set, get) => ({
     inTurn(() => readEntries(hostId, sessionId)).catch(() => undefined);
   },
   screen: { kind: "home" },
+  sendMessage: (hostId, sessionId, text) =>
+    // One after another, as typed: the order and the beat are the point.
+    messageSteps(text).reduce(
+      (sent, step) =>
+        sent
+          .then(() =>
+            step.waitMs > 0
+              ? new Promise<void>((done) => setTimeout(done, step.waitMs))
+              : undefined
+          )
+          .then(() => KriyonNative.input(hostId, sessionId, step.bytes)),
+      Promise.resolve()
+    ),
+
   show: (screen) => set({ newSessionError: null, screen }),
   start: async (deviceName) => {
     try {

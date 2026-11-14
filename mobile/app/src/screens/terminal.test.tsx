@@ -1,5 +1,11 @@
 import { beforeEach, expect, jest, test } from "@jest/globals";
-import { act, fireEvent, render, screen } from "@testing-library/react-native";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react-native";
 import type { HostSummary } from "../../../../src/remote/hostSummary.ts";
 import {
   KriyonNative,
@@ -141,7 +147,7 @@ test("typing is off until this phone holds control, and Take control asks Rust",
   expect(screen.queryByRole("button", { name: "Take control" })).toBeNull();
 });
 
-test("what is typed goes to Rust as UTF-8, with Enter", async () => {
+test("what is typed goes to Rust as UTF-8, then Enter after a beat", async () => {
   usePhone.setState({ states: { [MAC]: state({}, "you") } });
   await render(<TerminalView hostId={MAC} sessionId="s1" />);
   await fireEvent.changeText(
@@ -152,7 +158,14 @@ test("what is typed goes to Rust as UTF-8, with Enter", async () => {
   expect(native.input).toHaveBeenCalledWith(
     MAC,
     "s1",
-    new Uint8Array([0xc3, 0xa9, 13])
+    new Uint8Array([0xc3, 0xa9])
+  );
+  await waitFor(() =>
+    expect(native.input).toHaveBeenLastCalledWith(
+      MAC,
+      "s1",
+      new Uint8Array([13])
+    )
   );
   expect(screen.getByLabelText("Type into the terminal").props.value).toBe("");
 });

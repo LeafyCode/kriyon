@@ -6,6 +6,7 @@
 import { useEffect, useState } from "react";
 import { BackHandler, ScrollView, Text, TextInput, View } from "react-native";
 import { Button, Icon, TopBar, useLook, useNow } from "../kit.tsx";
+import { roleWord } from "../state/home.ts";
 import { type Pairing, usePhone } from "../state/phone.ts";
 import { fonts } from "../theme.ts";
 import { Scanner } from "./Scanner.tsx";
@@ -15,8 +16,6 @@ function left(expiresAtMs: number, nowMs: number): string {
   const seconds = Math.max(0, Math.ceil((expiresAtMs - nowMs) / 1000));
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
 }
-
-const ROLE_WORDS = { controller: "Controller", viewer: "Viewer" } as const;
 
 /** The two steps, the second lit once the phone shows its code. */
 function Steps({ second }: { second: boolean }) {
@@ -248,7 +247,7 @@ function CodeStep({
                 Role on this computer
               </Text>
               <Text style={[look.body, { color: t.ink, fontSize: 14 }]}>
-                {ROLE_WORDS[pairing.role]}
+                {roleWord(pairing.role)}
               </Text>
             </View>
           ) : null}

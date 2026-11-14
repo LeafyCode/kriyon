@@ -12,9 +12,7 @@ import type {
   ShownEntry,
   ShownKind,
 } from "../../../../src/remote/readableSummary.ts";
-import { KriyonNative } from "../../modules/kriyon-native/index.ts";
 import { Button, Icon, IconButton, useLook } from "../kit.tsx";
-import { typedLine } from "../state/keys.ts";
 import { readableKey, usePhone } from "../state/phone.ts";
 import { fonts, type Tokens } from "../theme.ts";
 
@@ -253,11 +251,17 @@ function Compose({
     if (!(mayType && message.trim())) {
       return;
     }
-    KriyonNative.input(hostId, sessionId, typedLine(message, false))
-      .then(() => setMessage(""))
-      .catch((error: unknown) =>
-        setProblem(error instanceof Error ? error.message : String(error))
-      );
+    const text = message;
+    setMessage("");
+    usePhone
+      .getState()
+      .sendMessage(hostId, sessionId, text)
+      .then(() => setProblem(null))
+      .catch((error: unknown) => {
+        // Not sent: the words come back to try again.
+        setMessage(text);
+        setProblem(error instanceof Error ? error.message : String(error));
+      });
   };
   return (
     <View
@@ -305,6 +309,7 @@ function Compose({
         />
         <IconButton
           color={mayType ? t.onAccent : t.muted}
+          disabled={!mayType}
           icon="send"
           label="Send"
           onPress={send}

@@ -13,6 +13,7 @@ jest.mock("../../modules/kriyon-native/index.ts", () => ({
     finishPairing: jest.fn(),
     forget: jest.fn(),
     hosts: jest.fn(),
+    input: jest.fn(),
     pair: jest.fn(),
     readEntries: jest.fn(),
     setScreen: jest.fn(),
@@ -318,4 +319,20 @@ test("trying again keeps entries being read", () => {
   usePhone.setState({ readable: { [key]: ENTRIES } });
   usePhone.getState().retryReadable(MAC, "s1");
   expect(usePhone.getState().readable[key]).toEqual(ENTRIES);
+});
+
+test("a message goes to Claude typed, then its Enter after a beat", async () => {
+  jest.useFakeTimers();
+  native.input.mockResolvedValue();
+  const sent = usePhone.getState().sendMessage(MAC, "s1", "hi");
+  await jest.advanceTimersByTimeAsync(0);
+  expect(native.input).toHaveBeenCalledTimes(1);
+  expect(new TextDecoder().decode(native.input.mock.calls[0]?.[2])).toBe("hi");
+  await jest.advanceTimersByTimeAsync(79);
+  // Enter waits its beat.
+  expect(native.input).toHaveBeenCalledTimes(1);
+  await jest.advanceTimersByTimeAsync(1);
+  await sent;
+  expect(new TextDecoder().decode(native.input.mock.calls[1]?.[2])).toBe("\r");
+  jest.useRealTimers();
 });

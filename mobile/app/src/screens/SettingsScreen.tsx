@@ -5,13 +5,11 @@
  */
 import { ScrollView, Text, View } from "react-native";
 import { Button, Pill, TopBar, useLook } from "../kit.tsx";
-import { shortKey } from "../state/home.ts";
+import { roleWord, shortKey } from "../state/home.ts";
 import { usePhone } from "../state/phone.ts";
 import { alertsWord, pushLine } from "../state/push.ts";
 import { fonts } from "../theme.ts";
 import { RelaySection } from "./RelaySection.tsx";
-
-const ROLE_WORDS = { controller: "Controller", viewer: "Viewer" } as const;
 
 /** "13 Nov": when a computer was paired. */
 function pairedOn(ms: number): string {
@@ -99,7 +97,7 @@ export function SettingsScreen() {
             <View style={box}>
               {hosts.map((host, index) => {
                 const summary = states[host.hostId];
-                const role = summary?.role ? ROLE_WORDS[summary.role] : null;
+                const role = roleWord(summary?.role ?? null);
                 const name = summary?.hostName || host.name;
                 return (
                   <View

@@ -4,9 +4,9 @@
  * own code (remote/remoteScreen.ts) and terminal colours. Built into one
  * HTML string by scripts/terminal-page.mjs; never imported by the app.
  *
- * The app talks to it through `window.kriyon` (frames as base64, typing on
- * or off, light or dark); it answers through React Native's message channel (what was
- * typed, a note to show, ready).
+ * The app talks to it through `window.kriyon` (frames as base64, light or
+ * dark); it answers through React Native's message channel (a note to show,
+ * ready). It never takes typing: the app's own field and keys do.
  */
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { Terminal } from "@xterm/xterm";
@@ -25,7 +25,6 @@ declare global {
       frame: (base64: string) => void;
       /** The phone's light or dark setting, and the screen's background. */
       theme: (mode: "dark" | "light", background: string) => void;
-      typing: (on: boolean) => void;
     };
     ReactNativeWebView?: { postMessage: (message: string) => void };
   }
@@ -62,7 +61,6 @@ const host = document.getElementById("terminal");
 if (host) {
   term.open(host);
 }
-term.onData((data) => post({ data, type: "input" }));
 
 window.kriyon = {
   frame: (base64) => {
@@ -92,15 +90,6 @@ window.kriyon = {
       if (box) {
         box.style.background = background;
       }
-    }
-  },
-  typing: (on) => {
-    term.options.disableStdin = !on;
-    // The keyboard comes up with control, and goes with it.
-    if (on) {
-      term.focus();
-    } else {
-      term.blur();
     }
   },
 };

@@ -68,14 +68,6 @@ function Current() {
       return <PairScreen />;
     case "settings":
       return <SettingsScreen />;
-    case "new":
-      // A sheet over Home, as the design draws it.
-      return (
-        <>
-          <HomeScreen />
-          <NewSessionSheet hostId={screen.hostId} />
-        </>
-      );
     case "session":
       return (
         <SessionScreen
@@ -86,7 +78,16 @@ function Current() {
         />
       );
     default:
-      return <HomeScreen />;
+      // Home, the same element whether or not the sheet is over it (so it
+      // keeps its filter, folds and scroll), with New session as a sheet.
+      return (
+        <>
+          <HomeScreen />
+          {screen.kind === "new" ? (
+            <NewSessionSheet hostId={screen.hostId} />
+          ) : null}
+        </>
+      );
   }
 }
 

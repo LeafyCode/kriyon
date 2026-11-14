@@ -4,7 +4,7 @@
  * terminal's size), shown first, and the real terminal. A session with no
  * entries to read shows its terminal, saying why; Readable tries again.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useState } from "react";
 import { Text, View } from "react-native";
 import type { SessionSummary } from "../../../../src/remote/hostSummary.ts";
 import { Pill, Segmented, TopBar, useLook } from "../kit.tsx";
@@ -70,9 +70,11 @@ export function SessionScreen({
   const readable = view === "readable" && !unavailable;
   const { retryReadable, show } = usePhone.getState();
   // Open while shown, read first, whichever view: switching turns its
-  // screen on and off (the terminal's), never closing it.
+  // screen on and off (the terminal's), never closing it. A layout effect,
+  // so the open is asked before a terminal shown first asks for its screen
+  // (a child's effects run before its parent's; layout effects before all).
   const [note, setNote] = useState<string | null>(null);
-  useEffect(() => {
+  useLayoutEffect(() => {
     const { closeReadable, openReadable } = usePhone.getState();
     openReadable(hostId, sessionId).catch((error: unknown) =>
       setNote(error instanceof Error ? error.message : String(error))

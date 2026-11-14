@@ -12,6 +12,7 @@ import {
   needsYouCards,
   pillFor,
   projectChoices,
+  roleWord,
   runningFor,
   shortKey,
 } from "./home.ts";
@@ -202,4 +203,25 @@ test("a new session's projects say how many sessions each has open, or parked", 
 test("this phone's key reads as its first twelve hex digits, in fours", () => {
   expect(shortKey("a09aa5f47a67beef00")).toBe("a09a·a5f4·7a67");
   expect(shortKey(null)).toBe("");
+});
+
+test("a dialog that isn't asking you (a menu open) doesn't make a session asking", () => {
+  const menu = session({
+    dialogOpen: true,
+    needsYou: false,
+    standing: "running",
+    status: "running",
+  });
+  expect(kindOf(menu)).toBe("running");
+});
+
+test("a standing nobody knows reads as Unknown, never as Idle", () => {
+  const unknown = session({ standing: "unknown", status: "idle" });
+  expect(pillFor(unknown, NOW)).toEqual({ label: "Unknown", tone: "plain" });
+});
+
+test("roles read in words", () => {
+  expect(roleWord("controller")).toBe("Controller");
+  expect(roleWord("viewer")).toBe("Viewer");
+  expect(roleWord(null)).toBeNull();
 });

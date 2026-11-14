@@ -273,6 +273,7 @@ export function Button({
 
 /** A round 44-point button with only an icon: its label says what it does. */
 export function IconButton({
+  disabled = false,
   icon,
   label,
   onPress,
@@ -281,6 +282,8 @@ export function IconButton({
   tint,
 }: {
   color?: string;
+  /** Says so to a screen reader, not only in colour. */
+  disabled?: boolean;
   icon: IconName;
   label: string;
   onPress: () => void;
@@ -293,6 +296,8 @@ export function IconButton({
     <Pressable
       accessibilityLabel={label}
       accessibilityRole="button"
+      accessibilityState={{ disabled }}
+      disabled={disabled}
       onPress={onPress}
       style={({ pressed }) => ({
         alignItems: "center",
@@ -379,7 +384,7 @@ export function Segmented<V extends string>({
               borderRadius: 8,
               flex: 1,
               justifyContent: "center",
-              minHeight: 38,
+              minHeight: 44,
             }}
           >
             <Text

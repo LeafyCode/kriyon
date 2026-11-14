@@ -137,6 +137,24 @@ export function TerminalView({
     runIn({ fresh, page, ready, waiting }, themeScript);
   }, [themeScript]);
 
+  /**
+   * The field's line: with ctrl held, its control key; else typed, then
+   * Enter after a beat, as the desktop sends a prompt.
+   */
+  const submit = () => {
+    const text = line;
+    setLine("");
+    if (ctrl) {
+      setCtrl(false);
+      send(typedLine(text, true));
+      return;
+    }
+    usePhone
+      .getState()
+      .sendMessage(hostId, sessionId, text)
+      .catch((error: unknown) => setNote(reasonOf(error)));
+  };
+
   /** Send `bytes` to the session, saying why if it can't go. */
   const send = (bytes: Uint8Array) => {
     if (bytes.length === 0) {
@@ -328,11 +346,7 @@ export function TerminalView({
               autoCapitalize="none"
               autoCorrect={false}
               onChangeText={setLine}
-              onSubmitEditing={() => {
-                send(typedLine(line, ctrl));
-                setLine("");
-                setCtrl(false);
-              }}
+              onSubmitEditing={submit}
               placeholder={ctrl ? "A letter for ctrl-…" : "Type, then Enter"}
               placeholderTextColor={t.muted}
               returnKeyType="send"
@@ -356,11 +370,7 @@ export function TerminalView({
               color={t.onAccent}
               icon="enter"
               label="Enter"
-              onPress={() => {
-                send(typedLine(line, ctrl));
-                setLine("");
-                setCtrl(false);
-              }}
+              onPress={submit}
               tint={t.accent}
             />
           </View>
