@@ -22,6 +22,12 @@ For each request the sender:
 4. sends one alert, "A session needs you", through Apple's or Google's push
    service, and forgets the token.
 
+Anyone can make a host key and seal a token to the sender's public key, so
+it also caps what it does for everyone together: 600 alerts a minute, and
+100,000 request ids, hosts and tokens remembered. It serves 256 connections
+at once and closes one more at once; a request's headers and body get 10
+seconds each, and a connection 30 in all.
+
 It stores nothing. The request ids and the counts for the limits are kept in
 memory, for ten minutes and a day, and go when it restarts. It never reads
 the address a request comes from, and its log holds only what happened ("wake
@@ -58,5 +64,8 @@ docker run --env-file push.env -v "$PWD/secrets:/secrets:ro" -p 8080:8080 kriyon
 ```
 
 Settings come from the environment (`push.env.example` lists them), and
-secrets from the files it names. It speaks plain HTTP: put a TLS proxy in
-front, with its access log off.
+secrets from the files it names. It speaks plain HTTP and listens on
+`127.0.0.1:8080` unless told otherwise (the image sets `0.0.0.0:8080`, for the
+container's network): put a TLS proxy in front, with its access log off and a
+limit of requests a minute per address. The sender never sees addresses, so
+that limit can only be the proxy's.

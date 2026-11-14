@@ -4,7 +4,7 @@
 //!
 //! | Variable | What |
 //! |---|---|
-//! | `KRIYON_PUSH_LISTEN` | Address to listen on (default `0.0.0.0:8080`), behind a TLS proxy |
+//! | `KRIYON_PUSH_LISTEN` | Address to listen on (default `127.0.0.1:8080`: only the TLS proxy in front reaches it) |
 //! | `KRIYON_PUSH_KEY_ID` | The key's id, a number phones and hosts name it by |
 //! | `KRIYON_PUSH_SECRET_FILE` | A file holding the X25519 secret, 64 hex digits (`kriyon-push new-key`) |
 //! | `KRIYON_PUSH_RETIRED_KEYS_FILE` | Optional: keys replaced by a newer one, one a line, `<key id> <retired at, Unix seconds> <64 hex digits>`; each still opens tokens for 60 days |
@@ -46,7 +46,7 @@ impl Config {
             read(&path).ok_or_else(|| format!("the file {name} names can't be read"))
         };
         let listen = var("KRIYON_PUSH_LISTEN")
-            .unwrap_or_else(|| "0.0.0.0:8080".into())
+            .unwrap_or_else(|| "127.0.0.1:8080".into())
             .parse()
             .map_err(|_| "KRIYON_PUSH_LISTEN isn't an address".to_string())?;
         let key_id = required("KRIYON_PUSH_KEY_ID")?
@@ -183,7 +183,7 @@ mod tests {
         .expect("reads");
         assert_eq!(config.key_id, 3);
         assert_eq!(config.secret, [1; 32]);
-        assert_eq!(config.listen, "0.0.0.0:8080".parse().expect("addr"));
+        assert_eq!(config.listen, "127.0.0.1:8080".parse().expect("addr"));
         assert!(config.apns.is_none() && config.fcm.is_none());
     }
 

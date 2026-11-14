@@ -20,5 +20,7 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=build /src/target/release/kriyon-push /usr/local/bin/kriyon-push
 USER nobody
+# Inside the container, the proxy reaches it only on the container's network.
+ENV KRIYON_PUSH_LISTEN=0.0.0.0:8080
 EXPOSE 8080
 ENTRYPOINT ["/usr/local/bin/kriyon-push"]

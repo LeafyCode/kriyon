@@ -85,18 +85,47 @@ impl Refusal {
     }
 }
 
+/// How much the sender takes on, for all hosts together: anyone can make a
+/// host key and seal a token to the sender's public key, so the limits per
+/// host and per token alone don't bound it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Caps {
+    /// Alerts sent a minute, by everyone.
+    pub alerts_per_minute: usize,
+    /// Request ids, hosts and tokens remembered, each.
+    pub remembered: usize,
+}
+
+impl Default for Caps {
+    fn default() -> Self {
+        Self {
+            alerts_per_minute: 600,
+            remembered: 100_000,
+        }
+    }
+}
+
+/// What the checks remember, behind one lock taken only after the crypto.
+#[derive(Default)]
+struct Memory {
+    /// Request ids seen, with when each may be forgotten, in the order seen.
+    seen: VecDeque<([u8; 16], u64)>,
+    seen_ids: HashMap<[u8; 16], u64>,
+    /// When alerts went out, per host id and per token hash.
+    by_host: HashMap<[u8; 32], VecDeque<u64>>,
+    by_token: HashMap<[u8; 32], VecDeque<u64>>,
+    /// When alerts went out, by anyone, in the last minute.
+    recent: VecDeque<u64>,
+}
+
 /// The checks, and the little they must remember.
 pub struct Gate {
     key_id: u32,
     secret: [u8; 32],
     /// Retired keys by id: their secret and when they were retired.
     retired: HashMap<u32, ([u8; 32], u64)>,
-    /// Request ids seen, with when, oldest first.
-    seen: VecDeque<([u8; 16], u64)>,
-    seen_ids: HashMap<[u8; 16], u64>,
-    /// When alerts went out, per host id and per token hash.
-    by_host: HashMap<[u8; 32], VecDeque<u64>>,
-    by_token: HashMap<[u8; 32], VecDeque<u64>>,
+    caps: Caps,
+    memory: std::sync::Mutex<Memory>,
 }
 
 impl Gate {
@@ -107,10 +136,8 @@ impl Gate {
             key_id,
             secret,
             retired: HashMap::new(),
-            seen: VecDeque::new(),
-            seen_ids: HashMap::new(),
-            by_host: HashMap::new(),
-            by_token: HashMap::new(),
+            caps: Caps::default(),
+            memory: std::sync::Mutex::default(),
         }
     }
 
@@ -122,6 +149,12 @@ impl Gate {
             self.retired.insert(key_id, (secret, retired_at));
         }
         self
+    }
+
+    /// The same gate, taking on at most `caps`.
+    #[must_use]
+    pub fn with_caps(self, caps: Caps) -> Self {
+        Self { caps, ..self }
     }
 
     /// The current key: its id and public key, as `GET /v1/key` gives it.
@@ -139,12 +172,19 @@ impl Gate {
         (now < retired_at.saturating_add(RETIRED_KEY_DAYS * DAY)).then_some(*secret)
     }
 
+    fn memory(&self) -> std::sync::MutexGuard<'_, Memory> {
+        self.memory
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     /// Check `request` at `now` (Unix seconds). An alert to send, counted
-    /// against the limits, or why not.
+    /// against the limits, or why not. The crypto runs first, with nothing
+    /// held; only a token that opened and named its signer is counted.
     ///
     /// # Errors
     /// The [`Refusal`].
-    pub fn check(&mut self, request: &WakeRequest, now: u64) -> Result<Alert, Refusal> {
+    pub fn check(&self, request: &WakeRequest, now: u64) -> Result<Alert, Refusal> {
         let sealed = hex(&request.sealed).ok_or(Refusal::Malformed)?;
         let request_id: [u8; 16] = array(&request.request_id)?;
         let host_id: [u8; 32] = array(&request.host_id)?;
@@ -168,38 +208,86 @@ impl Gate {
         if request.at.abs_diff(now) > CLOCK_SKEW_SECS {
             return Err(Refusal::BadTime);
         }
-        self.forget_before(now);
-        if self.seen_ids.contains_key(&request_id) {
-            return Err(Refusal::Replayed);
-        }
-        self.seen_ids.insert(request_id, now);
-        self.seen.push_back((request_id, now));
-
         let plain = open_push_token(&secret, &sealed).map_err(|_| Refusal::BadToken)?;
-        if plain.host_id != host_id {
+        if plain.host_id != host_id || !token_shape_ok(plain.platform, &plain.token) {
             return Err(Refusal::BadToken);
         }
         if plain.expires <= now {
             return Err(Refusal::Expired);
         }
         let token_hash: [u8; 32] = Sha256::digest(plain.token.as_bytes()).into();
-        if over_limit(self.by_host.get(&host_id), now)
-            || over_limit(self.by_token.get(&token_hash), now)
-        {
-            return Err(Refusal::TooMany);
-        }
-        self.by_host.entry(host_id).or_default().push_back(now);
-        self.by_token.entry(token_hash).or_default().push_back(now);
+        // Kept until its own time is past the clock skew too, so it can't be
+        // replayed at the window's end.
+        let forget_at = now
+            .saturating_add(REPLAY_WINDOW_SECS)
+            .max(request.at.saturating_add(CLOCK_SKEW_SECS + 1));
+        self.count(request_id, forget_at, host_id, token_hash, now)?;
         Ok(Alert {
             platform: plain.platform,
             token: plain.token,
         })
     }
 
-    /// Drop request ids past the window and sends older than a day.
+    /// Count an alert from `host_id` for `token_hash` with `request_id`, at
+    /// `now`, or why it can't go.
+    fn count(
+        &self,
+        request_id: [u8; 16],
+        forget_at: u64,
+        host_id: [u8; 32],
+        token_hash: [u8; 32],
+        now: u64,
+    ) -> Result<(), Refusal> {
+        let mut memory = self.memory();
+        memory.forget_before(now);
+        if memory.seen_ids.contains_key(&request_id) {
+            return Err(Refusal::Replayed);
+        }
+        let caps = self.caps;
+        let full = memory.seen_ids.len() >= caps.remembered
+            || (!memory.by_host.contains_key(&host_id) && memory.by_host.len() >= caps.remembered)
+            || (!memory.by_token.contains_key(&token_hash)
+                && memory.by_token.len() >= caps.remembered);
+        if full
+            || memory.recent.len() >= caps.alerts_per_minute
+            || over_limit(memory.by_host.get(&host_id), now)
+            || over_limit(memory.by_token.get(&token_hash), now)
+        {
+            return Err(Refusal::TooMany);
+        }
+        memory.seen_ids.insert(request_id, forget_at);
+        memory.seen.push_back((request_id, forget_at));
+        memory.by_host.entry(host_id).or_default().push_back(now);
+        memory
+            .by_token
+            .entry(token_hash)
+            .or_default()
+            .push_back(now);
+        memory.recent.push_back(now);
+        Ok(())
+    }
+
+    /// How many request ids, hosts and tokens it remembers: for tests that
+    /// it forgets.
+    #[must_use]
+    pub fn remembered(&self) -> (usize, usize, usize) {
+        let memory = self.memory();
+        (
+            memory.seen_ids.len(),
+            memory.by_host.len(),
+            memory.by_token.len(),
+        )
+    }
+}
+
+impl Memory {
+    /// Drop request ids past their time, sends older than a day and the
+    /// sender's sends older than a minute.
     fn forget_before(&mut self, now: u64) {
-        while let Some(&(id, at)) = self.seen.front() {
-            if now.saturating_sub(at) < REPLAY_WINDOW_SECS {
+        // In the order seen; one kept longer (its own time was ahead) holds
+        // the ones behind it a little longer, which only refuses more.
+        while let Some(&(id, forget_at)) = self.seen.front() {
+            if now < forget_at {
                 break;
             }
             self.seen.pop_front();
@@ -216,13 +304,30 @@ impl Gate {
                 !times.is_empty()
             });
         }
+        while self
+            .recent
+            .front()
+            .is_some_and(|&at| now.saturating_sub(at) >= MINUTE)
+        {
+            self.recent.pop_front();
+        }
     }
+}
 
-    /// How many request ids, hosts and tokens it remembers: for tests that
-    /// it forgets.
-    #[must_use]
-    pub fn remembered(&self) -> (usize, usize, usize) {
-        (self.seen_ids.len(), self.by_host.len(), self.by_token.len())
+/// Whether `token` is shaped as `platform`'s tokens are: an APNs device
+/// token is hex; an FCM registration token is letters, digits and `_-:`.
+#[must_use]
+pub fn token_shape_ok(platform: Platform, token: &str) -> bool {
+    match platform {
+        Platform::Apns => {
+            (64..=200).contains(&token.len()) && token.bytes().all(|b| b.is_ascii_hexdigit())
+        }
+        Platform::Fcm => {
+            (1..=4096).contains(&token.len())
+                && token
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b':'))
+        }
     }
 }
 
@@ -264,6 +369,8 @@ pub(crate) mod tests {
     pub(crate) const KEY_ID: u32 = 7;
     pub(crate) const HOST_SECRET: [u8; 32] = [6; 32];
     pub(crate) const NOW: u64 = 1_800_000_000;
+    /// An APNs device token: hex.
+    pub(crate) const TOK: &str = "ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12";
 
     pub(crate) fn host_id(secret: &[u8; 32]) -> [u8; 32] {
         ed25519_dalek::SigningKey::from_bytes(secret)
@@ -306,25 +413,25 @@ pub(crate) mod tests {
     }
 
     fn good(id: u8) -> WakeRequest {
-        let sealed = sealed_for("tok", host_id(&HOST_SECRET), NOW + DAY);
+        let sealed = sealed_for(TOK, host_id(&HOST_SECRET), NOW + DAY);
         wake(&HOST_SECRET, &sealed, NOW, id)
     }
 
     #[test]
     fn a_good_wake_up_gives_one_alert_with_the_opened_token() {
-        let mut gate = Gate::new(KEY_ID, SECRET);
+        let gate = Gate::new(KEY_ID, SECRET);
         assert_eq!(
             gate.check(&good(1), NOW),
             Ok(Alert {
                 platform: Platform::Apns,
-                token: "tok".into()
+                token: TOK.into()
             })
         );
     }
 
     #[test]
     fn a_wake_up_signed_by_another_host_is_refused() {
-        let mut gate = Gate::new(KEY_ID, SECRET);
+        let gate = Gate::new(KEY_ID, SECRET);
         let mut request = good(1);
         request.host_id = to_hex(&host_id(&[9; 32]));
         assert_eq!(gate.check(&request, NOW), Err(Refusal::BadSignature));
@@ -332,17 +439,17 @@ pub(crate) mod tests {
 
     #[test]
     fn a_token_sealed_for_another_host_is_refused_even_signed() {
-        let mut gate = Gate::new(KEY_ID, SECRET);
+        let gate = Gate::new(KEY_ID, SECRET);
         // Host B signs a token the phone sealed for host A.
-        let sealed = sealed_for("tok", host_id(&HOST_SECRET), NOW + DAY);
+        let sealed = sealed_for(TOK, host_id(&HOST_SECRET), NOW + DAY);
         let request = wake(&[9; 32], &sealed, NOW, 1);
         assert_eq!(gate.check(&request, NOW), Err(Refusal::BadToken));
     }
 
     #[test]
     fn a_wake_up_more_than_five_minutes_off_is_refused() {
-        let mut gate = Gate::new(KEY_ID, SECRET);
-        let sealed = sealed_for("tok", host_id(&HOST_SECRET), NOW + DAY);
+        let gate = Gate::new(KEY_ID, SECRET);
+        let sealed = sealed_for(TOK, host_id(&HOST_SECRET), NOW + DAY);
         let late = wake(&HOST_SECRET, &sealed, NOW - CLOCK_SKEW_SECS - 1, 1);
         let early = wake(&HOST_SECRET, &sealed, NOW + CLOCK_SKEW_SECS + 1, 2);
         assert_eq!(gate.check(&late, NOW), Err(Refusal::BadTime));
@@ -353,8 +460,8 @@ pub(crate) mod tests {
 
     #[test]
     fn a_request_id_is_refused_again_for_ten_minutes_then_forgotten() {
-        let mut gate = Gate::new(KEY_ID, SECRET);
-        let sealed = sealed_for("tok", host_id(&HOST_SECRET), NOW + 2 * DAY);
+        let gate = Gate::new(KEY_ID, SECRET);
+        let sealed = sealed_for(TOK, host_id(&HOST_SECRET), NOW + 2 * DAY);
         assert!(gate
             .check(&wake(&HOST_SECRET, &sealed, NOW, 1), NOW)
             .is_ok());
@@ -370,8 +477,8 @@ pub(crate) mod tests {
 
     #[test]
     fn an_expired_token_is_refused() {
-        let mut gate = Gate::new(KEY_ID, SECRET);
-        let sealed = sealed_for("tok", host_id(&HOST_SECRET), NOW);
+        let gate = Gate::new(KEY_ID, SECRET);
+        let sealed = sealed_for(TOK, host_id(&HOST_SECRET), NOW);
         assert_eq!(
             gate.check(&wake(&HOST_SECRET, &sealed, NOW, 1), NOW),
             Err(Refusal::Expired)
@@ -380,8 +487,8 @@ pub(crate) mod tests {
 
     #[test]
     fn a_host_gets_one_alert_a_minute_and_thirty_a_day() {
-        let mut gate = Gate::new(KEY_ID, SECRET);
-        let sealed = sealed_for("tok", host_id(&HOST_SECRET), NOW + 2 * DAY);
+        let gate = Gate::new(KEY_ID, SECRET);
+        let sealed = sealed_for(TOK, host_id(&HOST_SECRET), NOW + 2 * DAY);
         let mut at = NOW;
         assert!(gate.check(&wake(&HOST_SECRET, &sealed, at, 0), at).is_ok());
         assert_eq!(
@@ -405,10 +512,10 @@ pub(crate) mod tests {
 
     #[test]
     fn one_phones_token_is_limited_across_hosts() {
-        let mut gate = Gate::new(KEY_ID, SECRET);
+        let gate = Gate::new(KEY_ID, SECRET);
         let other = [8; 32];
-        let a = sealed_for("tok", host_id(&HOST_SECRET), NOW + DAY);
-        let b = sealed_for("tok", host_id(&other), NOW + DAY);
+        let a = sealed_for(TOK, host_id(&HOST_SECRET), NOW + DAY);
+        let b = sealed_for(TOK, host_id(&other), NOW + DAY);
         assert!(gate.check(&wake(&HOST_SECRET, &a, NOW, 1), NOW).is_ok());
         assert_eq!(
             gate.check(&wake(&other, &b, NOW + 1, 2), NOW + 1),
@@ -418,7 +525,7 @@ pub(crate) mod tests {
 
     #[test]
     fn junk_and_oversize_sealed_bytes_are_malformed() {
-        let mut gate = Gate::new(KEY_ID, SECRET);
+        let gate = Gate::new(KEY_ID, SECRET);
         let mut request = good(1);
         request.sealed = "zz".into();
         assert_eq!(gate.check(&request, NOW), Err(Refusal::Malformed));
@@ -437,7 +544,7 @@ pub(crate) mod tests {
         use kriyon_push_seal::{push_public_key, seal_push_token, sign_wake, PushTokenPlain};
         const OLD: [u8; 32] = [3; 32];
         let retired_at = NOW - 10 * DAY;
-        let mut gate = Gate::new(KEY_ID + 1, SECRET).with_retired(KEY_ID, OLD, retired_at);
+        let gate = Gate::new(KEY_ID + 1, SECRET).with_retired(KEY_ID, OLD, retired_at);
         let sealed = seal_push_token(
             &push_public_key(&OLD),
             &PushTokenPlain {
@@ -470,26 +577,97 @@ pub(crate) mod tests {
     #[test]
     fn a_token_opens_only_with_the_key_it_names() {
         // SECRET is retired as key KEY_ID + 5; the current key is another.
-        let mut gate = Gate::new(KEY_ID, [9; 32]).with_retired(KEY_ID + 5, SECRET, NOW);
+        let gate = Gate::new(KEY_ID, [9; 32]).with_retired(KEY_ID + 5, SECRET, NOW);
         // Sealed to SECRET, but named as the current key: it doesn't open.
         assert_eq!(gate.check(&good(1), NOW), Err(Refusal::BadToken));
     }
 
     #[test]
     fn a_wake_up_for_another_sender_key_is_refused() {
-        let mut gate = Gate::new(KEY_ID + 1, SECRET);
+        let gate = Gate::new(KEY_ID + 1, SECRET);
         assert_eq!(gate.check(&good(1), NOW), Err(Refusal::UnknownKey));
     }
 
     #[test]
     fn it_forgets_ids_and_sends_once_they_are_old() {
-        let mut gate = Gate::new(KEY_ID, SECRET);
+        let gate = Gate::new(KEY_ID, SECRET);
         assert!(gate.check(&good(1), NOW).is_ok());
         assert_eq!(gate.remembered(), (1, 1, 1));
-        let sealed = sealed_for("tok", host_id(&HOST_SECRET), NOW + 3 * DAY);
+        let other = [4; 32];
+        let token = "cd12cd12cd12cd12cd12cd12cd12cd12cd12cd12cd12cd12cd12cd12cd12cd12";
+        let sealed = sealed_for(token, host_id(&other), NOW + 3 * DAY);
         let later = NOW + DAY + 1;
-        let _ = gate.check(&wake(&[4; 32], &sealed, later, 2), later);
-        assert_eq!(gate.remembered().1, 0, "no host kept past a day");
-        assert_eq!(gate.remembered().2, 0, "no token kept past a day");
+        assert!(gate.check(&wake(&other, &sealed, later, 2), later).is_ok());
+        assert_eq!(gate.remembered(), (1, 1, 1), "only the new one kept");
+    }
+
+    /// A request id is remembered only once its token opened and named its
+    /// signer: junk can't fill the memory, or take a real id first.
+    #[test]
+    fn a_request_id_counts_only_once_its_token_is_good() {
+        let gate = Gate::new(KEY_ID, SECRET);
+        // Signed by another host, with this host's token: refused, not kept.
+        let sealed = sealed_for(TOK, host_id(&HOST_SECRET), NOW + DAY);
+        assert_eq!(
+            gate.check(&wake(&[9; 32], &sealed, NOW, 1), NOW),
+            Err(Refusal::BadToken)
+        );
+        assert_eq!(gate.remembered(), (0, 0, 0));
+        // The same id, good: sent.
+        assert!(gate.check(&good(1), NOW).is_ok());
+    }
+
+    /// Replayed at the window's end with a time still within the clock skew:
+    /// the id is remembered until that time is past too.
+    #[test]
+    fn a_request_id_is_kept_until_its_own_time_is_past() {
+        let gate = Gate::new(KEY_ID, SECRET);
+        let sealed = sealed_for(TOK, host_id(&HOST_SECRET), NOW + 2 * DAY);
+        let ahead = wake(&HOST_SECRET, &sealed, NOW + CLOCK_SKEW_SECS, 1);
+        assert!(gate.check(&ahead, NOW).is_ok());
+        let end = NOW + REPLAY_WINDOW_SECS;
+        assert_eq!(gate.check(&ahead, end), Err(Refusal::Replayed));
+    }
+
+    /// Anyone can make a host key and seal a token to the sender's public
+    /// key, so the limits per host and token aren't enough: alerts a minute
+    /// are capped for the whole sender, and so is what it remembers.
+    #[test]
+    fn alerts_a_minute_and_what_is_remembered_are_capped_overall() {
+        let gate = Gate::new(KEY_ID, SECRET).with_caps(Caps {
+            alerts_per_minute: 2,
+            remembered: 3,
+        });
+        let host_wake = |n: u8, at: u64| {
+            let secret = [n; 32];
+            let token = format!("{n:02x}").repeat(32);
+            let sealed = sealed_for(&token, host_id(&secret), NOW + 2 * DAY);
+            wake(&secret, &sealed, at, n)
+        };
+        assert!(gate.check(&host_wake(1, NOW), NOW).is_ok());
+        assert!(gate.check(&host_wake(2, NOW), NOW).is_ok());
+        assert_eq!(gate.check(&host_wake(3, NOW), NOW), Err(Refusal::TooMany));
+        let next = NOW + MINUTE;
+        assert!(gate.check(&host_wake(4, next), next).is_ok());
+        // Three hosts remembered (the cap, kept a day): a fourth waits.
+        let soon = next + MINUTE;
+        assert_eq!(gate.check(&host_wake(5, soon), soon), Err(Refusal::TooMany));
+        let later = NOW + DAY;
+        assert!(gate.check(&host_wake(6, later), later).is_ok());
+    }
+
+    #[test]
+    fn a_token_not_shaped_as_its_platform_says_is_refused() {
+        let gate = Gate::new(KEY_ID, SECRET);
+        let sealed = sealed_for("not hex at all", host_id(&HOST_SECRET), NOW + DAY);
+        assert_eq!(
+            gate.check(&wake(&HOST_SECRET, &sealed, NOW, 1), NOW),
+            Err(Refusal::BadToken)
+        );
+        assert!(token_shape_ok(Platform::Apns, TOK));
+        assert!(!token_shape_ok(Platform::Apns, "ab"));
+        assert!(token_shape_ok(Platform::Fcm, "dGVzdA:APA91b-x_y"));
+        assert!(!token_shape_ok(Platform::Fcm, "has space"));
+        assert!(!token_shape_ok(Platform::Fcm, ""));
     }
 }
