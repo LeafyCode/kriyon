@@ -7,7 +7,7 @@
 //! app stores paired hosts and keys (`HostEntry` in, `DeviceEvents` out).
 //! Tested against a host in-process.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -87,28 +87,49 @@ impl Reading {
 /// How the person wants one session shown here: the one call that opens,
 /// switches and closes it ([`DeviceRuntime::set_view`]).
 pub enum SessionView {
-    /// Open, its screen going to `screen` (or no screen crossing the link)
-    /// and its [Readable view] entries to `entries` (or not read).
+    /// Open, its screen as `screen` says and its [Readable view] entries
+    /// going to `entries` (or not read).
     Open {
-        screen: Option<ScreenSink>,
+        screen: ScreenView,
         entries: Option<EntriesSink>,
     },
     /// Not open here; the session keeps running on the host.
     Closed,
 }
 
+/// A session's screen, as a view asks for it.
+pub enum ScreenView {
+    /// No screen crosses the link.
+    Off,
+    /// A screen to `sink`, starting from a fresh snapshot: a terminal shown
+    /// (again), or a page that loaded again and needs the whole screen.
+    Fresh(ScreenSink),
+    /// The screen as it is now, on or off: the view changes something else.
+    Kept,
+}
+
 /// A session the person has open here: where its screen goes, and its
 /// entries if they read them. Kept across links.
 struct Wanted {
     screen: ScreenSlot,
+    /// Counts the fresh screens asked for: each starts from a snapshot.
+    fresh: u64,
     reading: Option<Arc<Reading>>,
+}
+
+impl Wanted {
+    /// The fresh screen showing, or `None` with the screen off.
+    fn screen_now(&self) -> Option<u64> {
+        shown(&self.screen).is_some().then_some(self.fresh)
+    }
 }
 
 /// What an open stream's host has been told, changed only under the
 /// stream's writer lock so the last word it hears is the view's.
 #[derive(Default)]
 struct Told {
-    screen: bool,
+    /// The fresh screen it was asked for, or `None` for off.
+    screen: Option<u64>,
     reading: Option<Arc<Reading>>,
 }
 
@@ -215,9 +236,10 @@ struct Conn {
     /// The sessions the person has open here, as they want them shown:
     /// opened again on each new link, so a reconnect redraws them.
     wanted: HashMap<SessionId, Wanted>,
-    /// Sessions whose stream is opening now: one at a time, so two opens
-    /// (a reconnect's and the person's) never race to two streams.
-    opening: HashSet<SessionId>,
+    /// Sessions whose stream is opening now, one at a time so two opens (a
+    /// reconnect's and the person's) never race to two streams; `true` once
+    /// another open was asked meanwhile, which the open under way then does.
+    opening: HashMap<SessionId, bool>,
     /// The number of the last view taken for each session: an older one,
     /// arriving late, changes nothing.
     views: HashMap<SessionId, u64>,
@@ -604,7 +626,8 @@ impl DeviceRuntime {
     /// the next link shows it.
     ///
     /// # Errors
-    /// [`DeviceError::NotConnected`] for a host not paired here.
+    /// [`DeviceError::NotConnected`] for a host not paired here (closing a
+    /// session there is no failure: nothing is open).
     pub async fn set_view(
         &self,
         host: &EndpointId,
@@ -612,7 +635,11 @@ impl DeviceRuntime {
         seq: u64,
         view: SessionView,
     ) -> Result<(), DeviceError> {
-        let conn = self.host(host).await?;
+        let conn = match self.host(host).await {
+            Ok(conn) => conn,
+            Err(_) if matches!(view, SessionView::Closed) => return Ok(()),
+            Err(why) => return Err(why),
+        };
         let gone = {
             let mut c = conn.conn.lock().await;
             if c.views.get(session).is_some_and(|last| *last >= seq) {
@@ -630,9 +657,17 @@ impl DeviceRuntime {
                         .entry(session.to_string())
                         .or_insert_with(|| Wanted {
                             screen: Arc::default(),
+                            fresh: 0,
                             reading: None,
                         });
-                    *shown(&wanted.screen) = screen;
+                    match screen {
+                        ScreenView::Off => *shown(&wanted.screen) = None,
+                        ScreenView::Fresh(sink) => {
+                            *shown(&wanted.screen) = Some(sink);
+                            wanted.fresh += 1;
+                        }
+                        ScreenView::Kept => {}
+                    }
                     wanted.reading = match (entries, wanted.reading.take()) {
                         (Some(sink), Some(read)) => {
                             *read
@@ -908,10 +943,10 @@ async fn show_wanted(conn: &HostConn, session: &str) {
 /// view's, whatever order calls came in.
 async fn tell(conn: &HostConn, session: &str, stream: &Stream) -> Result<(), LinkError> {
     let mut writer = stream.writer.lock().await;
-    let (screen_on, read) = {
+    let (screen, read) = {
         let c = conn.conn.lock().await;
         match c.wanted.get(session) {
-            Some(wanted) => (shown(&wanted.screen).is_some(), wanted.reading.clone()),
+            Some(wanted) => (wanted.screen_now(), wanted.reading.clone()),
             // Closed meanwhile: the close lets the stream go.
             None => return Ok(()),
         }
@@ -920,16 +955,19 @@ async fn tell(conn: &HostConn, session: &str, stream: &Stream) -> Result<(), Lin
         let told = told(&stream.told);
         (told.screen, told.reading.clone())
     };
-    if screen_on != told_screen {
-        if screen_on {
+    // A fresh screen not yet asked for (even with one on: the host answers
+    // `Screen { on }` with a snapshot), or the screen turned off.
+    if screen != told_screen {
+        if screen.is_some() {
             // A new screen follows from the snapshot coming; what was queued
             // before it is not drawn.
             if let Ok(fresh) = SessionScreen::new() {
                 *lock(&stream.screen) = fresh;
             }
         }
-        writer.send(&FromDevice::Screen { on: screen_on }).await?;
-        told(&stream.told).screen = screen_on;
+        let on = screen.is_some();
+        writer.send(&FromDevice::Screen { on }).await?;
+        told(&stream.told).screen = screen;
     }
     match (read, told_read) {
         (Some(read), Some(told)) if Arc::ptr_eq(&read, &told) => {}
@@ -957,70 +995,121 @@ async fn tell(conn: &HostConn, session: &str, stream: &Stream) -> Result<(), Lin
     Ok(())
 }
 
+/// How many times one open tries before it leaves the session to the next
+/// link or view: enough for a view that changes while it opens.
+const OPEN_TRIES: u32 = 8;
+
 /// Open `session`'s stream on the host's link, if the link is up, the
-/// person still wants it and no other open of it is under way; then tell
-/// it the view as it is by then.
+/// person still wants it and it has none; then tell it the view as it is by
+/// then. One open at a time: one asked meanwhile is done by the open under
+/// way, which goes round again for it.
 async fn open_once(conn: &HostConn, session: &str) {
-    // A view changed while the stream opened (closed and opened again) is
-    // opened once more, a few times at most.
-    for _ in 0..3 {
-        let link = {
-            let mut c = conn.conn.lock().await;
-            let link = c
-                .link
-                .clone()
-                .filter(|_| c.state == Some(LinkState::Connected));
-            let wanted = c
-                .wanted
-                .get(session)
-                .map(|wanted| Arc::clone(&wanted.screen));
-            match (link, wanted) {
-                (Some(link), Some(screen))
-                    if !c.sessions.contains_key(session) && !c.opening.contains(session) =>
-                {
-                    c.opening.insert(session.to_string());
-                    Some((link, screen))
-                }
-                _ => None,
-            }
-        };
-        let Some((link, screen)) = link else {
+    {
+        let mut c = conn.conn.lock().await;
+        if let Some(again) = c.opening.get_mut(session) {
+            *again = true;
             return;
+        }
+        c.opening.insert(session.to_string(), false);
+    }
+    let mut tries = 0;
+    loop {
+        let done = if tries < OPEN_TRIES {
+            tries += 1;
+            open_try(conn, session).await
+        } else {
+            true
         };
-        let opened = open_stream(conn, &link, session, &screen).await;
-        conn.conn.lock().await.opening.remove(session);
-        match opened {
-            Ok(Some(stream)) => {
-                if let Err(why) = tell(conn, session, &stream).await {
-                    // Its link is going; the next one opens it again.
-                    eprintln!("kriyon: remote session {session} stream ended: {why}");
+        let mut c = conn.conn.lock().await;
+        if !done || c.opening.get(session) == Some(&true) && tries < OPEN_TRIES {
+            c.opening.insert(session.to_string(), false);
+            continue;
+        }
+        c.opening.remove(session);
+        return;
+    }
+}
+
+/// One go at opening `session`'s stream: whether it is done (open and told,
+/// nothing to open, or a link that failed and is dialed again), or should
+/// go again (the view or the link changed meanwhile, or the new stream
+/// failed the view).
+async fn open_try(conn: &HostConn, session: &str) -> bool {
+    let target = {
+        let c = conn.conn.lock().await;
+        let link = c
+            .link
+            .clone()
+            .filter(|_| c.state == Some(LinkState::Connected));
+        let wanted = c
+            .wanted
+            .get(session)
+            .map(|wanted| (Arc::clone(&wanted.screen), wanted.screen_now()));
+        match (link, wanted) {
+            (Some(link), Some(wanted)) if !c.sessions.contains_key(session) => Some((link, wanted)),
+            _ => None,
+        }
+    };
+    let Some((link, (screen, fresh))) = target else {
+        return true;
+    };
+    match open_stream(conn, &link, session, &screen, fresh).await {
+        Ok(Some(stream)) => {
+            let Err(why) = tell(conn, session, &stream).await else {
+                return true;
+            };
+            // Stopped at once (or its link is going): this stream is done.
+            eprintln!("kriyon: remote session {session} stream ended: {why}");
+            let gone = {
+                let mut c = conn.conn.lock().await;
+                let same = c
+                    .sessions
+                    .get(session)
+                    .is_some_and(|open| Arc::ptr_eq(&open.writer, &stream.writer));
+                if same {
+                    c.sessions.remove(session)
+                } else {
+                    None
                 }
-                return;
+            };
+            if let Some(gone) = gone {
+                let_go(gone).await;
             }
-            // Not kept: the view or the link changed while it opened.
-            Ok(None) => {}
-            Err(why) => {
-                // A session gone from the host is refused on its own
-                // stream; a failed link is dialed again and opens it then.
-                eprintln!("kriyon: couldn't open remote session {session}: {why}");
-                return;
-            }
+            false
+        }
+        // Not kept: the view or the link changed while it opened.
+        Ok(None) => false,
+        Err(why) => {
+            // A session gone from the host is refused on its own stream; a
+            // failed link is dialed again and opens it then. A link replaced
+            // meanwhile is tried at once.
+            eprintln!("kriyon: couldn't open remote session {session}: {why}");
+            let replaced = conn
+                .conn
+                .lock()
+                .await
+                .link
+                .as_ref()
+                .is_some_and(|now| !Arc::ptr_eq(now, &link));
+            !replaced
         }
     }
 }
 
-/// Open a stream for `session` on `link`, its screen as `shown_in` has it.
-/// Kept only if the person still wants it with that screen slot and `link`
-/// is still the host's link once it is open; otherwise let go at once.
+/// Open a stream for `session` on `link`, with the screen `fresh` (on, or
+/// `None`: off). Kept only if the person still wants it with that screen
+/// slot and `link` is still the host's link once it is open; otherwise let
+/// go at once.
 async fn open_stream(
     conn: &HostConn,
     link: &Arc<DeviceLink>,
     session: &str,
     shown_in: &ScreenSlot,
+    fresh: Option<u64>,
 ) -> Result<Option<Stream>, DeviceError> {
     let link_err = |e: LinkError| DeviceError::Link(e.to_string());
     let (mut writer, reader) = link.open_stream().await.map_err(link_err)?;
-    let screen_on = shown(shown_in).is_some();
+    let screen_on = fresh.is_some();
     writer
         .send(&FromDevice::Open {
             session_id: session.to_string(),
@@ -1047,7 +1136,7 @@ async fn open_stream(
         reading,
         answer,
         told: Arc::new(std::sync::Mutex::new(Told {
-            screen: screen_on,
+            screen: fresh,
             reading: None,
         })),
         reader,
@@ -1701,7 +1790,7 @@ mod tests {
                 "s1",
                 1,
                 SessionView::Open {
-                    screen: Some(Arc::new(move |event| {
+                    screen: ScreenView::Fresh(Arc::new(move |event| {
                         sink_events.lock().expect("lock").push(event);
                     })),
                     entries: None,
@@ -1767,12 +1856,23 @@ mod tests {
     }
 
     #[test]
+    fn closing_a_session_of_a_host_not_paired_here_is_no_failure() {
+        run(async {
+            let rt = DeviceRuntime::default();
+            assert_eq!(
+                rt.set_view(&[9; 32], "s1", 1, SessionView::Closed).await,
+                Ok(())
+            );
+        });
+    }
+
+    #[test]
     fn a_view_of_a_host_not_paired_here_is_refused() {
         run(async {
             let rt = DeviceRuntime::default();
             let sink: ScreenSink = Arc::new(|_| {});
             let view = SessionView::Open {
-                screen: Some(sink),
+                screen: ScreenView::Fresh(sink),
                 entries: None,
             };
             assert_eq!(
@@ -1986,7 +2086,7 @@ mod tests {
             assert!(!rt.has_open_sessions().await);
             let sink: ScreenSink = Arc::new(|_| {});
             let view = SessionView::Open {
-                screen: Some(sink),
+                screen: ScreenView::Fresh(sink),
                 entries: None,
             };
             rt.set_view(&host.id(), "s", 1, view).await.expect("opens");

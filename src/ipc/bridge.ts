@@ -2076,19 +2076,27 @@ export function remoteHostForget(hostId: string): Promise<void> {
   return invoke("remote_host_forget", { hostId });
 }
 
-/** How a paired computer's session is shown here: its screen's frames go
- *  to `onFrame` (or no screen crosses the link), its [Readable view]
- *  entries to `onEntries`, whole on every change (or it isn't read). */
+/** A paired computer's session's screen, as a view asks for it: none
+ *  crossing the link, a fresh one whose frames go to `fresh` (from a
+ *  snapshot: a terminal shown, or drawn again), or kept as it is (the view
+ *  changes something else; its frames go on where they went). */
+export type RemoteScreen =
+  | "off"
+  | "kept"
+  | { fresh: (frame: Uint8Array) => void };
+
+/** How a paired computer's session is shown here: its screen, and its
+ *  [Readable view] entries going to `onEntries`, whole on every change (or
+ *  not read). */
 export interface RemoteView {
   onEntries: ((summary: ReadableSummary) => void) | null;
-  onFrame: ((frame: Uint8Array) => void) | null;
+  screen: RemoteScreen;
 }
 
 /** Show a paired computer's session here as `view`, or close it (`null`;
  *  it keeps running there). Views are numbered in the order asked: Rust
  *  takes only one newer than the last (`seq`), and keeps it across links.
- *  A screen turned on starts from a fresh one. Rejects only for a computer
- *  not paired here. */
+ *  Rejects only for a computer not paired here. */
 export function remoteHostSetView(
   hostId: string,
   sessionId: string,
@@ -2096,10 +2104,12 @@ export function remoteHostSetView(
   view: RemoteView | null
 ): Promise<void> {
   // Both channels always go (Tauri takes no missing one); Rust uses each
-  // only while its part is on.
+  // only while its part is asked for.
+  const screen = view?.screen ?? "off";
   const onScreen = new Channel<ArrayBuffer>();
-  const onFrame = view?.onFrame;
-  onScreen.onmessage = (message) => onFrame?.(new Uint8Array(message));
+  if (typeof screen === "object") {
+    onScreen.onmessage = (message) => screen.fresh(new Uint8Array(message));
+  }
   const onEntries = new Channel<ReadableSummary>();
   const entries = view?.onEntries;
   onEntries.onmessage = (summary) => entries?.(summary);
@@ -2111,7 +2121,7 @@ export function remoteHostSetView(
     view: {
       entries: Boolean(entries),
       open: view !== null,
-      screen: Boolean(onFrame),
+      screen: typeof screen === "object" ? "fresh" : screen,
       seq,
     },
   });

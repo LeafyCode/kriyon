@@ -119,7 +119,7 @@ interface PhoneStore {
   start: (deviceName: string) => Promise<void>;
   startError: string | null;
   states: Record<string, HostSummary>;
-  /** Each session's view as last asked of Rust, by `host:session`. */
+  /** Each session's view as last asked of Rust, by `readableKey`. */
   views: Record<string, View>;
 }
 
@@ -142,8 +142,15 @@ function reasonOf(error: unknown): string {
 /**
  * The last view's number. Rust takes only a view newer than the last it
  * took, so calls may reach it in any order: nothing here waits on another.
+ * Numbered from the clock (in microseconds), so the app's JavaScript loaded
+ * again starts above every view it asked before: Rust outlives it.
  */
 let viewSeq = 0;
+
+function nextSeq(): number {
+  viewSeq = Math.max(viewSeq + 1, Date.now() * 1000);
+  return viewSeq;
+}
 
 /**
  * Ask Rust to show a session as `view` (`null`: closed). Rust keeps it
@@ -152,19 +159,19 @@ let viewSeq = 0;
 function setView(
   hostId: string,
   sessionId: string,
-  view: View | null
+  view: View | null,
+  screen: "fresh" | "kept" | "off" = "off"
 ): Promise<void> {
   const key = readableKey(hostId, sessionId);
   usePhone.setState((state) => ({
     views: view ? { ...state.views, [key]: view } : without(state.views, key),
   }));
-  viewSeq += 1;
   return KriyonNative.setView(
     hostId,
     sessionId,
-    viewSeq,
+    nextSeq(),
     view !== null,
-    view?.screen ?? false,
+    view?.screen ? screen : "off",
     view?.entries ?? false
   );
 }
@@ -179,7 +186,14 @@ function changeView(
     entries: false,
     screen: false,
   };
-  return setView(hostId, sessionId, { ...now, ...change });
+  // A screen shown asks for a fresh one; with one on, a change to
+  // something else keeps it as it is.
+  return setView(
+    hostId,
+    sessionId,
+    { ...now, ...change },
+    change.screen ? "fresh" : "kept"
+  );
 }
 
 /**
@@ -237,6 +251,12 @@ export const usePhone = create<PhoneStore>((set, get) => ({
         hosts: state.hosts.filter((one) => one.hostId !== hostId),
         screen: showing ? { kind: "home" } : state.screen,
         states,
+        // Its sessions' views go with it: nothing is shown from there now.
+        views: Object.fromEntries(
+          Object.entries(state.views).filter(
+            ([key]) => !key.startsWith(readableKey(hostId, ""))
+          )
+        ),
       };
     });
   },

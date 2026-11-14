@@ -99,11 +99,11 @@ function link(
 
 function frames(): (frame: Uint8Array) => void {
   const [call] = vi.mocked(remoteHostSetView).mock.calls.slice(-1);
-  const onFrame = call?.[3]?.onFrame;
-  if (!onFrame) {
+  const screen = call?.[3]?.screen;
+  if (typeof screen !== "object") {
     throw new Error("not shown");
   }
-  return onFrame;
+  return screen.fresh;
 }
 
 beforeEach(() => {
@@ -119,7 +119,7 @@ test("turns the screen on when shown and off when it goes", async () => {
     HOST,
     "s1",
     expect.any(Number),
-    { onEntries: null, onFrame: expect.any(Function) }
+    { onEntries: null, screen: { fresh: expect.any(Function) } }
   );
   unmount();
   await vi.waitFor(() =>
@@ -127,7 +127,7 @@ test("turns the screen on when shown and off when it goes", async () => {
       HOST,
       "s1",
       expect.any(Number),
-      { onEntries: null, onFrame: null }
+      { onEntries: null, screen: "off" }
     )
   );
   expect(termHolder.current?.dispose).toHaveBeenCalled();

@@ -12,7 +12,7 @@ use tauri::{Emitter as _, Manager as _};
 
 use crate::remote_cmd::parse_device_id;
 use kriyon_remote_link::device_runtime::{
-    screen_frame, DeviceEvents, DeviceRuntime, EntriesSink, HostEntry, ScreenSink, SessionView,
+    screen_frame, DeviceEvents, DeviceRuntime, EntriesSink, HostEntry, ScreenView, SessionView,
 };
 
 /// The longest invite text taken: a QR code's worth, with room.
@@ -249,19 +249,30 @@ pub struct ViewAsked {
     seq: u64,
     /// Open here, or closed.
     open: bool,
-    /// Its screen on.
-    screen: bool,
+    /// Its screen: off, a fresh one (to `on_screen`, from a snapshot), or
+    /// kept as it is.
+    screen: ScreenAsked,
     /// Its entries read.
     entries: bool,
 }
 
+/// A session's screen as the webview asks for it.
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ScreenAsked {
+    Off,
+    Fresh,
+    Kept,
+}
+
 /// Show a host's session here as the person wants it (`view`): open, its
-/// screen on (to `on_screen`, as raw frames: see [`screen_frame`]) or off
-/// (none crosses the link) and its [Readable view] entries read (to
-/// `on_entries`, whole on every change) or not; or closed (it keeps running
-/// there). A channel goes unused while its part is off. Views are numbered
-/// in the order asked: one older than the last taken, arriving late,
-/// changes nothing. Kept across links; a link that is down never fails it.
+/// screen off (none crosses the link), fresh (to `on_screen`, as raw
+/// frames: see [`screen_frame`], from a snapshot) or kept as it is, and
+/// its [Readable view] entries read (to `on_entries`, whole on every
+/// change) or not; or closed (it keeps running there). A channel goes
+/// unused while its part isn't asked for. Views are numbered in the order
+/// asked: one older than the last taken, arriving late, changes nothing.
+/// Kept across links; a link that is down never fails it.
 ///
 /// # Errors
 /// For a bad id, or a host not paired here.
@@ -279,16 +290,15 @@ pub async fn remote_host_set_view(
     let seq = view.seq;
     let view = if view.open {
         SessionView::Open {
-            screen: view
-                .screen
-                .then_some(on_screen)
-                .map(|channel| -> ScreenSink {
-                    Arc::new(move |event: ScreenEvent| {
-                        if let Some(frame) = screen_frame(&event) {
-                            let _ = channel.send(frame);
-                        }
-                    })
-                }),
+            screen: match view.screen {
+                ScreenAsked::Off => ScreenView::Off,
+                ScreenAsked::Kept => ScreenView::Kept,
+                ScreenAsked::Fresh => ScreenView::Fresh(Arc::new(move |event: ScreenEvent| {
+                    if let Some(frame) = screen_frame(&event) {
+                        let _ = on_screen.send(frame);
+                    }
+                })),
+            },
             entries: view
                 .entries
                 .then_some(on_entries)

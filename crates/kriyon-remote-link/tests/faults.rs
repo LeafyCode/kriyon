@@ -41,8 +41,8 @@ use kriyon_remote::message::{EndpointId, FromDevice, Holder, RefuseReason, Role,
 use parking_lot::Mutex;
 
 use kriyon_remote_link::device_runtime::{
-    DeviceError, DeviceEvents, DeviceRuntime, EntriesSink, HostEntry, ScreenSink, SessionView,
-    StartError, Timing,
+    DeviceError, DeviceEvents, DeviceRuntime, EntriesSink, HostEntry, ScreenSink, ScreenView,
+    SessionView, StartError, Timing,
 };
 use kriyon_remote_link::test_support::host_world::{
     answer, asked, device, next, on_loopback, run, wait_until, world, world_on, RecordingEvents,
@@ -153,11 +153,23 @@ impl Phone {
         self.view("s", true, None).await;
     }
 
-    /// Ask for `session` open here, its screen on or off, its entries read
-    /// (to `entries`) or not. Never fails for a host paired here.
+    /// Ask for `session` open here, its screen a fresh one (`true`) or off,
+    /// its entries read (to `entries`) or not. Never fails for a host
+    /// paired here.
     async fn view(&self, session: &str, screen: bool, entries: Option<EntriesSink>) {
+        let screen = if screen {
+            ScreenView::Fresh(self.sink())
+        } else {
+            ScreenView::Off
+        };
+        self.ask(session, SessionView::Open { screen, entries })
+            .await;
+    }
+
+    /// Ask for `session` open with its screen as it is now.
+    async fn keep_screen(&self, session: &str, entries: Option<EntriesSink>) {
         let view = SessionView::Open {
-            screen: screen.then(|| self.sink()),
+            screen: ScreenView::Kept,
             entries,
         };
         self.ask(session, view).await;
@@ -404,11 +416,7 @@ fn a_phone_reading_entries_writes_to_claude_without_a_screen() {
         let world = world().await;
         let _beats = Beats::start(&world);
         let phone = Phone::connect(&world, 3, Role::Controller).await;
-        phone
-            .rt
-            .open_session(&phone.host, "s", None)
-            .await
-            .expect("opens for entries");
+        phone.view("s", false, None).await;
         phone.take_control().await;
         // The host names the run on this screen-off stream; until then
         // there is nothing to name.
@@ -445,22 +453,15 @@ fn a_compose_refused_while_a_dialog_shows_leaves_the_entries_showing() {
         let _beats = Beats::start(&world);
         *world.fake.entries.lock() = Ok(vec![note("a", "A")]);
         let phone = Phone::connect(&world, 3, Role::Controller).await;
-        phone
-            .rt
-            .open_session(&phone.host, "s", None)
-            .await
-            .expect("opens for entries");
         let seen: Arc<Mutex<Vec<EntriesEvent>>> = Arc::default();
         let into = Arc::clone(&seen);
         phone
-            .rt
-            .read_entries(
-                &phone.host,
+            .view(
                 "s",
-                Arc::new(move |event| into.lock().push(event)),
+                false,
+                Some(Arc::new(move |event| into.lock().push(event))),
             )
-            .await
-            .expect("reads");
+            .await;
         wait_until("the entries", || !seen.lock().is_empty()).await;
         phone.take_control().await;
         world
@@ -916,7 +917,7 @@ fn a_view_older_than_one_taken_changes_nothing() {
                 "s",
                 2,
                 SessionView::Open {
-                    screen: None,
+                    screen: ScreenView::Off,
                     entries: None,
                 },
             )
@@ -955,5 +956,55 @@ fn views_changed_while_the_link_drops_never_fail_and_show_once_back() {
         let id = asked(&world).await;
         answer(&world, id, b"after");
         phone.until_screen(b"after").await;
+    });
+}
+
+#[test]
+fn a_screen_asked_for_again_starts_from_a_fresh_snapshot() {
+    run(async {
+        let world = world().await;
+        let _beats = Beats::start(&world);
+        let phone = Phone::connect(&world, 3, Role::Viewer).await;
+        watching(&world, &phone, b"first").await;
+        // The page loaded again: it asks for the whole screen.
+        phone.open().await;
+        let id = asked(&world).await;
+        answer(&world, id, b"again");
+        phone.until_screen(b"again").await;
+    });
+}
+
+#[test]
+fn a_screen_turned_off_and_on_at_once_still_starts_fresh() {
+    run(async {
+        let world = world().await;
+        let _beats = Beats::start(&world);
+        let phone = Phone::connect(&world, 3, Role::Viewer).await;
+        watching(&world, &phone, b"first").await;
+        // A terminal unmounted and mounted again, faster than the stream.
+        tokio::join!(phone.view("s", false, None), phone.open());
+        let id = asked(&world).await;
+        answer(&world, id, b"remounted");
+        phone.until_screen(b"remounted").await;
+    });
+}
+
+#[test]
+fn entries_turned_on_with_the_screen_kept_ask_for_no_new_screen() {
+    use kriyon_remote::device_view::EntriesEvent;
+    run(async {
+        let world = world().await;
+        let _beats = Beats::start(&world);
+        *world.fake.entries.lock() = Ok(vec![note("a", "A")]);
+        let phone = Phone::connect(&world, 3, Role::Viewer).await;
+        watching(&world, &phone, b"x").await;
+        let seen: Arc<Mutex<Vec<EntriesEvent>>> = Arc::default();
+        let into = Arc::clone(&seen);
+        phone
+            .keep_screen("s", Some(Arc::new(move |event| into.lock().push(event))))
+            .await;
+        wait_until("the entries", || !seen.lock().is_empty()).await;
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        assert!(world.asks.lock().is_empty(), "a new screen was asked for");
     });
 }

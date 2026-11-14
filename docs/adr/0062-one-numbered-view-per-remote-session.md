@@ -26,16 +26,24 @@ error at a cold start.
   `setView` pass it through. The six calls and both TypeScript queues are gone.
 - **Numbered in the order asked.** The app numbers each view (`seq`). Rust keeps the last
   number per session and ignores an older view, so calls may reach Rust in any order and
-  nothing in the app waits on another.
+  nothing in the app waits on another. The numbers come from the clock (microseconds, and
+  always one more than the last), because Rust outlives the app's JavaScript: a page loaded
+  again starts above every view the last one asked.
+- **The screen is off, fresh or kept.** A fresh screen (a terminal shown, or a page that
+  loaded again) gets a new snapshot even when one is on, as the host answers every
+  `Screen { on }` with one. A view that changes only the entries keeps the screen as it is,
+  so its frames keep going to the same place in order.
 - **Kept, then applied.** Rust records the view at once. On an open stream it tells the
   host only what changed, under the stream's writer lock and reading the view at that
   moment, so the host's last word is the view's. With no stream, it opens one if the link
   is up, and every new link opens what is wanted.
 - **One open at a time.** Each session has at most one stream opening at a time. A
-  reconnect's open and the app's open no longer race to two streams.
+  reconnect's open and the app's open no longer race to two streams; an open asked while
+  one is under way is done by it, which goes round again (on the new link, if the old one
+  failed meanwhile).
 - **A link going down never fails a view.** A stream that fails a send is let go and opened
   again; a link that is down shows the view on the next one. `set_view` fails only for a
-  host not paired here.
+  host not paired here, and closing a session there is no failure.
 
 ## Consequences
 
@@ -43,6 +51,8 @@ error at a cold start.
   a new read from the start.
 - A view keeps its parts across calls on the app's side (the phone's and the desktop's
   stores hold the last view asked), because each call sends the whole view.
+- Rust keeps the last number of every session shown since the host was paired here: a
+  number per session, small, never pruned.
 - The race that made two streams could not be reproduced on loopback, where opening a
   stream is immediate. The one-open rule is held by reasoning and by the stream recovery
   above, not by a test that fails without it. `faults.rs` tests the cold-start pattern,

@@ -193,10 +193,13 @@ class KriyonNativeModule : Module() {
     // and its entries each on or off) or closed. Rust takes only a view
     // newer than the last (`seq`), so calls may arrive in any order.
     AsyncFunction("setView") Coroutine {
-      hostId: String, sessionId: String, seq: Double, open: Boolean, screen: Boolean, entries: Boolean ->
-      val screenEvents = if (screen) ScreenEvents(this@KriyonNativeModule, hostId, sessionId) else null
+      hostId: String, sessionId: String, seq: Double, open: Boolean, screen: String, entries: Boolean ->
+      // "fresh": a new screen, to these events; "kept" or "off": none here.
+      val screenEvents = if (screen == "fresh") ScreenEvents(this@KriyonNativeModule, hostId, sessionId) else null
       val entriesEvents = if (entries) EntriesEvents(this@KriyonNativeModule, hostId, sessionId) else null
-      rust { started().setView(hostId, sessionId, seq.toLong().toULong(), open, screenEvents, entriesEvents) }
+      rust {
+        started().setView(hostId, sessionId, seq.toLong().toULong(), open, screen, screenEvents, entriesEvents)
+      }
     }
 
     AsyncFunction("startSession") Coroutine { hostId: String, projectId: String, title: String? ->

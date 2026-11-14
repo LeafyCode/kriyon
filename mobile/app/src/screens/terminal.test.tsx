@@ -116,7 +116,7 @@ test("the session's screen comes on in Rust, and its frames reach the page once 
     "s1",
     expect.any(Number),
     true,
-    true,
+    "fresh",
     false
   );
   await act(() => {
@@ -143,7 +143,7 @@ test("the session's screen comes on in Rust, and its frames reach the page once 
     "s1",
     expect.any(Number),
     true,
-    false,
+    "off",
     false
   );
 });
@@ -244,7 +244,7 @@ test("the page is told the phone's light or dark, and again when it loads again"
     "s1",
     expect.any(Number),
     true,
-    true,
+    "fresh",
     false
   );
   expect(injected.some((code) => code.startsWith("window.kriyon.theme("))).toBe(

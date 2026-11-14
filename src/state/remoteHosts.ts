@@ -4,6 +4,7 @@ import {
   onRemoteHostChanged,
   onRemoteHostPairingEnded,
   type PairedHost,
+  type RemoteScreen,
   remoteHostForget,
   remoteHostInput,
   remoteHostPair,
@@ -97,6 +98,18 @@ interface SessionView {
   onFrame: ((frame: Uint8Array) => void) | null;
 }
 
+/** The screen to ask Rust for: fresh when this change shows one, kept when
+ *  it changes something else with one on, else off. */
+function screenAsked(
+  onFrame: SessionView["onFrame"],
+  changed: SessionView["onFrame"] | undefined
+): RemoteScreen {
+  if (!onFrame) {
+    return "off";
+  }
+  return changed === undefined ? "kept" : { fresh: onFrame };
+}
+
 function readableKey(hostId: string, sessionId: string): string {
   return `${hostId}:${sessionId}`;
 }
@@ -111,8 +124,14 @@ export function readableOf(
 
 export const useRemoteHosts = create<RemoteHostsStore>((set, get) => {
   // Rust takes only a view newer than the last it took, so calls may reach
-  // it in any order and nothing here waits on another.
+  // it in any order and nothing here waits on another. Numbered from the
+  // clock (in microseconds), so a page loaded again starts above every view
+  // the last one asked: Rust outlives the page.
   let viewSeq = 0;
+  function nextSeq(): number {
+    viewSeq = Math.max(viewSeq + 1, Date.now() * 1000);
+    return viewSeq;
+  }
 
   function onEntries(hostId: string, sessionId: string) {
     return (summary: ReadableSummary) =>
@@ -131,11 +150,11 @@ export const useRemoteHosts = create<RemoteHostsStore>((set, get) => {
     change: Partial<SessionView> | null
   ): Promise<void> {
     const key = readableKey(hostId, sessionId);
-    viewSeq += 1;
+    const seq = nextSeq();
     if (change === null) {
       const { [key]: _gone, ...views } = get().views;
       set({ views });
-      return attempt(() => remoteHostSetView(hostId, sessionId, viewSeq, null));
+      return attempt(() => remoteHostSetView(hostId, sessionId, seq, null));
     }
     const view = {
       ...(get().views[key] ?? { entries: false, onFrame: null }),
@@ -143,9 +162,9 @@ export const useRemoteHosts = create<RemoteHostsStore>((set, get) => {
     };
     set((state) => ({ views: { ...state.views, [key]: view } }));
     return attempt(() =>
-      remoteHostSetView(hostId, sessionId, viewSeq, {
+      remoteHostSetView(hostId, sessionId, seq, {
         onEntries: view.entries ? onEntries(hostId, sessionId) : null,
-        onFrame: view.onFrame,
+        screen: screenAsked(view.onFrame, change.onFrame),
       })
     );
   }
@@ -177,7 +196,13 @@ export const useRemoteHosts = create<RemoteHostsStore>((set, get) => {
       attempt(async () => {
         await remoteHostForget(hostId);
         const { [hostId]: _gone, ...links } = get().links;
-        set({ hosts: await remoteHosts(), links });
+        // Its sessions' views go with it: nothing is shown from there now.
+        const views = Object.fromEntries(
+          Object.entries(get().views).filter(
+            ([key]) => !key.startsWith(`${hostId}:`)
+          )
+        );
+        set({ hosts: await remoteHosts(), links, views });
       }),
     hosts: [],
     linkChanged: (link) =>
@@ -188,11 +213,25 @@ export const useRemoteHosts = create<RemoteHostsStore>((set, get) => {
         set({ hosts: await remoteHosts() });
       }),
     // A screen goes with its session: hiding one that just closed (the view
-    // closes it as the terminal unmounts) asks nothing.
-    hideScreen: (hostId, sessionId) =>
-      readableKey(hostId, sessionId) in get().views
-        ? setView(hostId, sessionId, { onFrame: null })
-        : Promise.resolve(),
+    // closes it as the terminal unmounts) asks nothing, and one Rust won't
+    // take (its computer forgotten meanwhile) is no failure.
+    hideScreen: async (hostId, sessionId) => {
+      const key = readableKey(hostId, sessionId);
+      const view = get().views[key];
+      if (!view) {
+        return;
+      }
+      const quiet = { ...view, onFrame: null };
+      set((state) => ({ views: { ...state.views, [key]: quiet } }));
+      try {
+        await remoteHostSetView(hostId, sessionId, nextSeq(), {
+          onEntries: quiet.entries ? onEntries(hostId, sessionId) : null,
+          screen: "off",
+        });
+      } catch {
+        // Quiet, as above.
+      }
+    },
     open: (hostId, sessionId) => setView(hostId, sessionId, {}),
     showScreen: (hostId, sessionId, onFrame) =>
       setView(hostId, sessionId, { onFrame }),

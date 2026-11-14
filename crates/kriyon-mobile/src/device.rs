@@ -16,7 +16,7 @@ use kriyon_remote::relay::RelayAction;
 use kriyon_remote_link::device::DevicePairing;
 use kriyon_remote_link::device_runtime::{
     screen_frame, DeviceError, DeviceEvents, DeviceRuntime, EntriesSink, HostEntry, ScreenSink,
-    SessionView, StartError,
+    ScreenView, SessionView, StartError,
 };
 use kriyon_remote_link::keys::{load_or_create, KeyVault};
 use kriyon_remote_link::{LinkConfig, RelayAccess};
@@ -958,31 +958,45 @@ impl MobileDevice {
         }
     }
 
-    /// Show a session as the person wants it: `open`, its screen going to
-    /// `screen` (or none crossing the link, or the relay) and its [Readable
-    /// view] entries to `entries` (or not read); or closed. The app numbers
-    /// views in the order it asks (`seq`): one older than the last taken
-    /// (a call that arrived late) changes nothing. The view is kept and
-    /// shown again on every link; a link that is down never fails it.
+    /// Show a session as the person wants it: `open`, its screen as
+    /// `screen` says (`"off"`; `"fresh"`: to `listener`, from a fresh
+    /// snapshot, for a terminal shown or a page loaded again; `"kept"`: as it
+    /// is, when the view changes something else) and its [Readable view]
+    /// entries going to `entries` (or not read); or closed. The app numbers
+    /// views in the order it asks (`seq`): one older than the last taken (a
+    /// call that arrived late) changes nothing. The view is kept and shown
+    /// again on every link; a link that is down never fails it.
     ///
     /// An entries summary with `unavailable` words means show the terminal;
     /// ask for the entries again when the person opens the readable view.
     ///
     /// # Errors
-    /// An id that isn't one, or a computer not paired here.
+    /// An id or screen word that isn't one, or a computer not paired here.
+    #[allow(clippy::too_many_arguments)] // UniFFI takes them one by one.
     pub async fn set_view(
         &self,
         host_id: String,
         session_id: String,
         seq: u64,
         open: bool,
-        screen: Option<Arc<dyn ScreenListener>>,
+        screen: String,
+        listener: Option<Arc<dyn ScreenListener>>,
         entries: Option<Arc<dyn EntriesListener>>,
     ) -> Result<(), MobileError> {
         let host = parse_host_id(&host_id)?;
+        let screen = match (screen.as_str(), listener) {
+            ("off", _) => ScreenView::Off,
+            ("kept", _) => ScreenView::Kept,
+            ("fresh", Some(listener)) => ScreenView::Fresh(screen_sink(listener)),
+            _ => {
+                return Err(MobileError::Invalid {
+                    reason: format!("not a screen: {screen}"),
+                })
+            }
+        };
         let view = if open {
             SessionView::Open {
-                screen: screen.map(screen_sink),
+                screen,
                 entries: entries.map(|listener| -> EntriesSink {
                     Arc::new(move |event| {
                         listener.entries_changed(json(
@@ -1220,15 +1234,41 @@ pub(crate) mod tests {
                     "s".into(),
                     1,
                     true,
+                    "kept".into(),
                     None,
                     Some(Arc::new(Entries)),
                 )
                 .await
         });
         assert!(refused.is_err(), "{refused:?}");
+        let odd = Arc::clone(&device);
+        let unknown = run(async move {
+            odd.set_view(
+                "ab".repeat(32),
+                "s".into(),
+                2,
+                true,
+                "dim".into(),
+                None,
+                None,
+            )
+            .await
+        });
+        assert!(
+            matches!(unknown, Err(MobileError::Invalid { .. })),
+            "{unknown:?}"
+        );
         let bad = run(async move {
             device
-                .set_view("not an id".into(), "s".into(), 2, false, None, None)
+                .set_view(
+                    "not an id".into(),
+                    "s".into(),
+                    3,
+                    false,
+                    "off".into(),
+                    None,
+                    None,
+                )
                 .await
         });
         assert!(matches!(bad, Err(MobileError::Invalid { .. })), "{bad:?}");

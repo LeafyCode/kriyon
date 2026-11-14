@@ -274,13 +274,15 @@ public final class KriyonNativeModule: Module {
     // and its entries each on or off) or closed. Rust takes only a view
     // newer than the last (`seq`), so calls may arrive in any order.
     AsyncFunction("setView") {
-      (hostId: String, sessionId: String, seq: Double, open: Bool, screen: Bool, entries: Bool) in
-      let screenEvents = screen ? ScreenEvents(module: self, hostId: hostId, sessionId: sessionId) : nil
+      (hostId: String, sessionId: String, seq: Double, open: Bool, screen: String, entries: Bool) in
+      // "fresh": a new screen, to these events; "kept" or "off": none here.
+      let screenEvents =
+        screen == "fresh" ? ScreenEvents(module: self, hostId: hostId, sessionId: sessionId) : nil
       let entriesEvents = entries ? EntriesEvents(module: self, hostId: hostId, sessionId: sessionId) : nil
       try await rust {
         try await self.started().setView(
           hostId: hostId, sessionId: sessionId, seq: UInt64(seq), open: open,
-          screen: screenEvents, entries: entriesEvents)
+          screen: screen, listener: screenEvents, entries: entriesEvents)
       }
     }
 

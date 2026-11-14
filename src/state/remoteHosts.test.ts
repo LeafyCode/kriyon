@@ -139,14 +139,14 @@ test("forgetting a computer drops it and its link", async () => {
   expect(useRemoteHosts.getState().links[HOST]).toBeUndefined();
 });
 
-/** The views asked of Rust, in order: [seq, open, screen on, entries read]. */
-function viewsAsked(): [number, boolean, boolean, boolean][] {
+/** The views asked of Rust, in order: [seq, open, screen, entries read]. */
+function viewsAsked(): [number, boolean, string, boolean][] {
   return vi
     .mocked(remoteHostSetView)
     .mock.calls.map(([, , seq, view]) => [
       seq,
       view !== null,
-      Boolean(view?.onFrame),
+      typeof view?.screen === "object" ? "fresh" : (view?.screen ?? "off"),
       Boolean(view?.onEntries),
     ]);
 }
@@ -163,12 +163,13 @@ test("each change to a session's view goes to Rust whole, numbered, without wait
   store.hideScreen(HOST, "s1");
   store.close(HOST, "s1");
   const asked = viewsAsked();
+  // The screen is asked for fresh only when shown; else kept as it is.
   expect(asked.map(([, ...rest]) => rest)).toEqual([
-    [true, false, false],
-    [true, true, false],
-    [true, true, true],
-    [true, false, true],
-    [false, false, false],
+    [true, "off", false],
+    [true, "fresh", false],
+    [true, "kept", true],
+    [true, "off", true],
+    [false, "off", false],
   ]);
   const seqs = asked.map(([seq]) => seq);
   expect(seqs).toEqual([...seqs].sort((a, b) => a - b));
@@ -182,6 +183,7 @@ test("reading a session as entries keeps what Rust last sent; stopping forgets i
   await store.readEntries(HOST, "s1");
   const [last] = vi.mocked(remoteHostSetView).mock.calls.slice(-1);
   const view = last?.[3];
+  expect(view?.onEntries).toBeTruthy();
   view?.onEntries?.({
     entries: [{ kind: "note", seq: 1, text: "Hi" }],
     unavailable: null,
@@ -189,8 +191,38 @@ test("reading a session as entries keeps what Rust last sent; stopping forgets i
   expect(readableOf(HOST, "s1")?.entries).toHaveLength(1);
   await store.stopEntries(HOST, "s1");
   const [lastAsked] = viewsAsked().slice(-1);
-  expect(lastAsked?.slice(1)).toEqual([true, false, false]);
+  expect(lastAsked?.slice(1)).toEqual([true, "off", false]);
   expect(readableOf(HOST, "s1")).toBeUndefined();
+});
+
+test("views are numbered above any a page loaded before could have asked", async () => {
+  vi.mocked(remoteHostSetView).mockResolvedValue();
+  const before = Date.now() * 1000;
+  await useRemoteHosts.getState().open(HOST, "s1");
+  const [[seq]] = viewsAsked();
+  expect(seq).toBeGreaterThanOrEqual(before);
+});
+
+test("forgetting a computer forgets its sessions' views", async () => {
+  vi.mocked(remoteHostSetView).mockResolvedValue();
+  vi.mocked(remoteHostForget).mockResolvedValue();
+  vi.mocked(remoteHosts).mockResolvedValue([]);
+  const store = useRemoteHosts.getState();
+  await store.showScreen(HOST, "s1", vi.fn());
+  await store.forget(HOST);
+  vi.mocked(remoteHostSetView).mockClear();
+  // Its terminal goes as the computer does: nothing left to hide there.
+  await store.hideScreen(HOST, "s1");
+  expect(remoteHostSetView).not.toHaveBeenCalled();
+  expect(useRemoteHosts.getState().error).toBeNull();
+});
+
+test("hiding a screen Rust won't take is no failure", async () => {
+  vi.mocked(remoteHostSetView).mockResolvedValueOnce();
+  await useRemoteHosts.getState().showScreen(HOST, "s1", vi.fn());
+  vi.mocked(remoteHostSetView).mockRejectedValueOnce("not paired");
+  await useRemoteHosts.getState().hideScreen(HOST, "s1");
+  expect(useRemoteHosts.getState().error).toBeNull();
 });
 
 test("hiding the screen of a session already closed asks Rust nothing", async () => {

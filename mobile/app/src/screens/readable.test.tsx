@@ -97,11 +97,11 @@ beforeEach(() => {
   });
 });
 
-/** The views asked of Rust, in order, as [open, screen, entries]. */
+/** The views asked of Rust, in order, as [open, screen on, entries]. */
 function viewsAsked(): [boolean, boolean, boolean][] {
   return native.setView.mock.calls.map(
     ([, , , open, screen, entries]) =>
-      [open, screen, entries] as [boolean, boolean, boolean]
+      [open, screen !== "off", entries] as [boolean, boolean, boolean]
   );
 }
 
@@ -113,7 +113,7 @@ test("a session opens on its readable view, which reads its entries", async () =
     "s1",
     expect.any(Number),
     true,
-    false,
+    "off",
     true
   );
   expect(screen.queryByTestId("terminal-page")).toBeNull();

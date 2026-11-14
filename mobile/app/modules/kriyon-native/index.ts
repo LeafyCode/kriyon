@@ -129,10 +129,10 @@ interface KriyonNativeModule {
    */
   setPushToken: (token: string, platform: "apns" | "fcm") => Promise<boolean>;
   /**
-   * Shows a session as the person wants it: open, its screen on (as
-   * `onScreen` events, from a fresh one) or off and its readable-view
-   * entries read (as `onEntriesChanged` events) or not; or closed (it keeps
-   * running on the computer). Views are numbered in the order asked:
+   * Shows a session as the person wants it: open, its screen off, fresh
+   * (as `onScreen` events, from a new snapshot) or kept as it is, and its
+   * readable-view entries read (as `onEntriesChanged` events) or not; or
+   * closed (it keeps running on the computer). Views are numbered in the order asked:
    * Rust takes only one newer than the last, and keeps it across links.
    * Rejects only for a computer not paired here.
    */
@@ -141,7 +141,7 @@ interface KriyonNativeModule {
     sessionId: string,
     seq: number,
     open: boolean,
-    screen: boolean,
+    screen: "fresh" | "kept" | "off",
     entries: boolean
   ) => Promise<void>;
   /**

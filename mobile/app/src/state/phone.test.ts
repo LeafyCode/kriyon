@@ -163,10 +163,10 @@ test("bytes travel to the terminal page as base64", () => {
 });
 
 /** The views asked of Rust, as [seq, open, screen, entries]. */
-function viewsAsked(): [number, boolean, boolean, boolean][] {
+function viewsAsked(): [number, boolean, string, boolean][] {
   return native.setView.mock.calls.map(
     ([, , seq, open, screen, entries]) =>
-      [seq, open, screen, entries] as [number, boolean, boolean, boolean]
+      [seq, open, screen, entries] as [number, boolean, string, boolean]
   );
 }
 
@@ -183,10 +183,10 @@ test("each change to a session's view goes to Rust whole, numbered, without wait
   expect(
     asked.map(([, open, screen, entries]) => [open, screen, entries])
   ).toEqual([
-    [true, false, true],
-    [true, true, true],
-    [true, false, true],
-    [false, false, false],
+    [true, "off", true],
+    [true, "fresh", true],
+    [true, "off", true],
+    [false, "off", false],
   ]);
   const seqs = asked.map(([seq]) => seq);
   expect(seqs).toEqual([...seqs].sort((a, b) => a - b));
@@ -205,6 +205,35 @@ const ENTRIES = {
   ],
   unavailable: null,
 };
+
+test("views are numbered above any a run of the app before could have asked", async () => {
+  native.setView.mockResolvedValue();
+  const before = Date.now() * 1000;
+  await usePhone.getState().openReadable(MAC, "s1");
+  expect(viewsAsked()[0]?.[0]).toBeGreaterThanOrEqual(before);
+});
+
+test("a screen asked for again comes fresh; one already on stays as it is otherwise", async () => {
+  native.setView.mockResolvedValue();
+  const { openReadable, retryReadable, showScreen } = usePhone.getState();
+  await showScreen(MAC, "s1");
+  await showScreen(MAC, "s1");
+  await openReadable(MAC, "s1");
+  expect(viewsAsked().map(([, , screen]) => screen)).toEqual([
+    "fresh",
+    "fresh",
+    "kept",
+  ]);
+  retryReadable(MAC, "s1");
+});
+
+test("forgetting a computer forgets its sessions' views", async () => {
+  native.setView.mockResolvedValue();
+  native.forget.mockResolvedValue();
+  await usePhone.getState().showScreen(MAC, "s1");
+  await usePhone.getState().forget(MAC);
+  expect(usePhone.getState().views).toEqual({});
+});
 
 test("entries are kept whole as Rust last sent them, for their session only", async () => {
   native.setView.mockResolvedValue();
@@ -270,8 +299,8 @@ test("trying again asks Rust for the entries afresh, the session staying open", 
   expect(
     viewsAsked().map(([, open, screen, entries]) => [open, screen, entries])
   ).toEqual([
-    [true, true, false],
-    [true, true, true],
+    [true, "kept", false],
+    [true, "kept", true],
   ]);
 });
 
