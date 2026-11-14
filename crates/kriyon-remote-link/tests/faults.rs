@@ -12,7 +12,7 @@
 //! |---|---|
 //! | Cut the network mid-stream | `a_link_cut_mid_stream_reconnects_and_redraws_without_replaying_input` |
 //! | Sleep and wake the host | `a_host_asleep_past_the_heartbeat_shows_lost_then_recovers` |
-//! | Kill and restart the relay | not yet: there is no relay support (plan, later steps) |
+//! | Kill and restart the relay | `relay.rs`: `a_relay_restarted_mid_session_is_reconnected_through`, on a local iroh relay with the pass check |
 //! | Crash the host mid-write | `a_host_that_crashed_mid_write_comes_back_with_nothing_replayed` |
 //! | A slow device beside a fast one | `host_runtime::serve::a_slow_device_skips_ahead_while_a_fast_one_follows`, `fanout::a_slow_device_skips_ahead_alone` |
 //! | A device that never reads its control stream | `a_device_that_never_reads_its_control_stream_is_closed_too_slow` |

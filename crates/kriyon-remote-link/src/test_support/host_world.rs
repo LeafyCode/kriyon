@@ -334,6 +334,8 @@ pub struct World {
     pub fake: Arc<FakeHost>,
     pub serve: Serve,
     pub asks: Arc<Mutex<Vec<RequesterId>>>,
+    /// Pairing connections, as the host accepts them.
+    pub pairing: tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<crate::host::PairLink>>,
 }
 
 /// A host serving one live session "s", whose daemon is the test.
@@ -363,6 +365,25 @@ pub async fn world_on(bind: SocketAddr) -> World {
             }
         }
     };
+    world_with(host, fake)
+}
+
+/// A world hosted on `endpoint` (one with a relay, say), as the app hosts
+/// on the endpoint it also dials out from. Within a runtime: it spawns.
+#[must_use]
+pub fn world_on_endpoint(endpoint: iroh::Endpoint) -> World {
+    let fake = Arc::new(FakeHost::default());
+    *fake.title.lock() = "first".into();
+    let host = Arc::new(Host::on_endpoint(
+        endpoint,
+        Arc::clone(&fake) as Arc<dyn PairedDevices>,
+        60,
+    ));
+    world_with(host, fake)
+}
+
+/// Serve session "s" from `host` for `fake`, accepting every device.
+fn world_with(host: Arc<Host>, fake: Arc<FakeHost>) -> World {
     let serve = Serve::new(Arc::clone(&fake) as Arc<dyn ServeHost>);
     *fake.serve.lock() = Some(serve.clone());
     let asks = Arc::new(Mutex::new(Vec::new()));
@@ -371,10 +392,17 @@ pub async fn world_on(bind: SocketAddr) -> World {
     let _ = serve.on_event("s", DaemonEvent::Hello { run: 1 });
     let accepting = Arc::clone(&host);
     let serving = serve.clone();
+    let (paired, pairing) = tokio::sync::mpsc::unbounded_channel();
     tokio::spawn(async move {
         while let Some(accepted) = accepting.accept().await {
-            if let Accepted::Remote(link) = accepted {
-                tokio::spawn(serving.clone().serve(Arc::new(link)));
+            match accepted {
+                Accepted::Remote(link) => {
+                    tokio::spawn(serving.clone().serve(Arc::new(link)));
+                }
+                // The test pairs: it takes them from `pairing`.
+                Accepted::Pair(link) => {
+                    let _ = paired.send(link);
+                }
             }
         }
     });
@@ -383,6 +411,7 @@ pub async fn world_on(bind: SocketAddr) -> World {
         fake,
         serve,
         asks,
+        pairing: tokio::sync::Mutex::new(pairing),
     }
 }
 

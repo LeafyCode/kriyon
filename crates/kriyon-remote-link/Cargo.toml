@@ -29,6 +29,9 @@ host-runtime = ["dep:kriyon-core", "dep:parking_lot"]
 test-support = ["tokio/rt-multi-thread"]
 
 [dev-dependencies]
+# A local relay for the relay tests (tests/relay.rs): the version iroh uses,
+# with its self-signed test certificate. Never in a build of the app.
+iroh-relay = { version = "=1.4.1", features = ["server", "test-utils"] }
 kriyon-remote-link = { path = ".", features = ["host-runtime", "test-support"] }
 tokio = { version = "1", default-features = false, features = ["macros", "rt-multi-thread", "sync", "time"] }
 
