@@ -24,8 +24,8 @@ fn read_until(stream: &mut UnixStream, needle: &str, timeout: Duration) -> Strin
             Ok(0) => break,
             Ok(n) => {
                 dec.push(&buf[..n]);
-                while let Some(frame) = dec.next_frame() {
-                    if let Frame::Output(bytes) = frame {
+                while let Ok(Some(frame)) = dec.next_frame() {
+                    if let Frame::Output(bytes) | Frame::Screen(bytes) = frame {
                         acc.push_str(&String::from_utf8_lossy(&bytes));
                     }
                 }
