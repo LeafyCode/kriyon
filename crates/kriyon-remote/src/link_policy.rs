@@ -217,6 +217,12 @@ impl PendingPairing {
         &self.secret
     }
 
+    /// The role the person chose for the device that pairs.
+    #[must_use]
+    pub fn role(&self) -> Role {
+        self.role
+    }
+
     /// How long the pairing has left at `now`: zero once it expired or was
     /// burned.
     #[must_use]

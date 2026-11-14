@@ -127,6 +127,13 @@ async fn a_wrong_code_typed_three_times_burns_the_pairing() {
         .pair(reach(&host), &SECRET, "Test phone")
         .await
         .expect("connects");
+    // With the code, the role the computer offers and how long it waits.
+    assert_eq!(pairing.role(), Role::Viewer);
+    let left = pairing.time_left();
+    assert!(
+        left > Duration::from_mins(4) && left <= Duration::from_mins(5),
+        "{left:?}"
+    );
     let (host_result, answer) = tokio::join!(host_side, pairing.finish());
     assert_eq!(host_result.expect("host task"), Some(CodeCheck::Burned));
     assert_eq!(answer, Err(LinkError::Refused(RefuseReason::NotPaired)));

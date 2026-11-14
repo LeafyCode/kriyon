@@ -120,9 +120,11 @@ calls while Remote access is off.
    exported keying material: label `EXPERIMENTAL kriyon pairing v1`, context
    `host_id || device_id || SHA-256(secret)`, 8 bytes read as a big-endian
    u64, mod 10^6, zero-padded.
-4. The host answers the proof with `ProofAccepted` or `Refused`. **Only after
-   `ProofAccepted` does the device show the code; the person types it into the
-   host.** Three
+4. The host answers the proof with `ProofAccepted { role, expires_in_ms }`
+   (the role chosen in step 1 and how long the pairing has left) or
+   `Refused`. **Only after `ProofAccepted` does the device show the code; the
+   person types it into the host.** The device shows the role it is offered
+   and counts down to the expiry beside the code. Three
    wrong tries burn the secret. If someone with a leaked QR connected first,
    the real phone shows no code and pairing fails safe.
 5. The host stores the device (endpoint id, name, role from step 1, paired at)

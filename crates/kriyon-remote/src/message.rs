@@ -501,10 +501,14 @@ pub enum PairToDevice {
     Refused {
         reason: RefuseReason,
     },
-    /// The proof is right and this device took the pairing: show the code.
-    /// A device shows no code before this, so one that lost the race to a
-    /// leaked QR code says pairing failed instead.
-    ProofAccepted,
+    /// The proof is right and this device took the pairing: show the code,
+    /// with the role the computer offers and how long it waits for the code
+    /// (ms). A device shows no code before this, so one that lost the race
+    /// to a leaked QR code says pairing failed instead.
+    ProofAccepted {
+        role: Role,
+        expires_in_ms: u64,
+    },
 }
 
 #[cfg(test)]
@@ -974,7 +978,13 @@ mod tests {
             reason: RefuseReason::NotPaired,
         };
         assert_eq!(tag(&refused), 1);
-        assert_eq!(tag(&PairToDevice::ProofAccepted), 2);
+        assert_eq!(
+            tag(&PairToDevice::ProofAccepted {
+                role: Role::Viewer,
+                expires_in_ms: 0
+            }),
+            2
+        );
     }
 
     /// Reasons and statuses are fields, so their order is on the wire too.

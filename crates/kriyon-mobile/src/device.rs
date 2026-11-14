@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use kriyon_relay_client::runtime::{RelayRuntime, RelaySetup, ThisDevice};
 use kriyon_remote::device_view::{host_summary, name_of, HostView, LinkFacts};
-use kriyon_remote::message::{hex, parse_id_hex, EndpointId};
+use kriyon_remote::message::{hex, parse_id_hex, EndpointId, Role};
 use kriyon_remote::pairing::PairingInvite;
 use kriyon_remote::relay::RelayAction;
 use kriyon_remote_link::device::DevicePairing;
@@ -500,6 +500,10 @@ fn now_ms() -> i64 {
 #[derive(uniffi::Object)]
 pub struct Pairing {
     code: String,
+    /// The role the computer offers, and until when (Unix ms) it waits
+    /// for the code.
+    role: Role,
+    expires_at_ms: i64,
     invite: PairingInvite,
     finish: tokio::sync::Mutex<Option<DevicePairing>>,
     shared: Arc<Shared>,
@@ -512,6 +516,21 @@ impl Pairing {
     #[must_use]
     pub fn code(&self) -> String {
         self.code.clone()
+    }
+
+    /// The code step, as JSON: `{code, role, expiresAtMs}`, the role the
+    /// computer offers (`viewer` or `controller`) and until when (Unix ms)
+    /// it waits for the code.
+    #[must_use]
+    pub fn offer(&self) -> String {
+        json(&serde_json::json!({
+            "code": self.code,
+            "role": match self.role {
+                Role::Viewer => "viewer",
+                Role::Controller => "controller",
+            },
+            "expiresAtMs": self.expires_at_ms,
+        }))
     }
 
     /// Stop this pairing: if the computer still accepts the code, the phone
@@ -812,8 +831,11 @@ impl MobileDevice {
             .on_runtime(async move { device.start_pairing(&invite_text, &name).await })
             .await?
             .map_err(|reason| MobileError::Link { reason })?;
+        let left = i64::try_from(start.finish.time_left().as_millis()).unwrap_or(i64::MAX);
         Ok(Arc::new(Pairing {
             code: start.code,
+            role: start.finish.role(),
+            expires_at_ms: now_ms().saturating_add(left),
             invite: start.invite,
             finish: tokio::sync::Mutex::new(Some(start.finish)),
             shared: Arc::clone(&self.shared),
@@ -1052,7 +1074,6 @@ pub(crate) mod tests {
     use std::time::Duration;
 
     use kriyon_remote::link_policy::CodeCheck;
-    use kriyon_remote::message::Role;
     use kriyon_remote_link::host::{Accepted, Host, PairedDevices};
     use kriyon_remote_link::LinkConfig;
 
@@ -1228,6 +1249,14 @@ pub(crate) mod tests {
                 let mut attempt = host_side.await.expect("host task");
                 assert_eq!(attempt.name(), "Test phone");
                 let code = pairing.code();
+                // What the code step shows: the code, the role offered and
+                // until when the computer waits for it.
+                let offer: serde_json::Value =
+                    serde_json::from_str(&pairing.offer()).expect("json");
+                assert_eq!(offer["code"], code.as_str());
+                assert_eq!(offer["role"], "controller");
+                let left = offer["expiresAtMs"].as_i64().expect("a time") - now_ms();
+                assert!((4 * 60_000..=5 * 60_000).contains(&left), "{left}");
                 let (check, finished) = tokio::join!(
                     attempt.confirm(&code, "Test Mac", |id, role| {
                         roles.0.lock().expect("roles").insert(id, role);

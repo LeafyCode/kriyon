@@ -443,11 +443,11 @@ impl PairLink {
         let checked = match request {
             Some(Decoded::Message(PairFromDevice::PairRequest { device_name, proof })) => self
                 .check(&device_name, &proof)
-                .map(|secret| (device_name, secret)),
+                .map(|taken| (device_name, taken)),
             Some(Decoded::Unknown { .. }) => Err(RefuseReason::UnknownMessage),
             None => Err(RefuseReason::NotPaired),
         };
-        let (name, secret) = match checked {
+        let (name, (secret, role, time_left)) = match checked {
             Ok(checked) => checked,
             Err(reason) => {
                 // Refused whether or not the device is still there to hear it.
@@ -462,7 +462,12 @@ impl PairLink {
                 return Err(LinkError::Refused(reason));
             }
         };
-        writer.send(&PairToDevice::ProofAccepted).await?;
+        writer
+            .send(&PairToDevice::ProofAccepted {
+                role,
+                expires_in_ms: u64::try_from(time_left.as_millis()).unwrap_or(u64::MAX),
+            })
+            .await?;
         let mut exported = [0_u8; EXPORTED_LEN];
         let context = exporter_context(&self.shared.id, &self.device, &secret);
         self.connection
@@ -482,12 +487,18 @@ impl PairLink {
     /// Check the name and proof; the first right proof takes the pairing.
     /// Returns the secret it took. Every refusal counts toward the source's
     /// limit, without using up the pairing.
-    fn check(&self, name: &str, proof: &[u8]) -> Result<PairingSecret, RefuseReason> {
+    /// The pairing's secret, the role it offers and how long it has left.
+    fn check(
+        &self,
+        name: &str,
+        proof: &[u8],
+    ) -> Result<(PairingSecret, Role, Duration), RefuseReason> {
         let taken = check_device_name(name).and_then(|()| {
             let mut pairing = lock(&self.shared.pairing);
             let pending = pairing.as_mut().ok_or(RefuseReason::NotPaired)?;
-            pending.take(&self.device, &self.shared.id, proof, Instant::now())?;
-            Ok(*pending.secret())
+            let now = Instant::now();
+            pending.take(&self.device, &self.shared.id, proof, now)?;
+            Ok((*pending.secret(), pending.role(), pending.time_left(now)))
         });
         if taken.is_err() {
             self.shared.note_refused(self.source);

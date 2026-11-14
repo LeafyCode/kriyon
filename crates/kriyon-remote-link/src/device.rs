@@ -7,7 +7,7 @@ use iroh::{Endpoint, EndpointAddr};
 use kriyon_remote::codec::Decoded;
 use kriyon_remote::link_policy::{Backoff, CloseCode};
 use kriyon_remote::message::{
-    EndpointId, FromDevice, PairFromDevice, PairToDevice, RefuseReason, ToDevice,
+    EndpointId, FromDevice, PairFromDevice, PairToDevice, RefuseReason, Role, ToDevice,
 };
 use kriyon_remote::pairing::{
     exporter_context, pair_proof, pairing_code, PairingSecret, EXPORTED_LEN, EXPORTER_LABEL,
@@ -74,17 +74,25 @@ impl Device {
         // the race to a leaked QR code says pairing failed instead.
         let mut reader = MessageReader::new(recv);
         let answer = match reader.next().await? {
-            Some(Decoded::Message(PairToDevice::ProofAccepted)) => Ok(()),
+            Some(Decoded::Message(PairToDevice::ProofAccepted {
+                role,
+                expires_in_ms,
+            })) => Ok((role, expires_in_ms)),
             Some(Decoded::Message(PairToDevice::Refused { reason })) => {
                 Err(LinkError::Refused(reason))
             }
             Some(Decoded::Message(PairToDevice::Paired { .. }) | Decoded::Unknown { .. })
             | None => Err(LinkError::Refused(RefuseReason::UnknownMessage)),
         };
-        if let Err(refused) = answer {
-            connection.close(VarInt::from_u32(0), b"");
-            return Err(refused);
-        }
+        let (role, expires_in_ms) = match answer {
+            Ok(offer) => offer,
+            Err(refused) => {
+                connection.close(VarInt::from_u32(0), b"");
+                return Err(refused);
+            }
+        };
+        let expires_at =
+            std::time::Instant::now() + std::time::Duration::from_millis(expires_in_ms);
         let mut exported = [0_u8; EXPORTED_LEN];
         let context = exporter_context(&host_id, &device_id, secret);
         connection
@@ -93,6 +101,8 @@ impl Device {
         Ok(DevicePairing {
             connection,
             code: pairing_code(&exported),
+            role,
+            expires_at,
             reader,
             _writer: writer,
         })
@@ -125,6 +135,8 @@ impl Device {
 pub struct DevicePairing {
     connection: Connection,
     code: String,
+    role: Role,
+    expires_at: std::time::Instant,
     reader: MessageReader<PairToDevice>,
     _writer: MessageWriter<PairFromDevice>,
 }
@@ -134,6 +146,19 @@ impl DevicePairing {
     #[must_use]
     pub fn code(&self) -> &str {
         &self.code
+    }
+
+    /// The role the computer offers this device.
+    #[must_use]
+    pub fn role(&self) -> Role {
+        self.role
+    }
+
+    /// How long the computer still waits for the code.
+    #[must_use]
+    pub fn time_left(&self) -> std::time::Duration {
+        self.expires_at
+            .saturating_duration_since(std::time::Instant::now())
     }
 
     /// Wait for the host. Store the host only on `Ok`.
@@ -146,7 +171,9 @@ impl DevicePairing {
             Some(Decoded::Message(PairToDevice::Refused { reason })) => {
                 Err(LinkError::Refused(reason))
             }
-            Some(Decoded::Message(PairToDevice::ProofAccepted) | Decoded::Unknown { .. })
+            Some(
+                Decoded::Message(PairToDevice::ProofAccepted { .. }) | Decoded::Unknown { .. },
+            )
             | None => Err(LinkError::Refused(RefuseReason::UnknownMessage)),
         };
         // Done either way: hang up, which the host waits for.
