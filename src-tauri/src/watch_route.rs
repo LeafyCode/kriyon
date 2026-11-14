@@ -268,8 +268,12 @@ mod tests {
         let handle = app.handle();
         let id = SessionId("s1".to_string());
         let dir = tempfile::tempdir().expect("tempdir");
-        let file = dir.path().join("handoff-test.md");
-        std::fs::write(&file, "# Handoff").expect("write");
+        std::fs::write(dir.path().join("handoff-test.md"), "# Handoff").expect("write");
+        // Named as Claude's Write names it: the folder's real, long path
+        // (Windows' %TEMP% can be a short 8.3 name, `RUNNER~1`).
+        let file = kriyon_core::paths::canonicalize(dir.path())
+            .expect("canon")
+            .join("handoff-test.md");
 
         let seen = std::sync::Arc::new(Mutex::new(Vec::<String>::new()));
         let sink_seen = seen.clone();
