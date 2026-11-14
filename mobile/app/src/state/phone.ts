@@ -9,7 +9,6 @@ import {
   KriyonNative,
   type PairedHost,
 } from "../../modules/kriyon-native/index.ts";
-import { messageSteps } from "./keys.ts";
 import { type PushStatus, registerPush } from "./push.ts";
 
 /** Which screen shows. */
@@ -32,14 +31,36 @@ export type Pairing =
   | { phase: "working" }
   | {
       code: string;
-      /** When the code stops working (Unix ms); not sent yet. */
+      /** When the code stops working (Unix ms), if the computer said. */
       expiresAtMs?: number | null;
       phase: "code";
-      /** The role the computer offered this phone; not sent yet. */
+      /** The role the computer offers this phone, if it said. */
       role?: "viewer" | "controller" | null;
     }
   | { name: string; phase: "paired" }
   | { phase: "failed"; reason: string };
+
+/**
+ * The code step as Rust gives it (`{code, role, expiresAtMs}`, as JSON):
+ * anything it doesn't say, or says oddly, is left unknown. Text that isn't
+ * JSON is taken as the code itself.
+ */
+export function codeStep(offer: string): Extract<Pairing, { phase: "code" }> {
+  let read: unknown;
+  try {
+    read = JSON.parse(offer);
+  } catch {
+    return { code: offer, expiresAtMs: null, phase: "code", role: null };
+  }
+  const fields = (read ?? {}) as Record<string, unknown>;
+  const { code, expiresAtMs, role } = fields;
+  return {
+    code: typeof code === "string" ? code : offer,
+    expiresAtMs: typeof expiresAtMs === "number" ? expiresAtMs : null,
+    phase: "code",
+    role: role === "viewer" || role === "controller" ? role : null,
+  };
+}
 
 /** How the person wants a session shown here: its screen, its entries. */
 interface View {
@@ -48,6 +69,10 @@ interface View {
 }
 
 interface PhoneStore {
+  /** Why alerts couldn't be turned on or off, if they couldn't. */
+  alertsError: string | null;
+  /** Whether this phone's alerts are on, as the person left them. */
+  alertsOn: boolean;
   /**
    * The phone's Back (Android's gesture or button, and the screens' own):
    * home from any screen, cancelling a pairing on the way. `false` at home,
@@ -66,6 +91,8 @@ interface PhoneStore {
   forget: (hostId: string) => Promise<void>;
   /** Forget a session's readable view (the person left the session). */
   forgetReadable: (hostId: string, sessionId: string) => void;
+  /** Give back typing control of a session: the computer holds it again. */
+  giveBack: (hostId: string, sessionId: string) => Promise<void>;
   /** Turn an open session's screen off, after what was asked before it. */
   hideScreen: (hostId: string, sessionId: string) => Promise<void>;
   hostChanged: (state: HostSummary) => void;
@@ -105,14 +132,17 @@ interface PhoneStore {
   retryReadable: (hostId: string, sessionId: string) => void;
   screen: Screen;
   /**
-   * Send `text` to Claude in a session, as typed then Enter, the way the
-   * desktop sends a prompt.
+   * Send `text` to Claude in a session this phone controls, as the
+   * desktop's composer does: the computer types it, then Enter. Rejects with
+   * the computer's words when it refuses (a question showing).
    */
   sendMessage: (
     hostId: string,
     sessionId: string,
     text: string
   ) => Promise<void>;
+  /** Turn this phone's alerts on or off; Rust keeps it for the next start. */
+  setAlerts: (on: boolean) => Promise<void>;
   show: (screen: Screen) => void;
   /** Turn an open session's screen on, after what was asked before it. */
   showScreen: (hostId: string, sessionId: string) => Promise<void>;
@@ -331,8 +361,7 @@ export const usePhone = create<PhoneStore>((set, get) => ({
     }
     set({ pairing: { phase: "working" } });
     try {
-      const code = await KriyonNative.pair(text);
-      set({ pairing: { code, phase: "code" } });
+      set({ pairing: codeStep(await KriyonNative.pair(text)) });
       const host = await KriyonNative.finishPairing();
       set({
         hosts: await KriyonNative.hosts(),
@@ -359,24 +388,18 @@ export const usePhone = create<PhoneStore>((set, get) => ({
   screen: { kind: "home" },
   views: {},
   sendMessage: (hostId, sessionId, text) =>
-    // One after another, as typed: the order and the beat are the point.
-    messageSteps(text).reduce(
-      (sent, step) =>
-        sent
-          .then(() =>
-            step.waitMs > 0
-              ? new Promise<void>((done) => setTimeout(done, step.waitMs))
-              : undefined
-          )
-          .then(() => KriyonNative.input(hostId, sessionId, step.bytes)),
-      Promise.resolve()
-    ),
+    KriyonNative.compose(hostId, sessionId, text),
 
   show: (screen) => set({ newSessionError: null, screen }),
   start: async (deviceName) => {
     try {
       const deviceId = await KriyonNative.start(deviceName);
-      set({ deviceId, hosts: await KriyonNative.hosts(), startError: null });
+      set({
+        alertsOn: KriyonNative.alertsOn(),
+        deviceId,
+        hosts: await KriyonNative.hosts(),
+        startError: null,
+      });
       // Alerts come once Rust is up: it seals the token for each computer.
       set({ push: await registerPush() });
     } catch (error) {
@@ -385,6 +408,17 @@ export const usePhone = create<PhoneStore>((set, get) => ({
   },
   startError: null,
   states: {},
+  alertsOn: true,
+  alertsError: null,
+  setAlerts: async (on) => {
+    try {
+      await KriyonNative.setAlerts(on);
+      set({ alertsError: null, alertsOn: on });
+    } catch (error) {
+      set({ alertsError: reasonOf(error) });
+    }
+  },
+  giveBack: (hostId, sessionId) => KriyonNative.giveBack(hostId, sessionId),
 }));
 
 /**

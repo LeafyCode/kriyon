@@ -26,6 +26,9 @@ use crate::hosts::{hosts_bytes, read_hosts, with_host, without_host, PairedHost,
 /// The store key of the device key.
 pub const DEVICE_KEY: &str = "device-key";
 
+/// Kept while the person has this phone's alerts off (absent: on).
+pub const ALERTS_OFF_KEY: &str = "alerts-off";
+
 /// Why the phone's store couldn't do something.
 #[derive(Debug, PartialEq, Eq, uniffi::Error)]
 pub enum StoreError {
@@ -758,6 +761,8 @@ impl MobileDevice {
             shared: std::sync::OnceLock::new(),
             last: std::sync::Mutex::new(std::collections::HashMap::new()),
         });
+        // As the person left them; a store that can't say leaves them on.
+        let alerts_off = matches!(store.read(ALERTS_OFF_KEY.into()), Ok(Some(_)));
         let shared = Arc::new(Shared {
             handle: runtime.handle().clone(),
             device,
@@ -766,7 +771,7 @@ impl MobileDevice {
             hosts_lock: std::sync::Mutex::new(()),
             push_url,
             push: std::sync::Mutex::new(None),
-            alerts_off: std::sync::atomic::AtomicBool::new(false),
+            alerts_off: std::sync::atomic::AtomicBool::new(alerts_off),
             relay,
             link: tokio::sync::Mutex::new(link),
             wanted: std::sync::Mutex::new(None),
@@ -925,14 +930,29 @@ impl MobileDevice {
         Ok(true)
     }
 
-    /// Turn this phone's alerts on or off. Off: each connected computer
-    /// forgets its sealed push token, and none is given it again until they
-    /// are on, when each connected computer is given it again. Kept only
-    /// while the library runs: the app says it again after `start`.
+    /// Whether this phone's alerts are on, as the person left them.
+    #[must_use]
+    pub fn alerts_on(&self) -> bool {
+        !self
+            .shared
+            .alerts_off
+            .load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Turn this phone's alerts on or off, kept in the phone's store for the
+    /// next start. Off: each connected computer forgets its sealed push
+    /// token, and none is given it again until they are on, when each
+    /// connected computer is given it again.
     ///
     /// # Errors
-    /// The library's runtime is gone.
+    /// The store couldn't keep it, or the library's runtime is gone.
     pub async fn set_alerts(&self, on: bool) -> Result<(), MobileError> {
+        let kept = if on {
+            self.shared.store.remove(ALERTS_OFF_KEY.into())
+        } else {
+            self.shared.store.write(ALERTS_OFF_KEY.into(), vec![1])
+        };
+        kept.map_err(|e| store_error(&e))?;
         self.shared
             .alerts_off
             .store(!on, std::sync::atomic::Ordering::SeqCst);
@@ -1216,6 +1236,18 @@ pub(crate) mod tests {
             loopback(),
         )
         .expect("starts")
+    }
+
+    #[test]
+    fn alerts_turned_off_stay_off_after_a_restart() {
+        let store = Arc::new(Memory::default());
+        let first = phone(&store);
+        assert!(first.alerts_on(), "on by default");
+        run(async move { first.set_alerts(false).await }).expect("off");
+        let again = phone(&store);
+        assert!(!again.alerts_on(), "off, as left");
+        run(async move { again.set_alerts(true).await }).expect("on");
+        assert!(phone(&store).alerts_on(), "on again");
     }
 
     #[test]

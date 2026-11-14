@@ -21,6 +21,7 @@ jest.mock("../../modules/kriyon-native/index.ts", () => ({
     forget: jest.fn(() => Promise.resolve()),
     hosts: jest.fn(() => Promise.resolve([])),
     pair: jest.fn(),
+    setAlerts: jest.fn(),
     start: jest.fn(),
     wake: jest.fn(),
   },
@@ -292,6 +293,17 @@ test("a failed pairing says why", async () => {
   expect(
     screen.getByText("that isn't a Kriyon pairing code")
   ).toBeOnTheScreen();
+});
+
+test("alerts are a switch that says whether they are on, and turns them off", async () => {
+  usePhone.setState({ alertsOn: true, push: "on" });
+  native.setAlerts.mockResolvedValue();
+  await render(<SettingsScreen />);
+  const alerts = screen.getByRole("switch", { name: "Alerts" });
+  expect(alerts).toBeChecked();
+  await fireEvent(alerts, "valueChange", false);
+  expect(native.setAlerts).toHaveBeenCalledWith(false);
+  expect(screen.getByRole("switch", { name: "Alerts" })).not.toBeChecked();
 });
 
 test("settings say where alerts stand, in a word and in full", async () => {

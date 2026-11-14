@@ -15,6 +15,7 @@ jest.mock(
 
 jest.mock("../modules/kriyon-native/index.ts", () => ({
   KriyonNative: {
+    alertsOn: jest.fn(() => true),
     addListener: jest.fn(() => ({ remove: jest.fn() })),
     hosts: jest.fn(() => Promise.resolve([])),
     start: jest.fn(() => Promise.resolve("ef".repeat(32))),

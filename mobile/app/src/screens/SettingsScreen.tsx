@@ -3,7 +3,7 @@
  * that has one), the paired computers (forget one here), and this phone's
  * key as computers show it.
  */
-import { ScrollView, Text, View } from "react-native";
+import { ScrollView, Switch, Text, View } from "react-native";
 import { Button, Pill, TopBar, useLargeText, useLook } from "../kit.tsx";
 import { roleWord, shortKey } from "../state/home.ts";
 import { usePhone } from "../state/phone.ts";
@@ -27,6 +27,9 @@ export function SettingsScreen() {
   const deviceId = usePhone((state) => state.deviceId);
   const { forget, show } = usePhone.getState();
   const alerts = alertsWord(push);
+  const alertsOn = usePhone((state) => state.alertsOn);
+  const alertsError = usePhone((state) => state.alertsError);
+  const { setAlerts } = usePhone.getState();
   const large = useLargeText();
   const box = {
     backgroundColor: t.card,
@@ -72,17 +75,38 @@ export function SettingsScreen() {
                 Says only "A session needs you". Details come from your
                 computer.
               </Text>
+              {alertsError ? (
+                <Text style={[text.caption, { color: t.red }]}>
+                  {alertsError}
+                </Text>
+              ) : null}
               {push && push !== "on" ? (
                 <Text style={[text.caption, { color: t.ink2 }]}>
                   {pushLine(push)}
                 </Text>
               ) : null}
             </View>
-            <Pill
-              align={large ? "flex-start" : "center"}
-              label={alerts.label}
-              tone={alerts.tone}
-            />
+            <View
+              style={{
+                alignItems: large ? "flex-start" : "flex-end",
+                gap: 8,
+              }}
+            >
+              <Switch
+                accessibilityLabel="Alerts"
+                onValueChange={(on) => {
+                  setAlerts(on).catch(() => undefined);
+                }}
+                thumbColor={t.card}
+                trackColor={{ false: t.lineStrong, true: t.accent }}
+                value={alertsOn}
+              />
+              <Pill
+                align={large ? "flex-start" : "center"}
+                label={alerts.label}
+                tone={alerts.tone}
+              />
+            </View>
           </View>
         </View>
 

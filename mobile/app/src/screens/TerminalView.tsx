@@ -144,11 +144,13 @@ export function TerminalView({
   const submit = () => {
     const text = line;
     setLine("");
-    if (ctrl) {
+    if (ctrl || !session?.mayCompose) {
+      // A control key, or an answer to a question showing: typed keys.
       setCtrl(false);
-      send(typedLine(text, true));
+      send(typedLine(text, ctrl));
       return;
     }
+    // A message to Claude: the computer types it, then Enter.
     usePhone
       .getState()
       .sendMessage(hostId, sessionId, text)
@@ -243,6 +245,18 @@ export function TerminalView({
               KriyonNative.takeControl(hostId, sessionId).catch(
                 (error: unknown) => setNote(reasonOf(error))
               );
+            }}
+          />
+        ) : null}
+        {connected && session?.typing === "you" ? (
+          <Button
+            kind="ghost"
+            label="Give back"
+            onPress={() => {
+              usePhone
+                .getState()
+                .giveBack(hostId, sessionId)
+                .catch((error: unknown) => setNote(reasonOf(error)));
             }}
           />
         ) : null}

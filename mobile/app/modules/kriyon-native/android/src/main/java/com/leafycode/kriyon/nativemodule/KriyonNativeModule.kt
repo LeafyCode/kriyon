@@ -118,7 +118,8 @@ class KriyonNativeModule : Module() {
         pairing?.cancel()
         pairing = next
       }
-      next.code()
+      // The code step: {code, role, expiresAtMs}, as JSON.
+      next.offer()
     }
 
     AsyncFunction("finishPairing") Coroutine { ->
@@ -208,6 +209,24 @@ class KriyonNativeModule : Module() {
 
     AsyncFunction("takeControl") Coroutine { hostId: String, sessionId: String ->
       rust { started().takeControl(hostId, sessionId) }
+    }
+
+    AsyncFunction("giveBack") Coroutine { hostId: String, sessionId: String ->
+      rust { started().giveBack(hostId, sessionId) }
+    }
+
+    // A message to Claude, as the desktop's composer sends it: the computer
+    // types it, then Enter. Resolves once it reached the terminal.
+    AsyncFunction("compose") Coroutine { hostId: String, sessionId: String, text: String ->
+      rust { started().compose(hostId, sessionId, text) }
+    }
+
+    AsyncFunction("setAlerts") Coroutine { on: Boolean ->
+      rust { started().setAlerts(on) }
+    }
+
+    Function("alertsOn") {
+      synchronized(lock) { device }?.alertsOn() ?: true
     }
 
     AsyncFunction("input") Coroutine { hostId: String, sessionId: String, bytes: ByteArray ->

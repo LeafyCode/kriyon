@@ -17,6 +17,7 @@ jest.mock("../terminal/page.generated.ts", () => ({ TERMINAL_PAGE: "" }));
 jest.mock("../../modules/kriyon-native/index.ts", () => ({
   KriyonNative: {
     addListener: jest.fn(() => ({ remove: jest.fn() })),
+    compose: jest.fn(() => Promise.resolve()),
     setView: jest.fn(() => Promise.resolve()),
     takeControl: jest.fn(() => Promise.resolve()),
   },
@@ -275,4 +276,44 @@ test("two options with the same words both show", async () => {
     })
   );
   expect(screen.getAllByText(YES)).toHaveLength(2);
+});
+
+/** A session this phone controls, the computer saying whether it may compose. */
+function controlled(mayCompose: boolean): HostSummary {
+  const summary = host(false);
+  const [one] = summary.sessions;
+  return {
+    ...summary,
+    role: "controller",
+    sessions: one ? [{ ...one, mayCompose, mayType: true, typing: "you" }] : [],
+  };
+}
+
+test("a message goes to Claude as the computer composes it, when it says this phone may", async () => {
+  usePhone.setState({ states: { [MAC]: controlled(true) } });
+  await render(<SessionScreen hostId={MAC} sessionId="s1" />);
+  await fireEvent.changeText(screen.getByLabelText("Message"), "run the tests");
+  await fireEvent.press(screen.getByRole("button", { name: "Send" }));
+  expect(native.compose).toHaveBeenCalledWith(MAC, "s1", "run the tests");
+});
+
+test("the message bar stays off when the computer says this phone may not compose", async () => {
+  usePhone.setState({ states: { [MAC]: controlled(false) } });
+  await render(<SessionScreen hostId={MAC} sessionId="s1" />);
+  expect(screen.getByLabelText("Message").props.editable).toBe(false);
+  expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+});
+
+test("a message the computer refused says why, and the words come back", async () => {
+  usePhone.setState({ states: { [MAC]: controlled(true) } });
+  native.compose.mockRejectedValueOnce(
+    new Error("A question shows: answer it in the terminal.")
+  );
+  await render(<SessionScreen hostId={MAC} sessionId="s1" />);
+  await fireEvent.changeText(screen.getByLabelText("Message"), "hello");
+  await fireEvent.press(screen.getByRole("button", { name: "Send" }));
+  expect(
+    await screen.findByText("A question shows: answer it in the terminal.")
+  ).toBeOnTheScreen();
+  expect(screen.getByLabelText("Message").props.value).toBe("hello");
 });

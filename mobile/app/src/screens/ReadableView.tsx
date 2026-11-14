@@ -247,7 +247,8 @@ function Compose({
   const [problem, setProblem] = useState<string | null>(null);
   const summary = usePhone((state) => state.states[hostId]);
   const session = summary?.sessions.find((one) => one.id === sessionId);
-  const mayType = Boolean(session?.mayType) && !asking;
+  // The computer's word: this phone controls it and no question shows.
+  const mayType = Boolean(session?.mayCompose);
   const line = composeLine(
     asking,
     summary?.role === "controller",

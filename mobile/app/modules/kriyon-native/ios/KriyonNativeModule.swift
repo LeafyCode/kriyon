@@ -201,7 +201,8 @@ public final class KriyonNativeModule: Module {
       self.pairing?.cancel()
       self.pairing = pairing
       self.lock.unlock()
-      return pairing.code()
+      // The code step: {code, role, expiresAtMs}, as JSON.
+      return pairing.offer()
     }
 
     AsyncFunction("finishPairing") { () -> Any in
@@ -294,6 +295,26 @@ public final class KriyonNativeModule: Module {
 
     AsyncFunction("takeControl") { (hostId: String, sessionId: String) in
       try await rust { try await self.started().takeControl(hostId: hostId, sessionId: sessionId) }
+    }
+
+    AsyncFunction("giveBack") { (hostId: String, sessionId: String) in
+      try await rust { try await self.started().giveBack(hostId: hostId, sessionId: sessionId) }
+    }
+
+    // A message to Claude, as the desktop's composer sends it: the computer
+    // types it, then Enter. Resolves once it reached the terminal.
+    AsyncFunction("compose") { (hostId: String, sessionId: String, text: String) in
+      try await rust {
+        try await self.started().compose(hostId: hostId, sessionId: sessionId, text: text)
+      }
+    }
+
+    AsyncFunction("setAlerts") { (on: Bool) in
+      try await rust { try await self.started().setAlerts(on: on) }
+    }
+
+    Function("alertsOn") { () -> Bool in
+      (try? self.started().alertsOn()) ?? true
     }
 
     AsyncFunction("input") { (hostId: String, sessionId: String, bytes: Data) in

@@ -92,10 +92,21 @@ interface KriyonNativeModule {
     event: E,
     listener: KriyonNativeEvents[E]
   ) => EventSubscription;
+  /** Whether this phone's alerts are on, as the person left them. */
+  alertsOn: () => boolean;
   /** Stops the pairing in progress; the phone keeps nothing of it. */
   cancelPairing: () => Promise<void>;
+  /**
+   * Sends a message to Claude in a session this phone controls, as the
+   * desktop's composer does: the computer types it, then Enter. Works with
+   * the screen off; refused, in words, while a question shows. Resolves once
+   * it reached the terminal.
+   */
+  compose: (hostId: string, sessionId: string, text: string) => Promise<void>;
   finishPairing: () => Promise<PairedHost>;
   forget: (hostId: string) => Promise<void>;
+  /** Gives back typing control of a session: the computer holds it again. */
+  giveBack: (hostId: string, sessionId: string) => Promise<void>;
   /**
    * Whether this build can get a push token at all: always on iPhone
    * (Apple's service is the system's); on Android, whether it was built
@@ -108,7 +119,11 @@ interface KriyonNativeModule {
     sessionId: string,
     bytes: Uint8Array
   ) => Promise<void>;
-  /** Starts pairing; resolves to the code to type into the computer. */
+  /**
+   * Starts pairing; resolves to the code step as JSON: `{code, role,
+   * expiresAtMs}`, the code to type into the computer, the role it offers
+   * (`viewer` or `controller`) and until when (Unix ms) it waits.
+   */
   pair: (inviteText: string) => Promise<string>;
   /** Our relay as it stands. */
   relay: () => Promise<PhoneRelay>;
@@ -122,6 +137,11 @@ interface KriyonNativeModule {
   relaySignOut: () => Promise<PhoneRelay>;
   /** Waits for the sign-in started last; whether it signed in. */
   relayWaitSignIn: () => Promise<boolean>;
+  /**
+   * Turns this phone's alerts on or off, kept for the next start: off, each
+   * connected computer forgets its push token; on, each is given it again.
+   */
+  setAlerts: (on: boolean) => Promise<void>;
   /**
    * Gives Rust this phone's raw push token (`apns` or `fcm`); each paired
    * computer gets it sealed for itself. Resolves to whether push is on (a

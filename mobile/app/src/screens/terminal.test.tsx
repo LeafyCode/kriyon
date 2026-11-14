@@ -1,11 +1,5 @@
 import { beforeEach, expect, jest, test } from "@jest/globals";
-import {
-  act,
-  fireEvent,
-  render,
-  screen,
-  waitFor,
-} from "@testing-library/react-native";
+import { act, fireEvent, render, screen } from "@testing-library/react-native";
 import type { HostSummary } from "../../../../src/remote/hostSummary.ts";
 import {
   KriyonNative,
@@ -46,6 +40,8 @@ jest.mock("../../modules/kriyon-native/index.ts", () => ({
       frameListeners.push(listener);
       return { remove: jest.fn() };
     }),
+    compose: jest.fn(() => Promise.resolve()),
+    giveBack: jest.fn(() => Promise.resolve()),
     input: jest.fn(() => Promise.resolve()),
     setView: jest.fn(() => Promise.resolve()),
     takeControl: jest.fn(() => Promise.resolve()),
@@ -161,7 +157,7 @@ test("typing is off until this phone holds control, and Take control asks Rust",
   expect(screen.queryByRole("button", { name: "Take control" })).toBeNull();
 });
 
-test("what is typed goes to Rust as UTF-8, then Enter after a beat", async () => {
+test("with a question showing, a line goes as typed keys, UTF-8, with its Enter", async () => {
   usePhone.setState({ states: { [MAC]: state({}, "you") } });
   await render(<TerminalView hostId={MAC} sessionId="s1" />);
   await fireEvent.changeText(
@@ -172,15 +168,9 @@ test("what is typed goes to Rust as UTF-8, then Enter after a beat", async () =>
   expect(native.input).toHaveBeenCalledWith(
     MAC,
     "s1",
-    new Uint8Array([0xc3, 0xa9])
+    new Uint8Array([0xc3, 0xa9, 13])
   );
-  await waitFor(() =>
-    expect(native.input).toHaveBeenLastCalledWith(
-      MAC,
-      "s1",
-      new Uint8Array([13])
-    )
-  );
+  expect(native.compose).not.toHaveBeenCalled();
   expect(screen.getByLabelText("Type into the terminal").props.value).toBe("");
 });
 
@@ -318,4 +308,38 @@ test("frames that pile up before the page loads are dropped for a fresh screen",
     injected.filter((code) => code.includes("frame(")).length
   ).toBeLessThan(300);
   expect(native.setView).toHaveBeenCalledTimes(2);
+});
+
+test("holding control, this phone can give it back to the computer", async () => {
+  usePhone.setState({ states: { [MAC]: state({}, "you") } });
+  await render(<TerminalView hostId={MAC} sessionId="s1" />);
+  await fireEvent.press(screen.getByRole("button", { name: "Give back" }));
+  expect(native.giveBack).toHaveBeenCalledWith(MAC, "s1");
+});
+
+test("watching, there is nothing to give back", async () => {
+  usePhone.setState({ states: { [MAC]: state({}, "host") } });
+  await render(<TerminalView hostId={MAC} sessionId="s1" />);
+  expect(screen.queryByRole("button", { name: "Give back" })).toBeNull();
+});
+
+test("a line typed with no question showing goes as one compose", async () => {
+  const summary = state({}, "you");
+  const [one] = summary.sessions;
+  usePhone.setState({
+    states: {
+      [MAC]: {
+        ...summary,
+        sessions: one ? [{ ...one, mayCompose: true }] : [],
+      },
+    },
+  });
+  await render(<TerminalView hostId={MAC} sessionId="s1" />);
+  await fireEvent.changeText(
+    screen.getByLabelText("Type into the terminal"),
+    "ls"
+  );
+  await fireEvent.press(screen.getByRole("button", { name: "Enter" }));
+  expect(native.compose).toHaveBeenCalledWith(MAC, "s1", "ls");
+  expect(native.input).not.toHaveBeenCalled();
 });

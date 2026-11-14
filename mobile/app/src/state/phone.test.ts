@@ -7,12 +7,16 @@ import { readableKey, toBase64, usePhone } from "./phone.ts";
 jest.mock("../../modules/kriyon-native/index.ts", () => ({
   KriyonNative: {
     addListener: jest.fn(() => ({ remove: jest.fn() })),
+    alertsOn: jest.fn(() => true),
     cancelPairing: jest.fn(),
+    compose: jest.fn(),
     finishPairing: jest.fn(),
     forget: jest.fn(),
+    giveBack: jest.fn(),
     hosts: jest.fn(),
     input: jest.fn(),
     pair: jest.fn(),
+    setAlerts: jest.fn(),
     setView: jest.fn(),
     start: jest.fn(),
     wake: jest.fn(),
@@ -70,14 +74,44 @@ test("a start that fails says why", async () => {
   expect(usePhone.getState().startError).toBe("keychain read failed (-25308)");
 });
 
+test("pairing shows the code with the role and time the computer offers", async () => {
+  native.pair.mockResolvedValue(
+    '{"code":"123456","role":"controller","expiresAtMs":1800000000000}'
+  );
+  native.finishPairing.mockReturnValue(new Promise(() => undefined));
+  usePhone.getState().pair("kriyon-pair:1:ab");
+  await Promise.resolve();
+  await Promise.resolve();
+  expect(usePhone.getState().pairing).toEqual({
+    code: "123456",
+    expiresAtMs: 1_800_000_000_000,
+    phase: "code",
+    role: "controller",
+  });
+});
+
+test("a code step without its role or time still shows the code", async () => {
+  native.pair.mockResolvedValue('{"code":"654321","role":"admin"}');
+  native.finishPairing.mockReturnValue(new Promise(() => undefined));
+  usePhone.getState().pair("kriyon-pair:1:ab");
+  await Promise.resolve();
+  await Promise.resolve();
+  expect(usePhone.getState().pairing).toEqual({
+    code: "654321",
+    expiresAtMs: null,
+    phase: "code",
+    role: null,
+  });
+});
+
 test("pairing shows the code, then the computer it paired with", async () => {
-  native.pair.mockResolvedValue("123456");
+  native.pair.mockResolvedValue('{"code":"123456"}');
   native.finishPairing.mockResolvedValue(paired(MAC, "Mac"));
   native.hosts.mockResolvedValue([paired(MAC, "Mac")]);
   const done = usePhone.getState().pair("kriyon-pair:1:ab");
   await Promise.resolve();
   await Promise.resolve();
-  expect(usePhone.getState().pairing).toEqual({
+  expect(usePhone.getState().pairing).toMatchObject({
     code: "123456",
     phase: "code",
   });
@@ -322,18 +356,35 @@ test("trying again keeps entries being read", () => {
   expect(usePhone.getState().readable[key]).toEqual(ENTRIES);
 });
 
-test("a message goes to Claude typed, then its Enter after a beat", async () => {
-  jest.useFakeTimers();
-  native.input.mockResolvedValue();
-  const sent = usePhone.getState().sendMessage(MAC, "s1", "hi");
-  await jest.advanceTimersByTimeAsync(0);
-  expect(native.input).toHaveBeenCalledTimes(1);
-  expect(new TextDecoder().decode(native.input.mock.calls[0]?.[2])).toBe("hi");
-  await jest.advanceTimersByTimeAsync(79);
-  // Enter waits its beat.
-  expect(native.input).toHaveBeenCalledTimes(1);
-  await jest.advanceTimersByTimeAsync(1);
-  await sent;
-  expect(new TextDecoder().decode(native.input.mock.calls[1]?.[2])).toBe("\r");
-  jest.useRealTimers();
+test("a message goes to Claude as one compose, the computer typing it", async () => {
+  native.compose.mockResolvedValue();
+  await usePhone.getState().sendMessage(MAC, "s1", "run the tests");
+  expect(native.compose).toHaveBeenCalledWith(MAC, "s1", "run the tests");
+  expect(native.input).not.toHaveBeenCalled();
+});
+
+test("giving back control tells Rust", async () => {
+  native.giveBack.mockResolvedValue();
+  await usePhone.getState().giveBack(MAC, "s1");
+  expect(native.giveBack).toHaveBeenCalledWith(MAC, "s1");
+});
+
+test("alerts start as the phone left them, and turning them off tells Rust", async () => {
+  native.start.mockResolvedValue("ef".repeat(32));
+  native.hosts.mockResolvedValue([]);
+  native.alertsOn.mockReturnValue(false);
+  await usePhone.getState().start("Test phone");
+  expect(usePhone.getState().alertsOn).toBe(false);
+  native.setAlerts.mockResolvedValue();
+  await usePhone.getState().setAlerts(true);
+  expect(native.setAlerts).toHaveBeenCalledWith(true);
+  expect(usePhone.getState().alertsOn).toBe(true);
+});
+
+test("alerts Rust couldn't change stay as they were, saying why", async () => {
+  usePhone.setState({ alertsOn: true });
+  native.setAlerts.mockRejectedValue(new Error("store locked"));
+  await usePhone.getState().setAlerts(false);
+  expect(usePhone.getState().alertsOn).toBe(true);
+  expect(usePhone.getState().alertsError).toBe("store locked");
 });
