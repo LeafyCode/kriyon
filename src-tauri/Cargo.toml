@@ -26,8 +26,8 @@ tauri = { version = "2.12.1", features = ["tray-icon", "macos-private-api", "ima
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-# Already in the tree through iroh (rustls with ring); used for the relay
-# pass API (relay_api.rs).
+# Already in the tree through iroh (rustls with ring); used to reach the
+# push sender (remote_push_rt.rs). The relay API is kriyon-relay-client's.
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls-no-provider"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 kriyon-core = { path = "../crates/kriyon-core" }
