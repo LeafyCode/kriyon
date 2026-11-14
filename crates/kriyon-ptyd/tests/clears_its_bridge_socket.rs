@@ -3,6 +3,10 @@
 //! It used to remove only its session socket, so every session ever run with
 //! the companion on left a dead `<id>.b` in the run dir for good.
 
+// Drives a POSIX shell through the daemon; the Windows path is covered by
+// `windows_daemon.rs`.
+#![cfg(unix)]
+
 use std::io::Write;
 use std::os::unix::net::UnixStream;
 use std::path::Path;

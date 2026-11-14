@@ -133,6 +133,7 @@ impl GitRun {
     /// wins.
     fn command_with(&self, shell_path: Option<&str>) -> Command {
         let mut cmd = Command::new("git");
+        crate::spawn::no_console(&mut cmd);
         cmd.arg("-C").arg(&self.repo).args(&self.args);
         if let Some(path) = shell_path {
             cmd.env("PATH", path);
@@ -369,6 +370,7 @@ fn reap(child: &mut Child) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kriyon_core::paths::Canonical as _;
 
     fn path_of(cmd: &Command) -> Option<OsString> {
         cmd.get_envs()
@@ -589,9 +591,9 @@ mod tests {
         let top = top.expect("rev-parse");
         assert!(
             std::path::Path::new(top.trim())
-                .canonicalize()
+                .canonical()
                 .expect("canonicalize")
-                == dir.path().canonicalize().expect("canonicalize"),
+                == dir.path().canonical().expect("canonicalize"),
             "an inherited GIT_DIR must not win over -C (got {top:?})"
         );
     }

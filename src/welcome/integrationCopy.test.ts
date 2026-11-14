@@ -1,12 +1,20 @@
-import { expect, test } from "vitest";
+import { afterAll, beforeAll, expect, test } from "vitest";
 import type { IntegrationStatus } from "../ipc/bridge.ts";
 import { DEFAULT_INTEGRATION_PREFS } from "../ipc/bridge.ts";
+import { pretendPlatform } from "../test/platform.ts";
 import {
   companionHint,
   hooksHint,
   liveUsageHint,
   REFUSED_TOAST,
 } from "./integrationCopy.ts";
+
+// The copy asserted here is the macOS wording; os.test.ts covers Windows.
+let restorePlatform: () => void = () => undefined;
+beforeAll(() => {
+  restorePlatform = pretendPlatform("mac");
+});
+afterAll(() => restorePlatform());
 
 const ON_PLUGIN = /only in Kriyon's sessions.*settings file has none/;
 const ORG = /organization blocks.*~\/\.claude\/settings\.json/;

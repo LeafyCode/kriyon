@@ -99,8 +99,8 @@ mod tests {
     use crate::{Session, StoreState};
     use kriyon_core::hooks::HookEvent;
     use kriyon_core::session::{SessionId, SessionStatus};
+    use kriyon_core::uds::UnixStream;
     use parking_lot::Mutex;
-    use std::os::unix::net::UnixStream;
     use std::sync::{Arc, Mutex as StdMutex};
     use std::time::{Duration, Instant};
 

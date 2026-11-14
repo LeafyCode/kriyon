@@ -226,12 +226,49 @@ fn trash(path: &std::path::Path) -> Result<Option<std::path::PathBuf>, String> {
         .map(|ns_path| std::path::PathBuf::from(ns_path.to_string())))
 }
 
-/// Kriyon only ships on macOS today; this stub exists so the crate still
-/// compiles on the Linux CI runner (the `objc2-*` crates are macOS-only
-/// dependencies). Mirrors `open_in_code_editor` in `links_cmd`.
-#[cfg(not(target_os = "macos"))]
+/// Windows's own "Delete" from Explorer: into the Recycle Bin, where Restore
+/// can bring it back. No confirmation or progress dialog — except when the item
+/// cannot go to the bin (a network share, a drive with the bin turned off, a
+/// file too big for it). Then Windows would delete it for good, so
+/// `FOF_WANTNUKEWARNING` makes it ask first; saying no fails the delete. The
+/// bin gives no location back, so this always returns `None`.
+///
+/// # Errors
+/// When the shell reports the move failed or was aborted.
+#[cfg(windows)]
+fn trash(path: &std::path::Path) -> Result<Option<std::path::PathBuf>, String> {
+    use std::os::windows::ffi::OsStrExt as _;
+    use windows_sys::Win32::UI::Shell::{
+        SHFileOperationW, FOF_ALLOWUNDO, FOF_NOCONFIRMATION, FOF_NOERRORUI, FOF_SILENT,
+        FOF_WANTNUKEWARNING, FO_DELETE, SHFILEOPSTRUCTW,
+    };
+    // The source list is NUL-separated and ends with a second NUL.
+    let from: Vec<u16> = path.as_os_str().encode_wide().chain([0, 0]).collect();
+    // SAFETY: plain-old-data struct; all zeroes is a valid value.
+    let mut op: SHFILEOPSTRUCTW = unsafe { std::mem::zeroed() };
+    op.wFunc = FO_DELETE;
+    op.pFrom = from.as_ptr();
+    // FOF_NOCONFIRMATION alone would turn "no bin here" into a silent
+    // permanent delete; FOF_WANTNUKEWARNING overrides it for that case only.
+    op.fFlags = u16::try_from(
+        FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_WANTNUKEWARNING | FOF_NOERRORUI | FOF_SILENT,
+    )
+    .unwrap_or_default();
+    // SAFETY: `op` points at `from`, which outlives the call.
+    let code = unsafe { SHFileOperationW(&raw mut op) };
+    if code != 0 || op.fAnyOperationsAborted != 0 {
+        return Err(format!(
+            "could not move it to the Recycle Bin (error {code})"
+        ));
+    }
+    Ok(None)
+}
+
+/// No trash to move to on other platforms; the crate still has to compile on
+/// the Linux CI runner.
+#[cfg(not(any(target_os = "macos", windows)))]
 fn trash(_path: &std::path::Path) -> Result<Option<std::path::PathBuf>, String> {
-    Err("moving to the Trash is only supported on macOS".to_string())
+    Err("moving to the Trash is only supported on macOS and Windows".to_string())
 }
 
 /// Rename an entry in the [All-files browser], in place.

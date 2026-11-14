@@ -26,7 +26,7 @@ installed and signed in.
 - **Download:** get the latest signed DMG from
   [Releases](https://github.com/LeafyCode/kriyon/releases/latest).
 - **Homebrew:** `brew install leafycode/tap/kriyon`
-- **Build from source:** see below.
+- **Build from source:** see below. This is also how to get the Windows beta for now.
 
 ## Build from source
 
@@ -45,6 +45,37 @@ pnpm check        # lint, types, and all tests
 The test copy uses its own bundle id, so it never touches the data of a Kriyon you installed.
 It is unsigned, so macOS notifications won't show unless you sign it (`pnpm smoke --sign`, which
 reads your own Developer ID from `.env`; see `.env.example`).
+
+### Windows (beta, build it yourself)
+
+Windows support is new and there is no signed Windows download yet, so for now you build the
+installer yourself. It needs 64-bit Windows 10 or 11 and these tools:
+
+- [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) with
+  the **Desktop development with C++** workload (the MSVC compiler and the Windows SDK).
+- [Rust](https://rustup.rs/) (stable, the default `x86_64-pc-windows-msvc` toolchain),
+  Node.js 22, [pnpm](https://pnpm.io/installation) and Git.
+- The [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code), installed and signed in.
+- [Python 3](https://www.python.org/downloads/windows/) from python.org (not the Microsoft
+  Store stub). Kriyon's Claude Code hooks run on it; without it, sessions still work but the
+  status line and live session status don't.
+
+Then, in PowerShell:
+
+```powershell
+git clone https://github.com/LeafyCode/kriyon.git
+cd kriyon
+pnpm install
+pnpm tauri build
+```
+
+If PowerShell refuses to run `pnpm` because scripts are disabled, use `pnpm.cmd` instead.
+
+The build makes an installer at `target\release\bundle\nsis\Kriyon_<version>_x64-setup.exe`
+(and an MSI under `target\release\bundle\msi\`). Run the setup file; it installs for your user
+only, with no admin prompt. Because it is unsigned, Windows SmartScreen may warn you: choose
+**More info**, then **Run anyway**. To update, pull the latest code, build again and run the new
+installer; it replaces the old version and keeps your settings.
 
 ## How Kriyon treats Claude Code
 

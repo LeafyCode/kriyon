@@ -7,7 +7,6 @@
 //! its own, so a slow or stuck client never stalls the session ([Skip ahead]).
 
 use std::io::{Read, Write};
-use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -18,6 +17,7 @@ use kriyon_core::lease::DetachedLease;
 use kriyon_core::output_history::OutputHistory;
 use kriyon_core::session::{check_screen_size, EngineError, SessionEngine, SessionId, SpawnSpec};
 use kriyon_core::skip_ahead::{Next, SkipAheadQueue};
+use kriyon_core::uds::{UnixListener, UnixStream};
 use kriyon_core::wire::{ByteStream, Frame, FrameDecoder};
 use parking_lot::{Condvar, Mutex};
 
@@ -551,7 +551,7 @@ pub fn run(
     id: SessionId,
     spec: &SpawnSpec,
     detached_ttl: Duration,
-    stop_signals: libc::sigset_t,
+    stop_signals: StopSignals,
 ) -> std::io::Result<()> {
     // A stale socket file from an unclean prior exit blocks bind and must go —
     // but only a *stale* one. Unlinking a path a live daemon still serves
@@ -660,10 +660,29 @@ fn spawn_reaper(engine: Arc<PtyEngine>, shared: Arc<Shared>, socket_path: PathBu
     });
 }
 
+/// What [`block_stop_signals`] hands to [`run`]: the blocked signal set on Unix.
+#[cfg(unix)]
+pub type StopSignals = libc::sigset_t;
+
+/// Nothing on Windows: there are no signals to turn into a [Tree stop]. Every
+/// way the daemon can be ended there — `TerminateProcess` from the app's
+/// reaper included — closes its Job Object, which ends the whole tree (see
+/// `crate::job`).
+#[cfg(windows)]
+pub type StopSignals = ();
+
+/// Windows has no stop signals to block; see [`StopSignals`].
+#[cfg(windows)]
+pub fn block_stop_signals() -> StopSignals {}
+
+#[cfg(windows)]
+fn spawn_terminator(_engine: Arc<PtyEngine>, _socket_path: PathBuf, _signals: StopSignals) {}
+
 /// Every signal whose default disposition would kill the daemon outright. Each
 /// is turned into a [Tree stop] instead: SIGTERM (a plain `kill`, the app's
 /// reaper), SIGINT and SIGQUIT (a dev build's terminal), SIGHUP (that terminal
 /// closing — the daemon shares its session when the app was launched from one).
+#[cfg(unix)]
 const STOP_SIGNALS: [libc::c_int; 4] = [libc::SIGTERM, libc::SIGINT, libc::SIGQUIT, libc::SIGHUP];
 
 /// Block the [`STOP_SIGNALS`] for the calling thread. Must be called before the daemon spawns
@@ -672,7 +691,8 @@ const STOP_SIGNALS: [libc::c_int; 4] = [libc::SIGTERM, libc::SIGINT, libc::SIGQU
 /// without the mask takes the signal on its default disposition, killing the daemon
 /// outright and leaving its whole tree to launchd. The hosted shell is not
 /// affected: portable-pty clears the signal mask in the child before `exec`.
-pub fn block_stop_signals() -> libc::sigset_t {
+#[cfg(unix)]
+pub fn block_stop_signals() -> StopSignals {
     // SAFETY: `sigset_t` is plain data initialised by `sigemptyset` before use;
     // the calls only read and write that local and this thread's signal mask.
     unsafe {
@@ -690,7 +710,8 @@ pub fn block_stop_signals() -> libc::sigset_t {
 /// the PTY master and leave everything the daemon hosts to launchd — so a plain
 /// `kill <pid>`, or the app's reaper falling back on a daemon whose socket is
 /// dead, would cause exactly the leak the tree stop exists to prevent.
-fn spawn_terminator(engine: Arc<PtyEngine>, socket_path: PathBuf, signals: libc::sigset_t) {
+#[cfg(unix)]
+fn spawn_terminator(engine: Arc<PtyEngine>, socket_path: PathBuf, signals: StopSignals) {
     std::thread::spawn(move || {
         let mut delivered: libc::c_int = 0;
         // SAFETY: `signals` is an initialised set and `delivered` a valid out

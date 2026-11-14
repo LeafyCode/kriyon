@@ -3,8 +3,11 @@
 //! so a Kriyon session survives an app crash and resumes on reattach.
 
 mod bridge;
+#[cfg(windows)]
+mod job;
 mod pty;
 mod server;
+#[cfg(unix)]
 mod tree_stop;
 
 use std::collections::HashMap;
@@ -48,8 +51,9 @@ fn main() {
         std::process::exit(2);
     };
     let cwd = arg(&args, "--cwd").unwrap_or_default();
-    let shell = arg(&args, "--shell")
-        .unwrap_or_else(|| std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into()));
+    let shell = arg(&args, "--shell").unwrap_or_else(|| {
+        kriyon_core::shellinit::user_shell(std::env::var("SHELL").ok().as_deref())
+    });
 
     // The daemon inherits the environment the app set for it (ZDOTDIR etc. are
     // passed through the spawn), so the spec carries no extra per-key env here.
@@ -66,6 +70,8 @@ fn main() {
         .map_or(DEFAULT_DETACHED_TTL, std::time::Duration::from_secs);
 
     // Before the first thread (the bridge's), so every thread inherits the mask.
+    // (On Windows there is no mask: the value is `()`.)
+    #[cfg_attr(windows, allow(clippy::let_unit_value))]
     let stop_signals = server::block_stop_signals();
     bridge::spawn(&id);
     if let Err(e) = server::run(

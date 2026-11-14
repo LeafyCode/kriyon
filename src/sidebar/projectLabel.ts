@@ -1,3 +1,4 @@
+import { pathSegments } from "../platform/path.ts";
 import type { ProjectRow } from "../types.ts";
 
 /**
@@ -23,8 +24,7 @@ export interface ProjectLabel {
 
 /** The path's parent segments, outermost first, with the leaf dropped. */
 function parentSegments(path: string): string[] {
-  const segments = path.split("/").filter((segment) => segment !== "");
-  return segments.slice(0, -1);
+  return pathSegments(path).slice(0, -1);
 }
 
 /** The trailing `depth` parent segments, rendered as a qualifier. */

@@ -13,7 +13,9 @@
 //! control moves each foreground command into its own process group, so the
 //! PTY's foreground process group id — `tpgid`, the same `tcgetpgrp` state the
 //! daemon's own `foreground_busy` reads — is the shell's own pid when the shell
-//! sits at its prompt, and the foreground command's pid otherwise.
+//! sits at its prompt, and the foreground command's pid otherwise. Windows has
+//! no terminal foreground; [`windows_command_of`] stands in for it, on both
+//! sides.
 //!
 //! This module is the pure half: parsing a `ps` table and folding it into a
 //! verdict. The `ps` invocation itself lives in the Tauri shell.
@@ -161,11 +163,20 @@ const DAEMON_EXECUTABLE: &str = "kriyon-ptyd";
 /// daemon", shared by the sweep index and the per-session socket match so the
 /// two can never drift.
 fn is_daemon_row(row: &ProcRow) -> bool {
-    row.cmd
-        .split_whitespace()
-        .next()
-        .and_then(|exe| exe.rsplit('/').next())
-        == Some(DAEMON_EXECUTABLE)
+    row.cmd.split_whitespace().next().map(program_name) == Some(DAEMON_EXECUTABLE)
+}
+
+/// A path's last segment by either separator: `/` everywhere, and `\` too,
+/// which Windows paths use (a macOS file name with a backslash in it is not
+/// something a process table ever shows for a daemon or `claude`).
+fn last_segment(token: &str) -> &str {
+    token.rsplit(['/', '\\']).next().unwrap_or(token)
+}
+
+/// A program token's name: its last path segment without a Windows `.exe`.
+fn program_name(token: &str) -> &str {
+    let name = last_segment(token);
+    name.strip_suffix(".exe").unwrap_or(name)
 }
 
 /// Whether a process-table row is `session_id`'s [PTY daemon].
@@ -182,7 +193,7 @@ fn is_session_daemon(row: &ProcRow, session_id: &str) -> bool {
     let socket = format!("{session_id}.sock");
     row.cmd
         .split_whitespace()
-        .any(|token| token.rsplit('/').next() == Some(socket.as_str()))
+        .any(|token| last_segment(token) == socket)
 }
 
 /// The session id a [PTY daemon] row serves — but only if its [Session socket]
@@ -206,7 +217,10 @@ pub fn daemon_session_id(row: &ProcRow, run_dir: &str) -> Option<String> {
     if !crate::daemon::is_valid_session_id(id) {
         return None;
     }
-    let spawned_as = format!("--socket {run_dir}/{id}.sock --id {id}");
+    // Joined the way `spawn_daemon` joins it, so a Windows run dir reads with
+    // its own separator.
+    let socket = std::path::Path::new(run_dir).join(format!("{id}.sock"));
+    let spawned_as = format!("--socket {} --id {id}", socket.display());
     row.cmd.contains(&spawned_as).then(|| id.to_string())
 }
 
@@ -510,18 +524,119 @@ pub const fn may_still_be_blocked(foreground: PtyForeground) -> bool {
 /// read alike. Matching whole segments (not a substring) is what keeps
 /// `claudette` and a `~/.claude/…` file path from reading as the process.
 ///
+/// On Windows an npm install has no `claude` file to run: `claude.cmd`, or
+/// PowerShell's `claude.ps1` starting node on the package's own folder,
+/// `@anthropic-ai/claude-code`. Both read as `claude` too.
+///
 /// Deliberately generous: a false positive only means the seed gate stays as
 /// permissive as it was before the gate existed, while a false negative would
 /// hide a session that genuinely needs the user.
 fn looks_like_claude(cmd: &str) -> bool {
-    cmd.split_whitespace()
-        .flat_map(|token| token.split('/'))
-        .any(|segment| segment == "claude")
+    cmd.split_whitespace().any(|token| {
+        let segments: Vec<&str> = token.split(['/', '\\']).collect();
+        segments
+            .iter()
+            .any(|segment| matches!(*segment, "claude" | "claude.exe" | "claude.cmd"))
+            || segments
+                .windows(2)
+                .any(|pair| pair == ["@anthropic-ai", "claude-code"])
+    })
+}
+
+/// One process as Windows reports it: no terminal, no process groups, and a
+/// command line that has already been split into arguments.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WindowsProcess {
+    pub pid: i32,
+    pub ppid: i32,
+    /// The image file name (`kriyon-ptyd.exe`).
+    pub exe: String,
+    /// The arguments after the program, or empty when the command line could
+    /// not be read (another user's process, a protected one).
+    pub args: Vec<String>,
+}
+
+/// Console hosts a pseudo console starts beside the shell, as children of the
+/// daemon. They are never the session's shell.
+const CONSOLE_HOSTS: [&str; 2] = ["conhost", "OpenConsole"];
+
+/// Windows processes as the rows a `ps` sweep would give, so every question
+/// the [`ProcessTree`] answers works unchanged.
+///
+/// - `cmd` is the program's name (no folder, no `.exe`, so a path with spaces
+///   can't split it) followed by its arguments, whitespace-joined like `ps`.
+/// - Windows has no terminal foreground, so it is stood in for where it
+///   matters — a [PTY daemon]'s shell: a shell with a child is running that
+///   command (its `tpgid` is the child), one without sits at its prompt (its
+///   own pid). A console host under the daemon reads as "at its prompt", the
+///   weakest verdict, so it never outweighs the real shell. Every other row
+///   has no terminal (`-1`).
+#[must_use]
+pub fn rows_from_windows(procs: &[WindowsProcess]) -> Vec<ProcRow> {
+    let name = |p: &WindowsProcess| program_name(&p.exe).to_string();
+    let daemons: HashSet<i32> = procs
+        .iter()
+        .filter(|p| name(p) == DAEMON_EXECUTABLE)
+        .map(|p| p.pid)
+        .collect();
+    procs
+        .iter()
+        .map(|p| {
+            let program = name(p);
+            let tpgid = if !daemons.contains(&p.ppid) {
+                -1
+            } else if CONSOLE_HOSTS.contains(&program.as_str()) {
+                p.pid
+            } else {
+                windows_command_of(p.pid, procs.iter().map(|q| (q.pid, q.ppid))).unwrap_or(p.pid)
+            };
+            let mut cmd = program;
+            for arg in &p.args {
+                cmd.push(' ');
+                cmd.push_str(arg);
+            }
+            ProcRow {
+                pid: p.pid,
+                ppid: p.ppid,
+                tpgid,
+                cmd,
+            }
+        })
+        .collect()
+}
+
+/// The command a Windows [PTY daemon]'s shell is running: a live process whose
+/// parent is `shell`, or `None` when the shell sits at its prompt. `procs` is
+/// `(pid, parent pid)` pairs.
+///
+/// Windows has no terminal foreground, so this is its one rule for "the shell
+/// is busy". The app's sweep reads it from the whole process table; the daemon
+/// reads it from its shell's Job Object. A process left behind in the job after
+/// the command that started it ended is not the shell's child, so it never
+/// holds a session busy.
+pub fn windows_command_of(shell: i32, procs: impl IntoIterator<Item = (i32, i32)>) -> Option<i32> {
+    procs
+        .into_iter()
+        .find(|&(pid, ppid)| ppid == shell && pid != shell)
+        .map(|(pid, _)| pid)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_windows_shell_is_busy_only_while_it_has_a_child() {
+        // Shell 10 at its prompt; an orphan (parent 11, gone) still in its job.
+        assert_eq!(windows_command_of(10, [(10, 5), (12, 11)]), None);
+        // Shell 10 running claude (20), which has a child of its own (30).
+        assert_eq!(
+            windows_command_of(10, [(10, 5), (20, 10), (30, 20)]),
+            Some(20)
+        );
+        // A process is never its own command.
+        assert_eq!(windows_command_of(10, [(10, 10)]), None);
+    }
 
     fn seat(pgid: i32, foreground_pgid: i32, on_session_tty: bool) -> TerminalSeat {
         TerminalSeat {
@@ -649,10 +764,19 @@ mod tests {
             "/opt/homebrew/bin/claude --resume",
             "node /Users/x/.local/share/claude/cli.js",
             "/usr/bin/node /opt/claude",
+            // npm on Windows: PowerShell's claude.ps1 starts node on the
+            // package itself, and cmd runs claude.cmd.
+            r"node C:\Users\you\AppData\Roaming\npm\node_modules\@anthropic-ai\claude-code\cli.js",
+            r"cmd /d /s /c C:\Users\you\AppData\Roaming\npm\claude.cmd",
         ] {
             assert!(looks_like_claude(cmd), "{cmd} should read as claude");
         }
-        for cmd in ["/bin/zsh -l", "vim ~/.claude/settings.json", "claudette"] {
+        for cmd in [
+            "/bin/zsh -l",
+            "vim ~/.claude/settings.json",
+            "claudette",
+            "node /work/claude-code/cli.js",
+        ] {
             assert!(!looks_like_claude(cmd), "{cmd} should not read as claude");
         }
     }
@@ -1014,6 +1138,8 @@ mod tests {
         )
     }
 
+    // POSIX run-dir fixture; see `a_windows_daemon_is_found_by_its_session_socket`.
+    #[cfg(unix)]
     #[test]
     fn a_daemon_in_the_run_dir_yields_its_session_id() {
         let row = proc(100, 1, &daemon_cmd(RUN_DIR, "0e8f9a2b-1c3d"));
@@ -1023,6 +1149,66 @@ mod tests {
         );
     }
 
+    fn win(pid: i32, parent: i32, exe: &str, args: &[&str]) -> WindowsProcess {
+        WindowsProcess {
+            pid,
+            ppid: parent,
+            exe: exe.to_string(),
+            args: args.iter().map(ToString::to_string).collect(),
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_windows_daemon_is_found_by_its_session_socket() {
+        let run_dir = r"C:\Users\Jane Doe\.claude\kriyon\run";
+        let socket = format!(r"{run_dir}\abc-123.sock");
+        let rows = rows_from_windows(&[win(
+            100,
+            1,
+            "kriyon-ptyd.exe",
+            &["--socket", &socket, "--id", "abc-123"],
+        )]);
+        assert_eq!(
+            daemon_session_id(&rows[0], run_dir).as_deref(),
+            Some("abc-123")
+        );
+        let tree = ProcessTree::new(&rows);
+        assert_eq!(tree.daemon_pids("abc-123").collect::<Vec<_>>(), [100]);
+    }
+
+    #[test]
+    fn a_windows_shell_reads_as_at_its_prompt_or_running_claude() {
+        let daemon = win(
+            100,
+            1,
+            "kriyon-ptyd.exe",
+            &["--socket", "s.sock", "--id", "s"],
+        );
+        let conhost = win(101, 100, "conhost.exe", &["--headless"]);
+        let shell = win(102, 100, "powershell.exe", &[]);
+        let at_prompt = rows_from_windows(&[daemon.clone(), conhost.clone(), shell.clone()]);
+        assert_eq!(
+            ProcessTree::new(&at_prompt).foreground("s"),
+            PtyForeground::ShellPrompt
+        );
+
+        let claude = win(103, 102, "claude.exe", &[]);
+        let running = rows_from_windows(&[daemon, conhost, shell, claude]);
+        let tree = ProcessTree::new(&running);
+        assert_eq!(tree.foreground("s"), PtyForeground::Claude);
+        assert_eq!(tree.claude_pid("s"), Some(103));
+    }
+
+    #[test]
+    fn a_windows_program_path_with_spaces_cannot_split_its_name() {
+        let rows = rows_from_windows(&[win(7, 1, "kriyon-ptyd.exe", &["--id", "x"])]);
+        assert_eq!(rows[0].cmd, "kriyon-ptyd --id x");
+        assert_eq!(rows[0].tpgid, -1);
+    }
+
+    // POSIX run-dir fixture; see `a_windows_daemon_is_found_by_its_session_socket`.
+    #[cfg(unix)]
     #[test]
     fn a_run_dir_containing_spaces_still_matches() {
         let run_dir = "/Users/first last/.claude/kriyon/run";

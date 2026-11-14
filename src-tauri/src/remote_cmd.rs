@@ -253,7 +253,7 @@ impl kriyon_remote_link::host::PairedDevices for StoreDevices {
 }
 
 /// The host's [Device key], made on first use, kept in this computer's
-/// keychain (macOS) or keyring (Linux).
+/// keychain (macOS), keyring (Linux) or Credential Manager (Windows).
 pub(crate) fn device_key(app: &tauri::AppHandle) -> Result<[u8; 32], String> {
     // On Linux each keyring read is a D-Bus round trip, and the key never
     // changes once had: read it once per run.
@@ -263,8 +263,18 @@ pub(crate) fn device_key(app: &tauri::AppHandle) -> Result<[u8; 32], String> {
     if let Some(key) = HAD.get() {
         return Ok(*key);
     }
-    let vault = crate::device_key::key_vault(&app.config().identifier)
-        .ok_or_else(|| "remote access needs macOS or Linux for now".to_string())?;
+    let local_data = {
+        use tauri::Manager as _;
+        app.path().app_local_data_dir().ok()
+    };
+    let vault = crate::device_key::key_vault(&app.config().identifier, local_data.as_deref())
+        .ok_or_else(|| {
+            if cfg!(windows) {
+                "this app has no local data folder for its key".to_string()
+            } else {
+                "remote access needs macOS, Linux or Windows for now".to_string()
+            }
+        })?;
     let key = kriyon_remote_link::keys::load_or_create(
         vault.as_ref(),
         kriyon_remote_link::endpoint::generate_secret_key,

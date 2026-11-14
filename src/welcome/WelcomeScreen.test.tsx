@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
-import { beforeEach, expect, test, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, expect, test, vi } from "vitest";
 import {
   activityStats,
   DEFAULT_INTEGRATION_PREFS,
@@ -8,7 +8,15 @@ import {
 } from "../ipc/bridge.ts";
 import { useIntegration } from "../state/integration.ts";
 import { DEFAULT_LAYOUT, useLayout } from "../state/layout.ts";
+import { pretendPlatform } from "../test/platform.ts";
 import { WelcomeScreen } from "./WelcomeScreen.tsx";
+
+// The copy asserted here is the macOS wording; os.test.ts covers Windows.
+let restorePlatform: () => void = () => undefined;
+beforeAll(() => {
+  restorePlatform = pretendPlatform("mac");
+});
+afterAll(() => restorePlatform());
 
 const RE_0 = /Status hooks/;
 const RE_1 = /Live usage and plan limits/;
@@ -62,6 +70,17 @@ test("explains each thing Kriyon adds before anything is written", () => {
   expect(screen.getByText(RE_2)).toBeInTheDocument();
   expect(screen.getByText(RE_3)).toBeInTheDocument();
   expect(screen.getByText(RE_4)).toBeInTheDocument();
+});
+
+// A flex-centred child taller than its scroll box overflows upward, where it
+// can't be scrolled to, so the dialog's top was cut off in a short window.
+// Auto margins centre it only while it fits.
+test("the dialog stays fully reachable in a window shorter than it", () => {
+  render(<WelcomeScreen />);
+  const page = screen.getByTestId("welcome-screen");
+  expect(page.style.alignItems).not.toBe("center");
+  expect(page.style.overflowY).toBe("auto");
+  expect(screen.getByRole("dialog").style.margin).toBe("auto");
 });
 
 function choose(name: string | RegExp, option: "On" | "Off") {

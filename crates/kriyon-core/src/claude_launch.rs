@@ -11,9 +11,17 @@
 //! - A [Nested session] starts under the conversation id it reports from,
 //!   told where to send its first answer (ADR-0049).
 //!
+//! The line is written for the session's shell: POSIX `sh`, or PowerShell
+//! (Windows' session shell, ADR 0055), where env is set for that one `claude`
+//! with `$env:` and removed after, and the seed is read as UTF-8.
+//!
 //! Every id that reaches the command must be a bare token (Claude's ids are
 //! UUIDs); one that isn't is never typed: a resume falls back to a fresh
 //! start, a report address is dropped.
+
+use std::fmt::Write as _;
+
+pub use crate::shellinit::ShellLanguage;
 
 /// Where a [Nested session] sends its first answer.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -34,6 +42,8 @@ pub struct LaunchPlan {
     /// The seed prompt's file, already written, when there is a first prompt.
     pub seed_path: Option<String>,
     pub report: Option<Report>,
+    /// The language of the shell that reads the line.
+    pub shell: ShellLanguage,
 }
 
 /// Whether `id` is safe to type: a bare token, as Claude's ids are.
@@ -66,21 +76,33 @@ pub fn claude_command(plan: &LaunchPlan) -> String {
         .report
         .as_ref()
         .filter(|report| is_bare_id(&report.to) && is_bare_id(&report.from));
-    let env = report.map_or_else(String::new, |report| {
-        let by = if report.split_off {
-            "KRIYON_REPORT_BY=person "
-        } else {
-            ""
-        };
-        format!(
-            "KRIYON_REPORT_TO={} KRIYON_REPORT_FROM={} {by}",
-            report.to, report.from
-        )
-    });
+    let mut env: Vec<(&str, &str)> = Vec::new();
+    if let Some(report) = report {
+        env.push(("KRIYON_REPORT_TO", &report.to));
+        env.push(("KRIYON_REPORT_FROM", &report.from));
+        if report.split_off {
+            env.push(("KRIYON_REPORT_BY", "person"));
+        }
+    }
     let flags = report.map_or_else(String::new, |report| {
         format!(" --session-id {}", report.from)
     });
-    match plan.seed_path.as_deref().filter(|path| safe_path(path)) {
+    let seed = plan
+        .seed_path
+        .as_deref()
+        .filter(|path| safe_path(path, plan.shell));
+    match plan.shell {
+        ShellLanguage::Posix => posix_launch(&env, &flags, seed),
+        ShellLanguage::PowerShell => powershell_launch(&env, &flags, seed),
+    }
+}
+
+fn posix_launch(env: &[(&str, &str)], flags: &str, seed: Option<&str>) -> String {
+    let env = env.iter().fold(String::new(), |mut out, (name, value)| {
+        let _ = write!(out, "{name}={value} ");
+        out
+    });
+    match seed {
         Some(path) => {
             format!("p=\"$(cat \"{path}\")\"; rm -f \"{path}\"; {env}claude{flags} \"$p\"\r")
         }
@@ -88,14 +110,68 @@ pub fn claude_command(plan: &LaunchPlan) -> String {
     }
 }
 
-/// Whether a seed file path is safe inside double quotes: nothing in it
-/// that the shell would read there.
+/// A value inside PowerShell single quotes, where only `'` needs doubling.
+fn ps_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
+}
+
+/// Windows PowerShell 5.1 passes a native program's argument without
+/// escaping the double quotes inside it, so a prompt with a `"` would arrive
+/// split. This escapes them the way the program's argument parser reads them:
+/// a `"` becomes `\"` (backslashes before it doubled), and backslashes ending
+/// the prompt are doubled so they can't escape the closing quote PowerShell
+/// adds.
+const PS_ESCAPED_ARG: &str =
+    r#"(($p.TrimEnd("`r`n") -replace '(\\*)"', '$1$1\"') -replace '(\\+)$', '$1$1')"#;
+
+/// The seed as `claude`'s argument. pwsh 7.3+ escapes a native argument's
+/// quotes itself (`$PSNativeCommandArgumentPassing` is `Standard`), and
+/// escaping them again would hand claude a literal backslash; Windows
+/// PowerShell 5.1 has no such variable, so it gets [`PS_ESCAPED_ARG`].
+fn ps_native_arg() -> String {
+    format!(
+        r#"$(if ($PSNativeCommandArgumentPassing -in $null, 'Legacy') {{ {PS_ESCAPED_ARG} }} else {{ $p.TrimEnd("`r`n") }})"#
+    )
+}
+
+/// The launch line for PowerShell. A `$env:` assignment lasts for the whole
+/// shell, not one command as `NAME=value claude` does in sh, so the variables
+/// are removed again when `claude` ends (even on Ctrl-C), and a `claude`
+/// started later in the same terminal doesn't inherit them.
+fn powershell_launch(env: &[(&str, &str)], flags: &str, seed: Option<&str>) -> String {
+    let read = seed.map_or_else(String::new, |path| {
+        let path = ps_quote(path);
+        format!("$p = Get-Content -Raw -Encoding UTF8 -LiteralPath {path}; Remove-Item -LiteralPath {path}; ")
+    });
+    let arg = seed.map_or_else(String::new, |_| format!(" {}", ps_native_arg()));
+    let claude = format!("claude{flags}{arg}");
+    if env.is_empty() {
+        return format!("{read}{claude}\r");
+    }
+    let set = env.iter().fold(String::new(), |mut out, (name, value)| {
+        let _ = write!(out, "$env:{name}={}; ", ps_quote(value));
+        out
+    });
+    let unset = env
+        .iter()
+        .map(|(name, _)| format!("Env:{name}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("{read}{set}try {{ {claude} }} finally {{ Remove-Item {unset} -ErrorAction Ignore }}\r")
+}
+
+/// Whether a seed file path is safe to type for `shell`: inside POSIX double
+/// quotes, nothing the shell would read there; inside PowerShell single
+/// quotes (a `'` doubled), no control character.
 #[must_use]
-pub fn safe_path(path: &str) -> bool {
-    !path.is_empty()
-        && !path
-            .chars()
-            .any(|c| matches!(c, '"' | '$' | '`' | '\\' | '\n' | '\r') || c.is_control())
+pub fn safe_path(path: &str, shell: ShellLanguage) -> bool {
+    if path.is_empty() || path.chars().any(char::is_control) {
+        return false;
+    }
+    match shell {
+        ShellLanguage::Posix => !path.chars().any(|c| matches!(c, '"' | '$' | '`' | '\\')),
+        ShellLanguage::PowerShell => true,
+    }
 }
 
 #[cfg(test)]
@@ -216,6 +292,101 @@ mod tests {
                 ..LaunchPlan::default()
             };
             assert_eq!(claude_command(&plan), "claude\r", "{path}");
+        }
+    }
+
+    /// The expression that escapes the seed for a native argument where
+    /// PowerShell passes quotes raw (Windows PowerShell 5.1).
+    const PS_ESCAPED: &str =
+        r#"(($p.TrimEnd("`r`n") -replace '(\\*)"', '$1$1\"') -replace '(\\+)$', '$1$1')"#;
+
+    fn ps_arg() -> String {
+        format!(
+            r#"$(if ($PSNativeCommandArgumentPassing -in $null, 'Legacy') {{ {PS_ESCAPED} }} else {{ $p.TrimEnd("`r`n") }})"#
+        )
+    }
+
+    fn powershell(plan: LaunchPlan) -> LaunchPlan {
+        LaunchPlan {
+            shell: ShellLanguage::PowerShell,
+            ..plan
+        }
+    }
+
+    #[test]
+    fn powershell_starts_claude_bare_or_resumes_the_same_way() {
+        assert_eq!(
+            claude_command(&powershell(LaunchPlan::default())),
+            "claude\r"
+        );
+        let resume = powershell(LaunchPlan {
+            claude_session_id: Some("claude-abc".into()),
+            ..LaunchPlan::default()
+        });
+        assert_eq!(claude_command(&resume), "claude --resume claude-abc\r");
+    }
+
+    /// A `$env:` assignment lasts for the whole shell, so it is removed again
+    /// when claude ends, even on Ctrl-C.
+    #[test]
+    fn powershell_sets_a_nested_sessions_env_for_that_claude_only() {
+        let plan = powershell(LaunchPlan {
+            report: Some(report("aaa", "bbb", false)),
+            ..LaunchPlan::default()
+        });
+        assert_eq!(
+            claude_command(&plan),
+            "$env:KRIYON_REPORT_TO='aaa'; $env:KRIYON_REPORT_FROM='bbb'; try { claude --session-id bbb } finally { Remove-Item Env:KRIYON_REPORT_TO, Env:KRIYON_REPORT_FROM -ErrorAction Ignore }\r"
+        );
+        let split = powershell(LaunchPlan {
+            report: Some(report("aaa", "bbb", true)),
+            ..LaunchPlan::default()
+        });
+        assert!(claude_command(&split).contains(
+            "$env:KRIYON_REPORT_BY='person'; try { claude --session-id bbb } finally { Remove-Item Env:KRIYON_REPORT_TO, Env:KRIYON_REPORT_FROM, Env:KRIYON_REPORT_BY -ErrorAction Ignore }"
+        ));
+    }
+
+    /// The seed is read as UTF-8 (Kriyon writes it without a BOM), its file
+    /// removed, and passed escaped only where PowerShell passes quotes raw.
+    #[test]
+    fn powershell_reads_a_seed_from_a_windows_path_and_passes_it() {
+        let plan = powershell(LaunchPlan {
+            seed_path: Some(r"C:\Users\O'Neil\run\s.prompt".into()),
+            ..LaunchPlan::default()
+        });
+        assert_eq!(
+            claude_command(&plan),
+            format!(
+                r"$p = Get-Content -Raw -Encoding UTF8 -LiteralPath 'C:\Users\O''Neil\run\s.prompt'; Remove-Item -LiteralPath 'C:\Users\O''Neil\run\s.prompt'; claude {}{}",
+                ps_arg(),
+                "\r"
+            )
+        );
+        let nested = powershell(LaunchPlan {
+            seed_path: Some(r"C:\r\s.prompt".into()),
+            report: Some(report("aaa", "bbb", false)),
+            ..LaunchPlan::default()
+        });
+        assert!(claude_command(&nested).contains(&format!(
+            "try {{ claude --session-id bbb {} }} finally {{ Remove-Item Env:KRIYON_REPORT_TO, Env:KRIYON_REPORT_FROM -ErrorAction Ignore }}\r",
+            ps_arg()
+        )));
+    }
+
+    #[test]
+    fn a_seed_path_powershell_can_quote_is_one_without_control_characters() {
+        assert!(safe_path(
+            r"C:\Users\me\run\s.prompt",
+            ShellLanguage::PowerShell
+        ));
+        assert!(safe_path("C:\\a'b\\s.prompt", ShellLanguage::PowerShell));
+        assert!(!safe_path(
+            r"C:\Users\me\run\s.prompt",
+            ShellLanguage::Posix
+        ));
+        for bad in ["", "C:\\a\nb", "C:\\a\rb"] {
+            assert!(!safe_path(bad, ShellLanguage::PowerShell), "{bad:?}");
         }
     }
 

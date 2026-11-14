@@ -15,8 +15,7 @@
 //! Edit and Window submenus) mirrors the platform default so the standard
 //! shortcuts keep working.
 //!
-//! Off macOS there is no app-menu bar to reshape, so we fall back to Tauri's
-//! default menu.
+//! Off macOS the app has no menu bar at all (see `run` in `lib.rs`).
 
 /// The menu id of the custom "About Kriyon" item. [`on_event`] emits
 /// `show-about` when this is chosen.
@@ -35,14 +34,13 @@ pub const NEW_SESSION_ID: &str = "new-session";
 /// `show-tour` when this is chosen.
 pub const TOUR_ID: &str = "show-tour";
 
-/// Build the application menu (see the module docs). Custom on macOS, the Tauri
-/// default elsewhere.
+/// Build the macOS application menu (see the module docs).
 ///
 /// # Errors
 ///
 /// Returns an error if any menu item or submenu fails to build.
+#[cfg(target_os = "macos")]
 pub fn build(handle: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
-    #[cfg(target_os = "macos")]
     {
         use tauri::menu::{
             MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder, HELP_SUBMENU_ID,
@@ -100,10 +98,6 @@ pub fn build(handle: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri
         MenuBuilder::new(handle)
             .items(&[&app_menu, &file_menu, &edit_menu, &window_menu, &help_menu])
             .build()
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        tauri::menu::Menu::default(handle)
     }
 }
 

@@ -5,6 +5,10 @@
 //! survivor of a crash nobody relaunched after. These tests run with a
 //! two-second lease (`--detached-ttl-secs`); the shipped default is 30 minutes.
 
+// Drives a POSIX shell through the daemon; the Windows path is covered by
+// `windows_daemon.rs`.
+#![cfg(unix)]
+
 use std::io::Write;
 use std::os::unix::net::UnixStream;
 use std::process::{Child, Command};

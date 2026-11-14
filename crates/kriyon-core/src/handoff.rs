@@ -462,7 +462,9 @@ impl HandoffFileWatch {
     }
 }
 
-#[cfg(test)]
+// The fixtures are POSIX paths (`/tmp`, `/Users/…`); the Windows temp and
+// home rules are covered by `watch_route`'s handoff test in the app.
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use std::time::Duration;

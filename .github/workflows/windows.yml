@@ -1,13 +1,14 @@
-name: Windows (crates)
+name: Windows
 
-# The crates remote access is built from, on Windows: clippy and the tests,
-# so remote access's Windows work can go ahead before the app runs there
-# (docs/superpowers/plans/2026-11-14-remote-windows.md, step 2). The daemon
-# (kriyon-ptyd) and the app (src-tauri) join once PR #48 brings them to
-# Windows; so do kriyon-core's own tests, which #48 ports. No secrets.
+# Kriyon on Windows: the crates remote access is built from, the daemon
+# (kriyon-ptyd) and the app (src-tauri), clippy and the tests, so the Windows
+# work can go ahead without a Windows PC at hand
+# (docs/superpowers/plans/2026-11-14-remote-windows.md, step 2). No secrets:
+# Credential Manager and DPAPI work on the runner as they do on a PC.
 on:
   push:
-    branches: [dev, main]
+    # The Windows branches too: each push is compiled on Windows before a PR.
+    branches: [dev, main, "feat/windows-*"]
     paths:
       - crates/kriyon-core/**
       - crates/kriyon-remote/**
@@ -15,6 +16,9 @@ on:
       - crates/kriyon-relay-client/**
       - crates/kriyon-push/**
       - crates/kriyon-push-seal/**
+      - crates/kriyon-ptyd/**
+      - src-tauri/**
+      - scripts/sidecar-ptyd.mjs
       - Cargo.toml
       - Cargo.lock
       - .github/workflows/windows.yml
@@ -27,6 +31,9 @@ on:
       - crates/kriyon-relay-client/**
       - crates/kriyon-push/**
       - crates/kriyon-push-seal/**
+      - crates/kriyon-ptyd/**
+      - src-tauri/**
+      - scripts/sidecar-ptyd.mjs
       - Cargo.toml
       - Cargo.lock
       - .github/workflows/windows.yml
@@ -62,11 +69,39 @@ jobs:
         run: >-
           cargo clippy -p kriyon-core -p kriyon-remote -p kriyon-remote-link
           -p kriyon-relay-client -p kriyon-push -p kriyon-push-seal --all-targets -- -D warnings
-      - name: Tests (the remote crates; kriyon-core's come with PR #48)
+      - name: Tests
         shell: bash
-        run: cargo test -p kriyon-remote -p kriyon-remote-link -p kriyon-relay-client -p kriyon-push -p kriyon-push-seal
-      # kriyon-core's Windows calls (the computer's name, file identity);
-      # the rest of its tests come with PR #48.
-      - name: kriyon-core's Windows calls
+        run: >-
+          cargo test -p kriyon-core -p kriyon-remote -p kriyon-remote-link
+          -p kriyon-relay-client -p kriyon-push -p kriyon-push-seal
+
+  app:
+    name: Daemon and app on Windows (clippy, test)
+    runs-on: windows-2025
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - run: |
+          rustup toolchain install stable --profile minimal --component clippy
+          rustup default stable
         shell: bash
-        run: "cargo test -p kriyon-core --lib -- host:: private_fs::"
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      # The app's build script needs the daemon staged as its sidecar
+      # (src-tauri/binaries/kriyon-ptyd-<triple>.exe).
+      - run: node scripts/sidecar-ptyd.mjs
+        shell: bash
+      - name: Clippy
+        shell: bash
+        run: cargo clippy -p kriyon-ptyd -p kriyon --all-targets -- -D warnings
+      # Single-threaded, as `pnpm rust:test` runs them: one test changes an
+      # environment variable that would break git tests running beside it.
+      - name: Tests
+        shell: bash
+        run: cargo test -p kriyon-ptyd -p kriyon -- --test-threads=1

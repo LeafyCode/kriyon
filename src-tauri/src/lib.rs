@@ -24,6 +24,8 @@ pub mod notes_cmd;
 pub mod notify;
 pub mod plan_limits_rt;
 pub mod policy;
+#[cfg(windows)]
+pub mod proc_win;
 pub mod prompt_cmd;
 pub mod quit;
 pub mod readable_rt;
@@ -43,6 +45,7 @@ pub mod session_writer;
 pub mod settings_cmd;
 pub mod shell_path;
 pub mod sleep_rt;
+pub mod spawn;
 pub mod status_rt;
 pub mod store;
 pub mod store_cmd;
@@ -353,8 +356,13 @@ fn emit_watch_heartbeats<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
 #[allow(clippy::too_many_lines)]
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
-        .menu(crate::menu::build)
+    let builder = tauri::Builder::default();
+    // A menu bar only on macOS. Windows windows carry none: Tauri's default one
+    // there would add a File → Quit that exits past the close gate, and every
+    // item the app needs is in the window or the tray.
+    #[cfg(target_os = "macos")]
+    let builder = builder.menu(crate::menu::build);
+    builder
         .on_menu_event(|app, event| crate::menu::on_event(app, &event))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
@@ -401,6 +409,11 @@ pub fn run() {
             // first git call or worktree setup does not wait for their shell.
             crate::shell_path::warm();
 
+            // A laptop screen can be shorter than the window's default size;
+            // Windows would place it running off the bottom of the screen.
+            #[cfg(windows)]
+            crate::window_cmd::fit_to_screen(app.handle());
+
             // The app launches with the main window frontmost; seed the flag so
             // the very first notification decision is correct even before any
             // `Focused` event arrives.
@@ -433,7 +446,11 @@ pub fn run() {
                     option_env!("KRIYON_RELAY_API"),
                     option_env!("KRIYON_RELAY_WEB"),
                 ),
-                crate::device_key::app_vault(&app.config().identifier, "relay"),
+                crate::device_key::app_vault(
+                    &app.config().identifier,
+                    "relay",
+                    app.path().app_local_data_dir().ok().as_deref(),
+                ),
             ));
             app.manage(kriyon_relay_client::keeper::PassKeeper::default());
             // The chosen port before anything binds the endpoint.

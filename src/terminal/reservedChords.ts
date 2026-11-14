@@ -1,3 +1,5 @@
+import { isMacPlatform } from "../platform/os.ts";
+
 interface ChordEvent {
   altKey: boolean;
   ctrlKey: boolean;
@@ -6,25 +8,6 @@ interface ChordEvent {
   metaKey: boolean;
   shiftKey: boolean;
   type: string;
-}
-
-const MAC_PLATFORM = /mac/i;
-const MAC_AGENT = /mac os x/i;
-
-/**
- * Whether this frontend runs on macOS. On mac, ⌘ carries app chords and Ctrl
- * belongs to the shell (Ctrl+C interrupt, Ctrl+K kill-line, Ctrl+A/E movement);
- * elsewhere Ctrl stands in for ⌘. Every chord predicate below branches on this,
- * with the platform injectable for tests.
- */
-function isMacPlatform(): boolean {
-  if (typeof navigator === "undefined") {
-    return false;
-  }
-  return (
-    MAC_PLATFORM.test(navigator.platform ?? "") ||
-    MAC_AGENT.test(navigator.userAgent ?? "")
-  );
 }
 
 /** The chord's app-modifier: ⌘ on mac, Ctrl elsewhere — never both. */

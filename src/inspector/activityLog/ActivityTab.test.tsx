@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { beforeEach, expect, test, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, expect, test, vi } from "vitest";
 import {
   type ActivityStep,
   type ActivityTurn,
@@ -9,8 +9,16 @@ import {
   onActivityChanged,
 } from "../../ipc/bridge.ts";
 import { useSessions } from "../../state/sessions.ts";
+import { pretendPlatform } from "../../test/platform.ts";
 import { ActivityTab } from "./ActivityTab.tsx";
 import { STEP_FLAGS } from "./activityLog.ts";
+
+// The copy asserted here is the macOS wording; os.test.ts covers Windows.
+let restorePlatform: () => void = () => undefined;
+beforeAll(() => {
+  restorePlatform = pretendPlatform("mac");
+});
+afterAll(() => restorePlatform());
 
 vi.mock("../../ipc/bridge.ts", () => ({
   activityStats: vi.fn(),
