@@ -21,6 +21,9 @@ module `modules/kriyon-native` (Swift on iPhone, Kotlin on Android, the same cal
   pill goes under its title instead of squeezing it; motion follows `useReduceMotion`. Check
   on the emulator with TalkBack and `font_scale` 2.0: Jest renders as iOS, so an Android-only
   difference (a sheet's scrim, the web view's text zoom) shows only there.
+- **Nothing of a session shows while the app is locked.** `App.tsx` puts the [App lock] or a
+  plain cover in front of every screen; a new screen goes inside `Current`, never beside it.
+  The rules (`state/lock.ts`) are tested; check on a device with a passcode set, and without.
 - **Check Expo against its current docs** (Context7, or `https://docs.expo.dev/llms.txt`):
   Expo changes every SDK, and memory of it goes stale. This is SDK 58.
 - **Add packages by editing `package.json` and running `pnpm install` from the repo root**,

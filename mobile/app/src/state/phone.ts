@@ -1,3 +1,8 @@
+import {
+  authenticateAsync,
+  getEnrolledLevelAsync,
+  SecurityLevel,
+} from "expo-local-authentication";
 import { create } from "zustand";
 import {
   type HostSummary,
@@ -9,6 +14,14 @@ import {
   KriyonNative,
   type PairedHost,
 } from "../../modules/kriyon-native/index.ts";
+import {
+  type AppLock,
+  type LockEvent,
+  type LockState,
+  lockIsOn,
+  nextLock,
+  readAppLock,
+} from "./lock.ts";
 import { type PushStatus, registerPush } from "./push.ts";
 
 /** Which screen shows. */
@@ -73,6 +86,8 @@ interface PhoneStore {
   alertsError: string | null;
   /** Whether this phone's alerts are on, as the person left them. */
   alertsOn: boolean;
+  /** The app lock as the person set it (Rust keeps it). */
+  appLock: AppLock;
   /**
    * The phone's Back (Android's gesture or button, and the screens' own):
    * home from any screen, cancelling a pairing on the way. `false` at home,
@@ -85,6 +100,8 @@ interface PhoneStore {
    * it had none stays, so the terminal keeps saying it.
    */
   closeReadable: (hostId: string, sessionId: string) => Promise<void>;
+  /** The phone has no passcode to ask for: go on without the lock. */
+  continueUnlocked: () => void;
   deviceId: string | null;
   /** A session's readable view changed in Rust: kept whole while it is read. */
   entriesChanged: (event: EntriesChangedEvent) => void;
@@ -97,6 +114,12 @@ interface PhoneStore {
   hideScreen: (hostId: string, sessionId: string) => Promise<void>;
   hostChanged: (state: HostSummary) => void;
   hosts: PairedHost[];
+  /** Locked or open, and since when the app was away. */
+  lock: LockState;
+  /** The app started, went away, came back, or was unlocked. */
+  lockEvent: (event: LockEvent) => void;
+  /** Why the lock didn't open: the phone has no passcode, or its words. */
+  lockProblem: "noPasscode" | string | null;
   /**
    * Start a session in `projectId` on `hostId`, titled `title` or after the
    * project; once it starts, its screen shows.
@@ -143,12 +166,16 @@ interface PhoneStore {
   ) => Promise<void>;
   /** Turn this phone's alerts on or off; Rust keeps it for the next start. */
   setAlerts: (on: boolean) => Promise<void>;
+  /** Change the app lock (on, off, or its time); kept, and used at once. */
+  setAppLock: (change: Partial<AppLock>) => Promise<void>;
   show: (screen: Screen) => void;
   /** Turn an open session's screen on, after what was asked before it. */
   showScreen: (hostId: string, sessionId: string) => Promise<void>;
   start: (deviceName: string) => Promise<void>;
   startError: string | null;
   states: Record<string, HostSummary>;
+  /** Ask the phone (Face ID, Touch ID, fingerprint or passcode) to unlock. */
+  unlock: () => Promise<void>;
   /** Each session's view as last asked of Rust, by `readableKey`. */
   views: Record<string, View>;
 }
@@ -290,10 +317,17 @@ export const usePhone = create<PhoneStore>((set, get) => ({
       };
     });
   },
-  hostChanged: (hostState) =>
+  hostChanged: (hostState) => {
     set((state) => ({
       states: { ...state.states, [hostState.hostId]: hostState },
-    })),
+    }));
+    // A computer made this phone a Controller: the lock is on from now,
+    // kept, so the next start locks before the role is heard again.
+    const { appLock, setAppLock } = get();
+    if (hostState.role === "controller" && appLock.on === null) {
+      setAppLock({ on: true }).catch(() => undefined);
+    }
+  },
   hosts: [],
   newSession: async (hostId, projectId, title) => {
     // One start at a time: a second tap would start a second session.
@@ -394,6 +428,10 @@ export const usePhone = create<PhoneStore>((set, get) => ({
   start: async (deviceName) => {
     try {
       const deviceId = await KriyonNative.start(deviceName);
+      const appLock = readAppLock(KriyonNative.appLock());
+      set({ appLock });
+      get().lockEvent({ kind: "start" });
+      KriyonNative.setPrivateInSwitcher(lockRule().on).catch(() => undefined);
       set({
         alertsOn: KriyonNative.alertsOn(),
         deviceId,
@@ -419,7 +457,56 @@ export const usePhone = create<PhoneStore>((set, get) => ({
     }
   },
   giveBack: (hostId, sessionId) => KriyonNative.giveBack(hostId, sessionId),
+  appLock: { afterS: 300, on: null },
+  setAppLock: async (change) => {
+    const appLock = { ...get().appLock, ...change };
+    set({ appLock });
+    await Promise.all([
+      KriyonNative.setAppLock(appLock.on, appLock.afterS),
+      KriyonNative.setPrivateInSwitcher(lockRule().on),
+    ]);
+  },
+  lock: { awayAtMs: null, locked: false },
+  lockEvent: (event) =>
+    set((state) => ({ lock: nextLock(state.lock, event, lockRule()) })),
+  lockProblem: null,
+  unlock: async () => {
+    set({ lockProblem: null });
+    try {
+      const level = await getEnrolledLevelAsync();
+      if (level === SecurityLevel.NONE) {
+        set({ lockProblem: "noPasscode" });
+        return;
+      }
+      // Face ID, Touch ID or the fingerprint, and the passcode after them.
+      const result = await authenticateAsync({
+        cancelLabel: "Cancel",
+        disableDeviceFallback: false,
+        promptMessage: "Unlock Kriyon",
+      });
+      if (result.success) {
+        get().lockEvent({ kind: "unlocked" });
+      } else if (result.error !== "user_cancel") {
+        set({ lockProblem: result.error });
+      }
+    } catch (error) {
+      set({ lockProblem: reasonOf(error) });
+    }
+  },
+  continueUnlocked: () => {
+    set({ lockProblem: null });
+    get().lockEvent({ kind: "unlocked" });
+  },
 }));
+
+/** The lock as it applies now: on or off, and the time away that locks it. */
+function lockRule(): { afterS: number; on: boolean } {
+  const { appLock, states } = usePhone.getState();
+  const controller = Object.values(states).some(
+    (summary) => summary.role === "controller"
+  );
+  return { afterS: appLock.afterS, on: lockIsOn(appLock, controller) };
+}
 
 /**
  * Bytes as base64, for the terminal page: a script can carry only text.

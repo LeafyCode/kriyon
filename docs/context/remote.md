@@ -57,6 +57,9 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
   [Session] beside its list entry: the question it asks, the tool running and since when, how the
   last turn ended and what it changed. Built only from cheap sources the [Host] already holds,
   never the transcript or git, and redacted. _Avoid_: preview, card data.
+- **App lock** (`mobile/app/src/state/lock.ts`) — the phone app asking for Face ID, Touch ID, the
+  fingerprint or its passcode before any session shows: on opening, and after the set time away.
+  On by default once a computer made the phone a Controller. _Avoid_: PIN screen, passcode lock.
 - **Session view** (`kriyon_remote_link::device_runtime::SessionView`, `set_view`) — how a
   [Remote device] wants one [Session] shown: open, with its screen and its [Readable view]
   entries each on or off, or closed. Sent whole and numbered in the order asked, so a late call

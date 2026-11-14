@@ -29,6 +29,31 @@ pub const DEVICE_KEY: &str = "device-key";
 /// Kept while the person has this phone's alerts off (absent: on).
 pub const ALERTS_OFF_KEY: &str = "alerts-off";
 
+/// The app lock as the person set it (absent: not chosen yet).
+pub const APP_LOCK_KEY: &str = "app-lock";
+
+/// How long the app may be away before it locks again, in seconds: at
+/// once, a minute, five, fifteen.
+pub const APP_LOCK_AFTER_S: [u32; 4] = [0, 60, 300, 900];
+
+/// The app lock: on, off, or not chosen (`None`: on whenever a computer
+/// gave this phone the Controller role); and how long away locks it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AppLock {
+    on: Option<bool>,
+    after_s: u32,
+}
+
+impl Default for AppLock {
+    fn default() -> Self {
+        Self {
+            on: None,
+            after_s: 300,
+        }
+    }
+}
+
 /// Why the phone's store couldn't do something.
 #[derive(Debug, PartialEq, Eq, uniffi::Error)]
 pub enum StoreError {
@@ -932,6 +957,44 @@ impl MobileDevice {
         Ok(true)
     }
 
+    /// The app lock as the person set it, as JSON: `{on, afterS}`, `on` being
+    /// `null` until they choose (then the app locks whenever a computer
+    /// gave this phone the Controller role). A store that can't be read
+    /// gives the default; the app's own rules decide the rest.
+    #[must_use]
+    pub fn app_lock_json(&self) -> String {
+        let kept = self
+            .shared
+            .store
+            .read(APP_LOCK_KEY.into())
+            .ok()
+            .flatten()
+            .and_then(|bytes| serde_json::from_slice::<AppLock>(&bytes).ok())
+            .unwrap_or_default();
+        json(&kept)
+    }
+
+    /// Keep the app lock: `on` (`None`: as the role says) and how long away
+    /// locks it, one of [`APP_LOCK_AFTER_S`].
+    ///
+    /// # Errors
+    /// A time that isn't one of those, or the store couldn't keep it.
+    pub fn set_app_lock(&self, on: Option<bool>, after_s: u32) -> Result<(), MobileError> {
+        if !APP_LOCK_AFTER_S.contains(&after_s) {
+            return Err(MobileError::Invalid {
+                reason: format!("not a lock time: {after_s} s"),
+            });
+        }
+        let kept =
+            serde_json::to_vec(&AppLock { on, after_s }).map_err(|e| MobileError::Store {
+                reason: e.to_string(),
+            })?;
+        self.shared
+            .store
+            .write(APP_LOCK_KEY.into(), kept)
+            .map_err(|e| store_error(&e))
+    }
+
     /// Whether this phone's alerts are on, as the person left them.
     #[must_use]
     pub fn alerts_on(&self) -> bool {
@@ -1238,6 +1301,21 @@ pub(crate) mod tests {
             loopback(),
         )
         .expect("starts")
+    }
+
+    #[test]
+    fn the_app_lock_is_kept_and_starts_as_the_role_says() {
+        let store = Arc::new(Memory::default());
+        let first = phone(&store);
+        assert_eq!(
+            first.app_lock_json(),
+            r#"{"on":null,"afterS":300}"#,
+            "not chosen yet: the role decides, five minutes"
+        );
+        first.set_app_lock(Some(false), 60).expect("kept");
+        assert_eq!(phone(&store).app_lock_json(), r#"{"on":false,"afterS":60}"#);
+        let odd = phone(&store).set_app_lock(Some(true), 7);
+        assert!(matches!(odd, Err(MobileError::Invalid { .. })), "{odd:?}");
     }
 
     #[test]

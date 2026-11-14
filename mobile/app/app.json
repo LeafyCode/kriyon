@@ -43,6 +43,12 @@
           "recordAudioAndroid": false,
           "barcodeScannerEnabled": true
         }
+      ],
+      [
+        "expo-local-authentication",
+        {
+          "faceIDPermission": "Kriyon asks for Face ID to unlock it, so only you can reach your computers' sessions."
+        }
       ]
     ]
   }

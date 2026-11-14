@@ -11,7 +11,7 @@ import { JetBrainsMono_500Medium } from "@expo-google-fonts/jetbrains-mono/500Me
 import { modelName, deviceName as phoneName } from "expo-device";
 import { useFonts } from "expo-font";
 import { StatusBar } from "expo-status-bar";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import {
   AppState,
   BackHandler,
@@ -28,10 +28,12 @@ import {
 import { KriyonNative } from "../modules/kriyon-native/index.ts";
 import { useLook } from "./kit.tsx";
 import { HomeScreen } from "./screens/HomeScreen.tsx";
+import { Cover, LockScreen } from "./screens/LockScreen.tsx";
 import { NewSessionSheet } from "./screens/NewSessionScreen.tsx";
 import { PairScreen } from "./screens/PairScreen.tsx";
 import { SessionScreen } from "./screens/SessionScreen.tsx";
 import { SettingsScreen } from "./screens/SettingsScreen.tsx";
+import { lockIsOn } from "./state/lock.ts";
 import { usePhone } from "./state/phone.ts";
 import { useMode } from "./theme.ts";
 
@@ -95,6 +97,16 @@ export function App() {
   const [fontsLoaded, fontsFailed] = useFonts(FONTS);
   const mode = useMode();
   const { t } = useLook();
+  const locked = usePhone((state) => state.lock.locked);
+  const lockOn = usePhone((state) =>
+    lockIsOn(
+      state.appLock,
+      Object.values(state.states).some((one) => one.role === "controller")
+    )
+  );
+  // Not in front: covered, so the app switcher's picture shows no session
+  // (iPhone takes it as the app goes inactive; Android is told natively).
+  const [covered, setCovered] = useState(false);
   useEffect(() => {
     const { entriesChanged, hostChanged, start } = usePhone.getState();
     const changes = KriyonNative.addListener("onHostChanged", hostChanged);
@@ -105,9 +117,15 @@ export function App() {
     start(deviceName()).catch(() => undefined);
     // Back in front, or the network came back: dial now, not after backoff.
     const front = AppState.addEventListener("change", (state) => {
+      const { lockEvent } = usePhone.getState();
+      setCovered(state !== "active");
+      if (state === "background") {
+        lockEvent({ atMs: Date.now(), kind: "away" });
+      }
       if (state !== "active") {
         return;
       }
+      lockEvent({ atMs: Date.now(), kind: "back" });
       // A start that failed while the phone was locked (its keys are
       // readable only while it is unlocked) is tried again now.
       if (usePhone.getState().startError) {
@@ -147,7 +165,10 @@ export function App() {
           behavior={Platform.OS === "android" ? "padding" : undefined}
           style={{ flex: 1 }}
         >
-          <Current />
+          {/* Locked: nothing of any session shows, only the lock. */}
+          {locked ? <LockScreen /> : null}
+          {!locked && covered && lockOn ? <Cover /> : null}
+          {locked || (covered && lockOn) ? null : <Current />}
         </KeyboardAvoidingView>
         <StatusBar style={mode === "dark" ? "light" : "dark"} />
       </SafeAreaView>

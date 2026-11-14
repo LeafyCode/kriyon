@@ -22,6 +22,8 @@ jest.mock("../../modules/kriyon-native/index.ts", () => ({
     hosts: jest.fn(() => Promise.resolve([])),
     pair: jest.fn(),
     setAlerts: jest.fn(),
+    setAppLock: jest.fn(() => Promise.resolve()),
+    setPrivateInSwitcher: jest.fn(() => Promise.resolve()),
     start: jest.fn(),
     wake: jest.fn(),
   },
@@ -293,6 +295,25 @@ test("a failed pairing says why", async () => {
   expect(
     screen.getByText("that isn't a Kriyon pairing code")
   ).toBeOnTheScreen();
+});
+
+test("the app lock is a switch with its time, kept as the person sets them", async () => {
+  usePhone.setState({
+    appLock: { afterS: 300, on: null },
+    states: { [MAC]: connected },
+  });
+  await render(<SettingsScreen />);
+  // A Controller's phone: on, not chosen yet.
+  const lock = screen.getByRole("switch", { name: "App lock" });
+  expect(lock).toBeChecked();
+  expect(screen.getByRole("tab", { name: "5 min" })).toBeSelected();
+  await fireEvent.press(screen.getByRole("tab", { name: "1 min" }));
+  expect(native.setAppLock).toHaveBeenLastCalledWith(null, 60);
+  await fireEvent(lock, "valueChange", false);
+  expect(native.setAppLock).toHaveBeenLastCalledWith(false, 60);
+  expect(screen.getByRole("switch", { name: "App lock" })).not.toBeChecked();
+  // Off: no time to choose.
+  expect(screen.queryByRole("tab", { name: "1 min" })).toBeNull();
 });
 
 test("alerts are a switch that says whether they are on, and turns them off", async () => {

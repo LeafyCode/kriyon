@@ -16,11 +16,20 @@ jest.mock(
 jest.mock("../modules/kriyon-native/index.ts", () => ({
   KriyonNative: {
     alertsOn: jest.fn(() => true),
+    appLock: jest.fn(() => '{"on":null,"afterS":300}'),
+    setAppLock: jest.fn(() => Promise.resolve()),
+    setPrivateInSwitcher: jest.fn(() => Promise.resolve()),
     addListener: jest.fn(() => ({ remove: jest.fn() })),
     hosts: jest.fn(() => Promise.resolve([])),
     start: jest.fn(() => Promise.resolve("ef".repeat(32))),
     wake: jest.fn(),
   },
+}));
+
+jest.mock("expo-local-authentication", () => ({
+  authenticateAsync: jest.fn(() => new Promise(() => undefined)),
+  getEnrolledLevelAsync: jest.fn(() => Promise.resolve(3)),
+  SecurityLevel: { BIOMETRIC_STRONG: 3, BIOMETRIC_WEAK: 2, NONE: 0, SECRET: 1 },
 }));
 
 jest.mock("./state/push.ts", () => ({
@@ -115,5 +124,19 @@ test("a start that failed (the phone was locked) is tried again when the app com
     expect(usePhone.getState().deviceId).toBe("ef".repeat(32))
   );
   expect(usePhone.getState().startError).toBeNull();
+  listen.mockRestore();
+});
+
+test("with the lock on, the app opens on the lock, not on its sessions", async () => {
+  const { AppState } =
+    jest.requireActual<typeof import("react-native")>("react-native");
+  const listen = jest
+    .spyOn(AppState, "addEventListener")
+    .mockImplementation((() => ({ remove: jest.fn() })) as never);
+  native.appLock.mockReturnValue('{"on":true,"afterS":300}');
+  await render(<App />);
+  expect(await screen.findByText("Kriyon is locked")).toBeOnTheScreen();
+  expect(screen.queryByText("Sessions")).toBeNull();
+  expect(screen.getByRole("button", { name: "Unlock" })).toBeOnTheScreen();
   listen.mockRestore();
 });

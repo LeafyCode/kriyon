@@ -4,6 +4,9 @@
 
 package com.leafycode.kriyon.nativemodule
 
+import android.os.Build
+import android.view.WindowManager
+import expo.modules.kotlin.functions.Queues
 import expo.modules.kotlin.exception.CodedException
 import expo.modules.kotlin.exception.Exceptions
 import expo.modules.kotlin.functions.Coroutine
@@ -228,6 +231,29 @@ class KriyonNativeModule : Module() {
     Function("alertsOn") {
       synchronized(lock) { device }?.alertsOn() ?: true
     }
+
+    // The app lock as the person set it: {on, afterS}, `on` null until chosen.
+    Function("appLock") {
+      synchronized(lock) { device }?.appLockJson() ?: """{"on":null,"afterS":300}"""
+    }
+
+    AsyncFunction("setAppLock") Coroutine { on: Boolean?, afterS: Int ->
+      rust { started().setAppLock(on, afterS.toUInt()) }
+    }
+
+    // With the lock on, the app switcher shows no picture of the app: from
+    // Android 13 the system's own switch; before it, a secure window (which
+    // also keeps screenshots out).
+    AsyncFunction("setPrivateInSwitcher") { on: Boolean ->
+      val activity = appContext.currentActivity ?: return@AsyncFunction
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        activity.setRecentsScreenshotEnabled(!on)
+      } else if (on) {
+        activity.window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+      } else {
+        activity.window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+      }
+    }.runOnQueue(Queues.MAIN)
 
     AsyncFunction("input") Coroutine { hostId: String, sessionId: String, bytes: ByteArray ->
       rust { started().input(hostId, sessionId, bytes) }

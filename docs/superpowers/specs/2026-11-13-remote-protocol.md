@@ -502,9 +502,17 @@ end in the behaviour above, with no lost session and no replayed input.
 ## Open
 
 - Exact Tailscale port and how the host learns its Tailscale address (spike).
-- An app lock on the phone, since a stolen Controller phone has shell access
-  until the person removes it on the host.
 
-Decided since: the readable view's entries (§6) and their nested-record
+Decided since: the phone's app lock. A stolen Controller phone could type
+into its computer's terminal until the person removes it there, so the app
+asks for Face ID, Touch ID, the fingerprint or the phone's passcode before
+any session shows: on opening, and after it was in the background longer
+than the person's setting (at once, 1, 5 or 15 minutes; 5 by default). It is
+on by default once any computer made the phone a Controller, optional for a
+Viewer-only phone, and the person may turn it off. While locked, and in the
+app switcher, the app shows a plain cover; alerts still arrive, as they
+carry nothing of a session. A phone with no passcode or biometrics can't be
+asked: the app says so and goes on. The setting is kept in the phone's
+store. Also decided: the readable view's entries (§6) and their nested-record
 framing (§3); `kriyon-remote` keeps its own codec (§3) rather than the
 [Daemon frame]'s, since its limits, compression and unknown-tag rule differ.

@@ -1,4 +1,8 @@
 import { beforeEach, expect, jest, test } from "@jest/globals";
+import {
+  authenticateAsync,
+  getEnrolledLevelAsync,
+} from "expo-local-authentication";
 import type { HostSummary } from "../../../../src/remote/hostSummary.ts";
 import type { PairedHost } from "../../modules/kriyon-native/index.ts";
 import { KriyonNative } from "../../modules/kriyon-native/index.ts";
@@ -8,6 +12,7 @@ jest.mock("../../modules/kriyon-native/index.ts", () => ({
   KriyonNative: {
     addListener: jest.fn(() => ({ remove: jest.fn() })),
     alertsOn: jest.fn(() => true),
+    appLock: jest.fn(() => '{"on":null,"afterS":300}'),
     cancelPairing: jest.fn(),
     compose: jest.fn(),
     finishPairing: jest.fn(),
@@ -17,10 +22,18 @@ jest.mock("../../modules/kriyon-native/index.ts", () => ({
     input: jest.fn(),
     pair: jest.fn(),
     setAlerts: jest.fn(),
+    setAppLock: jest.fn(() => Promise.resolve()),
+    setPrivateInSwitcher: jest.fn(() => Promise.resolve()),
     setView: jest.fn(),
     start: jest.fn(),
     wake: jest.fn(),
   },
+}));
+
+jest.mock("expo-local-authentication", () => ({
+  authenticateAsync: jest.fn(),
+  getEnrolledLevelAsync: jest.fn(),
+  SecurityLevel: { BIOMETRIC_STRONG: 3, BIOMETRIC_WEAK: 2, NONE: 0, SECRET: 1 },
 }));
 
 jest.mock("./push.ts", () => ({
@@ -387,4 +400,99 @@ test("alerts Rust couldn't change stay as they were, saying why", async () => {
   await usePhone.getState().setAlerts(false);
   expect(usePhone.getState().alertsOn).toBe(true);
   expect(usePhone.getState().alertsError).toBe("store locked");
+});
+
+const auth = {
+  authenticateAsync: jest.mocked(authenticateAsync),
+  getEnrolledLevelAsync: jest.mocked(getEnrolledLevelAsync),
+};
+
+/** A computer's summary saying this phone's role there. */
+function said(role: "controller" | "viewer"): HostSummary {
+  return {
+    hostId: MAC,
+    hostName: "Mac",
+    link: "connected",
+    mayStart: true,
+    projects: [],
+    refused: null,
+    role,
+    sessions: [],
+  };
+}
+
+test("a computer that makes this phone a Controller turns the lock on, kept, if the person hadn't chosen", () => {
+  usePhone.getState().hostChanged(said("controller"));
+  expect(native.setAppLock).toHaveBeenCalledWith(true, 300);
+  expect(usePhone.getState().appLock).toEqual({ afterS: 300, on: true });
+  expect(native.setPrivateInSwitcher).toHaveBeenCalledWith(true);
+});
+
+test("a Viewer's computer leaves the lock as it was, and so does a choice already made", () => {
+  usePhone.getState().hostChanged(said("viewer"));
+  usePhone.setState({ appLock: { afterS: 300, on: false } });
+  usePhone.getState().hostChanged(said("controller"));
+  expect(native.setAppLock).not.toHaveBeenCalled();
+});
+
+test("with the lock on, the app starts locked", async () => {
+  native.start.mockResolvedValue("ef".repeat(32));
+  native.hosts.mockResolvedValue([]);
+  native.appLock.mockReturnValue('{"on":true,"afterS":60}');
+  await usePhone.getState().start("Test phone");
+  expect(usePhone.getState().lock.locked).toBe(true);
+  expect(usePhone.getState().appLock).toEqual({ afterS: 60, on: true });
+});
+
+test("unlocking asks the phone, and opens only when it says yes", async () => {
+  usePhone.setState({
+    appLock: { afterS: 300, on: true },
+    lock: { awayAtMs: null, locked: true },
+  });
+  auth.getEnrolledLevelAsync.mockResolvedValue(3);
+  auth.authenticateAsync.mockResolvedValueOnce({
+    error: "user_cancel",
+    success: false,
+  });
+  await usePhone.getState().unlock();
+  expect(usePhone.getState().lock.locked).toBe(true);
+  auth.authenticateAsync.mockResolvedValueOnce({ success: true });
+  await usePhone.getState().unlock();
+  expect(usePhone.getState().lock.locked).toBe(false);
+  expect(auth.authenticateAsync).toHaveBeenCalledWith(
+    expect.objectContaining({ disableDeviceFallback: false })
+  );
+});
+
+test("a phone with no passcode says so, and lets the person continue", async () => {
+  usePhone.setState({
+    appLock: { afterS: 300, on: true },
+    lock: { awayAtMs: null, locked: true },
+  });
+  auth.getEnrolledLevelAsync.mockResolvedValue(0);
+  await usePhone.getState().unlock();
+  expect(auth.authenticateAsync).not.toHaveBeenCalled();
+  expect(usePhone.getState().lockProblem).toBe("noPasscode");
+  usePhone.getState().continueUnlocked();
+  expect(usePhone.getState().lock.locked).toBe(false);
+});
+
+test("back after the lock time, the app locks again", () => {
+  usePhone.setState({
+    appLock: { afterS: 60, on: true },
+    lock: { awayAtMs: null, locked: false },
+  });
+  usePhone.getState().lockEvent({ atMs: 0, kind: "away" });
+  usePhone.getState().lockEvent({ atMs: 61_000, kind: "back" });
+  expect(usePhone.getState().lock.locked).toBe(true);
+});
+
+test("the lock and its time are kept as the person sets them", async () => {
+  usePhone.setState({ appLock: { afterS: 300, on: true } });
+  await usePhone.getState().setAppLock({ on: false });
+  expect(native.setAppLock).toHaveBeenLastCalledWith(false, 300);
+  expect(native.setPrivateInSwitcher).toHaveBeenLastCalledWith(false);
+  await usePhone.getState().setAppLock({ afterS: 900 });
+  expect(native.setAppLock).toHaveBeenLastCalledWith(false, 900);
+  expect(usePhone.getState().appLock).toEqual({ afterS: 900, on: false });
 });

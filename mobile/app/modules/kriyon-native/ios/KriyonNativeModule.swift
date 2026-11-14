@@ -317,6 +317,19 @@ public final class KriyonNativeModule: Module {
       (try? self.started().alertsOn()) ?? true
     }
 
+    // The app lock as the person set it: {on, afterS}, `on` null until chosen.
+    Function("appLock") { () -> String in
+      (try? self.started().appLockJson()) ?? #"{"on":null,"afterS":300}"#
+    }
+
+    AsyncFunction("setAppLock") { (on: Bool?, afterS: Int) in
+      try self.started().setAppLock(on: on, afterS: UInt32(afterS))
+    }
+
+    // iPhone takes the switcher's picture as the app goes inactive: the app
+    // covers itself then (in JavaScript), so there is nothing to do here.
+    AsyncFunction("setPrivateInSwitcher") { (_: Bool) in }
+
     AsyncFunction("input") { (hostId: String, sessionId: String, bytes: Data) in
       try await rust {
         try await self.started().input(hostId: hostId, sessionId: sessionId, bytes: bytes)

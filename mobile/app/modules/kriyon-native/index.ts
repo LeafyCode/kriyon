@@ -94,6 +94,11 @@ interface KriyonNativeModule {
   ) => EventSubscription;
   /** Whether this phone's alerts are on, as the person left them. */
   alertsOn: () => boolean;
+  /**
+   * The app lock as the person set it, as JSON: `{on, afterS}`, `on` null
+   * until they choose (then it follows the role computers gave).
+   */
+  appLock: () => string;
   /** Stops the pairing in progress; the phone keeps nothing of it. */
   cancelPairing: () => Promise<void>;
   /**
@@ -142,6 +147,11 @@ interface KriyonNativeModule {
    * connected computer forgets its push token; on, each is given it again.
    */
   setAlerts: (on: boolean) => Promise<void>;
+  /** Keeps the app lock: on, off or `null` (as the role says), and the
+   *  seconds away that lock it again (0, 60, 300 or 900). */
+  setAppLock: (on: boolean | null, afterS: number) => Promise<void>;
+  /** Android: the app switcher shows no picture of the app while `on`. */
+  setPrivateInSwitcher: (on: boolean) => Promise<void>;
   /**
    * Gives Rust this phone's raw push token (`apns` or `fcm`); each paired
    * computer gets it sealed for itself. Resolves to whether push is on (a

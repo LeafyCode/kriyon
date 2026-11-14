@@ -4,8 +4,16 @@
  * key as computers show it.
  */
 import { ScrollView, Switch, Text, View } from "react-native";
-import { Button, Pill, TopBar, useLargeText, useLook } from "../kit.tsx";
+import {
+  Button,
+  Pill,
+  Segmented,
+  TopBar,
+  useLargeText,
+  useLook,
+} from "../kit.tsx";
 import { roleWord, shortKey } from "../state/home.ts";
+import { LOCK_AFTER, lockIsOn } from "../state/lock.ts";
 import { usePhone } from "../state/phone.ts";
 import { alertsWord, pushLine } from "../state/push.ts";
 import { fonts } from "../theme.ts";
@@ -17,6 +25,83 @@ function pairedOn(ms: number): string {
     day: "numeric",
     month: "short",
   });
+}
+
+/** "5 min": a lock time, short, for the choice. */
+function shortTime(afterS: number): string {
+  return afterS === 0 ? "Immediately" : `${afterS / 60} min`;
+}
+
+/**
+ * The app lock: on by default for a phone a computer made a Controller
+ * (it can type into that computer's terminal); the time away that locks
+ * it again.
+ */
+function AppLockSection() {
+  const { t, text } = useLook();
+  const appLock = usePhone((state) => state.appLock);
+  const controller = usePhone((state) =>
+    Object.values(state.states).some((one) => one.role === "controller")
+  );
+  const { setAppLock } = usePhone.getState();
+  const on = lockIsOn(appLock, controller);
+  return (
+    <View style={{ gap: 8 }}>
+      <Text
+        accessibilityRole="header"
+        style={[text.label, { paddingHorizontal: 4 }]}
+      >
+        App lock
+      </Text>
+      <View
+        style={{
+          backgroundColor: t.card,
+          borderColor: t.line,
+          borderRadius: 14,
+          borderWidth: 1,
+          gap: 12,
+          paddingHorizontal: 16,
+          paddingVertical: 12,
+        }}
+      >
+        <View style={{ alignItems: "center", flexDirection: "row", gap: 12 }}>
+          <View style={{ flex: 1, gap: 2 }}>
+            <Text style={text.body}>Ask before showing sessions</Text>
+            <Text style={text.caption}>
+              {controller
+                ? "This phone is a Controller: it can type into a computer's terminal. With the lock off, anyone holding it can too."
+                : "Face ID, the fingerprint or the phone's passcode, on opening and after the time below."}
+            </Text>
+          </View>
+          <Switch
+            accessibilityLabel="App lock"
+            onValueChange={(next) => {
+              setAppLock({ on: next }).catch(() => undefined);
+            }}
+            thumbColor={on ? t.onAccent : t.ink2}
+            trackColor={{ false: t.lineStrong, true: t.accent }}
+            value={on}
+          />
+        </View>
+        {on ? (
+          <View style={{ gap: 6 }}>
+            <Text style={text.caption}>Lock again when away</Text>
+            <Segmented
+              label="Lock again when away"
+              onChange={(next) => {
+                setAppLock({ afterS: Number(next) }).catch(() => undefined);
+              }}
+              options={LOCK_AFTER.map((afterS) => ({
+                label: shortTime(afterS),
+                value: String(afterS),
+              }))}
+              value={String(appLock.afterS)}
+            />
+          </View>
+        ) : null}
+      </View>
+    </View>
+  );
 }
 
 export function SettingsScreen() {
@@ -110,6 +195,8 @@ export function SettingsScreen() {
             </View>
           </View>
         </View>
+
+        <AppLockSection />
 
         <RelaySection />
 
