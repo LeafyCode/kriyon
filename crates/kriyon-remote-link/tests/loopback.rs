@@ -955,3 +955,84 @@ async fn a_paired_device_gets_through_on_its_tailscale_address_when_the_lan_one_
     assert!(matches!(accepted, Accepted::Remote(_)), "a remote link");
     link.open_stream().await.expect("a stream");
 }
+
+/// One paired device can't hold more than a few connections: each one past
+/// the cap closes its oldest, so a device that reconnects keeps working.
+#[tokio::test]
+async fn a_device_holds_at_most_a_few_connections_its_oldest_closed_first() {
+    use kriyon_remote_link::host::MAX_LINKS_PER_DEVICE;
+
+    let store = Arc::new(Store::default());
+    let host = Arc::new(host(&store, 10).await);
+    let phone = device(2).await;
+    store.add(phone.id(), Role::Viewer);
+    let mut links = Vec::new();
+    let mut served = Vec::new();
+    for _ in 0..=MAX_LINKS_PER_DEVICE {
+        let (link, accepted) = tokio::join!(
+            timeout(WAIT, phone.connect(reach(&host))),
+            next_accepted(&host)
+        );
+        let Accepted::Remote(remote) = accepted else {
+            panic!("a remote link");
+        };
+        // Kept, as the host keeps the links it serves.
+        served.push(remote);
+        links.push(link.expect("in time").expect("connected"));
+    }
+    let oldest = timeout(WAIT, links[0].closed())
+        .await
+        .expect("the oldest is closed");
+    assert_eq!(oldest, Some(CloseCode::HostClosing));
+    links
+        .last()
+        .expect("the newest")
+        .open_stream()
+        .await
+        .expect("the newest still works");
+}
+
+/// Pairing connections are capped while a pairing is open: past the cap a
+/// new one is refused, so a crowd of them can't hold the host.
+#[tokio::test]
+async fn pairing_connections_past_the_cap_are_refused() {
+    use kriyon_remote_link::host::MAX_PAIR_LINKS;
+
+    let store = Arc::new(Store::default());
+    let host = Arc::new(host(&store, 100).await);
+    host.start_pairing(SECRET, Role::Viewer);
+    let mut held = Vec::new();
+    let mut phones = Vec::new();
+    for key in 0..MAX_PAIR_LINKS {
+        let phone = device(10 + u8::try_from(key).expect("small")).await;
+        let connection = phone
+            .dial_pair_for_tests(reach(&host))
+            .await
+            .expect("dials");
+        let Accepted::Pair(link) = next_accepted(&host).await else {
+            panic!("a pairing connection");
+        };
+        held.push((connection, link));
+        phones.push(phone);
+    }
+    let one_more = device(40).await;
+    let connection = one_more
+        .dial_pair_for_tests(reach(&host))
+        .await
+        .expect("dials");
+    let code = timeout(WAIT, connection.closed()).await.expect("closed");
+    assert!(
+        matches!(&code, iroh::endpoint::ConnectionError::ApplicationClosed(close)
+            if close.error_code.into_inner() == CloseCode::NoPairing as u64),
+        "{code:?}"
+    );
+    // One goes: there is room again.
+    held.pop();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let again = device(41).await;
+    let _connection = again
+        .dial_pair_for_tests(reach(&host))
+        .await
+        .expect("dials");
+    assert!(matches!(next_accepted(&host).await, Accepted::Pair(_)));
+}

@@ -21,6 +21,18 @@ use crate::endpoint::{close, gone, LinkConfig, LinkError, ALPN_PAIR, ALPN_REMOTE
 use crate::framed::{MessageReader, MessageWriter};
 
 /// How long the host waits for a device to read a last message (`Paired`,
+/// Handshakes under way at once; past that a new one is ignored. Relay
+/// connections carry no source address, so the per-address limit can't
+/// stand in for this.
+pub const MAX_HANDSHAKES: usize = 64;
+
+/// Pairing connections held at once while a pairing is open.
+pub const MAX_PAIR_LINKS: usize = 4;
+
+/// Connections one paired device may hold: one more closes its oldest, so a
+/// device that reconnects before its old link ends keeps working.
+pub const MAX_LINKS_PER_DEVICE: usize = 4;
+
 /// `Refused`) and hang up, before it closes the connection itself.
 const FAREWELL: Duration = Duration::from_secs(5);
 
@@ -71,6 +83,9 @@ struct Shared {
     /// role check and the registration one step, so [`Host::cut_off`] can't
     /// fall between them.
     live: Mutex<Vec<(EndpointId, WeakConnectionHandle)>>,
+    /// Places for handshakes under way, and for pairing connections held.
+    handshakes: Arc<tokio::sync::Semaphore>,
+    pair_links: Arc<tokio::sync::Semaphore>,
 }
 
 /// A connection the accept loop let through.
@@ -117,6 +132,8 @@ impl Host {
             pairing: Mutex::new(None),
             unpaired: Mutex::new(RateLimit::new(unpaired_per_minute, UNPAIRED_WINDOW)),
             live: Mutex::new(Vec::new()),
+            handshakes: Arc::new(tokio::sync::Semaphore::new(MAX_HANDSHAKES)),
+            pair_links: Arc::new(tokio::sync::Semaphore::new(MAX_PAIR_LINKS)),
         });
         let (sender, receiver) = mpsc::channel(ADMITTED_QUEUE);
         let driver = tokio::spawn(accept_loop(Arc::clone(&shared), sender));
@@ -262,15 +279,20 @@ async fn accept_loop(shared: Arc<Shared>, admitted: mpsc::Sender<Accepted>) {
             incoming.ignore();
             continue;
         }
+        // Too many under way: ignored, as a failing source is.
+        let Ok(place) = Arc::clone(&shared.handshakes).try_acquire_owned() else {
+            incoming.ignore();
+            continue;
+        };
         let Ok(accepting) = incoming.accept() else {
             continue;
         };
-        tokio::spawn(handshake(
-            Arc::clone(&shared),
-            accepting,
-            source,
-            admitted.clone(),
-        ));
+        let shared = Arc::clone(&shared);
+        let admitted = admitted.clone();
+        tokio::spawn(async move {
+            let _place = place;
+            handshake(shared, accepting, source, admitted).await;
+        });
     }
 }
 
@@ -316,6 +338,20 @@ fn admit(shared: &Arc<Shared>, connection: Connection, source: Option<IpAddr>) -
                 return refuse(CloseCode::NotPaired);
             };
             live.retain(|(_, handle)| handle.upgrade().is_some());
+            // At most a few for one device: its oldest go, so a device that
+            // reconnects keeps working and one key can't hold many.
+            let mine = live.iter().filter(|(id, _)| *id == device).count();
+            let mut over = (mine + 1).saturating_sub(MAX_LINKS_PER_DEVICE);
+            live.retain(|(id, handle)| {
+                if over == 0 || *id != device {
+                    return true;
+                }
+                over -= 1;
+                if let Some(old) = handle.upgrade() {
+                    close(&old, CloseCode::HostClosing);
+                }
+                false
+            });
             live.push((device, connection.weak_handle()));
             drop(live);
             Some(Accepted::Remote(RemoteLink {
@@ -331,11 +367,18 @@ fn admit(shared: &Arc<Shared>, connection: Connection, source: Option<IpAddr>) -
             if !open {
                 return refuse(CloseCode::NoPairing);
             }
+            // A crowd of pairing connections can't hold the host: past the
+            // cap, refused as if no pairing were open.
+            let Ok(place) = Arc::clone(&shared.pair_links).try_acquire_owned() else {
+                close(&connection, CloseCode::NoPairing);
+                return None;
+            };
             Some(Accepted::Pair(PairLink {
                 connection,
                 device,
                 source,
                 shared: Arc::clone(shared),
+                place,
             }))
         }
         _ => refuse(CloseCode::ProtocolError),
@@ -423,6 +466,8 @@ pub struct PairLink {
     device: EndpointId,
     source: Option<IpAddr>,
     shared: Arc<Shared>,
+    /// Its place among the pairing connections held: free once it goes.
+    place: tokio::sync::OwnedSemaphorePermit,
 }
 
 impl PairLink {
@@ -487,6 +532,7 @@ impl PairLink {
             code: pairing_code(&exported),
             writer,
             shared: self.shared,
+            place: self.place,
         })
     }
 
@@ -516,6 +562,10 @@ impl PairLink {
 /// A device that took the pairing, waiting for the person to type the code
 /// it shows.
 pub struct PairAttempt {
+    /// Its place among the pairing connections held: kept, not read, for
+    /// as long as the attempt lives.
+    #[allow(dead_code, reason = "held for its drop, which frees the place")]
+    place: tokio::sync::OwnedSemaphorePermit,
     connection: Connection,
     device: EndpointId,
     name: String,

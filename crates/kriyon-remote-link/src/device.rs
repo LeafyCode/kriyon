@@ -48,6 +48,16 @@ impl Device {
         crate::endpoint::id_bytes(&self.endpoint)
     }
 
+    /// A bare connection on `kriyon/pair/1` that says nothing: for tests of
+    /// how the host bears many of them.
+    ///
+    /// # Errors
+    /// A [`LinkError`] when the host can't be reached.
+    #[cfg(feature = "test-support")]
+    pub async fn dial_pair_for_tests(&self, host: EndpointAddr) -> Result<Connection, LinkError> {
+        self.dial(host, ALPN_PAIR).await
+    }
+
     /// Pair with the host in the QR code: prove the secret, wait for the host
     /// to accept the proof, then show the code this connection derives.
     ///
