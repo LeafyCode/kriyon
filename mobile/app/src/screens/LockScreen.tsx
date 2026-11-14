@@ -59,7 +59,12 @@ export function LockScreen() {
           can't lock itself. Set one up in the phone's settings: then a lost
           phone can't reach your computers' sessions.
         </Text>
-        <Button kind="primary" label="Continue" onPress={continueUnlocked} />
+        <Button
+          kind="primary"
+          label="Continue"
+          onPress={continueUnlocked}
+          style={{ alignSelf: "center" }}
+        />
       </Cover>
     );
   }
@@ -80,6 +85,7 @@ export function LockScreen() {
         onPress={() => {
           unlock().catch(() => undefined);
         }}
+        style={{ alignSelf: "center" }}
       />
     </Cover>
   );
