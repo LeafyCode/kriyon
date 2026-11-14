@@ -92,7 +92,8 @@ impl Refusal {
 pub struct Caps {
     /// Alerts sent a minute, by everyone.
     pub alerts_per_minute: usize,
-    /// Request ids, hosts and tokens remembered, each.
+    /// Request ids, hosts and tokens remembered, each. Full, the host or
+    /// token heard from longest ago makes room for a new one.
     pub remembered: usize,
 }
 
@@ -244,10 +245,9 @@ impl Gate {
             return Err(Refusal::Replayed);
         }
         let caps = self.caps;
-        let full = memory.seen_ids.len() >= caps.remembered
-            || (!memory.by_host.contains_key(&host_id) && memory.by_host.len() >= caps.remembered)
-            || (!memory.by_token.contains_key(&token_hash)
-                && memory.by_token.len() >= caps.remembered);
+        // Ids are kept minutes only, at most the alerts of that time: full
+        // only under the caps' own misuse, refused then.
+        let full = memory.seen_ids.len() >= caps.remembered;
         if full
             || memory.recent.len() >= caps.alerts_per_minute
             || over_limit(memory.by_host.get(&host_id), now)
@@ -255,6 +255,10 @@ impl Gate {
         {
             return Err(Refusal::TooMany);
         }
+        // Hosts and tokens are kept a day: full, the one heard from longest
+        // ago makes room, so made-up hosts can't lock real ones out.
+        make_room(&mut memory.by_host, &host_id, caps.remembered);
+        make_room(&mut memory.by_token, &token_hash, caps.remembered);
         memory.seen_ids.insert(request_id, forget_at);
         memory.seen.push_back((request_id, forget_at));
         memory.by_host.entry(host_id).or_default().push_back(now);
@@ -328,6 +332,21 @@ pub fn token_shape_ok(platform: Platform, token: &str) -> bool {
                     .bytes()
                     .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b':'))
         }
+    }
+}
+
+/// Make room in `sends` for `key` if it is new and `sends` holds `cap`:
+/// the one sent to longest ago goes.
+fn make_room(sends: &mut HashMap<[u8; 32], VecDeque<u64>>, key: &[u8; 32], cap: usize) {
+    if sends.contains_key(key) || sends.len() < cap {
+        return;
+    }
+    let stalest = sends
+        .iter()
+        .min_by_key(|(_, times)| times.back().copied().unwrap_or(0))
+        .map(|(key, _)| *key);
+    if let Some(stalest) = stalest {
+        sends.remove(&stalest);
     }
 }
 
@@ -649,11 +668,12 @@ pub(crate) mod tests {
         assert_eq!(gate.check(&host_wake(3, NOW), NOW), Err(Refusal::TooMany));
         let next = NOW + MINUTE;
         assert!(gate.check(&host_wake(4, next), next).is_ok());
-        // Three hosts remembered (the cap, kept a day): a fourth waits.
-        let soon = next + MINUTE;
-        assert_eq!(gate.check(&host_wake(5, soon), soon), Err(Refusal::TooMany));
-        let later = NOW + DAY;
-        assert!(gate.check(&host_wake(6, later), later).is_ok());
+        // Three hosts remembered (the cap): a new one makes room, the one
+        // heard from longest ago going, so made-up hosts lock nobody out.
+        // (Past the ids' window: hosts, kept a day, are what is full.)
+        let soon = next + REPLAY_WINDOW_SECS + CLOCK_SKEW_SECS + 1;
+        assert!(gate.check(&host_wake(5, soon), soon).is_ok());
+        assert_eq!(gate.remembered().1, 3);
     }
 
     #[test]

@@ -332,6 +332,12 @@ impl SessionFanout {
             .held
             .take_if(|held| held.requester == snapshot.requester)?;
         let Some(frames) = frames else {
+            // Not packed (too many waiting, say): its held updates are gone,
+            // and it is asked for again through the device's gate. Denied,
+            // the device sees the gap in what follows and asks itself.
+            if !stream.resync.allow(Instant::now()) {
+                return None;
+            }
             return self.ask(&snapshot.device, true);
         };
         for frame in frames.into_iter().chain(held.frames) {
@@ -620,6 +626,32 @@ mod tests {
             .map(|(_, text)| text)
             .collect();
         assert_eq!(updates, vec!["during".to_string(), "after".to_string()]);
+    }
+
+    /// Snapshots that can't be packed again and again (the packing queue
+    /// full) are asked for at most once a second, and the device isn't left
+    /// waiting on one: what follows reaches it, and its gap asks again.
+    #[test]
+    fn a_snapshot_not_packed_again_and_again_is_asked_for_once_a_second() {
+        let mut fanout = SessionFanout::new(1 << 20).expect("fanout");
+        fanout.hello(7);
+        let id = fanout.open(A).expect("asks");
+        let to_pack = fanout.snapshot_end(id, SIZE).expect("a snapshot");
+        let again = fanout.snapshot_packed(&to_pack, None).expect("asked again");
+        let to_pack = fanout.snapshot_end(again, SIZE).expect("a snapshot");
+        assert_eq!(
+            fanout.snapshot_packed(&to_pack, None),
+            None,
+            "not within the second"
+        );
+        fanout.output(b"after");
+        let (messages, _) = drain(&mut fanout, &A);
+        assert!(
+            messages
+                .iter()
+                .any(|message| matches!(message, ToDevice::Update { .. })),
+            "{messages:?}"
+        );
     }
 
     #[test]

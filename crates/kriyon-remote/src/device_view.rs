@@ -181,7 +181,7 @@ pub struct SessionScreen {
 
 /// How long a screen waits for its first snapshot before asking again: the
 /// host gives at most one a second, and may have said no to the first ask.
-pub const FIRST_SCREEN_WAIT: std::time::Duration = std::time::Duration::from_secs(3);
+pub const FIRST_SCREEN_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
 
 impl SessionScreen {
     /// # Errors
@@ -1226,18 +1226,18 @@ mod tests {
     }
 
     /// The host asks for a snapshot at most once a second: a screen still
-    /// without its first one asks again, every few seconds, until it comes.
+    /// without its first one asks again, every second, until it comes.
     #[test]
     fn a_screen_still_without_its_first_snapshot_asks_again() {
         let t = Instant::now();
         let mut screen = SessionScreen::new_at(t).expect("screen");
         assert!(
-            !screen.resync_due(t + std::time::Duration::from_secs(1)),
+            !screen.resync_due(t + std::time::Duration::from_millis(500)),
             "not yet"
         );
         assert!(screen.resync_due(t + FIRST_SCREEN_WAIT), "asks");
         assert!(
-            !screen.resync_due(t + FIRST_SCREEN_WAIT + std::time::Duration::from_secs(1)),
+            !screen.resync_due(t + FIRST_SCREEN_WAIT + std::time::Duration::from_millis(500)),
             "once a wait"
         );
         screen.on_message(snapshot(9, 4, b"a", false), t + FIRST_SCREEN_WAIT * 2);

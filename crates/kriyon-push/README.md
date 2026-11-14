@@ -24,9 +24,11 @@ For each request the sender:
 
 Anyone can make a host key and seal a token to the sender's public key, so
 it also caps what it does for everyone together: 600 alerts a minute, and
-100,000 request ids, hosts and tokens remembered. It serves 256 connections
+100,000 request ids, hosts and tokens remembered (full, the host or token
+heard from longest ago makes room). It serves 256 connections
 at once and closes one more at once; a request's headers and body get 10
-seconds each, and a connection 30 in all.
+seconds each, and a connection 30 before it is shut down (a request being
+answered still ends).
 
 It stores nothing. The request ids and the counts for the limits are kept in
 memory, for ten minutes and a day, and go when it restarts. It never reads

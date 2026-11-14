@@ -672,18 +672,19 @@ impl Serve {
                     let snapshot = fanout
                         .snapshot_end(id, size.unwrap_or(kriyon_remote::writer::DEFAULT_SCREEN));
                     let unsent = snapshot.and_then(|snapshot| match served.packs.lock().as_ref() {
-                        // Too many waiting: dropped, not asked for again
-                        // here; its device asks once its wait is up.
+                        // Too many waiting, or no packing thread: it counts
+                        // as not packed, its held updates go, and it is asked
+                        // for again (through the device's gate).
                         Some(packs) => match packs.try_send(snapshot) {
-                            Err(std::sync::mpsc::TrySendError::Disconnected(snapshot)) => {
-                                Some(snapshot)
-                            }
-                            Ok(()) | Err(std::sync::mpsc::TrySendError::Full(_)) => None,
+                            Ok(()) => None,
+                            Err(
+                                std::sync::mpsc::TrySendError::Full(snapshot)
+                                | std::sync::mpsc::TrySendError::Disconnected(snapshot),
+                            ) => Some(snapshot),
                         },
                         None => Some(snapshot),
                     });
-                    // No packing thread: it counts as not packed, and is
-                    // asked for again.
+                    // Not packed: asked for again, through the gate.
                     unsent
                         .and_then(|snapshot| fanout.snapshot_packed(&snapshot, None))
                         .into_iter()

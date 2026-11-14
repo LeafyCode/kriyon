@@ -20,7 +20,6 @@ use tokio::task::JoinHandle;
 use crate::endpoint::{close, gone, LinkConfig, LinkError, ALPN_PAIR, ALPN_REMOTE};
 use crate::framed::{MessageReader, MessageWriter};
 
-/// How long the host waits for a device to read a last message (`Paired`,
 /// Handshakes under way at once; past that a new one is ignored. Relay
 /// connections carry no source address, so the per-address limit can't
 /// stand in for this.
@@ -33,6 +32,7 @@ pub const MAX_PAIR_LINKS: usize = 4;
 /// device that reconnects before its old link ends keeps working.
 pub const MAX_LINKS_PER_DEVICE: usize = 4;
 
+/// How long the host waits for a device to read a last message (`Paired`,
 /// `Refused`) and hang up, before it closes the connection itself.
 const FAREWELL: Duration = Duration::from_secs(5);
 

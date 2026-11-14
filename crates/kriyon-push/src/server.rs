@@ -205,15 +205,21 @@ pub async fn serve<D: Deliver>(listener: TcpListener, app: Arc<App<D>>) -> std::
                 async move { Ok::<_, Infallible>(handle(&app, request).await) }
             });
             // A connection that fails just ends; there is nothing to log
-            // that wouldn't be about the peer. Its time is capped whole.
-            let _ = tokio::time::timeout(
-                limits.connection_time,
-                hyper::server::conn::http1::Builder::new()
-                    .timer(TokioTimer::new())
-                    .header_read_timeout(limits.header_time)
-                    .serve_connection(TokioIo::new(stream), service),
-            )
-            .await;
+            // that wouldn't be about the peer. Past its time it is shut down
+            // gracefully: a request being answered (an alert being sent) ends
+            // first, within the same time again.
+            let connection = hyper::server::conn::http1::Builder::new()
+                .timer(TokioTimer::new())
+                .header_read_timeout(limits.header_time)
+                .serve_connection(TokioIo::new(stream), service);
+            tokio::pin!(connection);
+            tokio::select! {
+                _ = connection.as_mut() => {}
+                () = tokio::time::sleep(limits.connection_time) => {
+                    connection.as_mut().graceful_shutdown();
+                    let _ = tokio::time::timeout(limits.connection_time, connection).await;
+                }
+            }
         });
     }
 }
