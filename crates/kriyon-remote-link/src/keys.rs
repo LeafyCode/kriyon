@@ -101,9 +101,11 @@ impl<S: SecretVault, L: SecretVault> SecretVault for SizedVault<S, L> {
 
     fn write(&self, secret: &[u8]) -> Result<(), String> {
         if secret.len() <= self.limit {
-            // `small` is read first: the old large copy can't shadow it.
+            // `small` is read first, so an old large copy can't shadow it:
+            // clearing it is tidying, and its failure doesn't undo the write.
             self.small.write(secret)?;
-            self.large.remove()
+            let _ = self.large.remove();
+            Ok(())
         } else {
             // Cleared first, so an old small copy never shadows the new one;
             // stopped between, the secret is gone, never stale.

@@ -63,3 +63,8 @@ jobs:
       - name: Tests (the remote crates; kriyon-core's come with PR #48)
         shell: bash
         run: cargo test -p kriyon-remote -p kriyon-remote-link -p kriyon-relay-client -p kriyon-push
+      # kriyon-core's Windows calls (the computer's name, file identity);
+      # the rest of its tests come with PR #48.
+      - name: kriyon-core's Windows calls
+        shell: bash
+        run: "cargo test -p kriyon-core --lib -- host:: private_fs::"

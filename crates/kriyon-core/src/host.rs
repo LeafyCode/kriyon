@@ -9,8 +9,8 @@ pub fn computer_name() -> String {
 
 /// `raw` as a device shows it.
 fn shown_name(raw: &str) -> String {
-    let name = raw.trim();
-    let name = name.strip_suffix(".local").unwrap_or(name);
+    // As the app always did: every trailing ".local" goes, nothing else.
+    let name = raw.trim_end_matches(".local");
     if name.is_empty() {
         "Kriyon".to_string()
     } else {
@@ -78,7 +78,6 @@ mod tests {
     fn no_name_is_kriyon() {
         assert_eq!(shown_name(""), "Kriyon");
         assert_eq!(shown_name(".local"), "Kriyon");
-        assert_eq!(shown_name("  "), "Kriyon");
     }
 
     #[test]

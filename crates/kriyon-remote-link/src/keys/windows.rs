@@ -27,6 +27,18 @@ fn wide(text: &str) -> Vec<u16> {
     text.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
+/// Overwrite `len` bytes at `data` with zeroes, in a way the compiler keeps:
+/// a secret's bytes Windows handed back are wiped before they are freed.
+///
+/// # Safety
+/// `data` is valid for `len` bytes of writes.
+unsafe fn wipe(data: *mut u8, len: usize) {
+    for at in 0..len {
+        // SAFETY: within the `len` bytes the caller vouches for.
+        unsafe { std::ptr::write_volatile(data.add(at), 0) };
+    }
+}
+
 /// The name each store keeps a secret under: the app's, then the secret's.
 fn name_of(identifier: &str, account: &str) -> String {
     format!("{identifier}.remote/{account}")
@@ -77,6 +89,9 @@ impl SecretVault for Credential {
             } else {
                 std::slice::from_raw_parts(credential.CredentialBlob, size).to_vec()
             };
+            if !credential.CredentialBlob.is_null() {
+                wipe(credential.CredentialBlob, size);
+            }
             CredFree(found.cast());
             secret
         };
@@ -123,8 +138,10 @@ impl SecretVault for Credential {
 /// A secret sealed with DPAPI (this Windows account's key) into a file.
 pub struct SealedFile {
     path: PathBuf,
-    /// Ties the seal to this app and secret: another app's DPAPI call
-    /// can't open it without saying the same.
+    /// Names this app and secret in the seal, so one of Kriyon's sealed
+    /// secrets can't be opened as another. It is no barrier to other
+    /// programs of this Windows account, which can name it too: DPAPI keeps
+    /// it from other accounts and other PCs.
     entropy: Vec<u8>,
 }
 
@@ -140,6 +157,13 @@ impl SealedFile {
     }
 }
 
+impl SealedFile {
+    /// Where a new seal is written before it replaces the old one.
+    fn next(&self) -> PathBuf {
+        self.path.with_extension("sealed.new")
+    }
+}
+
 /// `data` as DPAPI's blob type, borrowed.
 fn blob(data: &[u8]) -> Result<CRYPT_INTEGER_BLOB, String> {
     Ok(CRYPT_INTEGER_BLOB {
@@ -148,17 +172,17 @@ fn blob(data: &[u8]) -> Result<CRYPT_INTEGER_BLOB, String> {
     })
 }
 
-/// The bytes DPAPI returned in `out`, which is then freed.
+/// The bytes DPAPI returned in `out`, which is then wiped and freed.
 fn taken(out: CRYPT_INTEGER_BLOB) -> Vec<u8> {
     let size = usize::try_from(out.cbData).unwrap_or(0);
-    // SAFETY: DPAPI gave `out` with `cbData` bytes at `pbData`, freed with
-    // LocalFree once copied.
+    // SAFETY: DPAPI gave `out` with `cbData` bytes at `pbData`, wiped and
+    // freed with LocalFree once copied.
     unsafe {
-        let bytes = if out.pbData.is_null() {
-            Vec::new()
-        } else {
-            std::slice::from_raw_parts(out.pbData, size).to_vec()
-        };
+        if out.pbData.is_null() {
+            return Vec::new();
+        }
+        let bytes = std::slice::from_raw_parts(out.pbData, size).to_vec();
+        wipe(out.pbData, size);
         LocalFree(out.pbData.cast());
         bytes
     }
@@ -231,16 +255,24 @@ impl SecretVault for SealedFile {
             std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         }
         // Whole or not at all: written beside it, then moved over it.
-        let next = self.path.with_extension("sealed.new");
-        std::fs::write(&next, sealed).map_err(|e| e.to_string())?;
-        std::fs::rename(&next, &self.path).map_err(|e| e.to_string())
+        let next = self.next();
+        let moved = std::fs::write(&next, sealed).and_then(|()| std::fs::rename(&next, &self.path));
+        if let Err(e) = moved {
+            // No sealed copy left beside it.
+            let _ = std::fs::remove_file(&next);
+            return Err(e.to_string());
+        }
+        Ok(())
     }
 
     fn remove(&self) -> Result<(), String> {
-        match std::fs::remove_file(&self.path) {
-            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.to_string()),
-            _ => Ok(()),
+        for path in [self.next(), self.path.clone()] {
+            match std::fs::remove_file(&path) {
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.to_string()),
+                _ => {}
+            }
         }
+        Ok(())
     }
 }
 
@@ -269,15 +301,30 @@ mod tests {
         format!("com.leafycode.kriyon.test.{}", std::process::id())
     }
 
-    fn scratch() -> PathBuf {
-        let dir = std::env::temp_dir().join(app());
+    /// A scratch folder of `test`'s own, so tests running side by side
+    /// never remove each other's files.
+    fn scratch(test: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("{}.{test}", app()));
         std::fs::create_dir_all(&dir).expect("scratch");
         dir
+    }
+
+    /// Removes what a test kept, even when it fails part way.
+    struct Cleanup<'a>(&'a dyn SecretVault, Option<PathBuf>);
+
+    impl Drop for Cleanup<'_> {
+        fn drop(&mut self) {
+            let _ = self.0.remove();
+            if let Some(dir) = &self.1 {
+                let _ = std::fs::remove_dir_all(dir);
+            }
+        }
     }
 
     #[test]
     fn a_credential_keeps_reads_replaces_and_removes_a_secret() {
         let credential = Credential::new(&app(), "device-key");
+        let _cleanup = Cleanup(&credential, None);
         credential.remove().expect("cleared");
         assert_eq!(credential.read(), Ok(None));
         credential.write(&[7; 32]).expect("kept");
@@ -291,6 +338,7 @@ mod tests {
     #[test]
     fn a_credential_refuses_more_than_it_holds() {
         let credential = Credential::new(&app(), "too-big");
+        let _cleanup = Cleanup(&credential, None);
         let error = credential
             .write(&vec![1; CREDENTIAL_LIMIT + 1])
             .expect_err("too big");
@@ -299,25 +347,27 @@ mod tests {
 
     #[test]
     fn a_sealed_file_is_never_the_plain_secret_and_reads_back() {
-        let dir = scratch();
+        let dir = scratch("sealed");
         let sealed = SealedFile::new(&dir, &app(), "relay");
+        let _cleanup = Cleanup(&sealed, Some(dir.clone()));
         let secret = b"a relay sign-in, longer than a credential holds".repeat(80);
         sealed.write(&secret).expect("sealed");
         let on_disk = std::fs::read(dir.join("relay.sealed")).expect("file");
         assert!(!on_disk.windows(20).any(|w| secret.starts_with(w)));
         assert_eq!(sealed.read(), Ok(Some(secret)));
+        assert!(!dir.join("relay.sealed.new").exists());
         // The same file, read as another app's, opens nothing.
         let other = SealedFile::new(&dir, "com.example.other", "relay");
         assert!(other.read().is_err());
         sealed.remove().expect("removed");
         assert_eq!(sealed.read(), Ok(None));
-        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
     fn the_app_vault_keeps_a_small_secret_in_credentials_and_a_big_one_sealed() {
-        let dir = scratch();
+        let dir = scratch("vault");
         let vault = app_vault(&app(), "relay-sized", &dir);
+        let _cleanup = Cleanup(&vault, Some(dir.clone()));
         SecretVault::write(&vault, &[3; 64]).expect("small");
         assert_eq!(vault.small.read(), Ok(Some(vec![3; 64])));
         let big = vec![4; CREDENTIAL_LIMIT + 100];
@@ -326,6 +376,5 @@ mod tests {
         assert_eq!(SecretVault::read(&vault), Ok(Some(big)));
         SecretVault::remove(&vault).expect("removed");
         assert_eq!(SecretVault::read(&vault), Ok(None));
-        let _ = std::fs::remove_dir_all(dir);
     }
 }
