@@ -22,13 +22,14 @@ Read the root `AGENTS.md` first. These crates live here:
   Shared loopback fakes for tests are behind its `test-support` feature; its relay tests run a
   local iroh relay (a dev-dependency only).
 - **`kriyon-relay-client`**: our relay as an app uses it (the relay pass contract): device
-  sign-in, the relay API calls, this device's pass and when to renew it. The desktop and the
-  phone share it; the pure rules are `kriyon_remote::relay`'s.
+  sign-in, the relay API calls, this device's pass, and its `PassKeeper` (when to renew the pass
+  and rebuild the endpoint with it; each app binds its endpoint through `Rebind`). The desktop
+  and the phone share it; the pure rules are `kriyon_remote::relay`'s.
 - **`kriyon-mobile`**: the phone's library, through UniFFI (Swift and Kotlin call it alike). The
   device runtime is `kriyon-remote-link`'s, the same as the desktop's; this adds what only the
   phone has: its store (the device key, the paired computers, the relay sign-in) behind a trait
-  the app provides, pairing, giving each computer the sealed push token, keeping the relay
-  pass, and the JSON its screens read. Its rules live in the crates it calls. Built for the
+  the app provides, pairing, giving each computer the sealed push token, its endpoint as the
+  relay's `PassKeeper` rebuilds it, and the JSON its screens read. Its rules live in the crates it calls. Built for the
   phones by `scripts/mobile/build-ios.sh` and `build-android.sh`; tested in `pnpm check`.
 - **`kriyon-push`**: the push sender, a small open server that opens a sealed push token in
   memory and sends one alert. Keeps nothing on disk and never logs addresses or tokens; a test
