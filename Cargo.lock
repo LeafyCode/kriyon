@@ -3285,6 +3285,7 @@ dependencies = [
 name = "kriyon-core"
 version = "0.16.0"
 dependencies = [
+ "libc",
  "regex",
  "semver",
  "serde",

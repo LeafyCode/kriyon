@@ -191,7 +191,7 @@ impl AppServeHost {
 
 impl ServeHost for AppServeHost {
     fn host_name(&self) -> String {
-        crate::remote_cmd::host_name()
+        kriyon_core::host::computer_name()
     }
 
     fn sessions(&self) -> Vec<SessionInfo> {

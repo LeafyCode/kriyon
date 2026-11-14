@@ -17,6 +17,7 @@ pub mod handoff;
 pub mod history;
 pub mod hook_signal;
 pub mod hooks;
+pub mod host;
 pub mod integration;
 pub mod lease;
 pub mod links;

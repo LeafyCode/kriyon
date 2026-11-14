@@ -250,25 +250,6 @@ impl kriyon_remote_link::host::PairedDevices for StoreDevices {
     }
 }
 
-/// This computer's name, as a paired device shows it.
-pub(crate) fn host_name() -> String {
-    let mut buf = [0_u8; 256];
-    // SAFETY: `buf` is valid for `buf.len()` bytes of writes.
-    let rc = unsafe { libc::gethostname(buf.as_mut_ptr().cast(), buf.len()) };
-    let name = if rc == 0 {
-        let end = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
-        String::from_utf8_lossy(&buf[..end]).into_owned()
-    } else {
-        String::new()
-    };
-    let name = name.trim_end_matches(".local");
-    if name.is_empty() {
-        "Kriyon".to_string()
-    } else {
-        name.to_string()
-    }
-}
-
 /// The host's [Device key], made on first use, kept in this computer's
 /// keychain (macOS) or keyring (Linux).
 pub(crate) fn device_key(app: &tauri::AppHandle) -> Result<[u8; 32], String> {
@@ -536,27 +517,31 @@ pub async fn remote_enter_code(app: tauri::AppHandle, code: String) -> Result<Co
     let now_ms = kriyon_remote_link::host_runtime::now_ms();
     let outcome = app
         .state::<kriyon_remote_link::host_runtime::RemoteRuntime>()
-        .enter_code(&code, &host_name(), move |device, name, role| {
-            let store = store_app.state::<crate::StoreState>();
-            let row = crate::store::PairedDeviceRow {
-                endpoint_id: device,
-                name: name.to_string(),
-                role,
-                paired_at: now_ms,
-            };
-            let kept = store.0.lock().add_paired_device(&row);
-            if let Err(e) = &kept {
-                eprintln!("kriyon: couldn't keep the paired device: {e}");
-            }
-            // Paired again: an earlier removal no longer stands.
-            if kept.is_ok() {
-                store_app
-                    .state::<crate::AppState>()
-                    .writers
-                    .unrevoke(&device);
-            }
-            kept.is_ok()
-        })
+        .enter_code(
+            &code,
+            &kriyon_core::host::computer_name(),
+            move |device, name, role| {
+                let store = store_app.state::<crate::StoreState>();
+                let row = crate::store::PairedDeviceRow {
+                    endpoint_id: device,
+                    name: name.to_string(),
+                    role,
+                    paired_at: now_ms,
+                };
+                let kept = store.0.lock().add_paired_device(&row);
+                if let Err(e) = &kept {
+                    eprintln!("kriyon: couldn't keep the paired device: {e}");
+                }
+                // Paired again: an earlier removal no longer stands.
+                if kept.is_ok() {
+                    store_app
+                        .state::<crate::AppState>()
+                        .writers
+                        .unrevoke(&device);
+                }
+                kept.is_ok()
+            },
+        )
         .await?;
     Ok(match outcome {
         CodeOutcome::Paired { device, name, role } => CodeResult::Paired {

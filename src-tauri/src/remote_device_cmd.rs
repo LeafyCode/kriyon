@@ -149,7 +149,7 @@ pub async fn remote_host_pair(app: tauri::AppHandle, invite: String) -> Result<S
     check_invite_text(&invite)?;
     crate::remote_cmd::bound(&app).await?;
     let start = runtime(&app)
-        .start_pairing(&invite, &crate::remote_cmd::host_name())
+        .start_pairing(&invite, &kriyon_core::host::computer_name())
         .await?;
     let code = start.code.clone();
     let invite = start.invite;
