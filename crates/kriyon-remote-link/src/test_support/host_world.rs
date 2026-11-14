@@ -65,6 +65,9 @@ pub struct FakeHost {
     pub calls: std::sync::atomic::AtomicUsize,
     /// How long a start takes, so a test can drop the link mid-start.
     pub start_delay: Mutex<Duration>,
+    /// How long a project's folder takes to look up: the window before a
+    /// start, for a test to remove the device in.
+    pub folder_delay: Mutex<Duration>,
     /// Sessions earlier starts made, by request id.
     pub started: Mutex<HashMap<[u8; 16], Result<String, RefuseReason>>>,
     /// Told every change of control, as the app's writers tell it.
@@ -97,6 +100,7 @@ impl Default for FakeHost {
             start_result: Mutex::new(Ok("started".into())),
             started: Mutex::default(),
             start_delay: Mutex::new(Duration::ZERO),
+            folder_delay: Mutex::new(Duration::ZERO),
             calls: std::sync::atomic::AtomicUsize::new(0),
             logged: Mutex::default(),
             entries: Mutex::new(Ok(Vec::new())),
@@ -264,6 +268,8 @@ impl ServeHost for FakeHost {
     }
     fn project_folder(&self, project_id: &str) -> ProjectFolder {
         self.called();
+        let delay = *self.folder_delay.lock();
+        std::thread::sleep(delay);
         self.folders
             .lock()
             .get(project_id)

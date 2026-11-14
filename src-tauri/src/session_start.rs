@@ -232,12 +232,25 @@ pub async fn start_remote(
         .await
 }
 
+/// Whether a start goes on for a device whose role is `role_now`: only a
+/// Controller's, still paired.
+fn still_may_start(
+    role_now: Option<kriyon_remote::message::Role>,
+) -> Result<(), kriyon_remote::message::RefuseReason> {
+    use kriyon_remote::message::{RefuseReason, Role};
+    match role_now {
+        Some(Role::Controller) => Ok(()),
+        Some(Role::Viewer) => Err(RefuseReason::NotAllowed),
+        None => Err(RefuseReason::NotPaired),
+    }
+}
+
 async fn start_remote_once(
     app: &tauri::AppHandle,
     device: kriyon_remote::message::EndpointId,
     request: kriyon_remote_link::host_runtime::RemoteStart,
 ) -> Result<String, kriyon_remote::message::RefuseReason> {
-    use kriyon_remote::message::RefuseReason;
+    use kriyon_remote::message::{RefuseReason, Role};
     use kriyon_remote_link::host_runtime::ServeHost as _;
     use tauri::{Emitter as _, Manager as _};
     fn store(app: &tauri::AppHandle) -> tauri::State<'_, crate::StoreState> {
@@ -250,10 +263,12 @@ async fn start_remote_once(
     let (made, project) = tauri::async_runtime::spawn_blocking(move || {
         let (app, project_id) = looking;
         let host = crate::remote_host_rt::AppServeHost(app.clone());
+        // Checked again here: the device may have been removed or made a
+        // Viewer since the check, and the project may have changed.
+        still_may_start(host.role_now(&device, Role::Controller))?;
         if let Some(made) = host.started(&device, &request_id) {
             return Ok((Some(made), None));
         }
-        // Checked again here: the project may have changed since the check.
         host.project_folder(&project_id).allows()?;
         let project = app
             .state::<crate::StoreState>()
@@ -389,6 +404,17 @@ mod tests {
         fn exited(&self) {
             *self.exits.lock() += 1;
         }
+    }
+
+    #[test]
+    fn a_start_goes_on_only_while_its_device_is_still_a_controller() {
+        use kriyon_remote::message::{RefuseReason, Role};
+        assert_eq!(still_may_start(Some(Role::Controller)), Ok(()));
+        assert_eq!(
+            still_may_start(Some(Role::Viewer)),
+            Err(RefuseReason::NotAllowed)
+        );
+        assert_eq!(still_may_start(None), Err(RefuseReason::NotPaired));
     }
 
     #[test]

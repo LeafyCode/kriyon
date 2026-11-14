@@ -847,6 +847,55 @@ fn a_start_resent_across_a_reconnect_makes_one_session() {
     });
 }
 
+/// A Controller removed while its start is under way (its project being
+/// looked up): the start is checked again before the shell opens, and
+/// refused.
+#[test]
+fn a_controller_removed_during_its_start_starts_nothing() {
+    run(async {
+        let world = startable().await;
+        let _beats = Beats::start(&world);
+        *world.fake.folder_delay.lock() = Duration::from_millis(500);
+        let phone = Arc::new(Phone::connect(&world, 3, Role::Controller).await);
+        phone.until_projects().await;
+        let starting = {
+            let phone = Arc::clone(&phone);
+            tokio::spawn(async move { phone.rt.start_session(&phone.host, "p", None).await })
+        };
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        world.fake.paired.lock().remove(&phone.me);
+        let refused = tokio::time::timeout(PATIENCE, starting)
+            .await
+            .expect("answered")
+            .expect("task");
+        assert_eq!(refused, Err(StartError::Refused(RefuseReason::NotPaired)));
+        assert!(world.fake.starts.lock().is_empty(), "nothing started");
+    });
+}
+
+/// A start whose device went away before its shell was asked for is
+/// dropped: nobody is there to use it.
+#[test]
+fn a_start_whose_link_closed_before_it_ran_starts_nothing() {
+    run(async {
+        let world = startable().await;
+        let _beats = Beats::start(&world);
+        *world.fake.folder_delay.lock() = Duration::from_millis(500);
+        let phone = Arc::new(Phone::connect(&world, 3, Role::Controller).await);
+        phone.until_projects().await;
+        let starting = {
+            let phone = Arc::clone(&phone);
+            tokio::spawn(async move { phone.rt.start_session(&phone.host, "p", None).await })
+        };
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        // The phone stops: its link closes while the project is looked up.
+        phone.rt.disconnect(&phone.host).await;
+        starting.abort();
+        tokio::time::sleep(Duration::from_millis(800)).await;
+        assert!(world.fake.starts.lock().is_empty(), "nothing started");
+    });
+}
+
 #[test]
 fn a_viewer_cant_start_and_is_told_why_in_words() {
     run(async {
