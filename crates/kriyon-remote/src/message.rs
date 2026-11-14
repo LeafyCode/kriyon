@@ -776,7 +776,6 @@ mod tests {
         for (reason, expected) in reasons.into_iter().zip(0..) {
             assert_eq!(tag(&reason), expected, "{reason:?}");
         }
-        // Tag 0 is the one a device that doesn't know a newer outcome reads.
         let outcomes = [
             ReportOutcome::Update,
             ReportOutcome::Completed,

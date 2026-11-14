@@ -723,7 +723,6 @@ mod entries_tests {
             report(3, ReportOutcome::Stopped, ""),
             report(4, ReportOutcome::Event, "Port 3000 is up"),
             report(5, ReportOutcome::Event, ""),
-            // What an older device reads for an outcome it doesn't know.
             report(6, ReportOutcome::Update, ""),
         ]));
         let words: Vec<_> = summary

@@ -81,6 +81,11 @@ calls while Remote access is off.
   - So a field appended inside a nested record must have a zero-byte default
     (`Option`, `bool`, a number, `String`, `Vec`). An appended enum field's
     tag-0 variant must mean "unknown" or "none".
+  - A list item a reader can't read at all (an enum variant newer than it, in
+    `EntryKind` or `ReportOutcome` say) is left out of the list; the rest of
+    the message still counts. A single record it can't read (`SessionStatus`)
+    is malformed, so a new variant of `SessionStatus` or `StandingState` needs
+    a new minor version, and the host sends older devices one they know.
   - A struct inside a nested record that is not itself nested can't grow; a
     new field goes beside it instead.
 - **Compression.** Each [Screen update] and snapshot is one independent zstd
@@ -218,10 +223,9 @@ the source of truth; entries are best-effort and say so.
   - `Step { name, target, state }`, `state` one of `Running`, `Done`,
     `Failed`: one tool call.
   - `Report { summary, outcome, event }`: a [Work report]. `outcome` is one
-    of `Update` (0: anything else, and what a device reads for an outcome it
-    doesn't know), `Completed`, `Failed`, `Stopped`, `Event`; `event` is
-    what a monitor saw for an `Event`, else empty. The words and their
-    colour are the device's.
+    of `Update` (anything else), `Completed`, `Failed`, `Stopped`, `Event`;
+    `event` is what a monitor saw for an `Event`, else empty. The words and
+    their colour are the device's.
   - `Asking { header, question, options: Vec<String> }`: Claude's question
     dialog is showing. The device shows the question and its options, never
     an answer button, only "Answer in the terminal", which opens the terminal

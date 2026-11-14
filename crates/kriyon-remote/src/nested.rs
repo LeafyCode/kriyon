@@ -11,6 +11,9 @@
 //!   with zero bytes, so each missing field comes out as its zero: `None`,
 //!   `false`, `0`, an empty `String` or `Vec`, an enum's tag-0 variant. A field
 //!   appended to a nested record must mean "unknown" or "none" at that zero.
+//! - A list item this reader can't read at all (an enum variant newer than
+//!   it) is left out of the list; the rest of the message still counts. A
+//!   single record it can't read is an error.
 //!
 //! A record cut short inside a field reads that field on into the zeros too;
 //! the length in front bounds it, and nothing a host checks for safety is
@@ -95,7 +98,6 @@ pub mod list {
         decode, encode, fmt, Bytes, DeserializeOwned, Deserializer, PhantomData, SeqAccess,
         Serialize, Serializer, Visitor,
     };
-    use serde::de::Error as _;
     use serde::ser::SerializeSeq;
 
     /// # Errors
@@ -117,8 +119,11 @@ pub mod list {
         }
     }
 
+    /// An item that isn't a record this reader can read, even as going on
+    /// with zeros, is left out.
+    ///
     /// # Errors
-    /// When an item isn't a record, even read as going on with zeros.
+    /// When the list itself isn't one.
     pub fn deserialize<'de, T: DeserializeOwned, D: Deserializer<'de>>(
         d: D,
     ) -> Result<Vec<T>, D::Error> {
@@ -131,8 +136,12 @@ pub mod list {
             fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Vec<T>, A::Error> {
                 // Never trust the stated length for the allocation.
                 let mut records = Vec::with_capacity(seq.size_hint().unwrap_or(0).min(64));
+                // One a reader can't read (a variant newer than it) is left
+                // out: the rest of the list, and the message, still count.
                 while let Some(Bytes(bytes)) = seq.next_element()? {
-                    records.push(decode(&bytes).map_err(A::Error::custom)?);
+                    if let Ok(record) = decode(&bytes) {
+                        records.push(record);
+                    }
                 }
                 Ok(records)
             }
@@ -249,6 +258,67 @@ mod tests {
         );
     }
 
+    /// A record with an enum an older reader knows fewer variants of.
+    #[derive(Debug, PartialEq, Serialize, Deserialize)]
+    enum Shape {
+        Unknown,
+        Big,
+        Round,
+    }
+
+    #[derive(Debug, PartialEq, Serialize, Deserialize)]
+    struct Shaped {
+        shape: Shape,
+    }
+
+    #[derive(Debug, PartialEq, Serialize, Deserialize)]
+    enum OldShape {
+        Unknown,
+        Big,
+    }
+
+    #[derive(Debug, PartialEq, Serialize, Deserialize)]
+    struct OldShaped {
+        shape: OldShape,
+    }
+
+    #[test]
+    fn a_list_item_a_reader_cannot_read_is_left_out_not_the_message() {
+        let bytes = postcard::to_allocvec(&Message {
+            records: vec![
+                Shaped { shape: Shape::Big },
+                // A variant newer than the reader.
+                Shaped {
+                    shape: Shape::Round,
+                },
+                Shaped {
+                    shape: Shape::Unknown,
+                },
+            ],
+            first: Shaped { shape: Shape::Big },
+            after: "end".into(),
+        })
+        .expect("encode");
+        let read: Message<OldShaped> = postcard::from_bytes(&bytes).expect("decode");
+        assert_eq!(
+            read,
+            Message {
+                records: vec![
+                    OldShaped {
+                        shape: OldShape::Big
+                    },
+                    OldShaped {
+                        shape: OldShape::Unknown
+                    },
+                ],
+                first: OldShaped {
+                    shape: OldShape::Big
+                },
+                after: "end".into(),
+            }
+        );
+    }
+
     #[test]
     fn a_record_is_its_length_then_its_bytes() {
         let bytes = postcard::to_allocvec(&Message {
@@ -262,9 +332,9 @@ mod tests {
     }
 
     #[test]
-    fn bytes_that_are_no_record_are_refused() {
-        // A record whose name isn't UTF-8.
-        let bytes = [1, 3, 1, 0xff, 3, 3, 1, b'b', 3, 0];
+    fn a_single_record_that_is_no_record_is_refused() {
+        // The single record's name isn't UTF-8.
+        let bytes = [1, 3, 1, b'a', 3, 3, 1, 0xff, 3, 0];
         assert!(postcard::from_bytes::<Message<Before>>(&bytes).is_err());
     }
 }

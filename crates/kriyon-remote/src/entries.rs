@@ -236,12 +236,18 @@ fn hash(kind: &EntryKind) -> u64 {
 
 /// `entries` as `Entries` messages within [`ENTRIES_MESSAGE_MAX`]; only the
 /// first carries `reset`.
+/// The most bytes the length in front of a nested record takes (a varint of
+/// a length under [`ENTRIES_MESSAGE_MAX`]).
+const NESTED_LENGTH_MAX: usize = 3;
+
 fn batches(entries: Vec<Entry>, reset: bool, from: u64) -> Vec<ToDevice> {
     let mut out = Vec::new();
     let mut batch = Vec::new();
     let mut size = MESSAGE_ROOM;
     for entry in entries {
-        let len = postcard::to_allocvec(&entry).map_or(ENTRIES_MESSAGE_MAX, |bytes| bytes.len());
+        // Its bytes and the length in front of them (a nested record).
+        let len = postcard::to_allocvec(&entry)
+            .map_or(ENTRIES_MESSAGE_MAX, |bytes| bytes.len() + NESTED_LENGTH_MAX);
         if !batch.is_empty() && size + len > ENTRIES_MESSAGE_MAX {
             out.push(ToDevice::Entries {
                 entries: std::mem::take(&mut batch),

@@ -384,8 +384,9 @@ struct Inner {
     sessions: Mutex<HashMap<String, Arc<Served>>>,
     controls: Mutex<HashMap<EndpointId, Arc<ControlOut>>>,
     heartbeat_seq: AtomicU64,
-    /// The session list as devices last heard it, in the host's order.
-    heard: Mutex<Vec<SessionInfo>>,
+    /// The session list as devices last heard it, in the host's order;
+    /// `None` while no device is connected.
+    heard: Mutex<Option<Vec<SessionInfo>>>,
     /// The project list as devices last heard it.
     heard_projects: Mutex<Option<Vec<ProjectInfo>>>,
     /// When the tick last looked at the project list: it changes seldom, and
@@ -468,7 +469,7 @@ impl Serve {
             sessions: Mutex::new(HashMap::new()),
             controls: Mutex::new(HashMap::new()),
             heartbeat_seq: AtomicU64::new(0),
-            heard: Mutex::new(Vec::new()),
+            heard: Mutex::new(None),
             heard_projects: Mutex::new(None),
             projects_looked: Mutex::new(None),
             control_asks: Mutex::default(),
@@ -643,7 +644,7 @@ impl Serve {
     pub fn sessions_changed(&self) {
         // Nobody to tell: no list built. The next device starts from Welcome.
         if self.0.controls.lock().is_empty() {
-            self.0.heard.lock().clear();
+            *self.0.heard.lock() = None;
             *self.0.heard_projects.lock() = None;
             return;
         }
@@ -659,7 +660,8 @@ impl Serve {
             self.projects_changed();
         }
         let now = self.0.host.sessions();
-        let mut heard = self.0.heard.lock();
+        let mut guard = self.0.heard.lock();
+        let heard = guard.get_or_insert_with(Vec::new);
         // Devices keep the host's order: a status changes a session in
         // place or adds it at the end, so anything else is the whole list.
         let in_place =
@@ -672,7 +674,7 @@ impl Serve {
             .collect();
         *heard = now;
         let list = (!in_place).then(|| heard.clone());
-        drop(heard);
+        drop(guard);
         if let Some(sessions) = list {
             self.broadcast(&ToDevice::SessionList { sessions });
         } else {
@@ -915,7 +917,6 @@ impl Serve {
             })
             .await
             .ok()?;
-        self.0.heard_projects.lock().get_or_insert(projects);
         let out = Arc::new(ControlOut {
             queue: Mutex::new(ControlQueue::new(CONTROL_QUEUE_LIMIT)),
             wake: Notify::new(),
@@ -929,12 +930,35 @@ impl Serve {
             let host = Arc::clone(&self.0.host);
             let _ = tokio::task::spawn_blocking(move || host.release(&device)).await;
         }
-        // A first device hears changes from the list it was just given.
-        {
+        // A first device's lists are what devices heard. A later one was
+        // given the lists as they were when read: if the others heard newer
+        // ones since (a tick while it was being welcomed), it hears those
+        // too, so the changes after reach it as they reach the others.
+        let sessions_since = {
             let mut heard = self.0.heard.lock();
-            if heard.is_empty() {
-                *heard = sessions;
+            match heard.as_ref() {
+                None => {
+                    *heard = Some(sessions);
+                    None
+                }
+                Some(heard) => (*heard != sessions).then(|| heard.clone()),
             }
+        };
+        if let Some(sessions) = sessions_since {
+            out.send(&ToDevice::SessionList { sessions });
+        }
+        let projects_since = {
+            let mut heard = self.0.heard_projects.lock();
+            match heard.as_ref() {
+                None => {
+                    *heard = Some(projects);
+                    None
+                }
+                Some(heard) => (*heard != projects).then(|| heard.clone()),
+            }
+        };
+        if let Some(projects) = projects_since {
+            out.send(&ToDevice::ProjectList { projects });
         }
         let writing = tokio::spawn(write_control(writer, Arc::clone(&out)));
         let serve = self.clone();
@@ -1630,6 +1654,41 @@ mod tests {
                 next(&mut cr).await,
                 ToDevice::SessionStatus { session } if session.title == "renamed"
             ));
+        });
+    }
+
+    #[test]
+    fn a_device_joining_never_hides_a_change_from_the_others() {
+        run(async {
+            let world = world().await;
+            let session = |id: &str| SessionInfo {
+                id: id.into(),
+                title: id.into(),
+                project_id: "p".into(),
+                status: SessionStatus::Idle,
+                standing: StandingState::Idle,
+                needs_you: false,
+                dialog_open: false,
+                last_change_ms: 0,
+            };
+            // The first device hears no sessions; one starts before the
+            // next tick, and a second device joins in between.
+            *world.fake.sessions.lock() = Some(vec![]);
+            let (_one, _l1, _w1, mut first) = device(&world, 3, Role::Viewer).await;
+            *world.fake.sessions.lock() = Some(vec![session("t")]);
+            let (_two, _l2, _w2, _second) = device(&world, 4, Role::Viewer).await;
+            world.serve.sessions_changed();
+            world.serve.heartbeat(7);
+            let mut heard = Vec::new();
+            loop {
+                match next(&mut first).await {
+                    ToDevice::SessionList { sessions } => heard = sessions,
+                    ToDevice::SessionStatus { session } => heard.push(session),
+                    ToDevice::Heartbeat { at: 7, .. } => break,
+                    _ => {}
+                }
+            }
+            assert_eq!(heard, vec![session("t")]);
         });
     }
 

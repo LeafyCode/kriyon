@@ -24,8 +24,8 @@ pub const PEER_ORIGIN: &str = "peer";
 const HANDBACK: &str = "[Subagent hand-back]";
 
 /// How the work a report is about came out. Variant order is the remote
-/// protocol's numbers: append only, and tag 0 is what a device reads for an
-/// outcome it doesn't know.
+/// protocol's numbers: append only. A device that doesn't know an outcome
+/// leaves that entry out (spec §3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ReportOutcome {

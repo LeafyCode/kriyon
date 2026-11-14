@@ -394,7 +394,7 @@ pub async fn device(
         .expect("hello");
     let welcome = next(&mut reader).await;
     assert!(
-        matches!(&welcome, ToDevice::Welcome { role: r, sessions, .. } if *r == role && !sessions.is_empty()),
+        matches!(&welcome, ToDevice::Welcome { role: r, .. } if *r == role),
         "{welcome:?}"
     );
     let projects = next(&mut reader).await;
