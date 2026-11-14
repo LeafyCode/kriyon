@@ -426,6 +426,20 @@ pub struct RemoteLink {
 }
 
 impl RemoteLink {
+    /// The path the link uses now: straight to the device, or through a
+    /// relay; `None` while none is chosen.
+    #[must_use]
+    pub fn path(&self) -> Option<kriyon_remote::device_view::LinkPath> {
+        use kriyon_remote::device_view::LinkPath;
+        let paths = self.connection.paths();
+        let selected = paths.iter().find(iroh::endpoint::Path::is_selected)?;
+        Some(if selected.is_relay() {
+            LinkPath::Relay
+        } else {
+            LinkPath::Direct
+        })
+    }
+
     #[must_use]
     pub fn device(&self) -> EndpointId {
         self.device

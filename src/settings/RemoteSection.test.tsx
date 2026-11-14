@@ -19,7 +19,12 @@ import {
   remoteStatus,
 } from "../ipc/bridge.ts";
 import { RELAY_CONSENT_LINE } from "../state/relay.ts";
-import { CONSENT_LINES, useRemote } from "../state/remote.ts";
+import {
+  CONSENT_LINES,
+  DIRECT_BLOCKED_LINE,
+  FIREWALL_CONSENT_LINE,
+  useRemote,
+} from "../state/remote.ts";
 import { useRemoteHosts } from "../state/remoteHosts.ts";
 import { RemoteSection } from "./RemoteSection.tsx";
 
@@ -54,6 +59,7 @@ const TYPE_THIS_CODE = /Type this code on the other computer/;
 
 const off: RemoteStatus = {
   enabled: false,
+  firewallAsks: false,
   hostId: null,
   pairing: { state: "idle" },
   port: 49_731,
@@ -106,6 +112,33 @@ test("with our relay on, the consent screen says what passes through it", async 
   expect((await screen.findByRole("dialog")).textContent).toContain(
     RELAY_CONSENT_LINE
   );
+});
+
+test("where the firewall asks, the consent screen says so before it does", async () => {
+  vi.mocked(remoteStatus).mockResolvedValue({ ...off, firewallAsks: true });
+  render(<RemoteSection />);
+  fireEvent.click(await screen.findByRole("switch", { name: "Remote access" }));
+  expect((await screen.findByRole("dialog")).textContent).toContain(
+    FIREWALL_CONSENT_LINE
+  );
+});
+
+test("the consent screen says nothing of a firewall where none asks", async () => {
+  render(<RemoteSection />);
+  fireEvent.click(await screen.findByRole("switch", { name: "Remote access" }));
+  expect((await screen.findByRole("dialog")).textContent).not.toContain(
+    FIREWALL_CONSENT_LINE
+  );
+});
+
+test("devices only ever through the relay: it says a firewall may block direct links, and how to allow Kriyon", async () => {
+  vi.mocked(remoteStatus).mockResolvedValue({
+    ...on,
+    firewallAsks: true,
+    routes: { directBlocked: true, portNote: null, relay: true, tailscale: [] },
+  });
+  render(<RemoteSection />);
+  expect(await screen.findByText(DIRECT_BLOCKED_LINE)).toBeInTheDocument();
 });
 
 test("turning on shows the consent screen, and Cancel leaves it off", async () => {
@@ -364,6 +397,7 @@ test("while on, it says which ways devices can reach it, and why the port isn't 
   vi.mocked(remoteStatus).mockResolvedValue({
     ...on,
     routes: {
+      directBlocked: false,
       portNote: "Port 49731 is in use by another program.",
       relay: false,
       tailscale: ["100.101.102.103"],
@@ -383,12 +417,22 @@ test("while on, it says which ways devices can reach it, and why the port isn't 
 test("the port can be changed, and only a whole number is sent", async () => {
   vi.mocked(remoteStatus).mockResolvedValue({
     ...on,
-    routes: { portNote: null, relay: false, tailscale: [] },
+    routes: {
+      directBlocked: false,
+      portNote: null,
+      relay: false,
+      tailscale: [],
+    },
   });
   vi.mocked(remoteSetPort).mockResolvedValue({
     ...on,
     port: 50_000,
-    routes: { portNote: null, relay: false, tailscale: [] },
+    routes: {
+      directBlocked: false,
+      portNote: null,
+      relay: false,
+      tailscale: [],
+    },
   });
   render(<RemoteSection />);
   const field = await screen.findByRole("spinbutton", { name: "Port" });

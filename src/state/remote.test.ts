@@ -42,6 +42,7 @@ const PROMISES_TOO_MUCH = /Mac|relay/;
 
 const off: RemoteStatus = {
   enabled: false,
+  firewallAsks: false,
   hostId: null,
   pairing: { state: "idle" },
   port: 49_731,
@@ -237,7 +238,12 @@ test("the consent screen says what changes, plainly", () => {
 });
 
 test("the routes devices can use are said plainly", () => {
-  const routes = { portNote: null, relay: false, tailscale: [] };
+  const routes = {
+    directBlocked: false,
+    portNote: null,
+    relay: false,
+    tailscale: [],
+  };
   expect(reachableLine(routes)).toBe("Reachable over: this network.");
   expect(
     reachableLine({ ...routes, relay: true, tailscale: ["100.101.102.103"] })

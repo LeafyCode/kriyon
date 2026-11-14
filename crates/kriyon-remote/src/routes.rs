@@ -92,9 +92,74 @@ impl Ports {
     }
 }
 
+/// How long devices may reach a host only through the relay before it looks
+/// as if direct links are blocked: a direct path forms within seconds where
+/// the network allows one.
+pub const RELAY_ONLY_WAIT: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// Whether a host's links to its devices ever ran direct since remote access
+/// came on: if devices have reached it only through the relay for
+/// [`RELAY_ONLY_WAIT`], something (Windows Defender Firewall, a network that
+/// keeps devices apart) may be blocking direct links. A device on another
+/// network relays anyway, so this is a hint, never a fault.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct DirectWatch {
+    direct_seen: bool,
+    relay_since: Option<std::time::Instant>,
+}
+
+impl DirectWatch {
+    /// A link to a device runs over `path` at `now`.
+    pub fn note(&mut self, path: crate::device_view::LinkPath, now: std::time::Instant) {
+        match path {
+            crate::device_view::LinkPath::Direct => self.direct_seen = true,
+            crate::device_view::LinkPath::Relay => {
+                self.relay_since.get_or_insert(now);
+            }
+        }
+    }
+
+    /// Whether direct links look blocked at `now`.
+    #[must_use]
+    pub fn blocked(&self, now: std::time::Instant) -> bool {
+        !self.direct_seen
+            && self
+                .relay_since
+                .is_some_and(|since| now.saturating_duration_since(since) >= RELAY_ONLY_WAIT)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Links that have only ever run through the relay, for long enough,
+    /// look blocked; one direct path since says nothing is.
+    #[test]
+    fn links_only_ever_through_the_relay_look_blocked_after_a_while() {
+        use crate::device_view::LinkPath;
+        use std::time::{Duration, Instant};
+        let t = Instant::now();
+        let mut watch = DirectWatch::default();
+        assert!(!watch.blocked(t), "no link yet");
+        watch.note(LinkPath::Relay, t);
+        assert!(
+            !watch.blocked(t + RELAY_ONLY_WAIT.saturating_sub(Duration::from_secs(1))),
+            "not yet"
+        );
+        assert!(
+            watch.blocked(t + RELAY_ONLY_WAIT),
+            "only the relay, for long enough"
+        );
+        // A direct path since: the network lets links through.
+        watch.note(LinkPath::Direct, t + RELAY_ONLY_WAIT);
+        assert!(!watch.blocked(t + RELAY_ONLY_WAIT * 10));
+        watch.note(LinkPath::Relay, t + RELAY_ONLY_WAIT * 10);
+        assert!(
+            !watch.blocked(t + RELAY_ONLY_WAIT * 20),
+            "it went direct once"
+        );
+    }
 
     fn ip(text: &str) -> IpAddr {
         text.parse().expect("an address")

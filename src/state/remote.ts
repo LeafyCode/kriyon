@@ -205,6 +205,16 @@ export const CONSENT_LINES: readonly string[] = [
   "A paired phone that's lost or stolen can still reach your sessions until you remove it here.",
 ];
 
+/** Said before Windows Defender Firewall asks, the first time remote access
+ * listens. */
+export const FIREWALL_CONSENT_LINE =
+  "Windows will ask whether Kriyon may accept connections. Allow it on private networks: if you don't, devices on the same network can only reach this PC through a relay.";
+
+/** Said when devices have reached this computer only through the relay for a
+ * while: on the same network, a firewall is the likely cause. */
+export const DIRECT_BLOCKED_LINE =
+  "Devices reach this PC only through the relay. If they're on the same network, Windows Defender Firewall may be blocking Kriyon: in Windows Security, open Firewall & network protection, choose Allow an app through firewall, and tick Kriyon for Private networks.";
+
 /** "4:59": time left until `expiresAtMs`, never below zero. */
 export function countdownText(expiresAtMs: number, nowMs: number): string {
   const seconds = Math.max(0, Math.ceil((expiresAtMs - nowMs) / 1000));

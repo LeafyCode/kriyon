@@ -339,6 +339,10 @@ pub(crate) async fn release_endpoint_if_unused(app: &tauri::AppHandle) {
 pub(crate) async fn turn_on(app: &tauri::AppHandle) -> Result<(), String> {
     use tauri::{Emitter as _, Manager as _};
     let host = bound(app).await?.host;
+    // Whether links go direct is learned afresh each time it comes on.
+    if let Some(serve) = app.try_state::<kriyon_remote_link::host_runtime::Serve>() {
+        serve.watch_direct_links_again();
+    }
     let emitter = app.clone();
     let releaser = app.clone();
     let setup = kriyon_remote_link::host_runtime::HostSetup {
@@ -410,6 +414,9 @@ pub struct RemoteStatus {
     pub routes: Option<Routes>,
     /// The UDP port remote access listens on (the person's choice).
     pub port: u16,
+    /// Windows Defender Firewall asks whether Kriyon may accept connections
+    /// the first time it listens: the consent screen says so first.
+    pub firewall_asks: bool,
 }
 
 /// The ways a device can reach this computer now (spec §2).
@@ -422,6 +429,9 @@ pub struct Routes {
     pub relay: bool,
     /// Why it isn't on the chosen port, if it isn't.
     pub port_note: Option<String>,
+    /// Devices have reached this computer only through the relay for a
+    /// while, where a firewall may be blocking direct links (Windows).
+    pub direct_blocked: bool,
 }
 
 /// The pairing in progress.
@@ -441,6 +451,10 @@ pub enum PairingView {
     Expired,
     Burned,
 }
+
+/// Whether this platform's firewall asks before an app accepts connections
+/// (Windows Defender Firewall; macOS asks for the local network itself).
+const FIREWALL_ASKS: bool = cfg!(windows);
 
 async fn status(app: &tauri::AppHandle) -> RemoteStatus {
     use kriyon_remote_link::host_runtime::PairingStatus;
@@ -478,6 +492,11 @@ async fn status(app: &tauri::AppHandle) -> RemoteStatus {
                 .collect(),
             relay: endpoint.bound_relay().await.is_some(),
             port_note: endpoint.port_note(),
+            // Said only where a firewall prompt is what likely blocks them.
+            direct_blocked: FIREWALL_ASKS
+                && app
+                    .try_state::<kriyon_remote_link::host_runtime::Serve>()
+                    .is_some_and(|serve| serve.direct_links_blocked()),
         })
     } else {
         None
@@ -488,6 +507,7 @@ async fn status(app: &tauri::AppHandle) -> RemoteStatus {
         pairing,
         routes,
         port: endpoint.port(),
+        firewall_asks: FIREWALL_ASKS,
     }
 }
 
