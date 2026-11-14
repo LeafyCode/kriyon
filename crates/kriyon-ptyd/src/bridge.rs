@@ -315,21 +315,26 @@ fn seat_in_job(
     if u64::try_from(shell).ok() != Some(session_shell) {
         return Err(FAILED);
     }
-    let poster = peer_pid(stream).ok_or(FAILED)?;
+    let poster = peer_pid(stream).map_err(|_| FAILED)?;
     let members = job.members().ok_or(FAILED)?;
     Ok(kriyon_core::proc::windows_seat(poster, shell, members))
 }
 
 /// The pid of the process at the other end of `stream`, as Windows recorded
 /// it when that process connected.
+///
+/// # Errors
+/// When Windows won't say, with its error and how much it wrote.
 #[cfg(windows)]
-fn peer_pid(stream: &UnixStream) -> Option<i32> {
+fn peer_pid(stream: &UnixStream) -> std::io::Result<i32> {
     use std::os::windows::io::AsRawSocket as _;
-    use windows_sys::Win32::Networking::WinSock::{WSAIoctl, SIO_AF_UNIX_GETPEERPID, SOCKET};
-    let socket = SOCKET::try_from(stream.as_raw_socket()).ok()?;
+    use windows_sys::Win32::Networking::WinSock::{
+        WSAGetLastError, WSAIoctl, SIO_AF_UNIX_GETPEERPID, SOCKET,
+    };
+    let socket = SOCKET::try_from(stream.as_raw_socket()).map_err(std::io::Error::other)?;
     let mut pid: u32 = 0;
     let mut written: u32 = 0;
-    let size = u32::try_from(std::mem::size_of::<u32>()).ok()?;
+    let size = u32::try_from(std::mem::size_of::<u32>()).map_err(std::io::Error::other)?;
     // SAFETY: no input buffer; `pid` is valid for `size` bytes of writes and
     // `written` for one `u32`; no overlapped I/O, so the call is synchronous.
     let rc = unsafe {
@@ -345,10 +350,17 @@ fn peer_pid(stream: &UnixStream) -> Option<i32> {
             None,
         )
     };
-    if rc != 0 || written != size || pid == 0 {
-        return None;
+    if rc != 0 {
+        // SAFETY: reads this thread's last Winsock error; no arguments.
+        let code = unsafe { WSAGetLastError() };
+        return Err(std::io::Error::from_raw_os_error(code));
     }
-    i32::try_from(pid).ok()
+    if pid == 0 {
+        return Err(std::io::Error::other(format!(
+            "no peer pid (wrote {written} bytes)"
+        )));
+    }
+    i32::try_from(pid).map_err(std::io::Error::other)
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
@@ -600,10 +612,8 @@ mod tests {
         let listener = bind(&socket).expect("binds");
         let _client = UnixStream::connect(&socket).expect("connects");
         let (accepted, _) = listener.accept().expect("accepts");
-        assert_eq!(
-            peer_pid(&accepted).and_then(|pid| u32::try_from(pid).ok()),
-            Some(std::process::id())
-        );
+        let pid = peer_pid(&accepted).expect("Windows names the peer");
+        assert_eq!(u32::try_from(pid).ok(), Some(std::process::id()));
     }
 
     /// The session engine [`windows_owner_posts`] checks posts against.
