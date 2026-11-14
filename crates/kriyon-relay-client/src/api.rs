@@ -38,7 +38,7 @@ pub struct DeviceCode {
 }
 
 /// A pass and when to use and renew it.
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct PassReply {
     /// Opaque: stored and sent as it is.
@@ -46,6 +46,18 @@ pub struct PassReply {
     pub expires_at: String,
     pub renew_after: String,
     pub relay_url: String,
+}
+
+/// The pass is a credential: a debug print shows the rest, never the pass.
+impl std::fmt::Debug for PassReply {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PassReply")
+            .field("pass", &"<redacted>")
+            .field("expires_at", &self.expires_at)
+            .field("renew_after", &self.renew_after)
+            .field("relay_url", &self.relay_url)
+            .finish()
+    }
 }
 
 /// A device registered on the relay account.

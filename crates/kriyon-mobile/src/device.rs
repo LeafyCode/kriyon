@@ -336,6 +336,16 @@ impl Rebind for PhoneEndpoint {
     fn changed(&self) {}
 }
 
+/// Whether the push sender at `url` may be used: https, or this machine
+/// (`kriyon_remote::relay::url_allowed`). Any other is never spoken to.
+fn push_url_allowed(url: &str) -> bool {
+    let ok = kriyon_remote::relay::url_allowed(url, cfg!(debug_assertions));
+    if !ok {
+        eprintln!("kriyon: the push sender {url} isn't https: no alerts");
+    }
+    ok
+}
+
 /// The platform the relay account lists this phone as.
 fn platform() -> &'static str {
     if cfg!(target_os = "android") {
@@ -795,7 +805,7 @@ impl MobileDevice {
             store,
             events: Arc::clone(&told) as Arc<dyn DeviceEvents>,
             hosts_lock: std::sync::Mutex::new(()),
-            push_url,
+            push_url: push_url.filter(|url| push_url_allowed(url)),
             push: std::sync::Mutex::new(None),
             alerts_off: std::sync::atomic::AtomicBool::new(alerts_off),
             relay,
@@ -1874,6 +1884,23 @@ pub(crate) mod tests {
             })
             .collect();
         assert_eq!(kinds, ["token", "forget", "token"]);
+    }
+
+    #[test]
+    fn a_push_sender_that_isnt_https_is_never_used() {
+        let store = Arc::new(Memory::default());
+        let device = MobileDevice::start_with(
+            Arc::clone(&store) as Arc<dyn PhoneStore>,
+            Arc::new(Seen::default()),
+            "Test phone".into(),
+            loopback(),
+            Some("http://push.example.test".into()),
+            None,
+        )
+        .expect("starts");
+        // As if there were no sender: the token goes nowhere.
+        let sent = run(async move { device.set_push_token("t".into(), "apns".into()).await });
+        assert_eq!(sent, Ok(false));
     }
 
     #[test]

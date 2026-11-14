@@ -17,10 +17,22 @@ use parking_lot::Mutex;
 use tauri::Manager as _;
 
 /// The push sender's address, from the build (`KRIYON_PUSH_URL`); push is
-/// off without it.
+/// off without it, or with one that isn't https (see [`usable_push_url`]).
 #[must_use]
 pub fn push_url() -> Option<&'static str> {
-    option_env!("KRIYON_PUSH_URL").filter(|url| !url.trim().is_empty())
+    usable_push_url(option_env!("KRIYON_PUSH_URL"))
+}
+
+/// A push sender's address the app may speak to: set, and https (or this
+/// machine; the local network only in a debug build).
+fn usable_push_url(url: Option<&str>) -> Option<&str> {
+    let url = url.filter(|url| !url.trim().is_empty())?;
+    if kriyon_remote::relay::url_allowed(url, cfg!(debug_assertions)) {
+        Some(url)
+    } else {
+        eprintln!("kriyon: the push sender {url} isn't https: no alerts");
+        None
+    }
 }
 
 /// How long one request to the sender may take: wakes go out together, and
@@ -227,6 +239,19 @@ fn host_secret(app: &tauri::AppHandle, rt: &PushRt) -> Option<[u8; 32]> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_push_sender_that_isnt_https_is_never_used() {
+        use super::usable_push_url;
+        assert_eq!(usable_push_url(None), None);
+        assert_eq!(usable_push_url(Some(" ")), None);
+        assert_eq!(usable_push_url(Some("http://push.example.test")), None);
+        assert_eq!(
+            usable_push_url(Some("https://push.example.test")),
+            Some("https://push.example.test")
+        );
+        assert!(usable_push_url(Some("http://localhost:8787")).is_some());
+    }
+
     use kriyon_push::deliver::{Deliver, DeliverError};
     use kriyon_push::gate::Alert;
     use kriyon_push::server::{serve, App};

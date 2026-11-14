@@ -32,11 +32,21 @@ pub struct LinkConfig {
 }
 
 /// A relay and the pass that lets this device use it.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct RelayAccess {
     pub url: RelayUrl,
     /// Opaque: sent to the relay as it is, never read.
     pub pass: String,
+}
+
+/// The pass is a credential: a debug print shows the relay, never the pass.
+impl std::fmt::Debug for RelayAccess {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RelayAccess")
+            .field("url", &self.url)
+            .field("pass", &"<redacted>")
+            .finish()
+    }
 }
 
 /// The relay setup for `config`: none, or our relay with the pass as its
@@ -172,6 +182,17 @@ pub(crate) fn gone(error: &iroh::endpoint::ConnectionError) -> LinkError {
 #[cfg(test)]
 mod relay_tests {
     use super::*;
+
+    #[test]
+    fn a_relay_access_never_prints_its_pass() {
+        let access = RelayAccess {
+            url: "https://relay.example.test/".parse().expect("url"),
+            pass: "secret-pass".into(),
+        };
+        let printed = format!("{access:?}");
+        assert!(!printed.contains("secret-pass"), "{printed}");
+        assert!(printed.contains("relay.example.test"), "{printed}");
+    }
 
     #[test]
     fn no_relay_unless_one_is_set() {

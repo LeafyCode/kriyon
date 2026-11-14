@@ -199,9 +199,73 @@ pub fn rebuild_due(
     newer_waiting && (quiet || running_low)
 }
 
+/// Whether an address the app speaks to (the relay's API, the relay in a
+/// pass, the push sender) may be used: `https` always; plain `http` only to
+/// this machine (`localhost`, a loopback address: a local test server), or,
+/// in a `debug` build, to a private address on the local network. Anything
+/// else could be read or changed on the way.
+#[must_use]
+pub fn url_allowed(url: &str, debug: bool) -> bool {
+    let host_of = |rest: &str| -> Option<String> {
+        let authority = rest.split(['/', '?', '#']).next()?;
+        let host = if let Some(bracketed) = authority.strip_prefix('[') {
+            bracketed.split(']').next()?
+        } else {
+            authority.split(':').next()?
+        };
+        (!host.is_empty()).then(|| host.to_ascii_lowercase())
+    };
+    if let Some(rest) = url.strip_prefix("https://") {
+        return host_of(rest).is_some();
+    }
+    let Some(host) = url.strip_prefix("http://").and_then(host_of) else {
+        return false;
+    };
+    if host == "localhost" {
+        return true;
+    }
+    match host.parse::<std::net::IpAddr>() {
+        Ok(ip) if ip.is_loopback() => true,
+        Ok(std::net::IpAddr::V4(ip)) => debug && ip.is_private(),
+        Ok(std::net::IpAddr::V6(ip)) => debug && (ip.segments()[0] & 0xfe00) == 0xfc00,
+        Err(_) => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_https_or_this_machine_is_spoken_to_and_the_lan_only_in_a_debug_build() {
+        for ok in [
+            "https://api.example.test",
+            "https://relay.example.test/",
+            "http://localhost:4001",
+            "http://127.0.0.1:4001/api",
+            "http://[::1]:4001",
+        ] {
+            assert!(url_allowed(ok, false), "{ok}");
+        }
+        for lan in [
+            "http://192.168.1.12:4001",
+            "http://10.0.2.2:4001",
+            "http://172.16.0.5",
+        ] {
+            assert!(!url_allowed(lan, false), "{lan} in a release build");
+            assert!(url_allowed(lan, true), "{lan} in a debug build");
+        }
+        for bad in [
+            "http://api.example.test",
+            "http://8.8.8.8",
+            "ftp://api.example.test",
+            "api.example.test",
+            "https://",
+            "http://localhost.example.test",
+        ] {
+            assert!(!url_allowed(bad, true), "{bad}");
+        }
+    }
 
     #[test]
     fn each_api_refusal_in_the_contract_maps_to_its_action() {
