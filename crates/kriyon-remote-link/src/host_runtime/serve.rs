@@ -31,8 +31,8 @@ use kriyon_remote::entries::{EntryBook, EntryReader};
 use kriyon_remote::fanout::{pack_snapshot, Pop, RequesterId, SessionFanout, SnapshotToPack};
 use kriyon_remote::link_policy::CloseCode;
 use kriyon_remote::message::{
-    EndpointId, EntriesUnavailable, FromDevice, ProjectInfo, RefuseReason, Role, SessionInfo,
-    ToDevice,
+    EndpointId, EntriesUnavailable, FromDevice, PlanUsage, ProjectInfo, RefuseReason, Role,
+    SessionInfo, ToDevice,
 };
 use kriyon_remote::queue::{ControlQueue, CONTROL_QUEUE_LIMIT, SESSION_QUEUE_LIMIT};
 use parking_lot::Mutex;
@@ -105,6 +105,11 @@ pub trait ServeHost: Send + Sync + 'static {
     }
     /// The projects a session can be started in, for devices' pickers.
     fn projects(&self) -> Vec<ProjectInfo>;
+    /// The host account's [Plan limits], as the desktop shows them. Read on
+    /// every tick: from memory, never a file. None known by default.
+    fn usage(&self) -> PlanUsage {
+        PlanUsage::default()
+    }
     /// Saved project `project_id`'s folder, checked against the [Approved
     /// root]s, for a remote start's check.
     fn project_folder(&self, project_id: &str) -> ProjectFolder;
@@ -389,6 +394,8 @@ struct Inner {
     heard: Mutex<Option<Vec<SessionInfo>>>,
     /// The project list as devices last heard it.
     heard_projects: Mutex<Option<Vec<ProjectInfo>>>,
+    /// The plan's use as devices last heard it.
+    heard_usage: Mutex<Option<PlanUsage>>,
     /// When the tick last looked at the project list: it changes seldom, and
     /// looking checks every project's folder.
     projects_looked: Mutex<Option<Instant>>,
@@ -471,6 +478,7 @@ impl Serve {
             heartbeat_seq: AtomicU64::new(0),
             heard: Mutex::new(None),
             heard_projects: Mutex::new(None),
+            heard_usage: Mutex::new(None),
             projects_looked: Mutex::new(None),
             control_asks: Mutex::default(),
             refusals: Mutex::new(kriyon_remote::link_policy::RateLimit::new(
@@ -646,6 +654,7 @@ impl Serve {
         if self.0.controls.lock().is_empty() {
             *self.0.heard.lock() = None;
             *self.0.heard_projects.lock() = None;
+            *self.0.heard_usage.lock() = None;
             return;
         }
         let due = {
@@ -658,6 +667,11 @@ impl Serve {
         };
         if due {
             self.projects_changed();
+        }
+        let usage = self.0.host.usage();
+        let usage_changed = self.0.heard_usage.lock().replace(usage) != Some(usage);
+        if usage_changed {
+            self.broadcast(&ToDevice::Usage { usage });
         }
         let now = self.0.host.sessions();
         let mut guard = self.0.heard.lock();
@@ -898,8 +912,15 @@ impl Serve {
             }
             return None;
         }
-        let (sessions, host_name, projects) = self
-            .blocking(|host| (host.sessions(), host.host_name(), host.projects()))
+        let (sessions, host_name, projects, usage) = self
+            .blocking(|host| {
+                (
+                    host.sessions(),
+                    host.host_name(),
+                    host.projects(),
+                    host.usage(),
+                )
+            })
             .await?;
         writer
             .send(&ToDevice::Welcome {
@@ -910,13 +931,15 @@ impl Serve {
             })
             .await
             .ok()?;
-        // Then where a session can be started: Viewers hear it too.
+        // Then where a session can be started, and the plan's use: Viewers
+        // hear them too.
         writer
             .send(&ToDevice::ProjectList {
                 projects: projects.clone(),
             })
             .await
             .ok()?;
+        writer.send(&ToDevice::Usage { usage }).await.ok()?;
         let out = Arc::new(ControlOut {
             queue: Mutex::new(ControlQueue::new(CONTROL_QUEUE_LIMIT)),
             wake: Notify::new(),
@@ -930,36 +953,7 @@ impl Serve {
             let host = Arc::clone(&self.0.host);
             let _ = tokio::task::spawn_blocking(move || host.release(&device)).await;
         }
-        // A first device's lists are what devices heard. A later one was
-        // given the lists as they were when read: if the others heard newer
-        // ones since (a tick while it was being welcomed), it hears those
-        // too, so the changes after reach it as they reach the others.
-        let sessions_since = {
-            let mut heard = self.0.heard.lock();
-            match heard.as_ref() {
-                None => {
-                    *heard = Some(sessions);
-                    None
-                }
-                Some(heard) => (*heard != sessions).then(|| heard.clone()),
-            }
-        };
-        if let Some(sessions) = sessions_since {
-            out.send(&ToDevice::SessionList { sessions });
-        }
-        let projects_since = {
-            let mut heard = self.0.heard_projects.lock();
-            match heard.as_ref() {
-                None => {
-                    *heard = Some(projects);
-                    None
-                }
-                Some(heard) => (*heard != projects).then(|| heard.clone()),
-            }
-        };
-        if let Some(projects) = projects_since {
-            out.send(&ToDevice::ProjectList { projects });
-        }
+        self.catch_up(&out, sessions, projects, usage);
         let writing = tokio::spawn(write_control(writer, Arc::clone(&out)));
         let serve = self.clone();
         let reading_out = Arc::clone(&out);
@@ -967,6 +961,28 @@ impl Serve {
             serve.read_control(device, role, reader, reading_out).await;
         });
         Some((out, [writing, reading]))
+    }
+
+    /// A device just welcomed with `sessions`, `projects` and `usage`, as
+    /// read then, hears what the other devices heard since (a tick while it
+    /// was being welcomed), so the changes after reach it as they reach the
+    /// others. A first device's lists become what devices heard.
+    fn catch_up(
+        &self,
+        out: &ControlOut,
+        sessions: Vec<SessionInfo>,
+        projects: Vec<ProjectInfo>,
+        usage: PlanUsage,
+    ) {
+        if let Some(sessions) = heard_since(&self.0.heard, sessions) {
+            out.send(&ToDevice::SessionList { sessions });
+        }
+        if let Some(projects) = heard_since(&self.0.heard_projects, projects) {
+            out.send(&ToDevice::ProjectList { projects });
+        }
+        if let Some(usage) = heard_since(&self.0.heard_usage, usage) {
+            out.send(&ToDevice::Usage { usage });
+        }
     }
 
     /// Answer what a device sends on its control stream.
@@ -1411,6 +1427,19 @@ impl Serve {
     }
 }
 
+/// What devices heard, if it isn't `told` (what a joining device was just
+/// told); when nothing was heard yet, `told` becomes it.
+fn heard_since<T: Clone + PartialEq>(heard: &Mutex<Option<T>>, told: T) -> Option<T> {
+    let mut heard = heard.lock();
+    match heard.as_ref() {
+        None => {
+            *heard = Some(told);
+            None
+        }
+        Some(heard) => (*heard != told).then(|| heard.clone()),
+    }
+}
+
 /// Write a device's control queue out as it fills.
 async fn write_control(mut writer: MessageWriter<ToDevice>, out: Arc<ControlOut>) {
     loop {
@@ -1628,6 +1657,40 @@ mod tests {
     }
 
     #[test]
+    fn the_plans_use_is_told_after_welcome_and_when_it_changes() {
+        run(async {
+            let world = world().await;
+            let (_phone, _link, _cw, mut cr) = device(&world, 3, Role::Viewer).await;
+            let used = kriyon_remote::message::PlanUsage {
+                five_hour: Some(kriyon_remote::message::UsageWindow {
+                    used_percent: 40,
+                    resets_at_ms: Some(9_000),
+                }),
+                weekly: None,
+            };
+            *world.fake.usage.lock() = used;
+            world.serve.sessions_changed();
+            loop {
+                match next(&mut cr).await {
+                    ToDevice::Usage { usage } => {
+                        assert_eq!(usage, used);
+                        break;
+                    }
+                    ToDevice::SessionStatus { .. } | ToDevice::ProjectList { .. } => {}
+                    other => panic!("{other:?}"),
+                }
+            }
+            // Unchanged: not sent again.
+            world.serve.sessions_changed();
+            world.serve.heartbeat(9);
+            assert!(matches!(
+                next(&mut cr).await,
+                ToDevice::Heartbeat { at: 9, .. }
+            ));
+        });
+    }
+
+    #[test]
     fn heartbeats_and_session_changes_reach_every_device() {
         run(async {
             let world = world().await;
@@ -1670,6 +1733,11 @@ mod tests {
                 needs_you: false,
                 dialog_open: false,
                 last_change_ms: 0,
+                question: None,
+                activity: None,
+                running_since_ms: None,
+                turn_summary: None,
+                diff: None,
             };
             // The first device hears no sessions; one starts before the
             // next tick, and a second device joins in between.
@@ -1705,6 +1773,11 @@ mod tests {
                 needs_you: false,
                 dialog_open: false,
                 last_change_ms: 0,
+                question: None,
+                activity: None,
+                running_since_ms: None,
+                turn_summary: None,
+                diff: None,
             };
             let ids = |list: &[SessionInfo]| -> Vec<String> {
                 list.iter().map(|info| info.id.clone()).collect()
@@ -2062,6 +2135,7 @@ mod tests {
             .expect("hello");
             assert!(matches!(next(&mut cr).await, ToDevice::Welcome { .. }));
             assert!(matches!(next(&mut cr).await, ToDevice::ProjectList { .. }));
+            assert!(matches!(next(&mut cr).await, ToDevice::Usage { .. }));
             drop(old);
             // Let the old connection's end be noticed and cleaned up.
             tokio::time::sleep(Duration::from_millis(500)).await;

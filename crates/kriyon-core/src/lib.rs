@@ -44,6 +44,7 @@ pub mod readable;
 pub mod redact;
 pub mod runtime;
 pub mod session;
+pub mod session_digest;
 pub mod shellinit;
 pub mod skip_ahead;
 pub mod sleep;

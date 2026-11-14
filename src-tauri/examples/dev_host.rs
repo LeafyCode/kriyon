@@ -221,6 +221,11 @@ impl ServeHost for DevApp {
                 needs_you,
                 dialog_open: false,
                 last_change_ms: minutes_ago(ago),
+                question: None,
+                activity: None,
+                running_since_ms: None,
+                turn_summary: None,
+                diff: None,
             }
         };
         vec![

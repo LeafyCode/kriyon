@@ -1,0 +1,108 @@
+{
+  "hostSummary": {
+    "hostId": "abababababababababababababababababababababababababababababababab",
+    "hostName": "Mac",
+    "lastSeenMs": null,
+    "link": "connected",
+    "mayStart": true,
+    "path": "direct",
+    "projects": [
+      {
+        "id": "p1",
+        "name": "app",
+        "parked": false
+      }
+    ],
+    "refused": null,
+    "role": "controller",
+    "sessions": [
+      {
+        "activity": null,
+        "dialogOpen": true,
+        "diff": {
+          "added": 10,
+          "files": 2,
+          "removed": 3
+        },
+        "id": "s1",
+        "lastChangeMs": 5,
+        "mayType": true,
+        "needsYou": true,
+        "projectId": "p1",
+        "question": {
+          "options": ["Postgres", "SQLite"],
+          "text": "Which db?"
+        },
+        "runningSinceMs": null,
+        "standing": "awaiting_input",
+        "status": "waiting",
+        "title": "Fix the build",
+        "turnSummary": "Fixed it.",
+        "typing": "you"
+      },
+      {
+        "activity": "Bash · pnpm test",
+        "dialogOpen": false,
+        "diff": null,
+        "id": "s2",
+        "lastChangeMs": 5,
+        "mayType": false,
+        "needsYou": false,
+        "projectId": "p1",
+        "question": null,
+        "runningSinceMs": 4,
+        "standing": "running",
+        "status": "running",
+        "title": "Fix the build",
+        "turnSummary": null,
+        "typing": null
+      }
+    ],
+    "usage": {
+      "resetsAtMs": 9000,
+      "usedPercent": 40,
+      "window": "5-hour limit"
+    }
+  },
+  "readableSummary": {
+    "entries": [
+      {
+        "kind": "you",
+        "seq": 1,
+        "text": "Fix the login bug"
+      },
+      {
+        "done": false,
+        "kind": "claude",
+        "seq": 2,
+        "text": "The form sends too early"
+      },
+      {
+        "kind": "step",
+        "name": "Read",
+        "seq": 3,
+        "state": "done",
+        "target": "src/login.ts"
+      },
+      {
+        "kind": "report",
+        "outcome": "Finished",
+        "seq": 4,
+        "summary": "Waited for the token"
+      },
+      {
+        "header": "Tests",
+        "kind": "asking",
+        "options": ["Yes", "No"],
+        "question": "Fix the failing test too?",
+        "seq": 5
+      },
+      {
+        "kind": "note",
+        "seq": 6,
+        "text": "Context compacted"
+      }
+    ],
+    "unavailable": null
+  }
+}

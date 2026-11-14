@@ -17,7 +17,8 @@ use crate::LinkError;
 use iroh::EndpointAddr;
 use kriyon_remote::codec::Decoded;
 use kriyon_remote::device_view::{
-    EntriesEvent, HostView, LinkState, ReadableEntries, ScreenEvent, SessionScreen,
+    EntriesEvent, HostView, LinkFacts, LinkPath, LinkState, ReadableEntries, ScreenEvent,
+    SessionScreen,
 };
 use kriyon_remote::link_policy::{CloseCode, HeartbeatWatch};
 use kriyon_remote::message::{
@@ -35,7 +36,7 @@ const HOST_CLOSE_WAIT: Duration = Duration::from_secs(2);
 
 /// Told when a host's link or view changes.
 pub trait DeviceEvents: Send + Sync + 'static {
-    fn host_changed(&self, host: EndpointId, state: LinkState, view: &HostView);
+    fn host_changed(&self, host: EndpointId, link: &LinkFacts, view: &HostView);
 }
 
 /// Where one session's screen events go.
@@ -147,6 +148,10 @@ struct HostConn {
 #[derive(Default)]
 struct Conn {
     state: Option<LinkState>,
+    /// The path the link uses, while it is up.
+    path: Option<LinkPath>,
+    /// When the host was last heard from (Unix ms).
+    last_seen_ms: Option<i64>,
     view: HostView,
     link: Option<Arc<DeviceLink>>,
     control: Option<Arc<Mutex<MessageWriter<FromDevice>>>>,
@@ -207,6 +212,26 @@ impl StartError {
             Self::Gone => "This device stopped connecting to that computer.",
         }
     }
+}
+
+impl Conn {
+    /// What this device knows of its link now.
+    fn link_facts(&self) -> LinkFacts {
+        LinkFacts {
+            state: self.state.unwrap_or(LinkState::Connecting),
+            path: self.path,
+            last_seen_ms: self.last_seen_ms,
+        }
+    }
+}
+
+/// The time now, in Unix milliseconds.
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| {
+            i64::try_from(since.as_millis()).unwrap_or(i64::MAX)
+        })
 }
 
 /// A request id no other start from this device has had: the time, and a
@@ -871,7 +896,7 @@ async fn reopen(conn: Arc<HostConn>, link: Arc<DeviceLink>) {
 async fn set_state(conn: &HostConn, host: EndpointId, state: LinkState, events: &dyn DeviceEvents) {
     let mut c = conn.conn.lock().await;
     c.state = Some(state);
-    events.host_changed(host, state, &c.view);
+    events.host_changed(host, &c.link_facts(), &c.view);
 }
 
 /// One link: say hello, follow the control stream and the heartbeat, and
@@ -899,8 +924,8 @@ async fn run_link(
         if c.state != Some(LinkState::Lost) {
             c.state = Some(LinkState::Connecting);
         }
-        let state = c.state.unwrap_or(LinkState::Connecting);
-        events.host_changed(host, state, &c.view);
+        c.path = None;
+        events.host_changed(host, &c.link_facts(), &c.view);
     }
     // A link that ended by itself was most likely closed by the host: wait
     // for its reason (NotPaired stops this device for good) before hanging up.
@@ -957,6 +982,7 @@ async fn follow_control(
                     watch.beat(Instant::now());
                 }
                 let mut c = conn.conn.lock().await;
+                c.last_seen_ms = Some(now_ms());
                 // A start's answer goes to whoever asked for it.
                 let answer = match &message {
                     ToDevice::StartResult { request_id, session_id } => {
@@ -979,6 +1005,7 @@ async fn follow_control(
                     && c.state != Some(LinkState::Connected);
                 if now_connected {
                     c.state = Some(LinkState::Connected);
+                    c.path = link.path();
                     welcomed = true;
                     // Redraw what the person had open before the link dropped.
                     tokio::spawn(reopen(Arc::clone(conn), Arc::clone(link)));
@@ -997,8 +1024,7 @@ async fn follow_control(
                     }
                 }
                 if changed || now_connected {
-                    let state = c.state.unwrap_or(LinkState::Connecting);
-                    events.host_changed(host, state, &c.view);
+                    events.host_changed(host, &c.link_facts(), &c.view);
                 }
             }
             _ = tick.tick() => {
@@ -1006,6 +1032,14 @@ async fn follow_control(
                     // Typing goes off; the link is dropped and dialed again.
                     set_state(conn, host, LinkState::Lost, events).await;
                     return (welcomed, true);
+                }
+                // A path that changed (a relay gave way to a direct one,
+                // say) is told; it is looked at each tick, cheaply.
+                let path = link.path();
+                let mut c = conn.conn.lock().await;
+                if c.state == Some(LinkState::Connected) && c.path != path {
+                    c.path = path;
+                    events.host_changed(host, &c.link_facts(), &c.view);
                 }
             }
         }
@@ -1205,6 +1239,11 @@ mod tests {
             needs_you: true,
             dialog_open: false,
             last_change_ms: 0,
+            question: None,
+            activity: None,
+            running_since_ms: None,
+            turn_summary: None,
+            diff: None,
         }
     }
 
@@ -1353,6 +1392,12 @@ mod tests {
             let (_, view) = seen.last().expect("a view");
             assert_eq!(view.host_name.as_deref(), Some("Studio"));
             assert_eq!(view.sessions, vec![session()]);
+            // Over loopback the link runs straight to the host.
+            wait_until("its path", || {
+                seen.facts()
+                    .is_some_and(|facts| facts.path == Some(LinkPath::Direct))
+            })
+            .await;
             rt.disconnect(&host.id()).await;
         });
     }

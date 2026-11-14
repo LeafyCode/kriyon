@@ -202,6 +202,12 @@ impl ServeHost for AppServeHost {
             .unwrap_or_default()
     }
 
+    fn usage(&self) -> kriyon_remote::message::PlanUsage {
+        // As the desktop shows it: off with "Live usage" off.
+        let limits = self.0.state::<AppState>().plan_limits.lock().last();
+        kriyon_remote::message::PlanUsage::from(&limits)
+    }
+
     fn session(&self, id: &str) -> Option<LiveSession> {
         let facts = self
             .0

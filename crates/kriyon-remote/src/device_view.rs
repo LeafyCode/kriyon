@@ -31,6 +31,37 @@ pub enum LinkState {
     Removed,
 }
 
+/// How a link to a host runs now: straight to it, or through a relay.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum LinkPath {
+    Direct,
+    Relay,
+}
+
+/// What this device knows of its own link to a host, beside what the host
+/// says: never on the wire.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LinkFacts {
+    pub state: LinkState,
+    /// The path iroh uses now, while connected.
+    pub path: Option<LinkPath>,
+    /// When this device last heard from the host (Unix ms).
+    pub last_seen_ms: Option<i64>,
+}
+
+impl LinkFacts {
+    /// A link in `state` with nothing else known.
+    #[must_use]
+    pub fn new(state: LinkState) -> Self {
+        Self {
+            state,
+            path: None,
+            last_seen_ms: None,
+        }
+    }
+}
+
 /// Who holds [Typing control] of a session, as the host last said.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ControlState {
@@ -50,6 +81,8 @@ pub struct HostView {
     pub refused: Option<RefuseReason>,
     /// Where a Controller may start a session, as the host last said.
     pub projects: Vec<ProjectInfo>,
+    /// The host's [Plan limits], once it has said them.
+    pub usage: Option<crate::message::PlanUsage>,
 }
 
 impl HostView {
@@ -92,6 +125,7 @@ impl HostView {
             }
             ToDevice::Refused { reason } => self.refused = Some(*reason),
             ToDevice::ProjectList { projects } => self.projects.clone_from(projects),
+            ToDevice::Usage { usage } => self.usage = Some(*usage),
             // Heartbeats are the link's; screens belong on session streams.
             _ => return false,
         }
@@ -302,6 +336,47 @@ pub struct SessionSummary {
     /// This device may type now: connected, a Controller, holding control.
     /// The host checks again at the write.
     pub may_type: bool,
+    /// Its [Session digest], as the host sent it.
+    pub question: Option<crate::message::Question>,
+    pub activity: Option<String>,
+    pub running_since_ms: Option<i64>,
+    pub turn_summary: Option<String>,
+    pub diff: Option<crate::message::Diff>,
+}
+
+/// A host's [Plan limits] as Home shows them: the window nearest its limit.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Usage {
+    /// The window's name, as the desktop says it.
+    pub window: &'static str,
+    pub used_percent: u8,
+    pub resets_at_ms: Option<i64>,
+}
+
+/// The window of `usage` nearest its limit, the 5-hour one on a tie, as
+/// the desktop's limit alert picks it.
+#[must_use]
+pub fn shown_usage(usage: &crate::message::PlanUsage) -> Option<Usage> {
+    let windows = [
+        ("5-hour limit", usage.five_hour),
+        ("Weekly limit", usage.weekly),
+    ];
+    windows
+        .into_iter()
+        .filter_map(|(window, used)| used.map(|used| (window, used)))
+        .reduce(|most, next| {
+            if next.1.used_percent > most.1.used_percent {
+                next
+            } else {
+                most
+            }
+        })
+        .map(|(window, used)| Usage {
+            window,
+            used_percent: used.used_percent,
+            resets_at_ms: used.resets_at_ms,
+        })
 }
 
 /// A paired host as a device's screens show it: one record, made here,
@@ -323,6 +398,12 @@ pub struct HostSummary {
     /// This device may start a session there now: connected, a Controller,
     /// with a project. The host checks again.
     pub may_start: bool,
+    /// How the link runs, while connected.
+    pub path: Option<LinkPath>,
+    /// When this device last heard from it (Unix ms), while not connected.
+    pub last_seen_ms: Option<i64>,
+    /// Its [Plan limits]: the window nearest its limit.
+    pub usage: Option<Usage>,
 }
 
 /// Who `holder` is, seen from device `me`.
@@ -351,15 +432,15 @@ pub fn name_of(value: &impl Serialize) -> String {
 pub fn host_summary(
     host: &crate::message::EndpointId,
     me: &crate::message::EndpointId,
-    link: LinkState,
+    link: &LinkFacts,
     view: &HostView,
 ) -> HostSummary {
-    let connected = link == LinkState::Connected;
+    let connected = link.state == LinkState::Connected;
     let controller = view.role == Some(Role::Controller);
     HostSummary {
         host_id: crate::message::hex(host),
         host_name: view.host_name.clone(),
-        link,
+        link: link.state,
         role: view.role.map(|role| match role {
             Role::Viewer => "viewer",
             Role::Controller => "controller",
@@ -384,11 +465,19 @@ pub fn host_summary(
                     last_change_ms: session.last_change_ms,
                     typing,
                     may_type: connected && controller && typing == Some(Typing::You),
+                    question: session.question.clone(),
+                    activity: session.activity.clone(),
+                    running_since_ms: session.running_since_ms,
+                    turn_summary: session.turn_summary.clone(),
+                    diff: session.diff,
                 }
             })
             .collect(),
         projects: view.projects.clone(),
         may_start: connected && controller && !view.projects.is_empty(),
+        path: link.path.filter(|_| connected),
+        last_seen_ms: link.last_seen_ms.filter(|_| !connected),
+        usage: view.usage.as_ref().and_then(shown_usage),
     }
 }
 
@@ -827,6 +916,11 @@ mod tests {
             needs_you: false,
             dialog_open: false,
             last_change_ms: 0,
+            question: None,
+            activity: None,
+            running_since_ms: None,
+            turn_summary: None,
+            diff: None,
         }
     }
 
@@ -1053,8 +1147,28 @@ mod tests {
     }
 
     #[test]
-    fn a_hosts_summary_is_one_record_both_apps_read() {
+    fn a_hosts_path_shows_while_connected_and_when_it_was_heard_while_not() {
         let me = [2; 32];
+        let view = home_view(me);
+        let link = LinkFacts {
+            state: LinkState::Connected,
+            path: Some(LinkPath::Relay),
+            last_seen_ms: Some(1_000),
+        };
+        let up = host_summary(&[0xab; 32], &me, &link, &view);
+        assert_eq!(up.path, Some(LinkPath::Relay));
+        assert_eq!(up.last_seen_ms, None, "only while the link isn't up");
+        let lost = LinkFacts {
+            state: LinkState::Lost,
+            ..link
+        };
+        let down = host_summary(&[0xab; 32], &me, &lost, &view);
+        assert_eq!(down.last_seen_ms, Some(1_000));
+        assert_eq!(down.path, None, "no path while the link is down");
+    }
+
+    /// A host as the fixture has it: a question asked, a session running.
+    fn home_view(me: crate::message::EndpointId) -> HostView {
         let mut control = HashMap::new();
         control.insert(
             "s1".to_string(),
@@ -1066,53 +1180,177 @@ mod tests {
                 },
             },
         );
-        let view = HostView {
+        let session = |id: &str| SessionInfo {
+            id: id.into(),
+            title: "Fix the build".into(),
+            project_id: "p1".into(),
+            status: kriyon_core::session::SessionStatus::Running,
+            standing: kriyon_core::standing::StandingState::Running,
+            needs_you: false,
+            dialog_open: false,
+            last_change_ms: 5,
+            question: None,
+            activity: Some("Bash · pnpm test".into()),
+            running_since_ms: Some(4),
+            turn_summary: None,
+            diff: None,
+        };
+        HostView {
             host_name: Some("Mac".into()),
             role: Some(Role::Controller),
-            sessions: vec![SessionInfo {
-                id: "s1".into(),
-                title: "Fix the build".into(),
-                project_id: "p1".into(),
-                status: kriyon_core::session::SessionStatus::Waiting,
-                standing: kriyon_core::standing::StandingState::AwaitingInput,
-                needs_you: true,
-                dialog_open: false,
-                last_change_ms: 5,
-            }],
+            sessions: vec![
+                SessionInfo {
+                    status: kriyon_core::session::SessionStatus::Waiting,
+                    standing: kriyon_core::standing::StandingState::AwaitingInput,
+                    needs_you: true,
+                    dialog_open: true,
+                    question: Some(crate::message::Question {
+                        text: "Which db?".into(),
+                        options: vec!["Postgres".into(), "SQLite".into()],
+                    }),
+                    activity: None,
+                    running_since_ms: None,
+                    turn_summary: Some("Fixed it.".into()),
+                    diff: Some(crate::message::Diff {
+                        files: 2,
+                        added: 10,
+                        removed: 3,
+                    }),
+                    ..session("s1")
+                },
+                session("s2"),
+            ],
             control,
-            refused: Some(RefuseReason::NotInControl),
+            refused: None,
             projects: vec![ProjectInfo {
                 id: "p1".into(),
                 name: "app".into(),
                 parked: false,
             }],
+            usage: Some(crate::message::PlanUsage {
+                five_hour: Some(crate::message::UsageWindow {
+                    used_percent: 40,
+                    resets_at_ms: Some(9_000),
+                }),
+                weekly: None,
+            }),
+        }
+    }
+
+    /// One entry of each kind, as the fixture has them.
+    fn home_entries() -> EntriesEvent {
+        use crate::message::{Entry, EntryKind};
+        EntriesEvent::Entries(vec![
+            Entry {
+                seq: 1,
+                kind: EntryKind::You {
+                    text: "Fix the login bug".into(),
+                },
+            },
+            Entry {
+                seq: 2,
+                kind: EntryKind::Claude {
+                    text: "The form sends too early".into(),
+                    done: false,
+                },
+            },
+            Entry {
+                seq: 3,
+                kind: EntryKind::Step {
+                    name: "Read".into(),
+                    target: "src/login.ts".into(),
+                    state: crate::message::StepState::Done,
+                },
+            },
+            Entry {
+                seq: 4,
+                kind: EntryKind::Report {
+                    summary: "Waited for the token".into(),
+                    outcome: ReportOutcome::Completed,
+                    event: String::new(),
+                },
+            },
+            Entry {
+                seq: 5,
+                kind: EntryKind::Asking {
+                    header: "Tests".into(),
+                    question: "Fix the failing test too?".into(),
+                    options: vec!["Yes".into(), "No".into()],
+                },
+            },
+            Entry {
+                seq: 6,
+                kind: EntryKind::Note {
+                    text: "Context compacted".into(),
+                },
+            },
+        ])
+    }
+
+    /// The JSON both apps read, checked in at `src/remote/fixtures/`: the
+    /// TypeScript tests load the same file as `HostSummary` and
+    /// `ReadableSummary`, so a field renamed on one side fails on the
+    /// other. `KRIYON_WRITE_FIXTURES=1` writes it afresh.
+    #[test]
+    fn the_summaries_match_the_fixture_the_apps_test_against() {
+        let me = [2; 32];
+        let view = home_view(me);
+        let link = LinkFacts {
+            state: LinkState::Connected,
+            path: Some(LinkPath::Direct),
+            last_seen_ms: None,
         };
-        let summary = host_summary(&[0xab; 32], &me, LinkState::Connected, &view);
-        let json = serde_json::to_value(&summary).expect("json");
-        assert_eq!(
-            json,
-            serde_json::json!({
-                "hostId": "ab".repeat(32),
-                "hostName": "Mac",
-                "link": "connected",
-                "role": "controller",
-                "refused": "NotInControl",
-                "sessions": [{
-                    "id": "s1",
-                    "title": "Fix the build",
-                    "projectId": "p1",
-                    "status": "waiting",
-                    "standing": "awaiting_input",
-                    "needsYou": true,
-                    "dialogOpen": false,
-                    "lastChangeMs": 5,
-                    "typing": "you",
-                    "mayType": true,
-                }],
-                "projects": [{ "id": "p1", "name": "app", "parked": false }],
-                "mayStart": true,
-            })
+        let readable = readable_summary(&home_entries());
+        let fixture = serde_json::json!({
+            "hostSummary": host_summary(&[0xab; 32], &me, &link, &view),
+            "readableSummary": readable,
+        });
+        let text = format!(
+            "{}\n",
+            serde_json::to_string_pretty(&fixture).expect("json")
         );
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../src/remote/fixtures/summaries.json");
+        if std::env::var_os("KRIYON_WRITE_FIXTURES").is_some() {
+            std::fs::write(&path, &text).expect("written");
+        }
+        let kept = std::fs::read_to_string(&path).expect("the fixture is checked in");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&kept).expect("json"),
+            fixture,
+            "src/remote/fixtures/summaries.json is out of date: run this test \
+             with KRIYON_WRITE_FIXTURES=1 and update the TypeScript types"
+        );
+    }
+
+    #[test]
+    fn usage_shows_the_window_nearest_its_limit() {
+        let window = |used_percent, resets_at_ms| crate::message::UsageWindow {
+            used_percent,
+            resets_at_ms,
+        };
+        let shown = |usage| shown_usage(&usage);
+        assert_eq!(
+            shown(crate::message::PlanUsage {
+                five_hour: Some(window(50, Some(1))),
+                weekly: Some(window(50, Some(2))),
+            }),
+            Some(Usage {
+                window: "5-hour limit",
+                used_percent: 50,
+                resets_at_ms: Some(1),
+            }),
+            "a tie is the 5-hour window"
+        );
+        assert_eq!(
+            shown(crate::message::PlanUsage {
+                five_hour: None,
+                weekly: Some(window(3, None)),
+            })
+            .map(|usage| usage.window),
+            Some("Weekly limit")
+        );
+        assert_eq!(shown(crate::message::PlanUsage::default()), None);
     }
 
     #[test]
@@ -1127,19 +1365,37 @@ mod tests {
             }],
             ..HostView::default()
         };
-        let summary = host_summary(&[1; 32], &me, LinkState::Connected, &view);
+        let summary = host_summary(&[1; 32], &me, &LinkFacts::new(LinkState::Connected), &view);
         assert!(!summary.may_start, "a Viewer");
         let controller = HostView {
             role: Some(Role::Controller),
             ..view.clone()
         };
-        assert!(host_summary(&[1; 32], &me, LinkState::Connected, &controller).may_start);
-        assert!(!host_summary(&[1; 32], &me, LinkState::Lost, &controller).may_start);
+        assert!(
+            host_summary(
+                &[1; 32],
+                &me,
+                &LinkFacts::new(LinkState::Connected),
+                &controller
+            )
+            .may_start
+        );
+        assert!(
+            !host_summary(&[1; 32], &me, &LinkFacts::new(LinkState::Lost), &controller).may_start
+        );
         let no_projects = HostView {
             projects: vec![],
             ..controller
         };
-        assert!(!host_summary(&[1; 32], &me, LinkState::Connected, &no_projects).may_start);
+        assert!(
+            !host_summary(
+                &[1; 32],
+                &me,
+                &LinkFacts::new(LinkState::Connected),
+                &no_projects
+            )
+            .may_start
+        );
         assert_eq!(typing(&Holder::Host, &me), Typing::Host);
         assert_eq!(typing(&Holder::Device(me), &me), Typing::You);
         assert_eq!(typing(&Holder::Device([9; 32]), &me), Typing::Other);

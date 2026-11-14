@@ -70,8 +70,8 @@ calls while Remote access is off.
   never depends on a new field for a security check unless it requires that
   minor version.
 - **Nested records.** `SessionInfo` (in `Welcome`, `SessionList` and
-  `SessionStatus`), `Entry` (in `Entries`) and the `EntryKind` inside each
-  `Entry` go on the wire as their own postcard bytes with the length first
+  `SessionStatus`), `Entry` (in `Entries`), the `EntryKind` inside each
+  `Entry`, and `PlanUsage` (in `Usage`) go on the wire as their own postcard bytes with the length first
   (`kriyon_remote::nested`), so each one can grow:
   - Old reader, new writer: a reader skips the record's tail bytes it
     doesn't know.
@@ -167,6 +167,25 @@ never waits on a network write. A full session queue means [Skip ahead]
   sends one whole updated entry, which replaces its session in place or, if
   new, goes at the end; any other change of order, or a session gone, sends
   the whole `SessionList` again.
+- **Home fields.** After `last_change_ms`, each `SessionInfo` carries its
+  [Session digest] (`kriyon_core::session_digest`), each `None` when it
+  doesn't apply now or isn't known:
+  - `question: Option<Question { text, options }>`: Claude's question while
+    the dialog shows, its options in order (the same question the readable
+    view shows, `readable::asking_now`); text at most 300 bytes.
+  - `activity: Option<String>`: "<Tool> · <target>" while running, at most
+    160 bytes.
+  - `running_since_ms: Option<i64>`: when the running turn began.
+  - `turn_summary: Option<String>`: once a turn ended, Claude's last reply
+    (else the [Work report]'s summary) in at most 2 lines and 200 bytes.
+  - `diff: Option<Diff { files, added, removed }>`: what the main agent's
+    file changes in that turn came to; `None` when nothing changed.
+
+  Built only from what the host holds cheaply: the hooks' pending question
+  and current tool, the [Activity log]'s last turn and the companion's last
+  rows, read again only when the log says the session worked. Never the
+  transcript, never git. Every text passes [Redaction]. `Question` and `Diff`
+  can't grow (spec §3).
 - `Open { session_id, screen: bool }` on a new session stream. Host checks
   the session exists, then, with `screen`, sends `Snapshot { run, seq, cols,
   rows, bytes, skipped }` (the [Screen snapshot], ADR-0004) followed by
@@ -369,6 +388,22 @@ sends `ProjectList { projects: [ProjectInfo { id, name, parked }] }`, Viewers
 included: the store's projects whose folder passes the same check a remote
 start uses, in store order. `parked` follows the desktop's rule (every open
 session in it is parked).
+
+**Plan limits.** After `ProjectList`, and again whenever it changes, the host
+sends `Usage { usage: PlanUsage { five_hour, weekly } }` (a nested record),
+each an `Option<UsageWindow { used_percent, resets_at_ms }>`: the account's
+[Plan limits] as its desktop shows them, a whole percent 0 to 100; both
+`None` with "Live usage" off. A device's Home shows the window nearest its
+limit (the 5-hour one on a tie) with the desktop's name for it.
+
+A device that joins while the others have heard a newer session list,
+project list or plan use (a tick while it was welcomed) is sent that after
+its `Welcome`, so the changes that follow reach it as they reach the others.
+
+**This device's link.** How the link runs (`direct` or `relay`, iroh's
+selected path, while connected) and when the host was last heard from
+(while not connected) are the device's own facts: never on the wire, put
+into its host summary by its runtime.
 
 **Other messages:** `Control { session_id, holder, epoch }` on the control stream. host to device `StartResult { request_id, session_id }`
 and `SessionStatus { session: SessionInfo }`. On `kriyon/pair/1`:

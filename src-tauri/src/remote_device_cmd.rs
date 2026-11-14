@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use kriyon_remote::device_view::{host_summary, HostView, LinkState, ScreenEvent};
+use kriyon_remote::device_view::{host_summary, HostView, LinkFacts, ScreenEvent};
 use kriyon_remote::message::{hex, EndpointId};
 use serde::Serialize;
 use tauri::{Emitter as _, Manager as _};
@@ -73,11 +73,11 @@ struct Emitter {
 }
 
 impl DeviceEvents for Emitter {
-    fn host_changed(&self, host: EndpointId, state: LinkState, view: &HostView) {
+    fn host_changed(&self, host: EndpointId, link: &LinkFacts, view: &HostView) {
         // The summary the phone reads too (kriyon_remote::device_view).
         let _ = self.app.emit(
             HOST_CHANGED_EVENT,
-            host_summary(&host, &self.me, state, view),
+            host_summary(&host, &self.me, link, view),
         );
     }
 }

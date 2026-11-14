@@ -439,6 +439,22 @@ pub fn activity_turns(session_id: String, limit: Option<u32>) -> Result<Vec<Acti
     with_store(|s| s.turns(&session_id, limit))
 }
 
+/// Session `session_id`'s newest [Activity log] turn; `None` when it has
+/// none or the store is unavailable.
+#[must_use]
+pub fn last_turn(session_id: &str) -> Option<ActivityTurn> {
+    with_store(|s| s.turns(session_id, 1))
+        .ok()
+        .and_then(|turns| turns.into_iter().next())
+}
+
+/// The newest `limit` [Bridge spool] rows kept for `session_id`, oldest
+/// first. Empty when there are none or the store is unavailable.
+#[must_use]
+pub fn bridge_tail(session_id: &str, limit: i64) -> Vec<String> {
+    with_store(|s| s.bridge_tail(session_id, limit)).unwrap_or_default()
+}
+
 /// When each session last did work, per the [Activity log] (see
 /// [`ActivityStore::last_active`]). Loaded once at launch so the sidebar's age
 /// fold measures every session from its real last activity, not its creation.

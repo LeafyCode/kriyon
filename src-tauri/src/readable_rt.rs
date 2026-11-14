@@ -5,7 +5,6 @@
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::Path;
 
-use kriyon_core::ask::PendingAsk;
 use kriyon_core::integration::CompanionState;
 use kriyon_core::readable::AskShown;
 use kriyon_remote::message::EntriesUnavailable;
@@ -78,24 +77,6 @@ fn build_stamp(
     hasher.finish()
 }
 
-/// The question showing: an open ask while the terminal shows a dialog. A
-/// question the hook described brings its header and options; any other ask
-/// (a permission, a plan) its one line.
-fn asking(ask: Option<&PendingAsk>, dialog_showing: bool) -> Option<AskShown> {
-    let ask = ask.filter(|_| dialog_showing)?;
-    let question = ask.question.clone().unwrap_or_default();
-    Some(AskShown {
-        header: question.header,
-        question: if question.question.is_empty() {
-            ask.text.clone()
-        } else {
-            question.question
-        },
-        options: question.options,
-        asked_at: ask.asked_at.clone(),
-    })
-}
-
 /// Session `id`'s entries, unless nothing changed since the build `last`
 /// names. Exact or off (ADR 0035): only with the companion on. Blocking.
 #[must_use]
@@ -126,7 +107,7 @@ pub fn entries(app: &tauri::AppHandle, id: &str, last: Option<u64>) -> EntriesBu
         .writers
         .facts(&session)
         .is_some_and(|facts| facts.dialog.showing);
-    let asking = asking(ask.as_ref(), showing);
+    let asking = kriyon_core::readable::asking_now(ask.as_ref(), showing);
     let spool = kriyon_core::paths::bridge_spool(&home, id);
     let transcript = crate::structured_cmd::session_transcript(&home, &row);
     let mut turn_files = vec![spool.as_path()];
@@ -151,39 +132,6 @@ pub fn entries(app: &tauri::AppHandle, id: &str, last: Option<u64>) -> EntriesBu
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kriyon_core::ask::{AskKind, AskQuestion};
-
-    fn question(options: &[&str]) -> PendingAsk {
-        PendingAsk {
-            kind: AskKind::Question,
-            text: "Which db?".into(),
-            asked_at: Some("2026-11-14T10:00:00Z".into()),
-            question: Some(AskQuestion {
-                header: "Database".into(),
-                question: "Which db?".into(),
-                options: options.iter().map(|option| (*option).to_string()).collect(),
-            }),
-        }
-    }
-
-    #[test]
-    fn a_question_shows_only_while_its_dialog_does() {
-        let ask = question(&["Postgres"]);
-        assert_eq!(asking(Some(&ask), false), None);
-        let shown = asking(Some(&ask), true).expect("showing");
-        assert_eq!(shown.header, "Database");
-        assert_eq!(shown.options, vec!["Postgres".to_string()]);
-        // A permission has its one line.
-        let permission = PendingAsk {
-            kind: AskKind::Permission,
-            text: "Bash: cargo test".into(),
-            asked_at: None,
-            question: None,
-        };
-        let shown = asking(Some(&permission), true).expect("showing");
-        assert_eq!(shown.question, "Bash: cargo test");
-        assert_eq!(shown.options, Vec::<String>::new());
-    }
 
     #[test]
     fn a_partial_reply_going_stale_moves_the_stamp() {
@@ -226,8 +174,13 @@ mod tests {
         std::fs::write(&file, b"ab").expect("written");
         let grown = stamp(&[&file], None);
         assert_ne!(grown, before);
-        let ask = asking(Some(&question(&["A"])), true);
-        assert_ne!(stamp(&[&file], ask.as_ref()), grown);
+        let ask = AskShown {
+            header: String::new(),
+            question: "Which db?".into(),
+            options: vec!["A".into()],
+            asked_at: None,
+        };
+        assert_ne!(stamp(&[&file], Some(&ask)), grown);
         // A file that isn't there yet stamps too.
         assert_eq!(
             stamp(&[&dir.path().join("none")], None),

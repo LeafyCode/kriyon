@@ -7,6 +7,8 @@
 //! variant (spec §3). The golden tests below pin every tag.
 
 use kriyon_core::session::SessionStatus;
+use kriyon_core::session_digest::SessionDigest;
+pub use kriyon_core::session_digest::{Diff, Question};
 use kriyon_core::standing::SessionListEntry;
 pub use kriyon_core::standing::StandingState;
 use serde::{Deserialize, Serialize};
@@ -89,6 +91,18 @@ pub struct SessionInfo {
     pub dialog_open: bool,
     /// Unix milliseconds.
     pub last_change_ms: i64,
+    /// The rest is its [Session digest], for a device's Home: each `None`
+    /// when it doesn't apply now or isn't known. Claude's question while
+    /// the dialog shows.
+    pub question: Option<Question>,
+    /// "<Tool> · <target>", while running.
+    pub activity: Option<String>,
+    /// When the running turn began (Unix ms).
+    pub running_since_ms: Option<i64>,
+    /// How the last turn ended, in a line or two.
+    pub turn_summary: Option<String>,
+    /// What the last turn changed.
+    pub diff: Option<Diff>,
 }
 
 impl From<SessionListEntry> for SessionInfo {
@@ -102,7 +116,15 @@ impl From<SessionListEntry> for SessionInfo {
             needs_you,
             dialog_open,
             last_change_ms,
+            digest,
         } = entry;
+        let SessionDigest {
+            question,
+            activity,
+            running_since_ms,
+            turn_summary,
+            diff,
+        } = digest;
         Self {
             id,
             title,
@@ -112,6 +134,11 @@ impl From<SessionListEntry> for SessionInfo {
             needs_you,
             dialog_open,
             last_change_ms,
+            question,
+            activity,
+            running_since_ms,
+            turn_summary,
+            diff,
         }
     }
 }
@@ -390,6 +417,46 @@ pub enum ToDevice {
     EntriesUnavailable {
         reason: EntriesUnavailable,
     },
+    /// Control stream, after `Welcome` and whenever it changes: the host's
+    /// [Plan limits], as its desktop shows them.
+    Usage {
+        #[serde(with = "crate::nested::one")]
+        usage: PlanUsage,
+    },
+}
+
+/// The host account's [Plan limits]: each window's use, `None` when Claude
+/// hasn't reported it (or it reset since). A nested record (spec §3).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlanUsage {
+    pub five_hour: Option<UsageWindow>,
+    pub weekly: Option<UsageWindow>,
+}
+
+impl From<&kriyon_core::plan_limits::PlanLimits> for PlanUsage {
+    /// As the desktop shows them: a whole percent, 0 to 100.
+    fn from(limits: &kriyon_core::plan_limits::PlanLimits) -> Self {
+        let window = |window: Option<kriyon_core::plan_limits::LimitWindow>| {
+            window.map(|window| UsageWindow {
+                // Rounded and clamped: always 0..=100, so the cast is exact.
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                used_percent: window.used_percentage.round().clamp(0.0, 100.0) as u8,
+                resets_at_ms: window.resets_at.checked_mul(1000),
+            })
+        };
+        Self {
+            five_hour: window(limits.five_hour),
+            weekly: window(limits.seven_day),
+        }
+    }
+}
+
+/// One window's use: a whole percent (0–100) and when it resets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UsageWindow {
+    pub used_percent: u8,
+    /// Unix milliseconds.
+    pub resets_at_ms: Option<i64>,
 }
 
 /// One [Readable view] entry. One that comes again with a `seq` the device
@@ -482,6 +549,11 @@ mod tests {
             needs_you: false,
             dialog_open: false,
             last_change_ms: 0,
+            question: None,
+            activity: None,
+            running_since_ms: None,
+            turn_summary: None,
+            diff: None,
         }
     }
 
@@ -497,6 +569,20 @@ mod tests {
             needs_you: true,
             dialog_open: true,
             last_change_ms: 1_700_000_000_000,
+            digest: SessionDigest {
+                question: Some(Question {
+                    text: "Which db?".into(),
+                    options: vec!["Postgres".into()],
+                }),
+                activity: Some("Bash · pnpm test".into()),
+                running_since_ms: Some(1_699_999_999_000),
+                turn_summary: Some("Fixed it.".into()),
+                diff: Some(Diff {
+                    files: 2,
+                    added: 10,
+                    removed: 3,
+                }),
+            },
         };
         let sent = SessionInfo::from(entry);
         assert_eq!(
@@ -510,6 +596,18 @@ mod tests {
                 needs_you: true,
                 dialog_open: true,
                 last_change_ms: 1_700_000_000_000,
+                question: Some(Question {
+                    text: "Which db?".into(),
+                    options: vec!["Postgres".into()],
+                }),
+                activity: Some("Bash · pnpm test".into()),
+                running_since_ms: Some(1_699_999_999_000),
+                turn_summary: Some("Fixed it.".into()),
+                diff: Some(Diff {
+                    files: 2,
+                    added: 10,
+                    removed: 3,
+                }),
             }
         );
     }
@@ -819,6 +917,46 @@ mod tests {
         // Tag, one entry of 5 bytes: seq 7, then its kind of 3 bytes (Note,
         // "n"); then reset and from.
         assert_eq!(entries, [13, 1, 5, 7, 3, 5, 1, b'n', 1, 1]);
+    }
+
+    #[test]
+    fn plan_limits_go_as_whole_percents_and_milliseconds() {
+        use kriyon_core::plan_limits::{LimitWindow, PlanLimits};
+        let usage = PlanUsage::from(&PlanLimits {
+            five_hour: Some(LimitWindow {
+                used_percentage: 41.6,
+                resets_at: 1_700_000_000,
+            }),
+            seven_day: Some(LimitWindow {
+                used_percentage: 130.0,
+                resets_at: 5,
+            }),
+        });
+        assert_eq!(
+            usage,
+            PlanUsage {
+                five_hour: Some(UsageWindow {
+                    used_percent: 42,
+                    resets_at_ms: Some(1_700_000_000_000),
+                }),
+                weekly: Some(UsageWindow {
+                    used_percent: 100,
+                    resets_at_ms: Some(5_000),
+                }),
+            }
+        );
+        assert_eq!(
+            PlanUsage::from(&PlanLimits::default()),
+            PlanUsage::default()
+        );
+    }
+
+    #[test]
+    fn the_usage_tag_is_fixed() {
+        let usage = ToDevice::Usage {
+            usage: PlanUsage::default(),
+        };
+        assert_eq!(tag(&usage), 15);
     }
 
     #[test]

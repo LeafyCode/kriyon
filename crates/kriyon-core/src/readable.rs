@@ -93,6 +93,26 @@ pub struct AskShown {
     pub asked_at: Option<String>,
 }
 
+/// The question showing now: an open ask while the terminal shows a dialog.
+/// A question the hook described brings its header and options; any other
+/// ask (a permission, a plan) its one line. The [Readable view] and the
+/// [Session digest] both show this one.
+#[must_use]
+pub fn asking_now(ask: Option<&crate::ask::PendingAsk>, dialog_showing: bool) -> Option<AskShown> {
+    let ask = ask.filter(|_| dialog_showing)?;
+    let question = ask.question.clone().unwrap_or_default();
+    Some(AskShown {
+        header: question.header,
+        question: if question.question.is_empty() {
+            ask.text.clone()
+        } else {
+            question.question
+        },
+        options: question.options,
+        asked_at: ask.asked_at.clone(),
+    })
+}
+
 /// The entries for `turns` (oldest first), the live `partial` reply and the
 /// question showing, if any: the newest [`WINDOW`], every text redacted and
 /// trimmed, after a note that older ones are in the terminal when some were
@@ -315,7 +335,40 @@ pub fn cut(text: &str, max: usize) -> String {
 mod tests {
     use super::*;
     use crate::activity_log::StepKind;
+    use crate::ask::{AskKind, AskQuestion, PendingAsk};
     use crate::structured::{PartialReply, StructuredTurn, TurnItem, TurnSource};
+
+    fn question(options: &[&str]) -> PendingAsk {
+        PendingAsk {
+            kind: AskKind::Question,
+            text: "Which db?".into(),
+            asked_at: Some("2026-11-14T10:00:00Z".into()),
+            question: Some(AskQuestion {
+                header: "Database".into(),
+                question: "Which db?".into(),
+                options: options.iter().map(|option| (*option).to_string()).collect(),
+            }),
+        }
+    }
+
+    #[test]
+    fn a_question_shows_only_while_its_dialog_does() {
+        let ask = question(&["Postgres"]);
+        assert_eq!(asking_now(Some(&ask), false), None);
+        let shown = asking_now(Some(&ask), true).expect("showing");
+        assert_eq!(shown.header, "Database");
+        assert_eq!(shown.options, vec!["Postgres".to_string()]);
+        // A permission has its one line.
+        let permission = PendingAsk {
+            kind: AskKind::Permission,
+            text: "Bash: cargo test".into(),
+            asked_at: None,
+            question: None,
+        };
+        let shown = asking_now(Some(&permission), true).expect("showing");
+        assert_eq!(shown.question, "Bash: cargo test");
+        assert_eq!(shown.options, Vec::<String>::new());
+    }
 
     fn turn(started_ms: i64, prompt: &str) -> StructuredTurn {
         StructuredTurn {

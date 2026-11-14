@@ -415,6 +415,9 @@ fn a_host_asleep_past_the_heartbeat_shows_lost_then_recovers() {
         // The host sleeps: no heartbeat, but the socket is still there.
         beats.sleep();
         phone.until_state(LinkState::Lost).await;
+        // When it was last heard from shows while it is lost.
+        let lost = phone.seen.facts().expect("told");
+        assert!(lost.last_seen_ms.is_some_and(|at| at > 0), "{lost:?}");
         assert!(
             phone
                 .rt

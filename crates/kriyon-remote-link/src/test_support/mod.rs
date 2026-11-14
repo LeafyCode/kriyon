@@ -7,7 +7,7 @@ use std::net::SocketAddr;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use kriyon_remote::device_view::{HostView, LinkState};
+use kriyon_remote::device_view::{HostView, LinkFacts, LinkState};
 use kriyon_remote::message::{EndpointId, Role};
 
 use crate::device_runtime::{DeviceEvents, DeviceRuntime};
@@ -65,13 +65,13 @@ pub fn loopback_config(seed: u8) -> LinkConfig {
     }
 }
 
-/// What a device side told the app: each link state with the host view.
+/// What a device side told the app: each link's facts with the host view.
 #[derive(Debug, Default)]
-pub struct RecordingEvents(Mutex<Vec<(LinkState, HostView)>>);
+pub struct RecordingEvents(Mutex<Vec<(LinkFacts, HostView)>>);
 
 impl DeviceEvents for RecordingEvents {
-    fn host_changed(&self, _host: EndpointId, state: LinkState, view: &HostView) {
-        lock(&self.0).push((state, view.clone()));
+    fn host_changed(&self, _host: EndpointId, link: &LinkFacts, view: &HostView) {
+        lock(&self.0).push((*link, view.clone()));
     }
 }
 
@@ -79,7 +79,15 @@ impl RecordingEvents {
     /// The latest state and view.
     #[must_use]
     pub fn last(&self) -> Option<(LinkState, HostView)> {
-        lock(&self.0).last().cloned()
+        lock(&self.0)
+            .last()
+            .map(|(link, view)| (link.state, view.clone()))
+    }
+
+    /// The latest link facts.
+    #[must_use]
+    pub fn facts(&self) -> Option<LinkFacts> {
+        lock(&self.0).last().map(|(link, _)| *link)
     }
 
     /// The latest state.

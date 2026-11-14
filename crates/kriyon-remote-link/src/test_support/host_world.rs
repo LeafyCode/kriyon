@@ -51,6 +51,8 @@ pub struct FakeHost {
     pub start_result: Mutex<Result<String, RefuseReason>>,
     /// The host's projects, as devices are told them.
     pub projects: Mutex<Vec<ProjectInfo>>,
+    /// The host account's [Plan limits].
+    pub usage: Mutex<kriyon_remote::message::PlanUsage>,
     /// Asks for control the host's ten-second rule refused: (session, device).
     pub control_asks: Mutex<Vec<(String, EndpointId)>>,
     /// What the serving layer logged, in order.
@@ -100,6 +102,7 @@ impl Default for FakeHost {
             entries: Mutex::new(Ok(Vec::new())),
             builds: std::sync::atomic::AtomicUsize::new(0),
             control_asks: Mutex::default(),
+            usage: Mutex::default(),
             projects: Mutex::new(vec![ProjectInfo {
                 id: "p".into(),
                 name: "app".into(),
@@ -147,6 +150,11 @@ impl ServeHost for FakeHost {
             needs_you: false,
             dialog_open: false,
             last_change_ms: 0,
+            question: None,
+            activity: None,
+            running_since_ms: None,
+            turn_summary: None,
+            diff: None,
         }]
     }
     fn session(&self, id: &str) -> Option<LiveSession> {
@@ -261,6 +269,10 @@ impl ServeHost for FakeHost {
     fn projects(&self) -> Vec<ProjectInfo> {
         self.called();
         self.projects.lock().clone()
+    }
+
+    fn usage(&self) -> kriyon_remote::message::PlanUsage {
+        *self.usage.lock()
     }
 
     fn started(
@@ -404,6 +416,14 @@ pub async fn device(
             projects: world.fake.projects.lock().clone()
         },
         "the project list follows Welcome"
+    );
+    let usage = next(&mut reader).await;
+    assert_eq!(
+        usage,
+        ToDevice::Usage {
+            usage: *world.fake.usage.lock()
+        },
+        "then the plan's use"
     );
     (phone, link, writer, reader)
 }

@@ -46,7 +46,7 @@ impl Wire for FromDevice {
 }
 
 impl Wire for ToDevice {
-    const KNOWN_TAGS: u32 = 15;
+    const KNOWN_TAGS: u32 = 16;
     const MAX_LEN: usize = 1024 * KIB;
     fn max_len(_tag: u32) -> usize {
         Self::MAX_LEN

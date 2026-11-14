@@ -35,6 +35,7 @@ pub mod remote_host_rt;
 pub mod remote_push_rt;
 pub mod remote_starts;
 pub mod sandbox;
+pub mod session_digest_rt;
 pub mod session_list_rt;
 pub mod session_registry;
 pub mod session_start;
@@ -201,6 +202,8 @@ pub struct AppState {
     pub handoffs: Mutex<HashMap<SessionId, kriyon_core::handoff::HandoffFileWatch>>,
     /// The cached [Limit reading]s behind the account's [Plan limits].
     pub plan_limits: Mutex<crate::plan_limits_rt::LimitsReader>,
+    /// What each session's [Session digest] is built from.
+    pub digests: crate::session_digest_rt::DigestSources,
 }
 
 /// Managed handle to the [`Store`]. The connection is not `Sync`, so it is

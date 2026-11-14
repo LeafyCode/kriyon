@@ -104,6 +104,7 @@ pub(crate) fn forget(state: &AppState, id: &SessionId) -> Option<Session> {
     // [Background shell] bookkeeping, which lives inside it.
     state.watchers.lock().remove(id);
     state.runtimes.lock().remove(id);
+    state.digests.forget(id);
     crate::handoff_rt::forget(state, id);
     state.bridged.lock().remove(id);
     // Sleep bookkeeping dies with the session; a stale mark would otherwise

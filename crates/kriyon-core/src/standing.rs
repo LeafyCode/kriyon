@@ -86,6 +86,8 @@ pub struct SessionFacts {
     pub last_active_ms: Option<i64>,
     /// A [CLI dialog] shows (see `cli_dialog::dialog_showing`).
     pub dialog_open: bool,
+    /// Its [Session digest], for remote devices' Home.
+    pub digest: crate::session_digest::SessionDigest,
 }
 
 /// One session in the [Session list].
@@ -100,6 +102,9 @@ pub struct SessionListEntry {
     pub needs_you: bool,
     pub dialog_open: bool,
     pub last_change_ms: i64,
+    /// Its [Session digest]: for remote devices, not the desktop's list.
+    #[serde(skip)]
+    pub digest: crate::session_digest::SessionDigest,
 }
 
 /// The host's [Session list] at `now_ms`: every session not put away, those
@@ -129,6 +134,7 @@ pub fn session_list(facts: Vec<SessionFacts>, now_ms: i64) -> Vec<SessionListEnt
                 status: f.runtime.status,
                 needs_you: f.runtime.needs_you,
                 dialog_open: f.dialog_open,
+                digest: f.digest,
             };
             (f.created_at_ms, entry)
         })
@@ -188,6 +194,7 @@ mod tests {
             last_seen_ms: Some(50_000),
             last_active_ms: None,
             dialog_open: false,
+            digest: crate::session_digest::SessionDigest::default(),
         }
     }
 
@@ -259,6 +266,7 @@ mod tests {
                 dialog_open: true,
                 // Never changed since it was made.
                 last_change_ms: 1_000,
+                digest: crate::session_digest::SessionDigest::default(),
             }]
         );
     }

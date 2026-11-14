@@ -109,36 +109,7 @@ pub fn route<R: tauri::Runtime>(
             );
         }
         WatchSignal::Activity(snapshot) => {
-            // The snapshot's [Background shell] claims have already been
-            // re-derived from a sweep by the watch itself (`ActivitySource`),
-            // upstream of its change gate — nothing in the hook stream closes a
-            // shell (ADR 0002), so a retraction is the only signal a dead dev
-            // server produces, and a quiet session emits no other.
-            //
-            // Mirror the two "live background work" vetoes for the sleep pass —
-            // the ticker can't reach the watcher's projection directly. A
-            // session whose claude hosts a live shell (a dev server), or is
-            // orchestrating a running [Subagent], must never be slept: stopping
-            // its claude would kill that work. The subagent case is the subtle
-            // one — the main session reads Idle while a subagent runs (its hook
-            // events are filtered by the [Main session lock]), so without this
-            // veto the idle clock would sleep a session that is hard at work.
-            {
-                use kriyon_core::activity::{ShellStatus, SubagentState};
-                use tauri::Manager as _;
-                let state = app.state::<crate::AppState>();
-                let running_shells = snapshot
-                    .shells
-                    .iter()
-                    .any(|shell| shell.status == ShellStatus::Running);
-                let running_subagents = snapshot
-                    .subagents
-                    .iter()
-                    .any(|sub| sub.state == SubagentState::Running);
-                let mut sleep = state.sleep.lock();
-                sleep.note_running_shells(&session_id.0, running_shells);
-                sleep.note_running_subagents(&session_id.0, running_subagents);
-            }
+            note_activity(app, session_id, &snapshot);
             let _ = app.emit(
                 "session-activity",
                 ActivityPayload {
@@ -200,6 +171,48 @@ pub fn route<R: tauri::Runtime>(
             );
         }
     }
+}
+
+/// A session's activity changed: mirror what the sleep pass and remote
+/// devices' Home need from it.
+fn note_activity<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    session_id: &SessionId,
+    snapshot: &kriyon_core::activity::SessionActivity,
+) {
+    // The snapshot's [Background shell] claims have already been
+    // re-derived from a sweep by the watch itself (`ActivitySource`),
+    // upstream of its change gate — nothing in the hook stream closes a
+    // shell (ADR 0002), so a retraction is the only signal a dead dev
+    // server produces, and a quiet session emits no other.
+    //
+    // Mirror the two "live background work" vetoes for the sleep pass —
+    // the ticker can't reach the watcher's projection directly. A
+    // session whose claude hosts a live shell (a dev server), or is
+    // orchestrating a running [Subagent], must never be slept: stopping
+    // its claude would kill that work. The subagent case is the subtle
+    // one — the main session reads Idle while a subagent runs (its hook
+    // events are filtered by the [Main session lock]), so without this
+    // veto the idle clock would sleep a session that is hard at work.
+    use kriyon_core::activity::{ShellStatus, SubagentState};
+    use tauri::Manager as _;
+    let state = app.state::<crate::AppState>();
+    let running_shells = snapshot
+        .shells
+        .iter()
+        .any(|shell| shell.status == ShellStatus::Running);
+    let running_subagents = snapshot
+        .subagents
+        .iter()
+        .any(|sub| sub.state == SubagentState::Running);
+    let mut sleep = state.sleep.lock();
+    sleep.note_running_shells(&session_id.0, running_shells);
+    sleep.note_running_subagents(&session_id.0, running_subagents);
+    drop(sleep);
+    // What remote devices' Home says it is running.
+    state
+        .digests
+        .note_tool(session_id, snapshot.main.current_tool.clone());
 }
 
 #[cfg(test)]

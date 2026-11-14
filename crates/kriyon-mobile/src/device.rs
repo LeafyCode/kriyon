@@ -9,7 +9,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use kriyon_relay_client::runtime::{RelayRuntime, RelaySetup, ThisDevice};
-use kriyon_remote::device_view::{host_summary, name_of, HostView};
+use kriyon_remote::device_view::{host_summary, name_of, HostView, LinkFacts};
 use kriyon_remote::message::{hex, parse_id_hex, EndpointId};
 use kriyon_remote::pairing::PairingInvite;
 use kriyon_remote::relay::RelayAction;
@@ -205,7 +205,8 @@ struct Told {
 }
 
 impl DeviceEvents for Told {
-    fn host_changed(&self, host: EndpointId, state: LinkState, view: &HostView) {
+    fn host_changed(&self, host: EndpointId, link: &LinkFacts, view: &HostView) {
+        let state = link.state;
         let came_up = locked(&self.last).insert(host, state) != Some(LinkState::Connected)
             && state == LinkState::Connected;
         if came_up {
@@ -214,7 +215,7 @@ impl DeviceEvents for Told {
             }
         }
         self.listener
-            .host_changed(json(&host_summary(&host, &self.me, state, view)));
+            .host_changed(json(&host_summary(&host, &self.me, link, view)));
     }
 }
 
@@ -1593,7 +1594,7 @@ pub(crate) mod tests {
             host_name: Some("Mac".into()),
             ..HostView::default()
         };
-        told.host_changed([0xab; 32], LinkState::Connected, &view);
+        told.host_changed([0xab; 32], &LinkFacts::new(LinkState::Connected), &view);
         let summary: serde_json::Value =
             serde_json::from_str(&seen.0.lock().expect("seen")[0]).expect("json");
         assert_eq!(summary["hostId"], "ab".repeat(32));

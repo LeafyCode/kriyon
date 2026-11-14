@@ -10,7 +10,7 @@ import type { LinkState } from "./remoteScreen.ts";
 /** Who types into a session now, seen from this device. */
 export type Typing = "host" | "you" | "other";
 
-/** The question Claude's dialog asks, as a device shows it. */
+/** The question Claude's dialog asks, as a device shows it: options in order. */
 export interface SessionQuestion {
   options: string[];
   text: string;
@@ -25,10 +25,10 @@ export interface DiffStat {
 
 /** One session on a paired computer. */
 export interface SessionSummary {
-  /** The running tool, as one line ("Bash · pnpm test"); not sent yet. */
+  /** The running tool, as one line ("Bash · pnpm test"), while running. */
   activity?: string | null;
   dialogOpen: boolean;
-  /** What the last turn changed; not sent yet. */
+  /** What the last turn changed; `null` when nothing or unknown. */
   diff?: DiffStat | null;
   id: string;
   lastChangeMs: number;
@@ -36,25 +36,27 @@ export interface SessionSummary {
   mayType: boolean;
   needsYou: boolean;
   projectId: string;
-  /** The open question while `dialogOpen`; not sent yet. */
+  /** The open question while `dialogOpen`. */
   question?: SessionQuestion | null;
-  /** When the running turn began (Unix ms); not sent yet. */
+  /** When the running turn began (Unix ms), while running. */
   runningSinceMs?: number | null;
   standing: StandingState;
   status: SessionStatus;
   title: string;
-  /** Claude's last reply in a line, for a finished turn; not sent yet. */
+  /** How the last turn ended: Claude's last reply or the report, in a line
+   *  or two, once it has. */
   turnSummary?: string | null;
   /** `null` until the computer says who holds control. */
   typing: Typing | null;
 }
 
-/** A computer's Claude plan use, in its current window. */
+/** A computer's Claude plan use: its window nearest the limit. */
 export interface PlanUsage {
   /** When the window resets (Unix ms), if known. */
   resetsAtMs: number | null;
+  /** A whole percent, 0 to 100. */
   usedPercent: number;
-  /** The window's name, as the desktop says it ("5-hour window"). */
+  /** The window's name, as the desktop says it ("5-hour limit"). */
   window: string;
 }
 
@@ -71,19 +73,19 @@ export interface HostSummary {
   hostId: string;
   /** The name it said; `null` until it has. */
   hostName: string | null;
-  /** When the link was last up (Unix ms), while it isn't; not sent yet. */
+  /** When this device last heard from it (Unix ms), while not connected. */
   lastSeenMs?: number | null;
   link: LinkState;
   /** This device may start a session there now. */
   mayStart: boolean;
-  /** How the link runs now; not sent yet. */
+  /** How the link runs now, while connected. */
   path?: "direct" | "relay" | null;
   projects: ProjectSummary[];
   /** The last refusal it sent, by name (`NotInControl`). */
   refused: string | null;
   role: "viewer" | "controller" | null;
   sessions: SessionSummary[];
-  /** Its Claude plan use; not sent yet. */
+  /** Its Claude plan use, once it has said it. */
   usage?: PlanUsage | null;
 }
 

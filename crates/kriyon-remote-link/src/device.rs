@@ -173,6 +173,20 @@ impl DeviceLink {
         Ok((MessageWriter::new(send), MessageReader::new(recv)))
     }
 
+    /// The path the link uses now: straight to the host, or through a
+    /// relay; `None` while none is chosen.
+    #[must_use]
+    pub fn path(&self) -> Option<kriyon_remote::device_view::LinkPath> {
+        use kriyon_remote::device_view::LinkPath;
+        let paths = self.connection.paths();
+        let selected = paths.iter().find(iroh::endpoint::Path::is_selected)?;
+        Some(if selected.is_relay() {
+            LinkPath::Relay
+        } else {
+            LinkPath::Direct
+        })
+    }
+
     /// Hang up: the host stopped answering, or the person left.
     pub fn close(&self) {
         self.connection.close(VarInt::from_u32(0), b"");

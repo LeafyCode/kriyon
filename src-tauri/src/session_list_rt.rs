@@ -6,9 +6,12 @@
 use std::collections::HashMap;
 use std::time::{Instant, SystemTime};
 
+use kriyon_core::activity::ToolActivity;
 use kriyon_core::ask::PendingAsk;
 use kriyon_core::cli_dialog::dialog_showing;
-use kriyon_core::session::SessionId;
+use kriyon_core::readable::asking_now;
+use kriyon_core::session::{SessionId, SessionStatus};
+use kriyon_core::session_digest::{digest, DigestFacts, TurnFacts};
 use kriyon_core::standing::{session_list, RuntimeFacts, SessionFacts, SessionListEntry};
 
 use crate::store::SessionRow;
@@ -22,6 +25,11 @@ struct Live {
     last_seen_ms: Option<i64>,
     /// The daemon's own screen shows a [CLI dialog].
     dialog_on_screen: bool,
+    /// The main agent's tool running now.
+    tool: Option<ToolActivity>,
+    /// The [Activity log]'s last turn, and Claude's last reply.
+    turn: Option<TurnFacts>,
+    reply: Option<String>,
 }
 
 /// Join the store's `rows` with what is known `live` about each, and when
@@ -34,14 +42,26 @@ fn gather(
     rows.into_iter()
         .map(|row| {
             let known = live.get(&SessionId(row.id.clone()));
+            let dialog_open =
+                known.is_some_and(|k| dialog_showing(k.dialog_on_screen, k.ask.as_ref()));
+            let asking = asking_now(known.and_then(|k| k.ask.as_ref()), dialog_open);
+            let digest = digest(&DigestFacts {
+                status: known
+                    .and_then(|k| k.runtime.as_ref())
+                    .map_or(SessionStatus::Idle, |runtime| runtime.status),
+                asking: asking.as_ref(),
+                current_tool: known.and_then(|k| k.tool.as_ref()),
+                last_turn: known.and_then(|k| k.turn.as_ref()),
+                last_reply: known.and_then(|k| k.reply.as_deref()),
+            });
             SessionFacts {
                 put_away: row.archived_at.is_some() || row.parked_at.is_some(),
                 created_at_ms: row.created_at,
                 runtime: known.and_then(|k| k.runtime.clone()).unwrap_or_default(),
                 last_seen_ms: known.and_then(|k| k.last_seen_ms),
                 last_active_ms: last_active.get(&row.id).copied(),
-                dialog_open: known
-                    .is_some_and(|k| dialog_showing(k.dialog_on_screen, k.ask.as_ref())),
+                dialog_open,
+                digest,
                 id: row.id,
                 title: row.title,
                 project_id: row.project_id,
@@ -76,6 +96,16 @@ pub fn current(state: &AppState, store: &StoreState) -> Result<Vec<SessionListEn
             session.engine.dialog().is_some_and(|d| d.open);
     }
     let last_active = crate::activity_rt::last_active_by_session();
+    for row in &rows {
+        let id = SessionId(row.id.clone());
+        let entry = live.entry(id.clone()).or_default();
+        entry.tool = state.digests.tool(&id);
+        let (turn, reply) = state
+            .digests
+            .last_turn(&row.id, last_active.get(&row.id).copied());
+        entry.turn = turn;
+        entry.reply = reply;
+    }
     Ok(session_list(gather(rows, &live, &last_active), now_ms))
 }
 
@@ -83,7 +113,6 @@ pub fn current(state: &AppState, store: &StoreState) -> Result<Vec<SessionListEn
 mod tests {
     use super::*;
     use kriyon_core::ask::AskKind;
-    use kriyon_core::session::SessionStatus;
 
     fn row(id: &str) -> SessionRow {
         SessionRow {
@@ -128,6 +157,7 @@ mod tests {
                 }),
                 last_seen_ms: Some(99),
                 dialog_on_screen: false,
+                ..Live::default()
             },
         );
         live.insert(
@@ -170,5 +200,51 @@ mod tests {
         assert!(by_id(&facts, "archived").put_away);
         assert!(by_id(&facts, "parked").put_away);
         assert!(!asking.put_away);
+    }
+
+    #[test]
+    fn each_session_carries_its_digest_from_what_is_known_live() {
+        let mut live = HashMap::new();
+        live.insert(
+            SessionId("asking".into()),
+            Live {
+                runtime: Some(RuntimeFacts {
+                    status: SessionStatus::Waiting,
+                    ..RuntimeFacts::default()
+                }),
+                ask: Some(PendingAsk {
+                    kind: AskKind::Question,
+                    text: "Which db?".into(),
+                    asked_at: None,
+                    question: None,
+                }),
+                ..Live::default()
+            },
+        );
+        live.insert(
+            SessionId("running".into()),
+            Live {
+                runtime: Some(RuntimeFacts {
+                    status: SessionStatus::Running,
+                    ..RuntimeFacts::default()
+                }),
+                tool: Some(kriyon_core::activity::ToolActivity {
+                    tool_name: "Bash".into(),
+                    target: Some("pnpm test".into()),
+                    started_at: None,
+                }),
+                turn: Some(TurnFacts {
+                    started_ms: 40,
+                    ..TurnFacts::default()
+                }),
+                ..Live::default()
+            },
+        );
+        let facts = gather(vec![row("asking"), row("running")], &live, &HashMap::new());
+        let question = by_id(&facts, "asking").digest.question.expect("asked");
+        assert_eq!(question.text, "Which db?");
+        let running = by_id(&facts, "running").digest;
+        assert_eq!(running.activity.as_deref(), Some("Bash · pnpm test"));
+        assert_eq!(running.running_since_ms, Some(40));
     }
 }

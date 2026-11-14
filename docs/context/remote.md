@@ -53,6 +53,10 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
   entry, a [Readable view] entry) sent as its own bytes with their length first, so it can grow:
   an older reader skips fields it doesn't know, a newer one reads fields an older writer left out
   as zero ("none"). _Avoid_: envelope, blob.
+- **Session digest** (`kriyon_core::session_digest`) — what a [Remote device]'s Home shows of a
+  [Session] beside its list entry: the question it asks, the tool running and since when, how the
+  last turn ended and what it changed. Built only from cheap sources the [Host] already holds,
+  never the transcript or git, and redacted. _Avoid_: preview, card data.
 - **Session fan-out** (`kriyon_remote::fanout::SessionFanout`) — the [Host]'s one copy of a
   [Session]'s screen stream for every [Remote device] that has it open: it numbers the output as
   [Screen update]s once, asks the [PTY daemon] for each device's [Screen snapshot], and keeps a
