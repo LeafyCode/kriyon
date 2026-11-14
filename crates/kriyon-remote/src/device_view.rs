@@ -169,6 +169,8 @@ pub enum ScreenEvent {
 
 /// One open session stream, on the device.
 pub struct SessionScreen {
+    /// Since when it has waited for its first snapshot (or last asked).
+    waiting_since: Option<Instant>,
     follower: ScreenFollower,
     parts: SnapshotParts,
     unpacker: Unpacker,
@@ -177,11 +179,24 @@ pub struct SessionScreen {
     run: Option<u64>,
 }
 
+/// How long a screen waits for its first snapshot before asking again: the
+/// host gives at most one a second, and may have said no to the first ask.
+pub const FIRST_SCREEN_WAIT: std::time::Duration = std::time::Duration::from_secs(3);
+
 impl SessionScreen {
     /// # Errors
     /// [`CompressError`] if zstd can't make a context.
     pub fn new() -> Result<Self, CompressError> {
+        Self::new_at(Instant::now())
+    }
+
+    /// A screen made at `now`, waiting for its first snapshot.
+    ///
+    /// # Errors
+    /// [`CompressError`] if zstd can't make a context.
+    pub fn new_at(now: Instant) -> Result<Self, CompressError> {
         Ok(Self {
+            waiting_since: Some(now),
             follower: ScreenFollower::new(),
             parts: SnapshotParts::new(),
             run: None,
@@ -265,6 +280,7 @@ impl SessionScreen {
     fn snapshot(&mut self, head: SnapshotHead, packed: &[u8], now: Instant) -> Vec<ScreenEvent> {
         match self.unpacker.unpack(Kind::Snapshot, packed) {
             Ok(bytes) => {
+                self.waiting_since = None;
                 self.follower.snapshot(head.run, head.seq);
                 self.run = Some(head.run);
                 vec![ScreenEvent::Screen {
@@ -291,6 +307,13 @@ impl SessionScreen {
     /// Whether to send `Resync` now with no message to prompt it (call on a
     /// timer): lost, and the last ask was a second ago.
     pub fn resync_due(&mut self, now: Instant) -> bool {
+        if let Some(since) = self.waiting_since {
+            if now.saturating_duration_since(since) < FIRST_SCREEN_WAIT {
+                return false;
+            }
+            self.waiting_since = Some(now);
+            return true;
+        }
         self.follower.resync_due(now)
     }
 
@@ -1200,6 +1223,25 @@ mod tests {
                 write_id: 3,
             })
         );
+    }
+
+    /// The host asks for a snapshot at most once a second: a screen still
+    /// without its first one asks again, every few seconds, until it comes.
+    #[test]
+    fn a_screen_still_without_its_first_snapshot_asks_again() {
+        let t = Instant::now();
+        let mut screen = SessionScreen::new_at(t).expect("screen");
+        assert!(
+            !screen.resync_due(t + std::time::Duration::from_secs(1)),
+            "not yet"
+        );
+        assert!(screen.resync_due(t + FIRST_SCREEN_WAIT), "asks");
+        assert!(
+            !screen.resync_due(t + FIRST_SCREEN_WAIT + std::time::Duration::from_secs(1)),
+            "once a wait"
+        );
+        screen.on_message(snapshot(9, 4, b"a", false), t + FIRST_SCREEN_WAIT * 2);
+        assert!(!screen.resync_due(t + FIRST_SCREEN_WAIT * 5), "it came");
     }
 
     #[test]

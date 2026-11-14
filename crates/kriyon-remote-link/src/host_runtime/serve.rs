@@ -217,7 +217,7 @@ struct Served {
     ended: std::sync::atomic::AtomicBool,
     /// Snapshots to compress, on the session's own packing thread (one
     /// thread, one compressor, reused), never the daemon's reader.
-    packs: Mutex<Option<std::sync::mpsc::Sender<SnapshotToPack>>>,
+    packs: Mutex<Option<std::sync::mpsc::SyncSender<SnapshotToPack>>>,
     /// The devices reading the session as [Readable view] entries, and the
     /// entries, numbered. Lock order: readers, then the book, then the
     /// fan-out.
@@ -388,6 +388,9 @@ impl Served {
     }
 }
 
+/// Snapshots waiting to be packed, at most, for one session.
+const PACKS_WAITING: usize = 4;
+
 /// A device's control stream, as the host writes to it.
 struct ControlOut {
     queue: Mutex<ControlQueue>,
@@ -542,7 +545,9 @@ impl Serve {
             book: Mutex::default(),
             reading: std::sync::atomic::AtomicBool::new(false),
         });
-        let (packs, snapshots) = std::sync::mpsc::channel();
+        // A few waiting at most: one that finds it full is dropped, and its
+        // device asks again (its screen re-asks on a timer).
+        let (packs, snapshots) = std::sync::mpsc::sync_channel(PACKS_WAITING);
         let weak = Arc::downgrade(&served);
         if std::thread::Builder::new()
             .name("kriyon-remote-pack".into())
@@ -645,7 +650,14 @@ impl Serve {
                     let snapshot = fanout
                         .snapshot_end(id, size.unwrap_or(kriyon_remote::writer::DEFAULT_SCREEN));
                     let unsent = snapshot.and_then(|snapshot| match served.packs.lock().as_ref() {
-                        Some(packs) => packs.send(snapshot).err().map(|e| e.0),
+                        // Too many waiting: dropped, not asked for again
+                        // here; its device asks once its wait is up.
+                        Some(packs) => match packs.try_send(snapshot) {
+                            Err(std::sync::mpsc::TrySendError::Disconnected(snapshot)) => {
+                                Some(snapshot)
+                            }
+                            Ok(()) | Err(std::sync::mpsc::TrySendError::Full(_)) => None,
+                        },
                         None => Some(snapshot),
                     });
                     // No packing thread: it counts as not packed, and is
@@ -1996,6 +2008,28 @@ mod tests {
                 world.fake.builds.load(std::sync::atomic::Ordering::Relaxed),
                 builds
             );
+        });
+    }
+
+    /// A Viewer flipping its screen on and off, or on and on, can't make
+    /// the host take many snapshots: at most one a second.
+    #[test]
+    fn a_screen_flipped_on_and_off_in_a_loop_asks_for_one_snapshot_a_second() {
+        run(async {
+            let world = world().await;
+            let (_phone, link, _cw, _cr) = device(&world, 3, Role::Viewer).await;
+            let (mut sw, _sr) = open_with(&link, false).await;
+            for _ in 0..30 {
+                sw.send(&FromDevice::Screen { on: true }).await.expect("on");
+                sw.send(&FromDevice::Screen { on: true }).await.expect("on");
+                sw.send(&FromDevice::Screen { on: false })
+                    .await
+                    .expect("off");
+            }
+            sw.send(&FromDevice::Screen { on: true }).await.expect("on");
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            let asks = world.asks.lock().len();
+            assert_eq!(asks, 1, "{asks} snapshots asked for");
         });
     }
 

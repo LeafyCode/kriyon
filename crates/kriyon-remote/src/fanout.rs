@@ -391,10 +391,27 @@ impl SessionFanout {
     /// off: no more updates, what was queued dropped (its entries start over
     /// if any went, [`Self::dropped`]) and a snapshot under way with it.
     pub fn set_screen(&mut self, device: &EndpointId, on: bool) -> Option<RequesterId> {
+        self.set_screen_at(device, on, Instant::now())
+    }
+
+    /// [`Self::set_screen`] at `now`. Turned on (again, or anew), its
+    /// snapshot is asked for through the same gate as a `Resync`: a device
+    /// flipping its screen gets at most one a second, and one it was denied
+    /// comes when it asks again (its screen re-asks on a timer).
+    pub fn set_screen_at(
+        &mut self,
+        device: &EndpointId,
+        on: bool,
+        now: Instant,
+    ) -> Option<RequesterId> {
         let stream = self.devices.get_mut(device)?;
         let was = std::mem::replace(&mut stream.screen, on);
         if on {
             self.seq.as_ref()?;
+            let stream = self.devices.get_mut(device)?;
+            if !stream.resync.allow(now) {
+                return None;
+            }
             return self.ask(device, false);
         }
         if was {
@@ -735,9 +752,29 @@ mod tests {
         assert!(!fanout.dropped(&A));
         // A resync while off doesn't use up the gate.
         assert_eq!(fanout.resync(&A, Instant::now()), None);
-        assert!(fanout.set_screen(&A, true).is_some());
-        // On already, a new screen still gets a snapshot.
-        assert!(fanout.set_screen(&A, true).is_some(), "asked again");
+    }
+
+    /// A screen turned on asks for a snapshot through the resync gate: a
+    /// device flipping it on and off, or on and on, asks once a second.
+    #[test]
+    fn turning_the_screen_on_again_and_again_asks_once_a_second() {
+        let mut fanout = SessionFanout::new(1 << 20).expect("fanout");
+        fanout.hello(7);
+        fanout.open_without_screen(A);
+        let t = Instant::now();
+        assert!(fanout.set_screen_at(&A, true, t).is_some(), "the first");
+        let mut asked = 0;
+        for _ in 0..20 {
+            fanout.set_screen_at(&A, false, t);
+            asked += usize::from(fanout.set_screen_at(&A, true, t).is_some());
+            asked += usize::from(fanout.set_screen_at(&A, true, t).is_some());
+        }
+        assert_eq!(asked, 0, "no more within the second");
+        let later = t + std::time::Duration::from_secs(1);
+        assert!(
+            fanout.set_screen_at(&A, true, later).is_some(),
+            "a new screen, a second on"
+        );
     }
 
     #[test]
