@@ -97,7 +97,8 @@ export function SettingsScreen() {
                 onValueChange={(on) => {
                   setAlerts(on).catch(() => undefined);
                 }}
-                thumbColor={t.card}
+                // A thumb that shows on its track in both modes.
+                thumbColor={alertsOn ? t.onAccent : t.ink2}
                 trackColor={{ false: t.lineStrong, true: t.accent }}
                 value={alertsOn}
               />

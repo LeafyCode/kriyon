@@ -249,11 +249,14 @@ function Compose({
   const session = summary?.sessions.find((one) => one.id === sessionId);
   // The computer's word: this phone controls it and no question shows.
   const mayType = Boolean(session?.mayCompose);
-  const line = composeLine(
-    asking,
-    summary?.role === "controller",
-    Boolean(session?.mayType)
-  );
+  // Why it can't send, only when it can't: the computer's word decides.
+  const line = mayType
+    ? null
+    : composeLine(
+        asking,
+        summary?.role === "controller",
+        Boolean(session?.mayType)
+      );
   const send = () => {
     if (!(mayType && message.trim())) {
       return;

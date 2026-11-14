@@ -29,6 +29,7 @@ const STILL_WRITING = /^The form sends too early/;
 const ENTRY = /^entry-/;
 const FIX_IT = /Yes, fix it/;
 const YES = /Yes$/;
+const TYPING_OFF = /Typing is off/;
 
 const host = (needsYou: boolean): HostSummary => ({
   hostId: MAC,
@@ -316,4 +317,13 @@ test("a message the computer refused says why, and the words come back", async (
     await screen.findByText("A question shows: answer it in the terminal.")
   ).toBeOnTheScreen();
   expect(screen.getByLabelText("Message").props.value).toBe("hello");
+});
+
+test("the bar's words follow the computer: none when it says this phone may compose", async () => {
+  usePhone.setState({ states: { [MAC]: controlled(true) } });
+  await render(<SessionScreen hostId={MAC} sessionId="s1" />);
+  // The conversation still ends on a question the computer says is gone.
+  await act(() => send(CONVERSATION));
+  expect(screen.queryByText(TYPING_OFF)).toBeNull();
+  expect(screen.getByLabelText("Message").props.editable).toBe(true);
 });

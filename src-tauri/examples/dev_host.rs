@@ -12,7 +12,8 @@
 //!
 //! It prints the pairing code (the QR code's text) and writes it to
 //! `invite-file` if given. Paste it into the phone; then type the six digits
-//! the phone shows here, one line. The session prints a line every two
+//! the phone shows here, one line; `ask` or `answer` puts the live
+//! session's question up or answers it. The session prints a line every two
 //! seconds; what the phone types is echoed into it. Its readable view is a
 //! short made-up conversation that grows from when it is opened, ending on a
 //! question.
@@ -27,7 +28,7 @@ use kriyon_core::readable::{EntryKind, Keyed, StepState};
 use kriyon_core::session::SessionStatus;
 use kriyon_core::standing::StandingState;
 use kriyon_core::work_report::ReportOutcome;
-use kriyon_remote::authorize::{PendingWrite, ProjectFolder};
+use kriyon_remote::authorize::{Dialog, PendingWrite, ProjectFolder};
 use kriyon_remote::control::{Change, HostIsTyping};
 use kriyon_remote::message::{
     Diff, EndpointId, PlanUsage, ProjectInfo, Question, RefuseReason, Role, SessionInfo,
@@ -65,9 +66,33 @@ struct DevApp {
     reading_since: Mutex<Instant>,
     /// When its entries were last built: a reader looks every second or so.
     last_read: Mutex<Option<Instant>>,
+    /// The live session shows its question (typed `ask` / `answer` here).
+    asking: std::sync::atomic::AtomicBool,
 }
 
 impl DevApp {
+    /// The live session's question shows (`true`) or was answered: on its
+    /// screen (the gate, which writes check) and in its list entry.
+    fn set_asking(&self, asking: bool) {
+        self.asking
+            .store(asking, std::sync::atomic::Ordering::Relaxed);
+        self.gate.lock().set_dialog(Dialog {
+            showing: asking,
+            changed_at_seq: Some(0),
+        });
+        if let Some(serve) = self.serve.lock().clone() {
+            serve.sessions_changed();
+        }
+        println!(
+            "dev host: {}",
+            if asking {
+                "the question shows"
+            } else {
+                "the question was answered"
+            }
+        );
+    }
+
     fn tell(&self, change: Option<Change>) {
         let serve = self.serve.lock().clone();
         if let (Some(serve), Some(change)) = (serve, change) {
@@ -108,7 +133,7 @@ first try always fails. I'll wait for the token, then send.";
 /// The made-up conversation at `beat` (one every two seconds): the reply
 /// grows in place, a step runs then finishes, a report, then a question
 /// answered only in the terminal, where it stays.
-fn conversation(beat: u64) -> Vec<Keyed> {
+fn conversation(beat: u64, asking: bool) -> Vec<Keyed> {
     let keyed = |key: &str, kind: EntryKind| Keyed {
         key: key.into(),
         kind,
@@ -176,7 +201,8 @@ fn conversation(beat: u64) -> Vec<Keyed> {
             },
         ));
     }
-    if beat >= 10 {
+    // The question shows only while it is asked, as a real host's does.
+    if beat >= 10 && asking {
         entries.push(keyed(
             "asking",
             EntryKind::Asking {
@@ -246,8 +272,8 @@ impl ServeHost for DevApp {
         };
         vec![
             SessionInfo {
-                dialog_open: true,
-                question: Some(Question {
+                dialog_open: self.asking.load(std::sync::atomic::Ordering::Relaxed),
+                question: self.asking.load(std::sync::atomic::Ordering::Relaxed).then(|| Question {
                     text: "The form sends before the token is ready. Wait for the token, or retry once on a 401?".into(),
                     options: vec![
                         "Wait for the token".into(),
@@ -384,12 +410,15 @@ impl ServeHost for DevApp {
             *self.reading_since.lock() = Instant::now();
         }
         let beat = self.reading_since.lock().elapsed().as_secs() / 2;
-        if stamp == Some(beat) {
+        let asking = self.asking.load(std::sync::atomic::Ordering::Relaxed);
+        // The question coming or going is a change too.
+        let now = beat * 2 + u64::from(asking);
+        if stamp == Some(now) {
             return EntriesBuilt::Unchanged;
         }
         EntriesBuilt::Built {
-            stamp: beat,
-            entries: conversation(beat),
+            stamp: now,
+            entries: conversation(beat, asking),
         }
     }
 
@@ -495,12 +524,18 @@ fn main() {
 async fn run(invite_file: Option<String>) {
     let mut gate = SessionGate::new(1, SIZE);
     gate.set_run(1);
+    // It starts on its question, as its list entry says.
+    gate.set_dialog(Dialog {
+        showing: true,
+        changed_at_seq: Some(0),
+    });
     let app = Arc::new(DevApp {
         paired: Mutex::default(),
         gate: Mutex::new(gate),
         lines: Mutex::default(),
         serve: Mutex::default(),
         reading_since: Mutex::new(Instant::now()),
+        asking: std::sync::atomic::AtomicBool::new(true),
         last_read: Mutex::default(),
     });
     let serve = Serve::new(Arc::clone(&app) as Arc<dyn ServeHost>);
@@ -572,6 +607,11 @@ async fn run(invite_file: Option<String>) {
         }
     });
     while let Some(code) = codes.recv().await {
+        // Not a code: the live session's question shows, or is answered.
+        if code == "ask" || code == "answer" {
+            app.set_asking(code == "ask");
+            continue;
+        }
         let keep = Arc::clone(&app);
         let outcome = runtime
             .enter_code(&code, &dev_host_name(), |device, _name, role| {
