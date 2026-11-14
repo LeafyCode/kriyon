@@ -710,9 +710,11 @@ pub(crate) fn launch_claude_in<R: tauri::Runtime>(
             Err(_) => seed_dropped = true,
         }
     }
+    // Kriyon types it, not the person: control stays where it is, so a
+    // device that started the session may type at once.
     if state
         .writers
-        .host_write(id, engine.as_ref(), claude_command(&plan).as_bytes())
+        .app_write(id, engine.as_ref(), claude_command(&plan).as_bytes())
         .is_err()
     {
         // Nothing started: the prompt file nothing will read goes, and the
@@ -1446,6 +1448,30 @@ mod tests {
             );
             assert_eq!(launch(&app, None), LaunchOutcome::Skipped);
             assert_eq!(typed(&mut daemon), b"claude\r");
+        }
+
+        /// Kriyon typing `claude` into a session isn't the person typing:
+        /// a device that just started it may take control at once, and
+        /// isn't shown "Let it type".
+        #[test]
+        fn launching_claude_leaves_a_device_free_to_take_control() {
+            use kriyon_remote::message::Role;
+            let (app, _daemon) = app_with_session(false);
+            let state = app.state::<AppState>();
+            state.writers.set_run(&SessionId("s".into()), 1);
+            assert_eq!(
+                launch(&app, None),
+                LaunchOutcome::Launched { resuming: false }
+            );
+            assert!(matches!(
+                state.writers.take(
+                    &SessionId("s".into()),
+                    [7; 32],
+                    Some(Role::Controller),
+                    Instant::now()
+                ),
+                Some(Ok(_))
+            ));
         }
 
         #[test]
