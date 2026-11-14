@@ -501,8 +501,10 @@ end in the behaviour above, with no lost session and no replayed input.
 
 ## Open
 
-- Readable-view entry format (follows the Structured view work).
 - Exact Tailscale port and how the host learns its Tailscale address (spike).
-- Whether `kriyon-remote` reuses the [Daemon frame] codec or keeps its own.
 - An app lock on the phone, since a stolen Controller phone has shell access
   until the person removes it on the host.
+
+Decided since: the readable view's entries (§6) and their nested-record
+framing (§3); `kriyon-remote` keeps its own codec (§3) rather than the
+[Daemon frame]'s, since its limits, compression and unknown-tag rule differ.

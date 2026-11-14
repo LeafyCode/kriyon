@@ -109,13 +109,37 @@ leaked pairing QR used first.
 - The phone: `kriyon-mobile` (UniFFI), the Expo app in `mobile/app` with its native module, Home,
   Pair (paste and QR), the terminal view, push registration, a dev host example, and a CI job.
 
+## Built after the phase 2 review (14 Nov)
+
+- The phase 2 architecture review's fixes, one host summary record shared by the desktop and
+  the phone, and the relay on the phone.
+- The readable view: entries built by `kriyon_core::readable`, sent and read again as they change,
+  on a session stream that can be open for its entries only; the screen turns on and off on
+  the same stream; the desktop and the phone both show it.
+- One numbered view per remote session on the device (`set_view`, ADR 0062).
+- Home data: each session's digest (question, tool running, since when, the last turn's end and
+  its changes), the host's plan limits, the link's path and when it was last heard from.
+- The wire format can grow: session and entry records are nested records (spec §3), entry
+  enums are pinned, a report's outcome is a number.
+- Pairing shows the role offered and the code's expiry; a phone gives back control and turns its
+  alerts off and on; it writes to Claude from the readable view (`Compose`, with the run told on
+  a screen-off stream); every write's answer names it (`write_id`).
+- A shared JSON fixture tested by Rust and TypeScript, so the apps' types follow Rust's.
+- The relay end to end, on a local iroh relay with the pass contract's check: pairing, a session,
+  refused passes and a relay restart (the last §11 fault test).
+- Push crypto in its own crate (`kriyon-push-seal`), so the push sender builds without zstd; key
+  stores implement one trait; the phone app needs Android 9 (minSdk 28) so its keys open only
+  while it is unlocked.
+
 ## Next
 
-- The fixes from the phase 2 architecture review (plan folder: `phase2-architecture-review.md`).
-- The readable view: entry format, then host and phone.
-- The relay on the phone; one host summary record shared by desktop and phone.
-- Device tests by the person: Mac to Mac, iPhone, the hidden-app freeze, session start.
+- The phase 3 review's items for the mobile session: the relay pass keeper built once
+  (`kriyon-relay-client`, both apps' refusal watching with it).
+- Windows key stores and the rest of item 9, with the Windows host (PR #48).
+- Device tests by the person: Mac to Mac, iPhone, Android, the hidden-app freeze, session start.
 - Windows as a host and a device (own plan).
+- Before the first release: ADR 0057 and the spec's status, and the docs drift the release PR
+  checks.
 
 ## Later steps (own plans)
 
