@@ -1,8 +1,10 @@
 /**
  * A session's real terminal: xterm.js in a web view (the terminal page),
- * fed by the session's stream from Rust. It only watches until this phone
- * holds typing control, and dims with typing off while the link is down.
- * Its size is the computer's: it never resizes the session there.
+ * fed by the session's stream from Rust, in the phone's light or dark. It
+ * only watches until this phone holds typing control; then the type field
+ * and the extra keys (esc, tab, ctrl, arrows) send to the computer. It dims
+ * with typing off while the link is down. Its size is the computer's: it
+ * never resizes the session there.
  */
 import {
   type ComponentType,
@@ -11,21 +13,21 @@ import {
   useRef,
   useState,
 } from "react";
-import { Pressable, Text, View } from "react-native";
+import { Pressable, Text, TextInput, View } from "react-native";
 import { WebView, type WebViewProps } from "react-native-webview";
 import { linkLine, noteLine } from "../../../../src/remote/remoteScreen.ts";
 import { KriyonNative } from "../../modules/kriyon-native/index.ts";
+import { Button, IconButton, useLook } from "../kit.tsx";
+import { KEYS, typedLine } from "../state/keys.ts";
 import { toBase64, usePhone } from "../state/phone.ts";
 import { TERMINAL_PAGE } from "../terminal/page.generated.ts";
 import { readPageMessage } from "../terminal/protocol.ts";
-import { colors, ui } from "../ui.ts";
+import { fonts, useMode } from "../theme.ts";
 
 /** What the page's web view lets the app do. */
 interface PageHandle {
   injectJavaScript: (script: string) => void;
   reload: () => void;
-  /** Give the web view the phone's focus (Android shows no keyboard for it otherwise). */
-  requestFocus: () => void;
 }
 
 /**
@@ -103,6 +105,11 @@ export function TerminalView({
   const typing = Boolean(session?.mayType);
   const connected = host?.link === "connected";
   const controller = host?.role === "controller";
+  const mode = useMode();
+  const { t, text } = useLook();
+  const [line, setLine] = useState("");
+  const [ctrl, setCtrl] = useState(false);
+  const themeScript = `window.kriyon.theme("${mode}", "${t.bg}")`;
 
   useEffect(() => {
     const frames = KriyonNative.addListener("onScreenFrame", (event) => {
@@ -125,14 +132,20 @@ export function TerminalView({
     };
   }, [hostId, sessionId]);
 
+  // The page follows the phone's light or dark.
   useEffect(() => {
-    if (typing) {
-      // Android keeps its focus on the app's own views until asked: the
-      // page's focus then brings no keyboard.
-      page.current?.requestFocus();
+    runIn({ fresh, page, ready, waiting }, themeScript);
+  }, [themeScript]);
+
+  /** Send `bytes` to the session, saying why if it can't go. */
+  const send = (bytes: Uint8Array) => {
+    if (bytes.length === 0) {
+      return;
     }
-    runIn({ fresh, page, ready, waiting }, `window.kriyon.typing(${typing})`);
-  }, [typing]);
+    KriyonNative.input(hostId, sessionId, bytes).catch((error: unknown) =>
+      setNote(reasonOf(error))
+    );
+  };
 
   /** The page loaded (again): send what waited, or the session afresh. */
   const pageReady = () => {
@@ -140,13 +153,14 @@ export function TerminalView({
     ready.current = true;
     const queued = waiting.current.splice(0);
     if (loads.current > 1 || fresh.current) {
-      // A new page, or frames dropped: ask for the whole screen again.
+      // A new page, or frames dropped: ask for the whole screen again, on
+      // the same open session.
       fresh.current = false;
       usePhone
         .getState()
         .showScreen(hostId, sessionId)
         .catch((error: unknown) => setNote(reasonOf(error)));
-      page.current?.injectJavaScript(`window.kriyon.typing(${typing});true;`);
+      page.current?.injectJavaScript(`${themeScript};true;`);
       return;
     }
     for (const script of queued) {
@@ -154,36 +168,73 @@ export function TerminalView({
     }
   };
 
+  const key = (label: string, bytes: string, accessibilityLabel: string) => (
+    <Pressable
+      accessibilityLabel={accessibilityLabel}
+      accessibilityRole="button"
+      key={label}
+      onPress={() => send(utf8.encode(bytes))}
+      style={({ pressed }) => ({
+        alignItems: "center",
+        backgroundColor: pressed ? t.lineStrong : t.overlay,
+        borderColor: t.lineStrong,
+        borderRadius: 8,
+        borderWidth: 1,
+        flex: 1,
+        justifyContent: "center",
+        minHeight: 44,
+      })}
+    >
+      <Text style={{ color: t.ink1, fontFamily: fonts.mono, fontSize: 13 }}>
+        {label}
+      </Text>
+    </Pressable>
+  );
+
   return (
-    <View style={{ flex: 1, gap: 8 }}>
-      <View style={{ alignItems: "center", flexDirection: "row", gap: 10 }}>
-        {connected ? (
-          <Text style={[ui.hint, { flex: 1 }]}>
-            {roleLine(typing, controller)}
-          </Text>
-        ) : (
-          <Text style={[ui.hint, { color: colors.statusWaiting, flex: 1 }]}>
-            {linkLine(host?.link ?? "connecting")}
-          </Text>
-        )}
+    <View style={{ flex: 1 }}>
+      <View
+        style={{
+          alignItems: "center",
+          flexDirection: "row",
+          gap: 10,
+          minHeight: 44,
+          paddingHorizontal: 16,
+          paddingVertical: 4,
+        }}
+      >
+        <Text
+          style={[
+            text.caption,
+            { color: connected ? t.ink2 : t.amberInk, flex: 1 },
+          ]}
+        >
+          {connected
+            ? roleLine(typing, controller)
+            : linkLine(host?.link ?? "connecting")}
+        </Text>
         {connected && controller && session && session.typing !== "you" ? (
-          <Pressable
-            accessibilityRole="button"
+          <Button
+            kind="ghost"
+            label="Take control"
             onPress={() => {
               KriyonNative.takeControl(hostId, sessionId).catch(
                 (error: unknown) => setNote(reasonOf(error))
               );
             }}
-            style={ui.ghostButton}
-          >
-            <Text style={ui.ghostButtonText}>Take control</Text>
-          </Pressable>
+          />
         ) : null}
       </View>
-      <View style={{ flex: 1, opacity: connected ? 1 : 0.5 }}>
+      <View
+        style={{
+          backgroundColor: t.bg,
+          flex: 1,
+          opacity: connected ? 1 : 0.5,
+          paddingHorizontal: 10,
+        }}
+      >
         <Page
           hideKeyboardAccessoryView
-          keyboardDisplayRequiresUserAction={false}
           onContentProcessDidTerminate={() => {
             // iOS ended the page's process: load it again.
             ready.current = false;
@@ -196,12 +247,6 @@ export function TerminalView({
             const message = readPageMessage(event.nativeEvent.data);
             if (message?.type === "ready") {
               pageReady();
-            } else if (message?.type === "input") {
-              KriyonNative.input(
-                hostId,
-                sessionId,
-                utf8.encode(message.data)
-              ).catch((error: unknown) => setNote(reasonOf(error)));
             } else if (message?.type === "note") {
               setNote(noteLine(message.note));
             }
@@ -209,10 +254,118 @@ export function TerminalView({
           originWhitelist={["about:blank"]}
           ref={page}
           source={PAGE_SOURCE}
-          style={{ backgroundColor: colors.chromeWindow }}
+          style={{ backgroundColor: t.bg }}
         />
       </View>
-      {note ? <Text style={ui.hint}>{note}</Text> : null}
+      {note ? (
+        <Text
+          style={[text.caption, { paddingHorizontal: 16, paddingVertical: 6 }]}
+        >
+          {note}
+        </Text>
+      ) : null}
+      {typing ? (
+        <>
+          <View
+            accessibilityLabel="Keys"
+            accessibilityRole="toolbar"
+            style={{
+              backgroundColor: t.card,
+              borderTopColor: t.line,
+              borderTopWidth: 1,
+              flexDirection: "row",
+              gap: 6,
+              padding: 8,
+            }}
+          >
+            {KEYS.slice(0, 2).map((k) =>
+              key(k.label, k.bytes, k.accessibilityLabel)
+            )}
+            <Pressable
+              accessibilityLabel="Control"
+              accessibilityRole="button"
+              accessibilityState={{ selected: ctrl }}
+              onPress={() => setCtrl((held) => !held)}
+              style={{
+                alignItems: "center",
+                backgroundColor: ctrl ? t.accentSoft : t.overlay,
+                borderColor: ctrl ? t.accentLine : t.lineStrong,
+                borderRadius: 8,
+                borderWidth: 1,
+                flex: 1,
+                justifyContent: "center",
+                minHeight: 44,
+              }}
+            >
+              <Text
+                style={{
+                  color: ctrl ? t.accentInk : t.ink1,
+                  fontFamily: fonts.mono,
+                  fontSize: 13,
+                }}
+              >
+                ctrl
+              </Text>
+            </Pressable>
+            {KEYS.slice(2).map((k) =>
+              key(k.label, k.bytes, k.accessibilityLabel)
+            )}
+          </View>
+          <View
+            style={{
+              alignItems: "center",
+              backgroundColor: t.rail,
+              borderTopColor: t.overlay,
+              borderTopWidth: 1,
+              flexDirection: "row",
+              gap: 8,
+              paddingHorizontal: 12,
+              paddingVertical: 10,
+            }}
+          >
+            <TextInput
+              accessibilityLabel="Type into the terminal"
+              autoCapitalize="none"
+              autoCorrect={false}
+              onChangeText={setLine}
+              onSubmitEditing={() => {
+                send(typedLine(line, ctrl));
+                setLine("");
+                setCtrl(false);
+              }}
+              placeholder={ctrl ? "A letter for ctrl-…" : "Type, then Enter"}
+              placeholderTextColor={t.muted}
+              returnKeyType="send"
+              style={{
+                backgroundColor: t.card,
+                borderColor: t.accentLine,
+                borderRadius: 22,
+                borderWidth: 1,
+                color: t.ink,
+                flex: 1,
+                fontFamily: fonts.mono,
+                fontSize: 15,
+                minHeight: 44,
+                minWidth: 0,
+                paddingHorizontal: 14,
+              }}
+              submitBehavior="submit"
+              value={line}
+            />
+            <IconButton
+              color={t.onAccent}
+              icon="enter"
+              label="Enter"
+              onPress={() => {
+                send(typedLine(line, ctrl));
+                setLine("");
+                setCtrl(false);
+              }}
+              tint={t.accent}
+            />
+          </View>
+        </>
+      ) : null}
     </View>
   );
 }

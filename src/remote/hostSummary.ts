@@ -10,20 +10,52 @@ import type { LinkState } from "./remoteScreen.ts";
 /** Who types into a session now, seen from this device. */
 export type Typing = "host" | "you" | "other";
 
+/** The question Claude's dialog asks, as a device shows it. */
+export interface SessionQuestion {
+  options: string[];
+  text: string;
+}
+
+/** What a finished turn changed in the project. */
+export interface DiffStat {
+  added: number;
+  files: number;
+  removed: number;
+}
+
 /** One session on a paired computer. */
 export interface SessionSummary {
+  /** The running tool, as one line ("Bash · pnpm test"); not sent yet. */
+  activity?: string | null;
   dialogOpen: boolean;
+  /** What the last turn changed; not sent yet. */
+  diff?: DiffStat | null;
   id: string;
   lastChangeMs: number;
   /** This device may type now: connected, a Controller, holding control. */
   mayType: boolean;
   needsYou: boolean;
   projectId: string;
+  /** The open question while `dialogOpen`; not sent yet. */
+  question?: SessionQuestion | null;
+  /** When the running turn began (Unix ms); not sent yet. */
+  runningSinceMs?: number | null;
   standing: StandingState;
   status: SessionStatus;
   title: string;
+  /** Claude's last reply in a line, for a finished turn; not sent yet. */
+  turnSummary?: string | null;
   /** `null` until the computer says who holds control. */
   typing: Typing | null;
+}
+
+/** A computer's Claude plan use, in its current window. */
+export interface PlanUsage {
+  /** When the window resets (Unix ms), if known. */
+  resetsAtMs: number | null;
+  usedPercent: number;
+  /** The window's name, as the desktop says it ("5-hour window"). */
+  window: string;
 }
 
 /** A project on a paired computer, where a session can be started. */
@@ -39,14 +71,20 @@ export interface HostSummary {
   hostId: string;
   /** The name it said; `null` until it has. */
   hostName: string | null;
+  /** When the link was last up (Unix ms), while it isn't; not sent yet. */
+  lastSeenMs?: number | null;
   link: LinkState;
   /** This device may start a session there now. */
   mayStart: boolean;
+  /** How the link runs now; not sent yet. */
+  path?: "direct" | "relay" | null;
   projects: ProjectSummary[];
   /** The last refusal it sent, by name (`NotInControl`). */
   refused: string | null;
   role: "viewer" | "controller" | null;
   sessions: SessionSummary[];
+  /** Its Claude plan use; not sent yet. */
+  usage?: PlanUsage | null;
 }
 
 /** One session that needs you, with its computer. */

@@ -1,7 +1,10 @@
 //! A development host for the phone app: the app's own remote-access code
-//! (pairing, accepting, serving streams) over one fake session, so the phone
-//! app in the Simulator can pair, watch and type without the desktop app.
-//! Never part of the app.
+//! (pairing, accepting, serving streams) over one live fake session, so the
+//! phone app in the Simulator can pair, watch and type without the desktop
+//! app. It lists more sessions than that one, one of each kind a phone's
+//! Home shows (asking, your turn, running, idle), and three projects for a
+//! new session. `KRIYON_DEV_HOST_NAME` names it (say, a second one that goes
+//! away). Never part of the app.
 //!
 //! ```sh
 //! cargo run -p kriyon --example dev_host -- [invite-file]
@@ -183,20 +186,84 @@ impl PairedDevices for DevApp {
 
 impl ServeHost for DevApp {
     fn host_name(&self) -> String {
-        "Dev host".into()
+        // A second dev host can be told apart (say, as the one that goes away).
+        std::env::var("KRIYON_DEV_HOST_NAME").unwrap_or_else(|_| "Dev host".into())
     }
 
     fn sessions(&self) -> Vec<SessionInfo> {
-        vec![SessionInfo {
-            id: SESSION.into(),
-            title: "Dev session".into(),
-            project_id: "dev".into(),
-            status: SessionStatus::Waiting,
-            standing: StandingState::AwaitingInput,
-            needs_you: true,
-            dialog_open: false,
-            last_change_ms: 0,
-        }]
+        // One of each kind a phone's Home shows; only `SESSION` is live.
+        let now = i64::try_from(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |since| since.as_millis()),
+        )
+        .unwrap_or(0);
+        let minutes_ago = |minutes: i64| now - minutes * 60_000;
+        let listed = |id: &str, title: &str, project: &str, standing: StandingState, ago: i64| {
+            let needs_you = standing == StandingState::AwaitingInput;
+            SessionInfo {
+                id: id.into(),
+                title: title.into(),
+                project_id: project.into(),
+                status: match standing {
+                    StandingState::Running => SessionStatus::Running,
+                    StandingState::AwaitingInput => SessionStatus::Waiting,
+                    _ => SessionStatus::Idle,
+                },
+                standing,
+                needs_you,
+                dialog_open: false,
+                last_change_ms: minutes_ago(ago),
+            }
+        };
+        vec![
+            SessionInfo {
+                dialog_open: true,
+                ..listed(
+                    SESSION,
+                    "Fix the login bug",
+                    "api",
+                    StandingState::AwaitingInput,
+                    4,
+                )
+            },
+            listed(
+                "turn",
+                "Add rate limits to /login",
+                "api",
+                StandingState::AwaitingInput,
+                12,
+            ),
+            listed(
+                "run1",
+                "Migrate auth to OAuth 2.1",
+                "api",
+                StandingState::Running,
+                3,
+            ),
+            listed(
+                "run2",
+                "Docs: release notes 0.17",
+                "web",
+                StandingState::Running,
+                1,
+            ),
+            listed("idle1", "Tidy the logs", "api", StandingState::Idle, 90),
+            listed(
+                "idle2",
+                "Spike: SQLite cache",
+                "web",
+                StandingState::Idle,
+                300,
+            ),
+            listed(
+                "idle3",
+                "Old release checklist",
+                "web",
+                StandingState::Idle,
+                2_000,
+            ),
+        ]
     }
 
     fn session(&self, id: &str) -> Option<LiveSession> {
@@ -258,7 +325,16 @@ impl ServeHost for DevApp {
     }
 
     fn projects(&self) -> Vec<ProjectInfo> {
-        Vec::new()
+        let project = |id: &str, name: &str, parked: bool| ProjectInfo {
+            id: id.into(),
+            name: name.into(),
+            parked,
+        };
+        vec![
+            project("api", "api-server", false),
+            project("web", "website", false),
+            project("vid", "video-tools", true),
+        ]
     }
 
     fn project_folder(&self, _project_id: &str) -> ProjectFolder {

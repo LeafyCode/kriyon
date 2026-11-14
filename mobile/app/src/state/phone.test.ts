@@ -1,9 +1,8 @@
 import { beforeEach, expect, jest, test } from "@jest/globals";
 import type { HostSummary } from "../../../../src/remote/hostSummary.ts";
-import { steel } from "../../../../src/theme/themes/steel.ts";
 import type { PairedHost } from "../../modules/kriyon-native/index.ts";
 import { KriyonNative } from "../../modules/kriyon-native/index.ts";
-import { readableKey, standingMeta, toBase64, usePhone } from "./phone.ts";
+import { readableKey, toBase64, usePhone } from "./phone.ts";
 
 jest.mock("../../modules/kriyon-native/index.ts", () => ({
   KriyonNative: {
@@ -155,24 +154,6 @@ test("forgetting a computer drops it and its state, and leaves its screen", asyn
   expect(state.hosts.map((one) => one.hostId)).toEqual([STUDIO]);
   expect(state.states[MAC]).toBeUndefined();
   expect(state.screen).toEqual({ kind: "home" });
-});
-
-test("each standing reads as the desktop says it, in the theme's colour", () => {
-  const { colors } = steel;
-  expect(standingMeta("running", colors)).toEqual({
-    color: colors.statusRunning,
-    label: "Running",
-  });
-  expect(standingMeta("awaiting_input", colors)).toEqual({
-    color: colors.statusWaiting,
-    label: "Awaiting input",
-  });
-  expect(standingMeta("changed", colors).label).toBe("Changed");
-  expect(standingMeta("idle", colors).label).toBe("Idle");
-  expect(standingMeta("unknown", colors)).toEqual({
-    color: colors.inkFaint,
-    label: "Unknown",
-  });
 });
 
 test("bytes travel to the terminal page as base64", () => {

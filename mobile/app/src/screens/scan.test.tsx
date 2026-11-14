@@ -105,7 +105,9 @@ test("a scanned pairing code pairs once; anything else says what it is", async (
   expect(native.pair).toHaveBeenCalledTimes(1);
   expect(native.pair).toHaveBeenCalledWith(CODE);
   expect(screen.queryByTestId("camera")).toBeNull();
-  expect(await screen.findByText("123456")).toBeOnTheScreen();
+  expect(
+    await screen.findByLabelText("Pairing code 1 2 3 4 5 6")
+  ).toBeOnTheScreen();
 });
 
 test("while the permission is still being read, nothing asks", async () => {

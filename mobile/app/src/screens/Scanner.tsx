@@ -5,10 +5,10 @@
  */
 import { CameraView, useCameraPermissions } from "expo-camera";
 import { useEffect, useState } from "react";
-import { Linking, Pressable, Text, View } from "react-native";
+import { Linking, Text, View } from "react-native";
 import { pairingCodeFrom } from "../../../../src/remote/hostSummary.ts";
 import appJson from "../../app.json" with { type: "json" };
-import { ui } from "../ui.ts";
+import { Button, useLook } from "../kit.tsx";
 
 /**
  * Why Kriyon asks for the camera: the same words as the system prompt, read
@@ -28,6 +28,7 @@ const WHY_CAMERA = (() => {
 const WRONG_SHOWS_MS = 2500;
 
 export function Scanner({ onCode }: { onCode: (code: string) => void }) {
+  const { text } = useLook();
   const [permission, ask] = useCameraPermissions();
   const [wrong, setWrong] = useState(false);
   const [done, setDone] = useState(false);
@@ -49,40 +50,36 @@ export function Scanner({ onCode }: { onCode: (code: string) => void }) {
     if (!permission.canAskAgain) {
       return (
         <View style={{ gap: 10 }}>
-          <Text style={ui.hint}>
+          <Text style={text.caption}>
             The camera is off for Kriyon. Turn it on in Settings, or paste the
             pairing code instead.
           </Text>
-          <Pressable
-            accessibilityRole="button"
+          <Button
+            kind="ghost"
+            label="Open Settings"
             onPress={() => {
               Linking.openSettings().catch(() => undefined);
             }}
-            style={ui.ghostButton}
-          >
-            <Text style={ui.ghostButtonText}>Open Settings</Text>
-          </Pressable>
+          />
         </View>
       );
     }
     return (
       <View style={{ gap: 10 }}>
-        <Text style={ui.hint}>{WHY_CAMERA}</Text>
-        <Pressable
-          accessibilityRole="button"
+        <Text style={text.caption}>{WHY_CAMERA}</Text>
+        <Button
+          kind="soft"
+          label="Allow the camera"
           onPress={() => {
             ask().catch(() => undefined);
           }}
-          style={ui.ghostButton}
-        >
-          <Text style={ui.ghostButtonText}>Allow the camera</Text>
-        </Pressable>
+        />
       </View>
     );
   }
   if (broken) {
     return (
-      <Text style={ui.hint}>
+      <Text style={text.caption}>
         The camera didn't start ({broken}). Paste the pairing code instead.
       </Text>
     );
@@ -108,9 +105,9 @@ export function Scanner({ onCode }: { onCode: (code: string) => void }) {
               }
         }
         onMountError={(event) => setBroken(event.message)}
-        style={{ aspectRatio: 1, borderRadius: 8, overflow: "hidden" }}
+        style={{ aspectRatio: 1, borderRadius: 16, overflow: "hidden" }}
       />
-      <Text style={ui.hint}>
+      <Text style={text.caption}>
         {wrong
           ? "That isn't a Kriyon pairing code."
           : "Point the camera at the QR code on your computer."}

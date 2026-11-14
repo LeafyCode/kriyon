@@ -9,7 +9,6 @@ import { usePhone } from "../state/phone.ts";
 import { TerminalView } from "./TerminalView.tsx";
 
 const injected: string[] = [];
-const mockRequestFocus = jest.fn();
 let pageProps: {
   onMessage: (event: { nativeEvent: { data: string } }) => void;
 };
@@ -23,7 +22,6 @@ jest.mock("react-native-webview", () => {
       pageProps = props;
       React.useImperativeHandle(ref, () => ({
         injectJavaScript: (code: string) => injected.push(code),
-        requestFocus: mockRequestFocus,
       }));
       return <View testID="terminal-page" />;
     }),
@@ -100,7 +98,6 @@ async function pageReady() {
 beforeEach(() => {
   jest.clearAllMocks();
   injected.length = 0;
-  mockRequestFocus.mockClear();
   frameListeners.length = 0;
   usePhone.setState(usePhone.getInitialState());
 });
@@ -135,36 +132,57 @@ test("typing is off until this phone holds control, and Take control asks Rust",
   usePhone.setState({ states: { [MAC]: state({}, "host") } });
   await render(<TerminalView hostId={MAC} sessionId="s1" />);
   await pageReady();
-  expect(injected).toContain("window.kriyon.typing(false);true;");
+  expect(screen.queryByLabelText("Type into the terminal")).toBeNull();
   await fireEvent.press(screen.getByRole("button", { name: "Take control" }));
   expect(native.takeControl).toHaveBeenCalledWith(MAC, "s1");
   await act(() => usePhone.getState().hostChanged(state({}, "you")));
-  expect(injected).toContain("window.kriyon.typing(true);true;");
+  expect(screen.getByLabelText("Type into the terminal")).toBeOnTheScreen();
+  expect(screen.getByLabelText("Keys")).toBeOnTheScreen();
   expect(screen.queryByRole("button", { name: "Take control" })).toBeNull();
 });
 
-test("with control the web view takes the phone's focus, so Android shows the keyboard", async () => {
-  usePhone.setState({ states: { [MAC]: state({}, "host") } });
-  await render(<TerminalView hostId={MAC} sessionId="s1" />);
-  await pageReady();
-  expect(mockRequestFocus).not.toHaveBeenCalled();
-  await act(() => usePhone.getState().hostChanged(state({}, "you")));
-  expect(mockRequestFocus).toHaveBeenCalled();
-});
-
-test("what is typed goes to Rust as UTF-8", async () => {
+test("what is typed goes to Rust as UTF-8, with Enter", async () => {
   usePhone.setState({ states: { [MAC]: state({}, "you") } });
   await render(<TerminalView hostId={MAC} sessionId="s1" />);
-  await act(() =>
-    pageProps.onMessage({
-      nativeEvent: { data: '{"type":"input","data":"é\\r"}' },
-    })
+  await fireEvent.changeText(
+    screen.getByLabelText("Type into the terminal"),
+    "é"
   );
+  await fireEvent.press(screen.getByRole("button", { name: "Enter" }));
   expect(native.input).toHaveBeenCalledWith(
     MAC,
     "s1",
     new Uint8Array([0xc3, 0xa9, 13])
   );
+  expect(screen.getByLabelText("Type into the terminal").props.value).toBe("");
+});
+
+test("the extra keys send a terminal's keys, and ctrl makes the next letter a control key", async () => {
+  usePhone.setState({ states: { [MAC]: state({}, "you") } });
+  await render(<TerminalView hostId={MAC} sessionId="s1" />);
+  await fireEvent.press(screen.getByRole("button", { name: "Escape" }));
+  expect(native.input).toHaveBeenLastCalledWith(
+    MAC,
+    "s1",
+    new Uint8Array([27])
+  );
+  await fireEvent.press(screen.getByRole("button", { name: "Up" }));
+  expect(native.input).toHaveBeenLastCalledWith(
+    MAC,
+    "s1",
+    new TextEncoder().encode("\u001b[A")
+  );
+  await fireEvent.press(screen.getByRole("button", { name: "Control" }));
+  await fireEvent.changeText(
+    screen.getByLabelText("Type into the terminal"),
+    "c"
+  );
+  await fireEvent.press(screen.getByRole("button", { name: "Enter" }));
+  expect(native.input).toHaveBeenLastCalledWith(MAC, "s1", new Uint8Array([3]));
+  // Ctrl lets go after one key.
+  expect(
+    screen.getByRole("button", { name: "Control" }).props.accessibilityState
+  ).toMatchObject({ selected: false });
 });
 
 test("a lost link says so and typing is off", async () => {
@@ -176,7 +194,28 @@ test("a lost link says so and typing is off", async () => {
   expect(
     screen.getByText("Disconnected, reconnecting. Typing is off.")
   ).toBeOnTheScreen();
-  expect(injected).toContain("window.kriyon.typing(false);true;");
+  expect(screen.queryByLabelText("Type into the terminal")).toBeNull();
+});
+
+test("the page is told the phone's light or dark, and again when it loads again", async () => {
+  usePhone.setState({ states: { [MAC]: state({}, "you") } });
+  await render(<TerminalView hostId={MAC} sessionId="s1" />);
+  await pageReady();
+  await act(() => Promise.resolve());
+  expect(injected.some((code) => code.startsWith("window.kriyon.theme("))).toBe(
+    true
+  );
+  expect(native.setScreen).toHaveBeenCalledTimes(1);
+  injected.length = 0;
+  // iOS ended the page's process; it loaded again: a fresh screen, on the
+  // same open session.
+  await pageReady();
+  await act(() => Promise.resolve());
+  expect(native.setScreen).toHaveBeenCalledTimes(2);
+  expect(native.setScreen).toHaveBeenLastCalledWith(MAC, "s1", true);
+  expect(injected.some((code) => code.startsWith("window.kriyon.theme("))).toBe(
+    true
+  );
 });
 
 test("a note from the stream shows in the desktop's words", async () => {
@@ -223,22 +262,6 @@ test("a session that is gone offers no control", async () => {
   });
   await render(<TerminalView hostId={MAC} sessionId="s1" />);
   expect(screen.queryByRole("button", { name: "Take control" })).toBeNull();
-});
-
-test("a page that loads again gets the session afresh, and its typing state", async () => {
-  usePhone.setState({ states: { [MAC]: state({}, "you") } });
-  await render(<TerminalView hostId={MAC} sessionId="s1" />);
-  await pageReady();
-  await act(() => Promise.resolve());
-  expect(native.setScreen).toHaveBeenCalledTimes(1);
-  injected.length = 0;
-  // iOS ended the page's process; it loaded again: a fresh screen, on the
-  // same open session.
-  await pageReady();
-  await act(() => Promise.resolve());
-  expect(native.setScreen).toHaveBeenCalledTimes(2);
-  expect(native.setScreen).toHaveBeenLastCalledWith(MAC, "s1", true);
-  expect(injected).toContain("window.kriyon.typing(true);true;");
 });
 
 test("frames that pile up before the page loads are dropped for a fresh screen", async () => {

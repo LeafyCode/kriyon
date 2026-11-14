@@ -8,6 +8,7 @@ import {
 import { usePhone } from "../state/phone.ts";
 import { HomeScreen } from "./HomeScreen.tsx";
 import { PairScreen } from "./PairScreen.tsx";
+import { SettingsScreen } from "./SettingsScreen.tsx";
 
 jest.mock("../../modules/kriyon-native/index.ts", () => ({
   KriyonNative: {
@@ -22,7 +23,11 @@ jest.mock("../../modules/kriyon-native/index.ts", () => ({
   },
 }));
 
+jest.mock("./RelaySection.tsx", () => ({ RelaySection: () => null }));
+
 const native = jest.mocked(KriyonNative);
+const MORE = /\+1 more/;
+const ASKING = /^Asking/;
 const MAC = "ab".repeat(32);
 
 const paired: PairedHost = {
@@ -74,40 +79,165 @@ beforeEach(() => {
   usePhone.setState(usePhone.getInitialState());
 });
 
+const session = (
+  over: Partial<HostSummary["sessions"][number]>
+): HostSummary["sessions"][number] => ({
+  dialogOpen: false,
+  id: "s",
+  lastChangeMs: 0,
+  mayType: false,
+  needsYou: false,
+  projectId: "api",
+  standing: "idle",
+  status: "idle",
+  title: "A session",
+  typing: null,
+  ...over,
+});
+
 test("with no computer yet, home offers pairing", async () => {
   await render(<HomeScreen />);
   expect(screen.getByText("No computers yet.")).toBeOnTheScreen();
   await fireEvent.press(
-    screen.getByRole("button", { name: "Pair a computer" })
+    screen.getAllByRole("button", { name: "Pair a computer" })[0]
   );
   expect(usePhone.getState().screen).toEqual({ kind: "pair" });
 });
 
-test("home leads with what needs you, then each computer's sessions", async () => {
+test("home leads with the sessions at a glance and what needs you, in words", async () => {
   usePhone.setState({ hosts: [paired], states: { [MAC]: connected } });
   await render(<HomeScreen />);
+  expect(screen.getByText("sessions · 1 need you")).toBeOnTheScreen();
+  expect(
+    screen.getByLabelText("1 asking, 0 your turn, 1 running, 0 idle")
+  ).toBeOnTheScreen();
   expect(screen.getByText("Needs you")).toBeOnTheScreen();
-  // Once under Needs you, once under its computer.
-  expect(screen.getAllByText("Fix the build")).toHaveLength(2);
+  // Under Needs you only: its computer lists the rest.
+  expect(screen.getAllByText("Fix the build")).toHaveLength(1);
+  expect(screen.getByText(ASKING)).toBeOnTheScreen();
   expect(screen.getByText("Write the docs")).toBeOnTheScreen();
   expect(screen.getByText("Running")).toBeOnTheScreen();
-  await fireEvent.press(screen.getAllByText("Fix the build")[0]);
+  await fireEvent.press(screen.getByText("Fix the build"));
   expect(usePhone.getState().screen).toEqual({
     hostId: MAC,
     kind: "session",
     sessionId: "s1",
+    view: "readable",
   });
 });
 
-test("a computer that is away says so, and its sessions don't need you here", async () => {
+test("a question is answered in the terminal, with its first two options shown", async () => {
+  const question = {
+    options: ["Attach the listener", "Mock the network", "Retry"],
+    text: "Which fix do you want?",
+  };
+  usePhone.setState({
+    hosts: [paired],
+    states: {
+      [MAC]: {
+        ...connected,
+        sessions: [{ ...connected.sessions[0], question }],
+      },
+    },
+  });
+  await render(<HomeScreen />);
+  expect(screen.getByText("Which fix do you want?")).toBeOnTheScreen();
+  expect(screen.getByText(MORE)).toBeOnTheScreen();
+  expect(screen.queryByText("Retry")).toBeNull();
+  await fireEvent.press(
+    screen.getByRole("button", { name: "Answer in the terminal" })
+  );
+  expect(usePhone.getState().screen).toMatchObject({ view: "terminal" });
+});
+
+test("a turn waiting for you shows its summary and diff once the computer sends them", async () => {
+  const turn = session({
+    id: "t",
+    needsYou: true,
+    standing: "awaiting_input",
+    status: "waiting",
+    title: "Add rate limits",
+  });
+  usePhone.setState({
+    hosts: [paired],
+    states: { [MAC]: { ...connected, sessions: [turn] } },
+  });
+  const view = await render(<HomeScreen />);
+  expect(screen.getByText("Your turn")).toBeOnTheScreen();
+  expect(screen.queryByText("4 files")).toBeNull();
+  await view.unmount();
+  usePhone.setState({
+    states: {
+      [MAC]: {
+        ...connected,
+        sessions: [
+          {
+            ...turn,
+            diff: { added: 128, files: 4, removed: 31 },
+            turnSummary: "Added a token bucket per IP.",
+          },
+        ],
+      },
+    },
+  });
+  await render(<HomeScreen />);
+  expect(screen.getByText("Added a token bucket per IP.")).toBeOnTheScreen();
+  expect(screen.getByText("4 files")).toBeOnTheScreen();
+  expect(screen.getByText("+128")).toBeOnTheScreen();
+  await fireEvent.press(screen.getByRole("button", { name: "Reply" }));
+  expect(usePhone.getState().screen).toMatchObject({ sessionId: "t" });
+});
+
+test("a computer folds its idle sessions, and says what a running one runs", async () => {
+  usePhone.setState({
+    hosts: [paired],
+    states: {
+      [MAC]: {
+        ...connected,
+        sessions: [
+          session({
+            activity: "Bash · pnpm test",
+            id: "r",
+            standing: "running",
+            status: "running",
+            title: "Migrate auth",
+          }),
+          session({ id: "i1", title: "Old one" }),
+          session({ id: "i2", title: "Older one" }),
+        ],
+        usage: { resetsAtMs: null, usedPercent: 62, window: "5-hour window" },
+      },
+    },
+  });
+  await render(<HomeScreen />);
+  expect(screen.getByText("Bash · pnpm test")).toBeOnTheScreen();
+  expect(screen.getByLabelText("62 percent used")).toBeOnTheScreen();
+  expect(screen.queryByText("Old one")).toBeNull();
+  await fireEvent.press(
+    screen.getByRole("button", { name: "2 idle sessions" })
+  );
+  expect(screen.getByText("Old one")).toBeOnTheScreen();
+  expect(screen.getAllByText("Idle")).toHaveLength(2);
+});
+
+test("the filters show what needs you, or only what runs", async () => {
+  usePhone.setState({ hosts: [paired], states: { [MAC]: connected } });
+  await render(<HomeScreen />);
+  await fireEvent.press(screen.getByRole("tab", { name: "Running · 1" }));
+  expect(screen.queryByText("Fix the build")).toBeNull();
+  expect(screen.getByText("Write the docs")).toBeOnTheScreen();
+  await fireEvent.press(screen.getByRole("tab", { name: "Needs you · 1" }));
+  expect(screen.getByText("Fix the build")).toBeOnTheScreen();
+  expect(screen.queryByText("Write the docs")).toBeNull();
+});
+
+test("a computer that is away is dimmed, says so, and its sessions don't need you here", async () => {
   usePhone.setState({
     hosts: [paired],
     states: { [MAC]: { ...connected, link: "lost" } },
   });
   await render(<HomeScreen />);
-  expect(
-    screen.getByText("Disconnected, reconnecting. Typing is off.")
-  ).toBeOnTheScreen();
+  expect(screen.getByText("Reconnecting · Controller")).toBeOnTheScreen();
   expect(screen.queryByText("Needs you")).toBeNull();
 });
 
@@ -116,16 +246,37 @@ test("pairing takes the pasted code and shows the digits to type there", async (
   native.finishPairing.mockReturnValue(new Promise(() => undefined));
   usePhone.setState({ screen: { kind: "pair" } });
   await render(<PairScreen />);
+  expect(screen.getByLabelText("Step 1 of 2")).toBeOnTheScreen();
   await fireEvent.changeText(
     screen.getByLabelText("Pairing code from the computer"),
     "kriyon-pair:1:abc"
   );
   await fireEvent.press(screen.getByRole("button", { name: "Connect" }));
-  expect(await screen.findByText("123456")).toBeOnTheScreen();
+  expect(
+    await screen.findByLabelText("Pairing code 1 2 3 4 5 6")
+  ).toBeOnTheScreen();
+  expect(screen.getByLabelText("Step 2 of 2")).toBeOnTheScreen();
+  expect(screen.getByText("Waiting for the computer…")).toBeOnTheScreen();
+  // Not sent yet: nothing said about the role or when the code runs out.
+  expect(screen.queryByText("Role on this computer")).toBeNull();
   expect(native.pair).toHaveBeenCalledWith("kriyon-pair:1:abc");
   await fireEvent.press(screen.getByRole("button", { name: "Cancel" }));
   expect(native.cancelPairing).toHaveBeenCalled();
   expect(usePhone.getState().screen).toEqual({ kind: "home" });
+});
+
+test("the code step says the role and the time left once the computer sends them", async () => {
+  usePhone.setState({
+    pairing: {
+      code: "482913",
+      expiresAtMs: Date.now() + 252_000,
+      phase: "code",
+      role: "controller",
+    },
+  });
+  await render(<PairScreen />);
+  expect(screen.getByText("Controller")).toBeOnTheScreen();
+  expect(screen.getByText("Code expires in")).toBeOnTheScreen();
 });
 
 test("a failed pairing says why", async () => {
@@ -138,9 +289,10 @@ test("a failed pairing says why", async () => {
   ).toBeOnTheScreen();
 });
 
-test("home says where alerts stand", async () => {
+test("settings say where alerts stand, in a word and in full", async () => {
   usePhone.setState({ push: "unavailable: no aps-environment" });
-  await render(<HomeScreen />);
+  await render(<SettingsScreen />);
+  expect(screen.getByText("Unavailable")).toBeOnTheScreen();
   expect(
     screen.getByText("Alerts: unavailable: no aps-environment")
   ).toBeOnTheScreen();
@@ -148,15 +300,20 @@ test("home says where alerts stand", async () => {
 
 test("an Android build without Firebase says so in plain words", async () => {
   usePhone.setState({ push: "needs Firebase" });
-  await render(<HomeScreen />);
+  await render(<SettingsScreen />);
   expect(
     screen.getByText("Alerts need a Firebase setup on this build.")
   ).toBeOnTheScreen();
 });
 
-test("a computer can be forgotten from home", async () => {
-  usePhone.setState({ hosts: [paired], states: { [MAC]: connected } });
-  await render(<HomeScreen />);
+test("a computer can be forgotten from settings, and this phone's key shows", async () => {
+  usePhone.setState({
+    deviceId: "a09aa5f47a67beef",
+    hosts: [paired],
+    states: { [MAC]: connected },
+  });
+  await render(<SettingsScreen />);
+  expect(screen.getByText("a09a·a5f4·7a67")).toBeOnTheScreen();
   await fireEvent.press(screen.getByRole("button", { name: "Forget Mac" }));
   expect(native.forget).toHaveBeenCalledWith(MAC);
   expect(usePhone.getState().hosts).toEqual([]);

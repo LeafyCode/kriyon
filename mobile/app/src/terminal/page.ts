@@ -5,7 +5,7 @@
  * HTML string by scripts/terminal-page.mjs; never imported by the app.
  *
  * The app talks to it through `window.kriyon` (frames as base64, typing on
- * or off); it answers through React Native's message channel (what was
+ * or off, light or dark); it answers through React Native's message channel (what was
  * typed, a note to show, ready).
  */
 import { Unicode11Addon } from "@xterm/addon-unicode11";
@@ -16,12 +16,15 @@ import {
 } from "../../../../src/remote/remoteScreen.ts";
 import { terminalTheme } from "../../../../src/theme/terminalTheme.ts";
 import { steel } from "../../../../src/theme/themes/steel.ts";
+import { steelLight } from "../../../../src/theme/themes/steelLight.ts";
 import type { PageMessage } from "./protocol.ts";
 
 declare global {
   interface Window {
     kriyon: {
       frame: (base64: string) => void;
+      /** The phone's light or dark setting, and the screen's background. */
+      theme: (mode: "dark" | "light", background: string) => void;
       typing: (on: boolean) => void;
     };
     ReactNativeWebView?: { postMessage: (message: string) => void };
@@ -78,6 +81,13 @@ window.kriyon = {
     if (note) {
       post({ note, type: "note" });
     }
+  },
+  theme: (mode, background) => {
+    term.options.theme = {
+      ...terminalTheme(mode === "light" ? steelLight : steel),
+      background,
+    };
+    document.body.style.background = background;
   },
   typing: (on) => {
     term.options.disableStdin = !on;

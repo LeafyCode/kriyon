@@ -5,50 +5,64 @@
  * entries to read shows its terminal, saying why; Readable tries again.
  */
 import { useEffect, useState } from "react";
-import { Pressable, Text, View } from "react-native";
+import { Text, View } from "react-native";
+import type { SessionSummary } from "../../../../src/remote/hostSummary.ts";
+import { Pill, Segmented, TopBar, useLook } from "../kit.tsx";
+import { kindOf, type Tone } from "../state/home.ts";
 import { readableKey, usePhone } from "../state/phone.ts";
-import { colors, ui } from "../ui.ts";
 import { ReadableView } from "./ReadableView.tsx";
 import { TerminalView } from "./TerminalView.tsx";
 
 type View_ = "readable" | "terminal";
 
-function Tab({
-  label,
-  on,
-  onPress,
-}: {
-  label: string;
-  on: boolean;
-  onPress: () => void;
-}) {
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityState={{ selected: on }}
-      onPress={onPress}
-      style={{
-        borderBottomColor: on ? colors.accentBright : "transparent",
-        borderBottomWidth: 2,
-        paddingVertical: 6,
-      }}
-    >
-      <Text style={on ? ui.rowTitle : ui.hint}>{label}</Text>
-    </Pressable>
-  );
+/** The header's word for a session, as the design shows it. */
+const HEADER_WORDS: Record<
+  ReturnType<typeof kindOf>,
+  { label: string; tone: Tone }
+> = {
+  asking: { label: "Asking", tone: "amber" },
+  idle: { label: "Idle", tone: "plain" },
+  running: { label: "Running", tone: "blue" },
+  yourTurn: { label: "Your turn", tone: "green" },
+};
+
+/** The header's pill: in the terminal while this phone types, that. */
+function headerWord(
+  session: SessionSummary | undefined,
+  inTerminal: boolean
+): { label: string; tone: Tone } | null {
+  if (!session) {
+    return null;
+  }
+  if (inTerminal && session.mayType) {
+    return { label: "You're typing", tone: "green" };
+  }
+  return HEADER_WORDS[kindOf(session)];
 }
 
 export function SessionScreen({
   hostId,
   sessionId,
+  initialView = "readable",
 }: {
   hostId: string;
+  initialView?: View_;
   sessionId: string;
 }) {
-  const [view, setView] = useState<View_>("readable");
+  const { t, text } = useLook();
+  const [view, setView] = useState<View_>(initialView);
   const session = usePhone((state) =>
     state.states[hostId]?.sessions.find((one) => one.id === sessionId)
   );
+  const place = usePhone((state) => {
+    const summary = state.states[hostId];
+    const name =
+      summary?.hostName || state.hosts.find((h) => h.hostId === hostId)?.name;
+    const project = summary?.projects.find(
+      (p) => p.id === session?.projectId
+    )?.name;
+    return [name, project].filter(Boolean).join(" · ");
+  });
   // Why there are no entries: the terminal shows instead.
   const unavailable = usePhone(
     (state) => state.readable[readableKey(hostId, sessionId)]?.unavailable
@@ -72,31 +86,44 @@ export function SessionScreen({
     () => () => usePhone.getState().forgetReadable(hostId, sessionId),
     [hostId, sessionId]
   );
+  const word = headerWord(session, !readable);
   return (
-    <View style={[ui.screen, { gap: 12, padding: 16 }]}>
-      <Pressable
-        accessibilityRole="button"
-        onPress={() => show({ kind: "home" })}
+    <View style={{ backgroundColor: t.bg, flex: 1 }}>
+      <View
+        style={{
+          backgroundColor: t.rail,
+          borderBottomColor: t.overlay,
+          borderBottomWidth: 1,
+          gap: 10,
+          paddingBottom: 10,
+          paddingHorizontal: 8,
+          paddingTop: 4,
+        }}
       >
-        <Text style={ui.ghostButtonText}>‹ Back</Text>
-      </Pressable>
-      <Text numberOfLines={1} style={ui.title}>
-        {session?.title ?? "Session"}
-      </Text>
-      <View style={{ flexDirection: "row", gap: 18 }}>
-        <Tab
-          label="Readable"
-          on={readable}
-          onPress={() => {
-            retryReadable(hostId, sessionId);
-            setView("readable");
-          }}
+        <TopBar
+          back={() => show({ kind: "home" })}
+          right={
+            word ? <Pill label={word.label} tone={word.tone} /> : undefined
+          }
+          subtitle={place || undefined}
+          title={session?.title ?? "Session"}
         />
-        <Tab
-          label="Terminal"
-          on={!readable}
-          onPress={() => setView("terminal")}
-        />
+        <View style={{ paddingHorizontal: 8 }}>
+          <Segmented
+            label="View"
+            onChange={(next) => {
+              if (next === "readable") {
+                retryReadable(hostId, sessionId);
+              }
+              setView(next);
+            }}
+            options={[
+              { label: "Readable", value: "readable" },
+              { label: "Terminal", value: "terminal" },
+            ]}
+            value={readable ? "readable" : "terminal"}
+          />
+        </View>
       </View>
       {readable ? (
         <ReadableView
@@ -108,7 +135,9 @@ export function SessionScreen({
       ) : (
         <>
           {view === "readable" && unavailable ? (
-            <Text style={ui.hint}>{unavailable}</Text>
+            <Text style={[text.caption, { color: t.ink2, padding: 16 }]}>
+              {unavailable}
+            </Text>
           ) : null}
           <TerminalView hostId={hostId} sessionId={sessionId} />
         </>

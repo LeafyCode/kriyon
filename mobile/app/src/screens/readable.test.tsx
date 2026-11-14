@@ -30,7 +30,6 @@ const MAC = "ab".repeat(32);
 const STILL_WRITING = /^The form sends too early/;
 const ENTRY = /^entry-/;
 const FIX_IT = /Yes, fix it/;
-const NEEDS_YOU = /Needs you/;
 const YES = /Yes$/;
 
 const host = (needsYou: boolean): HostSummary => ({
@@ -115,10 +114,10 @@ test("a session opens on its readable view, which reads its entries", async () =
 test("switching to the terminal and back keeps the session open", async () => {
   await render(<SessionScreen hostId={MAC} sessionId="s1" />);
   await act(() => send(CONVERSATION));
-  await fireEvent.press(screen.getByRole("button", { name: "Terminal" }));
+  await fireEvent.press(screen.getByRole("tab", { name: "Terminal" }));
   await act(() => Promise.resolve());
   expect(native.setScreen).toHaveBeenLastCalledWith(MAC, "s1", true);
-  await fireEvent.press(screen.getByRole("button", { name: "Readable" }));
+  await fireEvent.press(screen.getByRole("tab", { name: "Readable" }));
   await act(() => Promise.resolve());
   expect(native.setScreen).toHaveBeenLastCalledWith(MAC, "s1", false);
   expect(native.openSession).toHaveBeenCalledTimes(1);
@@ -189,17 +188,27 @@ test("no entries: the terminal, with why; Readable tries again", async () => {
   expect(screen.getByText("The Kriyon Companion is off.")).toBeOnTheScreen();
   expect(screen.getByTestId("terminal-page")).toBeOnTheScreen();
   native.readEntries.mockClear();
-  await fireEvent.press(screen.getByRole("button", { name: "Readable" }));
+  await fireEvent.press(screen.getByRole("tab", { name: "Readable" }));
   await act(() => Promise.resolve());
   expect(screen.queryByTestId("terminal-page")).toBeNull();
   expect(native.readEntries).toHaveBeenCalledWith(MAC, "s1");
 });
 
-test("what the session needs from you shows on top", async () => {
+test("what the session needs from you shows on top, in a word", async () => {
   await render(<SessionScreen hostId={MAC} sessionId="s1" />);
-  expect(screen.getByText("Needs you · Awaiting input")).toBeOnTheScreen();
+  expect(screen.getByText("Asking")).toBeOnTheScreen();
+  expect(screen.getByText("Mac")).toBeOnTheScreen();
   await act(() => usePhone.getState().hostChanged(host(false)));
-  expect(screen.queryByText(NEEDS_YOU)).toBeNull();
+  expect(screen.queryByText("Asking")).toBeNull();
+  expect(screen.getByText("Running")).toBeOnTheScreen();
+});
+
+test("while Claude asks, the message bar says to answer in the terminal", async () => {
+  await render(<SessionScreen hostId={MAC} sessionId="s1" />);
+  expect(
+    screen.getByText("Typing is off while Claude asks. Answer in the terminal.")
+  ).toBeOnTheScreen();
+  expect(screen.getByLabelText("Message").props.editable).toBe(false);
 });
 
 test("a session that can't be opened says so on its readable view", async () => {

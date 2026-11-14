@@ -25,6 +25,8 @@ jest.mock("../../modules/kriyon-native/index.ts", () => ({
   },
 }));
 
+const SAME_ACCOUNT = /Sign in with the same account on your computer\./;
+const MANAGED_THERE = /^Subscriptions are managed on your computer\./;
 const native = jest.mocked(KriyonNative);
 const BUY = /Subscribe|Manage/;
 const ACTIVE = /^Active, renews automatically/;
@@ -67,9 +69,7 @@ test("signing in shows the code, opens the browser and waits", async () => {
   expect(await screen.findByText("ABCD1234")).toBeOnTheScreen();
   expect(opened).toHaveBeenCalledWith("https://web.test/device?code=ABCD1234");
   expect(native.relayWaitSignIn).toHaveBeenCalled();
-  expect(
-    screen.getByText("Sign in with the same account on your computer.")
-  ).toBeOnTheScreen();
+  expect(screen.getByText(SAME_ACCOUNT)).toBeOnTheScreen();
 });
 
 test("signed in, it shows the subscription only, with no way to buy", async () => {
@@ -84,9 +84,7 @@ test("signed in, it shows the subscription only, with no way to buy", async () =
   await render(<RelaySection />);
   expect(await screen.findByText("No subscription yet.")).toBeOnTheScreen();
   expect(screen.queryByText(BUY)).toBeNull();
-  expect(
-    screen.getByText("Subscriptions are managed on your computer.")
-  ).toBeOnTheScreen();
+  expect(screen.getByText(MANAGED_THERE)).toBeOnTheScreen();
 });
 
 test("turning the relay off asks Rust, and a refusal shows in its words", async () => {

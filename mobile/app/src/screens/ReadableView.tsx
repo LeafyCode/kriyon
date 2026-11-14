@@ -1,46 +1,45 @@
 /**
  * A session's readable view: what the desktop's Structured view shows, at
- * phone width, from the entries Rust reads off the computer. It only reads:
- * Claude's questions are answered in the terminal. It never touches the
- * terminal's size.
+ * phone width, in the mobile design's look, from the entries Rust reads off
+ * the computer. Claude's questions are answered in the terminal: their
+ * options are shown, never buttons. While this phone holds control, a
+ * message typed below goes to Claude, as typed into the terminal. It never
+ * touches the terminal's size.
  */
-import { type ComponentRef, useRef } from "react";
-import { Platform, Pressable, ScrollView, Text, View } from "react-native";
+import { type ComponentRef, useRef, useState } from "react";
+import { ScrollView, Text, TextInput, View } from "react-native";
 import type {
   ShownEntry,
   ShownKind,
 } from "../../../../src/remote/readableSummary.ts";
-import { readableKey, standingMeta, usePhone } from "../state/phone.ts";
-import { colors, ui } from "../ui.ts";
+import { KriyonNative } from "../../modules/kriyon-native/index.ts";
+import { Button, Icon, IconButton, useLook } from "../kit.tsx";
+import { typedLine } from "../state/keys.ts";
+import { readableKey, usePhone } from "../state/phone.ts";
+import { fonts, type Tokens } from "../theme.ts";
 
 /** How near the bottom still counts as following the newest entry. */
 const FOLLOW_SLACK = 48;
 
 type StepState = Extract<ShownKind, { kind: "step" }>["state"];
 
-const mono = Platform.select({ android: "monospace", default: "Menlo" });
-
-/** `hex` (#rrggbb) at `alpha`, as the desktop's accent washes. */
-function wash(hex: string, alpha: number): string {
-  const byte = Math.round(alpha * 255)
-    .toString(16)
-    .padStart(2, "0");
-  return `${hex}${byte}`;
+/** A step's mark, its colour and the word a screen reader says for it. */
+function stepLook(
+  t: Tokens
+): Record<StepState, { color: string; mark: string; word: string }> {
+  return {
+    done: { color: t.green, mark: "✓", word: "Done" },
+    failed: { color: t.red, mark: "✕", word: "Failed" },
+    running: { color: t.accentBright, mark: "●", word: "Running" },
+  };
 }
 
-/** A step's mark and colour, as the desktop's step list shows them. */
-const STEP_LOOK: Record<StepState, { color: string; mark: string }> = {
-  done: { color: colors.statusDone, mark: "✓" },
-  failed: { color: colors.statusError, mark: "✕" },
-  running: { color: colors.statusRunning, mark: "●" },
-};
-
 /** A report's outcome colour: finished and failed as the desktop's. */
-function outcomeColor(outcome: string): string {
+function outcomeColor(t: Tokens, outcome: string): string {
   if (outcome === "Finished") {
-    return colors.statusDone;
+    return t.greenInk;
   }
-  return outcome === "Failed" ? colors.statusError : colors.inkMuted;
+  return outcome === "Failed" ? t.red : t.ink2;
 }
 
 function Entry({
@@ -50,6 +49,7 @@ function Entry({
   entry: ShownEntry;
   onAnswer: () => void;
 }) {
+  const { t, text } = useLook();
   const id = `entry-${entry.seq}`;
   switch (entry.kind) {
     case "you":
@@ -58,62 +58,54 @@ function Entry({
           accessibilityLabel="Your prompt"
           style={{
             alignSelf: "flex-end",
-            backgroundColor: wash(colors.accent, 0.1),
+            backgroundColor: t.accentSoft,
             borderBottomRightRadius: 4,
-            borderColor: wash(colors.accent, 0.22),
-            borderRadius: 14,
+            borderColor: t.accentLine,
+            borderRadius: 16,
             borderWidth: 1,
-            maxWidth: "85%",
-            paddingHorizontal: 12,
-            paddingVertical: 8,
+            maxWidth: "82%",
+            paddingHorizontal: 14,
+            paddingVertical: 10,
           }}
           testID={id}
         >
-          <Text
-            style={{ color: colors.inkBright, fontSize: 15, lineHeight: 21 }}
-          >
-            {entry.text}
-          </Text>
+          <Text style={text.body}>{entry.text}</Text>
         </View>
       );
     case "claude":
       return (
-        <View accessibilityLabel="Claude" style={{ gap: 4 }} testID={id}>
-          <Text style={{ color: colors.inkSecondary, fontSize: 12 }}>
-            <Text style={{ color: colors.accentBright }}>✻ </Text>
-            Claude
-          </Text>
-          <Text
-            style={{ color: colors.inkPrimary, fontSize: 15, lineHeight: 22 }}
-          >
+        <View
+          accessibilityLabel="Claude"
+          style={{ flexDirection: "row", gap: 10 }}
+          testID={id}
+        >
+          <Text style={[text.body, { color: t.accentBright }]}>✻</Text>
+          <Text style={[text.body, { flex: 1, lineHeight: 22 }]}>
             {entry.text}
             {entry.done ? null : (
-              <Text style={{ color: colors.accentBright }}> ▍</Text>
+              <Text style={{ color: t.accentBright }}> ▍</Text>
             )}
           </Text>
         </View>
       );
     case "step": {
-      const look = STEP_LOOK[entry.state] ?? STEP_LOOK.running;
+      const looks = stepLook(t);
+      const look = looks[entry.state] ?? looks.running;
       return (
         <View
-          style={{ alignItems: "center", flexDirection: "row", gap: 8 }}
+          style={{ flexDirection: "row", gap: 8, paddingLeft: 24 }}
           testID={id}
         >
-          <Text style={{ color: look.color, fontSize: 12, width: 14 }}>
+          <Text
+            accessibilityLabel={look.word}
+            style={[text.mono, { color: look.color, fontSize: 12.5 }]}
+          >
             {look.mark}
           </Text>
-          <Text style={{ color: colors.inkSecondary, fontSize: 13 }}>
-            {entry.name}
-          </Text>
+          <Text style={[text.mono, { fontSize: 12.5 }]}>{entry.name}</Text>
           <Text
             numberOfLines={1}
-            style={{
-              color: colors.inkMuted,
-              flex: 1,
-              fontFamily: mono,
-              fontSize: 12,
-            }}
+            style={[text.mono, { flex: 1, fontSize: 12.5 }]}
           >
             {entry.target}
           </Text>
@@ -124,76 +116,91 @@ function Entry({
       return (
         <View
           style={{
-            backgroundColor: colors.surface1,
-            borderColor: colors.lineSoft,
-            borderRadius: 10,
+            backgroundColor: t.card,
+            borderColor: t.lineSoft,
+            borderRadius: 14,
             borderWidth: 1,
             gap: 4,
-            paddingHorizontal: 12,
-            paddingVertical: 8,
+            paddingHorizontal: 14,
+            paddingVertical: 10,
           }}
           testID={id}
         >
-          <Text style={{ color: outcomeColor(entry.outcome), fontSize: 12 }}>
+          <Text
+            style={{
+              color: outcomeColor(t, entry.outcome),
+              fontFamily: fonts.medium,
+              fontSize: 12,
+            }}
+          >
             {entry.outcome}
           </Text>
-          <Text
-            style={{ color: colors.inkPrimary, fontSize: 14, lineHeight: 20 }}
-          >
-            {entry.summary}
-          </Text>
+          <Text style={text.body}>{entry.summary}</Text>
         </View>
       );
     case "asking":
       return (
         <View
+          accessibilityLabel="Claude is asking"
           style={{
-            borderColor: colors.statusWaiting,
-            borderRadius: 10,
+            backgroundColor: t.amberSoft,
+            borderColor: t.amberLine,
+            borderRadius: 14,
             borderWidth: 1,
-            gap: 8,
-            padding: 12,
+            gap: 12,
+            marginTop: 4,
+            padding: 16,
           }}
           testID={id}
         >
-          {entry.header ? (
-            <Text style={{ color: colors.statusWaiting, fontSize: 12 }}>
-              {entry.header}
+          <View style={{ alignItems: "center", flexDirection: "row", gap: 8 }}>
+            <Icon color={t.amberInk} name="question" size={14} />
+            <Text style={[text.label, { color: t.amberInk, flexShrink: 1 }]}>
+              {entry.header
+                ? `Claude is asking · ${entry.header}`
+                : "Claude is asking"}
             </Text>
+          </View>
+          <Text style={[text.title, { lineHeight: 22 }]}>{entry.question}</Text>
+          {entry.options.length > 0 ? (
+            <View style={{ gap: 6 }}>
+              {entry.options.map((option, index) => (
+                <View
+                  // Two options can read the same: their place tells them apart.
+                  // biome-ignore lint/suspicious/noArrayIndexKey: options never move
+                  key={index}
+                  style={{
+                    backgroundColor: t.amberWell,
+                    borderColor: t.amberWellLine,
+                    borderRadius: 10,
+                    borderWidth: 1,
+                    paddingHorizontal: 12,
+                    paddingVertical: 10,
+                  }}
+                >
+                  <Text style={[text.bodyMuted, { color: t.ink1 }]}>
+                    <Text style={{ color: t.amberInk, fontFamily: fonts.mono }}>
+                      {index + 1}
+                    </Text>
+                    {`  ${option}`}
+                  </Text>
+                </View>
+              ))}
+            </View>
           ) : null}
-          <Text
-            style={{ color: colors.inkBright, fontSize: 15, lineHeight: 21 }}
-          >
-            {entry.question}
-          </Text>
-          {entry.options.map((option, index) => (
-            <Text
-              // Two options can read the same: their place tells them apart.
-              // biome-ignore lint/suspicious/noArrayIndexKey: options never move
-              key={index}
-              style={{ color: colors.inkSecondary, fontSize: 14 }}
-            >
-              · {option}
-            </Text>
-          ))}
-          <Pressable
-            accessibilityRole="button"
+          <Button
+            icon="arrowRight"
+            kind="amber"
+            label="Answer in the terminal"
             onPress={onAnswer}
-            style={ui.ghostButton}
-          >
-            <Text style={ui.ghostButtonText}>Answer in the terminal</Text>
-          </Pressable>
+            wide
+          />
         </View>
       );
     case "note":
       return (
         <Text
-          style={{
-            color: colors.inkMuted,
-            fontSize: 12,
-            fontStyle: "italic",
-            textAlign: "center",
-          }}
+          style={[text.caption, { fontStyle: "italic", textAlign: "center" }]}
           testID={id}
         >
           {entry.text}
@@ -202,6 +209,110 @@ function Entry({
     default:
       return null;
   }
+}
+
+/** Why the message bar can't send now, or `null` when it can. */
+function composeLine(
+  asking: boolean,
+  controller: boolean,
+  mayType: boolean
+): string | null {
+  if (asking) {
+    return "Typing is off while Claude asks. Answer in the terminal.";
+  }
+  if (!controller) {
+    return "This phone may only watch.";
+  }
+  return mayType
+    ? null
+    : "Take control in the terminal to write to Claude here.";
+}
+
+/** The bar below: a message to Claude while this phone holds control. */
+function Compose({
+  asking,
+  hostId,
+  sessionId,
+}: {
+  asking: boolean;
+  hostId: string;
+  sessionId: string;
+}) {
+  const { t, text } = useLook();
+  const [message, setMessage] = useState("");
+  const [problem, setProblem] = useState<string | null>(null);
+  const summary = usePhone((state) => state.states[hostId]);
+  const session = summary?.sessions.find((one) => one.id === sessionId);
+  const mayType = Boolean(session?.mayType) && !asking;
+  const line = composeLine(
+    asking,
+    summary?.role === "controller",
+    Boolean(session?.mayType)
+  );
+  const send = () => {
+    if (!(mayType && message.trim())) {
+      return;
+    }
+    KriyonNative.input(hostId, sessionId, typedLine(message, false))
+      .then(() => setMessage(""))
+      .catch((error: unknown) =>
+        setProblem(error instanceof Error ? error.message : String(error))
+      );
+  };
+  return (
+    <View
+      style={{
+        backgroundColor: t.rail,
+        borderTopColor: t.overlay,
+        borderTopWidth: 1,
+        gap: 8,
+        paddingHorizontal: 12,
+        paddingVertical: 10,
+      }}
+    >
+      {line ? (
+        <Text style={[text.caption, { color: t.ink2, paddingHorizontal: 4 }]}>
+          {line}
+        </Text>
+      ) : null}
+      {problem ? (
+        <Text style={[text.caption, { color: t.red, paddingHorizontal: 4 }]}>
+          {problem}
+        </Text>
+      ) : null}
+      <View style={{ alignItems: "center", flexDirection: "row", gap: 8 }}>
+        <TextInput
+          accessibilityLabel="Message"
+          editable={mayType}
+          onChangeText={setMessage}
+          onSubmitEditing={send}
+          placeholder="Message Claude…"
+          placeholderTextColor={t.muted}
+          returnKeyType="send"
+          style={{
+            backgroundColor: t.card,
+            borderColor: t.line,
+            borderRadius: 22,
+            borderWidth: 1,
+            color: mayType ? t.ink : t.muted,
+            flex: 1,
+            fontFamily: fonts.regular,
+            fontSize: 15,
+            minHeight: 44,
+            paddingHorizontal: 14,
+          }}
+          value={message}
+        />
+        <IconButton
+          color={mayType ? t.onAccent : t.muted}
+          icon="send"
+          label="Send"
+          onPress={send}
+          tint={mayType ? t.accent : t.overlay}
+        />
+      </View>
+    </View>
+  );
 }
 
 export function ReadableView({
@@ -217,43 +328,26 @@ export function ReadableView({
   onAnswer: () => void;
   sessionId: string;
 }) {
+  const { t, text } = useLook();
   const summary = usePhone(
     (state) => state.readable[readableKey(hostId, sessionId)]
   );
-  const session = usePhone((state) =>
-    state.states[hostId]?.sessions.find((one) => one.id === sessionId)
+  const dialogOpen = usePhone(
+    (state) =>
+      state.states[hostId]?.sessions.find((one) => one.id === sessionId)
+        ?.dialogOpen
   );
   const scroll = useRef<ComponentRef<typeof ScrollView>>(null);
   // Following the newest entry, until the person scrolls up to read.
   const following = useRef(true);
 
-  const needs = session?.needsYou
-    ? standingMeta(session.standing, colors)
-    : null;
+  const asking =
+    Boolean(dialogOpen) || summary?.entries.at(-1)?.kind === "asking";
   return (
-    <View style={{ flex: 1, gap: 10 }}>
-      {needs ? (
-        <View style={{ alignItems: "center", flexDirection: "row", gap: 8 }}>
-          <View
-            style={{
-              backgroundColor: needs.color,
-              borderRadius: 4,
-              height: 8,
-              width: 8,
-            }}
-          />
-          <Text style={{ color: needs.color, fontSize: 13 }}>
-            {`Needs you · ${needs.label}`}
-          </Text>
-        </View>
-      ) : null}
-      {note ? <Text style={ui.hint}>{note}</Text> : null}
-      {summary || note ? null : <Text style={ui.hint}>Reading…</Text>}
-      {summary && summary.entries.length === 0 ? (
-        <Text style={ui.hint}>Nothing to read yet.</Text>
-      ) : null}
+    <View style={{ backgroundColor: t.bg, flex: 1 }}>
       <ScrollView
-        contentContainerStyle={{ gap: 14, paddingBottom: 16 }}
+        accessibilityLabel="Conversation"
+        contentContainerStyle={{ gap: 14, padding: 16 }}
         // The newest entry stays in view as entries come, as on the desktop,
         // unless the person scrolled up to read.
         onContentSizeChange={() => {
@@ -270,10 +364,16 @@ export function ReadableView({
         ref={scroll}
         scrollEventThrottle={100}
       >
+        {note ? <Text style={text.caption}>{note}</Text> : null}
+        {summary || note ? null : <Text style={text.caption}>Reading…</Text>}
+        {summary && summary.entries.length === 0 ? (
+          <Text style={text.caption}>Nothing to read yet.</Text>
+        ) : null}
         {summary?.entries.map((entry) => (
           <Entry entry={entry} key={entry.seq} onAnswer={onAnswer} />
         ))}
       </ScrollView>
+      <Compose asking={asking} hostId={hostId} sessionId={sessionId} />
     </View>
   );
 }

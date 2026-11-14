@@ -48,7 +48,7 @@ test("the app starts Rust once, listens for its computers and opens on home", as
     "onHostChanged",
     expect.any(Function)
   );
-  expect(screen.getByText("Kriyon")).toBeOnTheScreen();
+  expect(screen.getByText("Sessions")).toBeOnTheScreen();
 });
 
 test("what Rust says about a computer reaches the store", async () => {

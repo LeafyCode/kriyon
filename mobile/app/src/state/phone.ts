@@ -2,11 +2,8 @@ import { create } from "zustand";
 import {
   type HostSummary,
   pairingCodeFrom,
-  standingLabel,
 } from "../../../../src/remote/hostSummary.ts";
 import type { ReadableSummary } from "../../../../src/remote/readableSummary.ts";
-import type { ThemeColors } from "../../../../src/theme/themes/types.ts";
-import type { StandingState } from "../../../../src/types.ts";
 import {
   type EntriesChangedEvent,
   KriyonNative,
@@ -18,14 +15,28 @@ import { type PushStatus, registerPush } from "./push.ts";
 export type Screen =
   | { kind: "home" }
   | { kind: "pair" }
+  | { kind: "settings" }
   | { hostId: string; kind: "new" }
-  | { hostId: string; kind: "session"; sessionId: string };
+  | {
+      hostId: string;
+      kind: "session";
+      sessionId: string;
+      /** Which view opens first; Readable unless said. */
+      view?: "readable" | "terminal";
+    };
 
 /** Where a pairing started here stands. */
 export type Pairing =
   | { phase: "idle" }
   | { phase: "working" }
-  | { code: string; phase: "code" }
+  | {
+      code: string;
+      /** When the code stops working (Unix ms); not sent yet. */
+      expiresAtMs?: number | null;
+      phase: "code";
+      /** The role the computer offered this phone; not sent yet. */
+      role?: "viewer" | "controller" | null;
+    }
   | { name: string; phase: "paired" }
   | { phase: "failed"; reason: string };
 
@@ -315,30 +326,6 @@ export const usePhone = create<PhoneStore>((set, get) => ({
   startError: null,
   states: {},
 }));
-
-/**
- * A standing's label and dot colour, in the desktop's words (its
- * `standingMeta`) and the theme's status colours. Anything unknown reads as
- * Unknown, never as Idle.
- */
-export function standingMeta(
-  standing: StandingState,
-  colors: ThemeColors
-): { color: string; label: string } {
-  const label = standingLabel(standing);
-  switch (standing) {
-    case "running":
-      return { color: colors.statusRunning, label };
-    case "awaiting_input":
-      return { color: colors.statusWaiting, label };
-    case "changed":
-      return { color: colors.statusDone, label };
-    case "idle":
-      return { color: colors.statusIdle, label };
-    default:
-      return { color: colors.inkFaint, label };
-  }
-}
 
 /**
  * Bytes as base64, for the terminal page: a script can carry only text.

@@ -5,7 +5,7 @@ import {
   requestPermissionsAsync,
 } from "expo-notifications";
 import { KriyonNative } from "../../modules/kriyon-native/index.ts";
-import { pushLine, registerPush } from "./push.ts";
+import { alertsWord, pushLine, registerPush } from "./push.ts";
 
 jest.mock("expo-notifications", () => ({
   addPushTokenListener: jest.fn(() => ({ remove: jest.fn() })),
@@ -104,4 +104,22 @@ test("the alerts line is in plain words", () => {
   );
   expect(pushLine("on")).toBe("Alerts: on");
   expect(pushLine("not allowed")).toBe("Alerts: not allowed");
+});
+
+test("alerts say where they stand in a word", () => {
+  expect(alertsWord("on")).toEqual({ label: "On", tone: "green" });
+  expect(alertsWord("off")).toEqual({ label: "Off", tone: "plain" });
+  expect(alertsWord("not allowed")).toEqual({
+    label: "Not allowed",
+    tone: "amber",
+  });
+  expect(alertsWord("needs Firebase")).toEqual({
+    label: "Needs setup",
+    tone: "amber",
+  });
+  expect(alertsWord("unavailable: no aps-environment")).toEqual({
+    label: "Unavailable",
+    tone: "amber",
+  });
+  expect(alertsWord(null)).toEqual({ label: "Checking…", tone: "plain" });
 });

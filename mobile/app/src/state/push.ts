@@ -46,6 +46,27 @@ async function give(token: DevicePushToken): Promise<PushStatus> {
 
 let renewals: EventSubscription | null = null;
 
+/** Where alerts stand, in a word for Settings' row. */
+export function alertsWord(status: PushStatus | null): {
+  label: string;
+  tone: "amber" | "green" | "plain";
+} {
+  switch (status) {
+    case null:
+      return { label: "Checking…", tone: "plain" };
+    case "on":
+      return { label: "On", tone: "green" };
+    case "off":
+      return { label: "Off", tone: "plain" };
+    case "not allowed":
+      return { label: "Not allowed", tone: "amber" };
+    case "needs Firebase":
+      return { label: "Needs setup", tone: "amber" };
+    default:
+      return { label: "Unavailable", tone: "amber" };
+  }
+}
+
 /** The alerts line on Home. */
 export function pushLine(status: PushStatus): string {
   return status === "needs Firebase"
