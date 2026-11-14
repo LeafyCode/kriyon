@@ -263,7 +263,7 @@ impl MobileDevice {
         let me = self.id();
         Ok(RelayAccount {
             state: status.subscription.as_ref().map(|one| one.state.clone()),
-            paid_until: status.subscription.map(|one| one.paid_until),
+            paid_until: status.subscription.and_then(|one| one.paid_until),
             blocked: status.blocked,
             devices: status
                 .devices

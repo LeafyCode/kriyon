@@ -67,7 +67,9 @@ pub struct Subscription {
     /// `pending | active | past_due | canceled | expired`.
     pub state: String,
     pub plan: String,
-    pub paid_until: String,
+    /// None while a subscription is pending (not paid yet).
+    #[serde(default)]
+    pub paid_until: Option<String>,
 }
 
 /// `GET /status`.
@@ -156,6 +158,10 @@ impl RelayApi {
         let status = reply.status();
         let bytes = reply.bytes().await.map_err(unreachable)?;
         if status.is_success() {
+            // A success with no body (204): there is no data to read.
+            if bytes.is_empty() {
+                return serde_json::from_slice::<T>(b"null").map_err(unreachable);
+            }
             return serde_json::from_slice::<Envelope<T>>(&bytes)
                 .map(|envelope| envelope.data)
                 .map_err(unreachable);
@@ -532,5 +538,43 @@ mod tests {
     fn an_api_that_is_not_there_is_unreachable_not_a_refusal() {
         let api = RelayApi::new("http://127.0.0.1:1", DESKTOP_CLIENT_ID).expect("api");
         assert!(matches!(run(api.status()), Err(ApiError::Unreachable(_))));
+    }
+
+    /// Found against `BisBig`'s real API: removing a device answers 204 with
+    /// no body, which read as "unreachable".
+    #[test]
+    fn removing_a_device_accepts_an_empty_204() {
+        let (base, _) = fake_api(|_, _| (204, String::new()));
+        run(async {
+            let api = RelayApi::new(&base, DESKTOP_CLIENT_ID)
+                .expect("api")
+                .signed_in("tok");
+            assert_eq!(
+                api.remove_device("2b1c7a4e-0000-4000-8000-000000000001")
+                    .await,
+                Ok(())
+            );
+        });
+    }
+
+    /// Found against `BisBig`'s real API: a pending subscription has no
+    /// paid-until date yet, which made the whole status unreadable.
+    #[test]
+    fn a_pending_subscription_without_a_paid_until_date_reads() {
+        let (base, _) = fake_api(|_, _| {
+            (
+                200,
+                r#"{"data":{"subscription":{"state":"pending","plan":"monthly","paidUntil":null},"devices":[],"deviceLimit":10,"blocked":false},"meta":{}}"#.into(),
+            )
+        });
+        run(async {
+            let api = RelayApi::new(&base, DESKTOP_CLIENT_ID)
+                .expect("api")
+                .signed_in("tok");
+            let status = api.status().await.expect("status reads");
+            let sub = status.subscription.expect("a subscription");
+            assert_eq!(sub.state, "pending");
+            assert_eq!(sub.paid_until, None);
+        });
     }
 }

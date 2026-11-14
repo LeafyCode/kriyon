@@ -1954,7 +1954,8 @@ export interface RelayAccount {
   deviceLimit: number;
   devices: RelayDevice[];
   subscription: {
-    paidUntil: string;
+    /** Null while the first payment is pending. */
+    paidUntil: string | null;
     plan: string;
     state: RelaySubscriptionState;
   } | null;
