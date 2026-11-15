@@ -360,12 +360,21 @@ test("while Claude asks, its choices answer it, each by its number key", async (
   );
 });
 
-test("a permission prompt, its choices unnamed, offers the first numbers", async () => {
+test("a prompt whose choices aren't known is answered by arrows and Enter", async () => {
+  // A number would pick a line the person can't name (in Claude's folder
+  // trust prompt, 1 is "No, exit"): the highlight on screen shows instead.
   usePhone.setState({ states: { [MAC]: asking([]) } });
   await render(<TerminalView hostId={MAC} sessionId="s1" />);
-  for (const name of ["1", "2", "3", "Esc"]) {
+  for (const name of ["↑", "↓", "Enter", "Esc"]) {
     expect(screen.getByRole("button", { name })).toBeOnTheScreen();
   }
+  expect(screen.queryByRole("button", { name: "1" })).toBeNull();
+  await fireEvent.press(screen.getByRole("button", { name: "↓" }));
+  expect(native.input).toHaveBeenLastCalledWith(
+    MAC,
+    "s1",
+    new TextEncoder().encode("\u001b[B")
+  );
 });
 
 test("a Viewer is never offered an answer", async () => {

@@ -125,7 +125,12 @@ export function SessionScreen({
         </View>
       </View>
       {readable ? (
-        <ReadableView hostId={hostId} note={note} sessionId={sessionId} />
+        <ReadableView
+          hostId={hostId}
+          note={note}
+          onTerminal={() => setView("terminal")}
+          sessionId={sessionId}
+        />
       ) : (
         <>
           {view === "readable" && unavailable ? (

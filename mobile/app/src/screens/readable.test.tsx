@@ -425,9 +425,11 @@ test("the bar's words follow the computer: none when it says this phone may comp
   expect(screen.getByLabelText("Message").props.editable).toBe(true);
 });
 
-test("a question with nothing to read (a permission prompt) still gets its answer card", async () => {
+test("a question with nothing to read (a permission prompt) still gets its card, answered in the terminal", async () => {
   // Seen on the Android emulator: Claude's folder-trust prompt has no
   // readable entry, yet the bar said "Pick an answer above" over nothing.
+  // Its choices aren't known, so it is answered by arrows, which need the
+  // highlighted line in view: the card leads to the terminal.
   usePhone.setState({ states: { [MAC]: asController(true) } });
   await render(<SessionScreen hostId={MAC} sessionId="s1" />);
   await act(() =>
@@ -437,9 +439,11 @@ test("a question with nothing to read (a permission prompt) still gets its answe
     })
   );
   expect(screen.getByText("Claude asks.")).toBeOnTheScreen();
-  for (const name of ["1", "2", "3", "Esc"]) {
-    expect(screen.getByRole("button", { name })).toBeOnTheScreen();
-  }
+  expect(screen.queryByRole("button", { name: "↓" })).toBeNull();
+  await fireEvent.press(
+    screen.getByRole("button", { name: "Answer in the terminal" })
+  );
+  expect(screen.getByTestId("terminal-page")).toBeOnTheScreen();
 });
 
 test("how an answer went doesn't linger into the next question", async () => {

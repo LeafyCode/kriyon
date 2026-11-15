@@ -13,7 +13,7 @@ import type {
   ShownEntry,
   ShownKind,
 } from "../../../../src/remote/readableSummary.ts";
-import { Icon, IconButton, useLook, useReduceMotion } from "../kit.tsx";
+import { Button, Icon, IconButton, useLook, useReduceMotion } from "../kit.tsx";
 import { readableKey, usePhone } from "../state/phone.ts";
 import { wordsOf } from "../state/words.ts";
 import { fonts, type Tokens } from "../theme.ts";
@@ -49,6 +49,9 @@ interface Answering {
   hostId: string;
   onAnswered: (answered: Answered) => void;
   sessionId: string;
+  /** Show the terminal: a question whose choices aren't known is answered
+   *  there, by arrows, with the highlighted line in view. */
+  toTerminal: () => void;
 }
 
 function Entry({
@@ -204,7 +207,16 @@ function Entry({
               ))}
             </View>
           ) : null}
-          {answering ? (
+          {answering && entry.options.length === 0 ? (
+            <Button
+              icon="arrowRight"
+              kind="amber"
+              label="Answer in the terminal"
+              onPress={answering.toTerminal}
+              wide
+            />
+          ) : null}
+          {answering && entry.options.length > 0 ? (
             <Answers
               hostId={answering.hostId}
               onAnswered={answering.onAnswered}
@@ -375,11 +387,14 @@ function questionShowing(
 export function ReadableView({
   hostId,
   note,
+  onTerminal,
   sessionId,
 }: {
   hostId: string;
   /** Why the session couldn't be opened, if it couldn't. */
   note: string | null;
+  /** Show the session's terminal. */
+  onTerminal: () => void;
   sessionId: string;
 }) {
   const { t, text } = useLook();
@@ -409,6 +424,7 @@ export function ReadableView({
   } = questionShowing(summary?.entries, session);
   const answering: Answering = {
     hostId,
+    toTerminal: onTerminal,
     onAnswered: (how) => setAnswered({ ...how, question: showingKey ?? "" }),
     sessionId,
   };
