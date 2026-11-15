@@ -26,6 +26,7 @@ import { KriyonNative } from "../../modules/kriyon-native/index.ts";
 import { IconButton, KEY_TEXT_MAX, useLook } from "../kit.tsx";
 import { KEYS, typedLine } from "../state/keys.ts";
 import { toBase64, usePhone } from "../state/phone.ts";
+import { wordsOf } from "../state/words.ts";
 import { TERMINAL_PAGE } from "../terminal/page.generated.ts";
 import { readPageMessage } from "../terminal/protocol.ts";
 import { fonts, useMode } from "../theme.ts";
@@ -89,10 +90,6 @@ function roleLine(controller: boolean, typing: Typing | null): string | null {
     return "This phone may only watch.";
   }
   return typing === "host" || typing === "other" ? typedLastLine(typing) : null;
-}
-
-function reasonOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 /** Typed text as the bytes the terminal expects. */
@@ -163,7 +160,7 @@ export function TerminalView({
     // while shown, off when it goes.
     const { hideScreen, showScreen } = usePhone.getState();
     showScreen(hostId, sessionId).catch((error: unknown) =>
-      setNote(reasonOf(error))
+      setNote(wordsOf(error))
     );
     return () => {
       frames.remove();
@@ -193,7 +190,7 @@ export function TerminalView({
     usePhone
       .getState()
       .sendMessage(hostId, sessionId, text)
-      .catch((error: unknown) => setNote(reasonOf(error)));
+      .catch((error: unknown) => setNote(wordsOf(error)));
   };
 
   /** Send `bytes` to the session, saying why if it can't go. */
@@ -202,7 +199,7 @@ export function TerminalView({
       return;
     }
     KriyonNative.input(hostId, sessionId, bytes).catch((error: unknown) =>
-      setNote(reasonOf(error))
+      setNote(wordsOf(error))
     );
   };
 
@@ -218,7 +215,7 @@ export function TerminalView({
       usePhone
         .getState()
         .showScreen(hostId, sessionId)
-        .catch((error: unknown) => setNote(reasonOf(error)));
+        .catch((error: unknown) => setNote(wordsOf(error)));
       page.current?.injectJavaScript(`${themeScript};true;`);
       return;
     }

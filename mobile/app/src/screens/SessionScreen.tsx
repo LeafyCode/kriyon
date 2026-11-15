@@ -10,6 +10,7 @@ import type { SessionSummary } from "../../../../src/remote/hostSummary.ts";
 import { Pill, Segmented, TopBar, useLook } from "../kit.tsx";
 import { kindOf, type Tone } from "../state/home.ts";
 import { readableKey, usePhone } from "../state/phone.ts";
+import { wordsOf } from "../state/words.ts";
 import { ReadableView } from "./ReadableView.tsx";
 import { TerminalView } from "./TerminalView.tsx";
 
@@ -73,7 +74,7 @@ export function SessionScreen({
   useLayoutEffect(() => {
     const { closeReadable, openReadable } = usePhone.getState();
     openReadable(hostId, sessionId).catch((error: unknown) =>
-      setNote(error instanceof Error ? error.message : String(error))
+      setNote(wordsOf(error))
     );
     return () => {
       closeReadable(hostId, sessionId).catch(() => undefined);

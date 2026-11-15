@@ -22,6 +22,7 @@ import {
 import { KriyonNative } from "../../modules/kriyon-native/index.ts";
 import { Button } from "../kit.tsx";
 import { usePhone } from "../state/phone.ts";
+import { wordsOf } from "../state/words.ts";
 
 const utf8 = new TextEncoder();
 
@@ -32,10 +33,6 @@ const ANSWER_WAIT_MS = 15_000;
 export interface Answered {
   line: string;
   ok: boolean;
-}
-
-function reasonOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 /**
@@ -70,7 +67,7 @@ function answerSeen(
       if (frame?.kind === "screen" && !sent) {
         sent = true;
         KriyonNative.input(hostId, sessionId, utf8.encode(answer.key)).catch(
-          (error: unknown) => finish({ line: reasonOf(error), ok: false })
+          (error: unknown) => finish({ line: wordsOf(error), ok: false })
         );
       } else if (frame?.kind === "receipt" && sent) {
         finish(
@@ -91,7 +88,7 @@ function answerSeen(
       ANSWER_WAIT_MS
     );
     showScreen(hostId, sessionId).catch((error: unknown) =>
-      finish({ line: reasonOf(error), ok: false })
+      finish({ line: wordsOf(error), ok: false })
     );
   });
 }
@@ -117,7 +114,7 @@ export function Answers({
   const pick = (answer: AnswerKey) => {
     if (screenOn) {
       KriyonNative.input(hostId, sessionId, utf8.encode(answer.key)).catch(
-        (error: unknown) => onAnswered({ line: reasonOf(error), ok: false })
+        (error: unknown) => onAnswered({ line: wordsOf(error), ok: false })
       );
       return;
     }

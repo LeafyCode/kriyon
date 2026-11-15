@@ -15,6 +15,7 @@ import type {
 } from "../../../../src/remote/readableSummary.ts";
 import { Icon, IconButton, useLook, useReduceMotion } from "../kit.tsx";
 import { readableKey, usePhone } from "../state/phone.ts";
+import { wordsOf } from "../state/words.ts";
 import { fonts, type Tokens } from "../theme.ts";
 import { type Answered, Answers } from "./Answers.tsx";
 
@@ -281,7 +282,7 @@ function Compose({
       .catch((error: unknown) => {
         // Not sent: the words come back to try again.
         setMessage(text);
-        setProblem(error instanceof Error ? error.message : String(error));
+        setProblem(wordsOf(error));
       });
   };
   return (

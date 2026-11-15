@@ -23,6 +23,7 @@ import {
   readAppLock,
 } from "./lock.ts";
 import { type PushStatus, registerPush } from "./push.ts";
+import { wordsOf } from "./words.ts";
 
 /** Which screen shows. */
 export type Screen =
@@ -191,11 +192,6 @@ function without<T>(record: Record<string, T>, key: string): Record<string, T> {
   return rest;
 }
 
-/** Words for a failure, from whatever was thrown. */
-function reasonOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 /**
  * The last view's number. Rust takes only a view newer than the last it
  * took, so calls may reach it in any order: nothing here waits on another.
@@ -348,7 +344,7 @@ export const usePhone = create<PhoneStore>((set, get) => ({
         set({ screen: { hostId, kind: "session", sessionId } });
       }
     } catch (error) {
-      set({ newSessionError: reasonOf(error) });
+      set({ newSessionError: wordsOf(error) });
     } finally {
       set({ newSessionStarting: false });
     }
@@ -402,7 +398,7 @@ export const usePhone = create<PhoneStore>((set, get) => ({
         pairing: { name: host.name, phase: "paired" },
       });
     } catch (error) {
-      set({ pairing: { phase: "failed", reason: reasonOf(error) } });
+      set({ pairing: { phase: "failed", reason: wordsOf(error) } });
     }
   },
   pairing: { phase: "idle" },
@@ -441,7 +437,7 @@ export const usePhone = create<PhoneStore>((set, get) => ({
       // Alerts come once Rust is up: it seals the token for each computer.
       set({ push: await registerPush() });
     } catch (error) {
-      set({ startError: reasonOf(error) });
+      set({ startError: wordsOf(error) });
     }
   },
   startError: null,
@@ -453,7 +449,7 @@ export const usePhone = create<PhoneStore>((set, get) => ({
       await KriyonNative.setAlerts(on);
       set({ alertsError: null, alertsOn: on });
     } catch (error) {
-      set({ alertsError: reasonOf(error) });
+      set({ alertsError: wordsOf(error) });
     }
   },
   giveBack: (hostId, sessionId) => KriyonNative.giveBack(hostId, sessionId),
@@ -490,7 +486,7 @@ export const usePhone = create<PhoneStore>((set, get) => ({
         set({ lockProblem: result.error });
       }
     } catch (error) {
-      set({ lockProblem: reasonOf(error) });
+      set({ lockProblem: wordsOf(error) });
     }
   },
   continueUnlocked: () => {

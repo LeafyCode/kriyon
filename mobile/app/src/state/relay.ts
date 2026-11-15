@@ -10,6 +10,7 @@ import {
   type PhoneRelay,
   type RelayAccount,
 } from "../../modules/kriyon-native/index.ts";
+import { wordsOf } from "./words.ts";
 
 interface RelayStore {
   account: RelayAccount | null;
@@ -24,10 +25,6 @@ interface RelayStore {
   signIn: () => Promise<void>;
   signOut: () => Promise<void>;
   view: PhoneRelay | null;
-}
-
-function reasonOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 export const useRelay = create<RelayStore>((set, get) => {
@@ -45,7 +42,7 @@ export const useRelay = create<RelayStore>((set, get) => {
       await step();
       set({ error: null });
     } catch (error) {
-      set({ error: reasonOf(error) });
+      set({ error: wordsOf(error) });
     }
   }
 

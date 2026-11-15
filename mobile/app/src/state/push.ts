@@ -12,6 +12,7 @@ import {
   requestPermissionsAsync,
 } from "expo-notifications";
 import { KriyonNative } from "../../modules/kriyon-native/index.ts";
+import { wordsOf } from "./words.ts";
 
 /** Where alerts stand, in words the settings can show. */
 export type PushStatus =
@@ -96,6 +97,6 @@ export async function registerPush(): Promise<PushStatus> {
         : null;
     return status;
   } catch (error) {
-    return `unavailable: ${error instanceof Error ? error.message : String(error)}`;
+    return `unavailable: ${wordsOf(error)}`;
   }
 }
