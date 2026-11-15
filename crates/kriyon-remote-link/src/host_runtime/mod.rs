@@ -308,6 +308,10 @@ async fn accept_loop(
                 let link = Arc::new(link);
                 links.lock().await.push(Arc::clone(&link));
                 if let Some(serve) = &serve {
+                    // Where this host is now, as of this link (ADR-0065).
+                    let tailscale = crate::invite::tailscale_ips().await;
+                    let (addrs, relay_url) = crate::invite::reachable(&host, &tailscale);
+                    serve.set_reachable(addrs, relay_url);
                     tokio::spawn(serve.clone().serve(Arc::clone(&link)));
                 }
                 let links = Arc::clone(&links);

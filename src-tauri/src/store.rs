@@ -475,6 +475,24 @@ impl Store {
         Ok(out)
     }
 
+    /// Where paired host `host_id` can be reached now, as it last said on a
+    /// link (ADR-0065): its addresses and relay. Returns whether it was there.
+    ///
+    /// # Errors
+    /// Returns [`StoreError::Sqlite`] if the statement fails.
+    pub fn update_paired_host_reach(
+        &self,
+        host_id: &[u8; 32],
+        addrs: &[String],
+        relay_url: Option<&str>,
+    ) -> Result<bool, StoreError> {
+        let addrs = serde_json::to_string(addrs).unwrap_or_else(|_| "[]".into());
+        Ok(self.conn.execute(
+            "UPDATE paired_hosts SET addrs_json = ?1, relay_url = ?2 WHERE host_id = ?3",
+            rusqlite::params![addrs, relay_url, hex(host_id)],
+        )? > 0)
+    }
+
     /// Forget a host. Returns whether it was there.
     ///
     /// # Errors
@@ -1386,6 +1404,29 @@ mod tests {
             };
             s.add_paired_host(&again).expect("replaces");
             assert_eq!(s.paired_hosts().expect("lists"), vec![again]);
+        }
+
+        /// Where a host said it is now replaces where its pairing code said,
+        /// for the next dial (ADR-0065); its name and pairing stay.
+        #[test]
+        fn a_hosts_addresses_follow_what_it_last_said() {
+            let s = store();
+            s.add_paired_host(&studio()).expect("adds");
+            let relay = Some("https://relay.example.test/".to_string());
+            assert!(s
+                .update_paired_host_reach(&LAPTOP, &["10.0.0.9:49731".into()], relay.as_deref())
+                .expect("updates"));
+            assert_eq!(
+                s.paired_hosts().expect("lists"),
+                vec![PairedHostRow {
+                    addrs: vec!["10.0.0.9:49731".into()],
+                    relay_url: relay,
+                    ..studio()
+                }]
+            );
+            assert!(!s
+                .update_paired_host_reach(&[9; 32], &[], None)
+                .expect("no such host"));
         }
 
         #[test]

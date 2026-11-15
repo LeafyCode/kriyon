@@ -218,6 +218,9 @@ struct HostConn {
     /// Where the host is, and who hears about it: kept to dial it again
     /// from a rebuilt endpoint.
     entry: HostEntry,
+    /// Where the host is dialed next: its entry's address, then where it
+    /// last said it is (`Reachable`, ADR-0065).
+    dial: std::sync::Mutex<EndpointAddr>,
     events: Arc<dyn DeviceEvents>,
     conn: Mutex<Conn>,
     task: std::sync::Mutex<Option<JoinHandle<()>>>,
@@ -531,6 +534,7 @@ impl DeviceRuntime {
             return Ok(());
         }
         let conn = Arc::new(HostConn {
+            dial: std::sync::Mutex::new(host.addr.clone()),
             entry: host.clone(),
             events,
             conn: Mutex::new(Conn::default()),
@@ -551,7 +555,14 @@ impl DeviceRuntime {
             let host = staying.entry.clone();
             let events = Arc::clone(&staying.events);
             set_state(&staying, host.id, LinkState::Connecting, events.as_ref()).await;
-            stay_connected_waking(&device, host.addr, &wake, |link| {
+            let dial = || {
+                staying
+                    .dial
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .clone()
+            };
+            stay_connected_waking(&device, dial, &wake, |link| {
                 run_link(
                     Arc::clone(&staying),
                     host.id,
@@ -808,6 +819,18 @@ impl DeviceRuntime {
             drop_link(&conn).await;
             self.stay_linked(&conn, Arc::clone(&device));
         }
+    }
+
+    /// Where `host` is dialed next: where it last said it is (ADR-0065),
+    /// else its entry's address. `None` for a host not connected to.
+    pub async fn dial_addr(&self, host: &EndpointId) -> Option<EndpointAddr> {
+        let conn = self.hosts.lock().await.get(host).cloned()?;
+        let addr = conn
+            .dial
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        Some(addr)
     }
 
     /// The hosts connected now (welcomed, heartbeat coming).
@@ -1351,6 +1374,17 @@ async fn follow_control(
                     continue;
                 }
                 let changed = c.view.apply(&message);
+                if let (true, ToDevice::Reachable { addrs, relay_url }) = (changed, &message) {
+                    // Dialed there from the next try on (ADR-0065).
+                    if let Ok(addr) =
+                        crate::invite::endpoint_addr(&host, addrs, relay_url.as_deref())
+                    {
+                        *conn
+                            .dial
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner) = addr;
+                    }
+                }
                 // This link's own Welcome: the view keeps the last link's.
                 let now_connected = matches!(message, ToDevice::Welcome { .. })
                     && c.state != Some(LinkState::Connected);

@@ -22,16 +22,25 @@ pub fn invite(host: &Host, secret: PairingSecret) -> PairingInvite {
 /// tailnet dials them directly, from any network.
 #[must_use]
 pub fn invite_on(host: &Host, secret: PairingSecret, tailscale: &[IpAddr]) -> PairingInvite {
-    let addr = host.addr();
-    let reported: Vec<SocketAddr> = addr.ip_addrs().copied().collect();
-    let addrs = routes::invite_addrs(&reported, tailscale, Ports::of(&host.bound_sockets()));
-    let relay_url = addr.relay_urls().next().map(ToString::to_string);
+    let (addrs, relay_url) = reachable(host, tailscale);
     PairingInvite {
         host_id: host.id(),
         addrs,
         relay_url,
         secret,
     }
+}
+
+/// Where `host` can be reached now, as its pairing code says it: every
+/// address it listens on (with `tailscale`'s on its port) and its relay.
+/// Told to every device it serves, for their next dial (ADR-0065).
+#[must_use]
+pub fn reachable(host: &Host, tailscale: &[IpAddr]) -> (Vec<String>, Option<String>) {
+    let addr = host.addr();
+    let reported: Vec<SocketAddr> = addr.ip_addrs().copied().collect();
+    let addrs = routes::invite_addrs(&reported, tailscale, Ports::of(&host.bound_sockets()));
+    let relay_url = addr.relay_urls().next().map(ToString::to_string);
+    (addrs, relay_url)
 }
 
 /// This computer's Tailscale addresses, read from its network interfaces

@@ -460,6 +460,14 @@ pub enum ToDevice {
         write_id: u32,
         reason: RefuseReason,
     },
+    /// Control stream, after `Welcome` (and again when it changes): where
+    /// this host can be reached now, as a pairing code would say it: its
+    /// `ip:port` addresses (LAN, Tailscale) and its relay, if any. The device
+    /// keeps it for its next dial (ADR-0065).
+    Reachable {
+        addrs: Vec<String>,
+        relay_url: Option<String>,
+    },
 }
 
 /// The host account's [Plan limits]: each window's use, `None` when Claude
@@ -778,6 +786,25 @@ mod tests {
             (FromDevice::ReleaseControl { session_id: s() }, 12),
             (FromDevice::ForgetPushToken, 13),
         ]
+    }
+
+    /// Appended (spec §8: only appends from the first release on): the host
+    /// says where it can be reached now (ADR-0065).
+    #[test]
+    fn reachable_takes_the_next_tag() {
+        let reachable = ToDevice::Reachable {
+            addrs: vec!["10.0.0.7:49731".into()],
+            relay_url: Some("https://relay.example.test/".into()),
+        };
+        assert_eq!(tag(&reachable), 18);
+        assert_eq!(
+            tag(&ToDevice::WriteRefused {
+                write_id: 1,
+                reason: RefuseReason::Stale
+            }),
+            17,
+            "the one before"
+        );
     }
 
     #[test]

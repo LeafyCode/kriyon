@@ -785,13 +785,18 @@ async fn a_wake_skips_the_backoff_wait() {
     let noted = Arc::clone(&tries);
     let waker = Arc::clone(&wake);
     let staying = tokio::spawn(async move {
-        stay_connected_waking(&phone, reach(&host), &waker, move |link| {
-            let noted = Arc::clone(&noted);
-            async move {
-                noted.lock().expect("lock").push(Instant::now());
-                (false, link.closed().await)
-            }
-        })
+        stay_connected_waking(
+            &phone,
+            || reach(&host),
+            &waker,
+            move |link| {
+                let noted = Arc::clone(&noted);
+                async move {
+                    noted.lock().expect("lock").push(Instant::now());
+                    (false, link.closed().await)
+                }
+            },
+        )
         .await
     });
     // Three tries: waits of 1 s then 2 s; the next wait is 4 s.

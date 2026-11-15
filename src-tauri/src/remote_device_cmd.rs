@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use kriyon_remote::device_view::{host_summary, HostView, LinkFacts, ScreenEvent};
+use kriyon_remote::device_view::{host_summary, HostView, LinkFacts, Reachable, ScreenEvent};
 use kriyon_remote::message::{hex, EndpointId};
 use serde::Serialize;
 use tauri::{Emitter as _, Manager as _};
@@ -68,14 +68,36 @@ pub fn check_input(text: &str) -> Result<(), String> {
     }
 }
 
-/// Tells the webview about each host's link.
+/// Tells the webview about each host's link, and keeps where each host
+/// last said it is (ADR-0065).
 struct Emitter {
     app: tauri::AppHandle,
     me: EndpointId,
+    /// What was last saved for each host, so a repeat isn't written again.
+    saved: parking_lot::Mutex<std::collections::HashMap<EndpointId, Reachable>>,
 }
 
 impl DeviceEvents for Emitter {
     fn host_changed(&self, host: EndpointId, link: &LinkFacts, view: &HostView) {
+        // Where it is now, kept for the next dial after a restart.
+        if let Some(reachable) = &view.reachable {
+            let fresh = self.saved.lock().get(&host) != Some(reachable);
+            if fresh {
+                let saved = self
+                    .app
+                    .state::<crate::StoreState>()
+                    .0
+                    .lock()
+                    .update_paired_host_reach(
+                        &host,
+                        &reachable.addrs,
+                        reachable.relay_url.as_deref(),
+                    );
+                if saved.is_ok() {
+                    self.saved.lock().insert(host, reachable.clone());
+                }
+            }
+        }
         // The summary the phone reads too (kriyon_remote::device_view).
         let _ = self.app.emit(
             HOST_CHANGED_EVENT,
@@ -106,6 +128,7 @@ async fn connect(app: &tauri::AppHandle, row: &crate::store::PairedHostRow) -> R
     let events = Arc::new(Emitter {
         app: app.clone(),
         me,
+        saved: parking_lot::Mutex::default(),
     });
     runtime(app).connect(entry(row)?, events).await
 }

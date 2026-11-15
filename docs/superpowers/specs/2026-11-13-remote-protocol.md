@@ -172,6 +172,18 @@ shows "Removed from this computer".
 5. **When a connection closes,** the host releases any typing control that
    device held and bumps the epoch. A reconnected device must send
    `TakeControl` again, so input buffered before the drop can never land.
+   (Since ADR-0063 there is no control to take: the device types again.)
+6. **Where the host is now** ([ADR-0065](../../adr/0065-hosts-tell-devices-where-they-are.md)).
+   After `Welcome`, `ProjectList` and `Usage`, the host sends
+   `Reachable { addrs, relay_url }`: its `ip:port` addresses (LAN, Tailscale)
+   and its relay, as a pairing code made now would say. The device dials
+   there from its next try on and saves it in place of what the pairing code
+   said. A device with our relay dials a host whose relay it doesn't know
+   through its own (one account, one relay).
+7. **A device that dials again** while the host still holds its old,
+   dead connection replaces it: the old connection closes and its session
+   streams go. A second `Open` of a session the device has open takes over
+   the older stream rather than being refused.
 
 **Back-pressure.** Every outgoing stream, the control stream included, has a
 bounded per-device queue measured in bytes. The main loop only enqueues and

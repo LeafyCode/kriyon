@@ -1094,3 +1094,30 @@ fn opening_the_terminal_while_claude_asks_draws_it_and_refuses_nothing() {
         assert!(refused.is_empty(), "{refused:?}");
     });
 }
+
+/// A device dials the host where it said it is now, not only where its
+/// pairing code said: the host tells it on every link (ADR-0065).
+#[test]
+fn a_device_dials_where_the_host_last_said_it_is() {
+    run(async {
+        let world = world().await;
+        world.serve.set_reachable(
+            vec!["192.0.2.7:49731".into()],
+            Some("https://relay.example.test/".into()),
+        );
+        let phone = Phone::connect(&world, 3, Role::Controller).await;
+        wait_until("the host's addresses kept", || {
+            phone.seen.last().is_some_and(|(_, view)| {
+                view.reachable
+                    .as_ref()
+                    .is_some_and(|reachable| reachable.addrs == ["192.0.2.7:49731"])
+            })
+        })
+        .await;
+        let dial = phone.rt.dial_addr(&phone.host).await.expect("a host");
+        let ips: Vec<String> = dial.ip_addrs().map(ToString::to_string).collect();
+        assert_eq!(ips, ["192.0.2.7:49731"]);
+        let relays: Vec<String> = dial.relay_urls().map(ToString::to_string).collect();
+        assert_eq!(relays, ["https://relay.example.test/"]);
+    });
+}

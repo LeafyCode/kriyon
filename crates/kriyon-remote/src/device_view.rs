@@ -83,6 +83,17 @@ pub struct HostView {
     pub projects: Vec<ProjectInfo>,
     /// The host's [Plan limits], once it has said them.
     pub usage: Option<crate::message::PlanUsage>,
+    /// Where the host can be reached now, as it last said (ADR-0065).
+    pub reachable: Option<Reachable>,
+}
+
+/// Where a host can be reached, as it said on a link: what the device dials
+/// next time, in place of what its pairing code said.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Reachable {
+    /// `ip:port` addresses: LAN and Tailscale.
+    pub addrs: Vec<String>,
+    pub relay_url: Option<String>,
 }
 
 impl HostView {
@@ -126,6 +137,16 @@ impl HostView {
             ToDevice::Refused { reason } => self.refused = Some(*reason),
             ToDevice::ProjectList { projects } => self.projects.clone_from(projects),
             ToDevice::Usage { usage } => self.usage = Some(*usage),
+            ToDevice::Reachable { addrs, relay_url } => {
+                let said = Reachable {
+                    addrs: addrs.clone(),
+                    relay_url: relay_url.clone(),
+                };
+                if self.reachable.as_ref() == Some(&said) {
+                    return false;
+                }
+                self.reachable = Some(said);
+            }
             // Heartbeats are the link's; screens belong on session streams.
             _ => return false,
         }
@@ -1007,6 +1028,26 @@ mod tests {
     use kriyon_core::standing::StandingState;
 
     use super::*;
+
+    /// The host's current addresses and relay, as it says them on every
+    /// link: kept, so the device dials them next time (ADR-0065).
+    #[test]
+    fn a_hosts_reachable_addresses_are_kept() {
+        let mut view = HostView::default();
+        let said = ToDevice::Reachable {
+            addrs: vec!["10.0.0.7:49731".into()],
+            relay_url: Some("https://relay.example.test/".into()),
+        };
+        assert!(view.apply(&said));
+        assert_eq!(
+            view.reachable,
+            Some(Reachable {
+                addrs: vec!["10.0.0.7:49731".into()],
+                relay_url: Some("https://relay.example.test/".into()),
+            })
+        );
+        assert!(!view.apply(&said), "the same again changes nothing");
+    }
     use crate::compress::{compress, snapshot_messages, SNAPSHOT_PART_LEN};
 
     const EPOCH: Epoch = Epoch {
@@ -1438,6 +1479,7 @@ mod tests {
                 }),
                 weekly: None,
             }),
+            reachable: None,
         }
     }
 

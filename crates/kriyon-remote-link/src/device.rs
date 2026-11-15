@@ -128,6 +128,13 @@ impl Device {
         Ok(DeviceLink { connection })
     }
 
+    /// This device's own relay, if its endpoint has one: our relay joins the
+    /// devices of one account, so a host on it is reached through it too.
+    #[must_use]
+    pub fn own_relay(&self) -> Option<iroh::RelayUrl> {
+        self.endpoint.addr().relay_urls().next().cloned()
+    }
+
     /// Whether its endpoint is closed.
     #[must_use]
     pub fn is_closed(&self) -> bool {
@@ -235,6 +242,21 @@ impl DeviceLink {
     }
 }
 
+/// `host`, with `relay` added when it names none: a host whose relay this
+/// device never heard of is still reached through the device's own (one
+/// account, one relay; ADR-0065).
+#[must_use]
+pub fn with_relay(host: EndpointAddr, relay: Option<iroh::RelayUrl>) -> EndpointAddr {
+    match relay {
+        Some(relay) if host.relay_urls().next().is_none() => {
+            let mut addrs: Vec<iroh::TransportAddr> = host.addrs.iter().cloned().collect();
+            addrs.push(iroh::TransportAddr::Relay(relay));
+            EndpointAddr::from_parts(host.id, addrs)
+        }
+        _ => host,
+    }
+}
+
 /// Stay connected to `host`: connect, hand each link to `run` until it ends,
 /// and reconnect with backoff (up to 30 s). `run` returns whether the link
 /// worked (it got the host's `Welcome`), which starts the backoff over.
@@ -244,14 +266,14 @@ where
     F: FnMut(DeviceLink) -> Fut,
     Fut: Future<Output = (bool, Option<CloseCode>)>,
 {
-    stay_connected_waking(device, host, &tokio::sync::Notify::new(), run).await
+    stay_connected_waking(device, || host.clone(), &tokio::sync::Notify::new(), run).await
 }
 
 /// [`stay_connected`], where `wake` cuts a backoff wait short: the app calls
 /// it on a network change or when it comes to the front (spec section 5).
 pub async fn stay_connected_waking<F, Fut>(
     device: &Device,
-    host: EndpointAddr,
+    host: impl Fn() -> EndpointAddr,
     wake: &tokio::sync::Notify,
     run: F,
 ) -> LinkError
@@ -262,7 +284,8 @@ where
     let mut run = run;
     let mut backoff = Backoff::default();
     loop {
-        let code = match device.connect(host.clone()).await {
+        // Read at each try: where the host said it is may have changed.
+        let code = match device.connect(with_relay(host(), device.own_relay())).await {
             Ok(link) => {
                 let (worked, code) = run(link).await;
                 if worked {
@@ -280,5 +303,36 @@ where
             () = tokio::time::sleep(backoff.next_delay()) => {}
             () = wake.notified() => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod relay_fallback_tests {
+    use super::*;
+
+    fn host(relay: Option<&str>) -> EndpointAddr {
+        let id = iroh::SecretKey::from_bytes(&[5; 32]).public();
+        let mut addrs = vec![iroh::TransportAddr::Ip(
+            "10.0.0.7:49731".parse().expect("ip"),
+        )];
+        if let Some(relay) = relay {
+            addrs.push(iroh::TransportAddr::Relay(relay.parse().expect("url")));
+        }
+        EndpointAddr::from_parts(id, addrs)
+    }
+
+    /// A host paired before its relay was on is still reached through this
+    /// device's own relay (ADR-0065); one that names its relay keeps it.
+    #[test]
+    fn a_host_with_no_relay_known_is_dialed_through_this_devices_own() {
+        let own: iroh::RelayUrl = "https://own.example.test/".parse().expect("url");
+        let dialed = with_relay(host(None), Some(own.clone()));
+        let relays: Vec<String> = dialed.relay_urls().map(ToString::to_string).collect();
+        assert_eq!(relays, ["https://own.example.test/"]);
+        assert_eq!(dialed.ip_addrs().count(), 1, "its addresses kept");
+        let named = with_relay(host(Some("https://theirs.example.test/")), Some(own));
+        let relays: Vec<String> = named.relay_urls().map(ToString::to_string).collect();
+        assert_eq!(relays, ["https://theirs.example.test/"]);
+        assert_eq!(with_relay(host(None), None).relay_urls().count(), 0);
     }
 }

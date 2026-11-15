@@ -441,6 +441,9 @@ struct Inner {
     projects_looked: Mutex<Option<Instant>>,
     /// Refusals answered per device, rate-limited (spec §8).
     refusals: Mutex<kriyon_remote::link_policy::RateLimit<EndpointId>>,
+    /// Where this host can be reached now: its addresses and relay, as a
+    /// pairing code would say them. Told to every device after its welcome.
+    reachable: Mutex<Option<(Vec<String>, Option<String>)>>,
 }
 
 /// Serving every paired device's streams. Cheap to clone.
@@ -518,6 +521,7 @@ impl Serve {
             heard_projects: Mutex::new(None),
             heard_usage: Mutex::new(None),
             projects_looked: Mutex::new(None),
+            reachable: Mutex::new(None),
             refusals: Mutex::new(kriyon_remote::link_policy::RateLimit::new(
                 kriyon_remote::link_policy::REFUSALS_PER_WINDOW,
                 kriyon_remote::link_policy::REFUSAL_WINDOW,
@@ -636,6 +640,12 @@ impl Serve {
 
     fn served(&self, id: &str) -> Option<Arc<Served>> {
         self.0.sessions.lock().get(id).cloned()
+    }
+
+    /// Where this host can be reached now (`ip:port` addresses, its relay):
+    /// every device welcomed from now on hears it (ADR-0065).
+    pub fn set_reachable(&self, addrs: Vec<String>, relay_url: Option<String>) {
+        *self.0.reachable.lock() = Some((addrs, relay_url));
     }
 
     /// Session `id`'s terminal took a new size from the host's window: every
@@ -1001,6 +1011,14 @@ impl Serve {
             .await
             .ok()?;
         writer.send(&ToDevice::Usage { usage }).await.ok()?;
+        // Where it is now, for the device's next dial (ADR-0065).
+        let reachable = self.0.reachable.lock().clone();
+        if let Some((addrs, relay_url)) = reachable {
+            writer
+                .send(&ToDevice::Reachable { addrs, relay_url })
+                .await
+                .ok()?;
+        }
         let out = Arc::new(ControlOut {
             queue: Mutex::new(ControlQueue::new(CONTROL_QUEUE_LIMIT)),
             wake: Notify::new(),
@@ -2581,6 +2599,28 @@ mod tests {
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
             drop(old);
+        });
+    }
+
+    /// Every link hears where the host can be reached now, right after its
+    /// welcome, so a device paired before the relay was on (or before the
+    /// host's address changed) dials what is true now (ADR-0065).
+    #[test]
+    fn a_welcomed_device_hears_where_the_host_is_reachable() {
+        run(async {
+            let world = world().await;
+            world.serve.set_reachable(
+                vec!["10.0.0.7:49731".into()],
+                Some("https://relay.example.test/".into()),
+            );
+            let (_phone, _link, _cw, mut cr) = device(&world, 3, Role::Viewer).await;
+            assert_eq!(
+                next(&mut cr).await,
+                ToDevice::Reachable {
+                    addrs: vec!["10.0.0.7:49731".into()],
+                    relay_url: Some("https://relay.example.test/".into()),
+                }
+            );
         });
     }
 
