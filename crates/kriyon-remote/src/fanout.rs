@@ -256,6 +256,12 @@ impl SessionFanout {
         self.ask_all(true)
     }
 
+    /// The session's terminal changed size: each device starts over from a
+    /// snapshot, which carries the new size. Nothing was dropped.
+    pub fn resized(&mut self) -> Vec<RequesterId> {
+        self.ask_all(false)
+    }
+
     /// The daemon's [Dialog generation] moved: the `seq` a dialog appeared or
     /// changed at, for the input check; `None` when it didn't move. The dialog
     /// frame follows the output that drew it, so that is the last update.

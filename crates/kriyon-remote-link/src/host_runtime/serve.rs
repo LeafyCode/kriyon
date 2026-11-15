@@ -658,6 +658,18 @@ impl Serve {
         self.0.sessions.lock().get(id).cloned()
     }
 
+    /// Session `id`'s terminal took a new size from the host's window: every
+    /// device with it open gets a fresh snapshot at that size. Call it after
+    /// the resize reached the daemon, and not under the session's gate lock.
+    pub fn resized(&self, id: &str) {
+        let Some(served) = self.served(id) else {
+            return;
+        };
+        let asks = served.fanout.lock().resized();
+        served.ask_all(asks);
+        served.wake_all();
+    }
+
     /// One event from session `id`'s daemon, in order. Called from its
     /// reader thread: never waits.
     #[must_use]
@@ -1638,6 +1650,32 @@ mod tests {
             };
             assert_eq!(seq, 1);
             assert_eq!(decompress(Kind::Update, &bytes).expect("update"), b"typed");
+        });
+    }
+
+    /// The host's window gave the session a new size: each device starts
+    /// over from a snapshot, which carries the size, or it draws the new
+    /// output at the old width (seen on the Windows test PC).
+    #[test]
+    fn a_host_resize_gives_each_device_a_fresh_snapshot() {
+        run(async {
+            let world = world().await;
+            let (_phone, link, _cw, _cr) = device(&world, 3, Role::Viewer).await;
+            let (_sw, mut sr) = open(&link).await;
+            let id = asked(&world).await;
+            answer(&world, id, b"before");
+            assert!(matches!(next(&mut sr).await, ToDevice::Snapshot { .. }));
+            world.serve.resized("s");
+            let again = asked(&world).await;
+            answer(&world, again, b"after");
+            let ToDevice::Snapshot { bytes, skipped, .. } = next(&mut sr).await else {
+                panic!("a fresh snapshot")
+            };
+            assert!(!skipped, "nothing was dropped");
+            assert_eq!(
+                decompress(Kind::Snapshot, &bytes).expect("snapshot"),
+                b"after"
+            );
         });
     }
 

@@ -33,6 +33,8 @@ pub struct Writers {
     gates: Mutex<HashMap<SessionId, Arc<Mutex<SessionGate>>>>,
     /// Told every change of [Typing control] (see [`Writers::on_change`]).
     on_change: Mutex<Option<OnChange>>,
+    /// Told each size the host gives a session's PTY (see [`Writers::on_resize`]).
+    on_resize: Mutex<Option<OnResize>>,
     /// Devices removed or made Viewers since they connected: what every
     /// check reads, so a connection's role never outlives the person's
     /// change (spec §4, §8).
@@ -50,6 +52,9 @@ pub enum Revoked {
 
 /// What hears a change of [Typing control].
 type OnChange = Arc<dyn Fn(&SessionId, Change) + Send + Sync>;
+
+/// What hears the host giving a session's PTY a new size.
+type OnResize = Arc<dyn Fn(&SessionId) + Send + Sync>;
 
 /// One session's gate as the host's one check sees it, copied out from under
 /// its lock.
@@ -72,6 +77,7 @@ impl Default for Writers {
             host_boot_id: u64::from_le_bytes(boot),
             gates: Mutex::new(HashMap::new()),
             on_change: Mutex::new(None),
+            on_resize: Mutex::new(None),
             revoked: Mutex::new(HashMap::new()),
         }
     }
@@ -248,6 +254,22 @@ impl Writers {
         *self.on_change.lock() = Some(Arc::new(hook));
     }
 
+    /// Call `hook` each time the host gives session `id`'s PTY a size (its
+    /// window resized, or its size put back when control came back), after
+    /// the resize reached the daemon and with no gate lock held, so devices
+    /// can redraw at it. Set once at app start.
+    pub fn on_resize(&self, hook: impl Fn(&SessionId) + Send + Sync + 'static) {
+        *self.on_resize.lock() = Some(Arc::new(hook));
+    }
+
+    /// Tell the resize hook about session `id`. Never under a gate's lock.
+    fn told_resized(&self, id: &SessionId) {
+        let hook = self.on_resize.lock().clone();
+        if let Some(hook) = hook {
+            hook(id);
+        }
+    }
+
     /// Tell the hook about `change`. Called with the session's gate lock
     /// held (epoch order), so the hook must not call back into the writers:
     /// see the lock order in the module's header.
@@ -337,6 +359,9 @@ impl Writers {
         // told even when the write failed: control came back all the same.
         self.tell(id, took.change);
         drop(gate);
+        if took.restore.is_some() {
+            self.told_resized(id);
+        }
         written?;
         Ok(took)
     }
@@ -372,10 +397,13 @@ impl Writers {
     ) -> Result<(), String> {
         let gate = self.gate(id);
         let mut gate = gate.lock();
-        match gate.host_resize(size) {
-            Some((cols, rows)) => engine.resize(cols, rows).map_err(|e| e.to_string()),
-            None => Ok(()),
-        }
+        let Some((cols, rows)) = gate.host_resize(size) else {
+            return Ok(());
+        };
+        engine.resize(cols, rows).map_err(|e| e.to_string())?;
+        drop(gate);
+        self.told_resized(id);
+        Ok(())
     }
 
     /// `device` left, was removed or became a Viewer: give control, and the
@@ -402,6 +430,9 @@ impl Writers {
             // Under the gate's lock, in epoch order.
             self.tell(id, took.change);
             drop(gate);
+            if took.restore.is_some() {
+                self.told_resized(id);
+            }
             if took.change.is_some() {
                 changed.push((id.clone(), took));
             }
@@ -640,6 +671,39 @@ mod tests {
         let n = daemon.read(&mut buf).expect("the bytes reached the daemon");
         assert!(buf[..n].ends_with(b"ok"));
     }
+    /// Devices are told each size the host's window gives the PTY, so they
+    /// can redraw at it; not while a device's own size stands.
+    #[test]
+    fn every_size_the_host_gives_the_pty_is_told_to_the_resize_hook() {
+        let writers = Writers::default();
+        let heard = Arc::new(Mutex::new(0_u32));
+        let hook = Arc::clone(&heard);
+        writers.on_resize(move |_id| *hook.lock() += 1);
+        let id = SessionId("s".into());
+        let (engine, _daemon) = engine();
+        writers.set_run(&id, 1);
+        writers
+            .host_resize(&id, &engine, (100, 30))
+            .expect("resized");
+        assert_eq!(*heard.lock(), 1, "the window's size");
+        writers
+            .take(
+                &id,
+                PHONE,
+                Some(Role::Controller),
+                Instant::now() + std::time::Duration::from_secs(60),
+            )
+            .expect("live")
+            .expect("taken");
+        writers
+            .host_resize(&id, &engine, (120, 40))
+            .expect("remembered");
+        assert_eq!(*heard.lock(), 1, "a device's size stands");
+        // The person types: control and the window's size come back.
+        writers.host_write(&id, &engine, b"x").expect("typed");
+        assert_eq!(*heard.lock(), 2, "the window's size put back");
+    }
+
     /// The host's terminal answers what the program asks of it on its own (a
     /// focus change, its version when Claude Code starts): that isn't the
     /// person typing, so a device keeps control. Seen on the Windows test

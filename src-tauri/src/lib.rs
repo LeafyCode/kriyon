@@ -459,6 +459,12 @@ pub fn run() {
             app.state::<AppState>()
                 .writers
                 .on_change(move |id, change| teller.broadcast_control(&id.0, change));
+            // Each size the host gives a session reaches every device with it
+            // open, as a fresh snapshot at that size.
+            let sizer = serve.clone();
+            app.state::<AppState>()
+                .writers
+                .on_resize(move |id| sizer.resized(&id.0));
             app.state::<kriyon_remote_link::host_runtime::RemoteRuntime>()
                 .serve_with(serve);
             // Our relay, before remote access comes back up: its pass is
