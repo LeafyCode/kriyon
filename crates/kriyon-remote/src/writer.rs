@@ -206,11 +206,97 @@ impl HostFacts for OneSession<'_> {
     }
 }
 
+/// Whether `bytes` from the host's terminal are only its own replies to what
+/// the program asked of it, not keys the person pressed: a focus change
+/// (`CSI I`, `CSI O`), device attributes (`CSI ? … c`, `CSI > … c`), the
+/// cursor position (`CSI row;col R`), a mode report (`CSI … $ y`), keyboard
+/// flags (`CSI ? … u`), a status or window report (`CSI … n`, `CSI … t`),
+/// and any DCS or OSC string (its version, a colour). These take nothing
+/// from a device in control. A key that only some terminals send as
+/// `CSI 1;2 R` (Shift+F3) reads as a reply too: it still reaches the
+/// program, it just leaves control where it is.
+#[must_use]
+pub fn is_terminal_reply(bytes: &[u8]) -> bool {
+    let mut rest = bytes;
+    while !rest.is_empty() {
+        match reply_len(rest) {
+            Some(len) => rest = &rest[len..],
+            None => return false,
+        }
+    }
+    true
+}
+
+/// The length of the one reply `bytes` start with, if they start with one.
+fn reply_len(bytes: &[u8]) -> Option<usize> {
+    match bytes {
+        [0x1b, b'[', body @ ..] => {
+            let end = body.iter().position(|b| (0x40..=0x7e).contains(b))?;
+            let (params, last) = (&body[..end], body[end]);
+            let numbers = |p: &[u8]| p.iter().all(|b| b.is_ascii_digit() || *b == b';');
+            let is_reply = match last {
+                b'I' | b'O' => params.is_empty(),
+                b'c' => matches!(params.first(), Some(b'?' | b'>')),
+                b'R' => !params.is_empty() && params.contains(&b';') && numbers(params),
+                b'y' => params.ends_with(b"$"),
+                b'u' => params.first() == Some(&b'?') && numbers(&params[1..]),
+                b'n' | b't' => !params.is_empty() && numbers(params),
+                _ => false,
+            };
+            is_reply.then_some(2 + end + 1)
+        }
+        [0x1b, b'P' | b']', body @ ..] => {
+            let osc = bytes[1] == b']';
+            let end = body.iter().enumerate().find_map(|(at, b)| match b {
+                0x07 if osc => Some(at + 1),
+                0x1b if body.get(at + 1) == Some(&b'\\') => Some(at + 2),
+                _ => None,
+            })?;
+            Some(2 + end)
+        }
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
 
     use super::*;
+
+    #[test]
+    fn a_terminals_own_replies_are_told_apart_from_keys() {
+        let replies: [&[u8]; 9] = [
+            b"",
+            b"\x1b[I",
+            b"\x1b[O",
+            b"\x1bP>|xterm.js(6.1.0-beta.304)\x1b\\",
+            b"\x1b[?1;2c",
+            b"\x1b[>0;276;0c",
+            b"\x1b]11;rgb:1e1e/1e1e/1e1e\x1b\\",
+            b"\x1b]10;rgb:ffff/ffff/ffff\x07",
+            b"\x1b[24;80R\x1b[?2026;2$y\x1b[?0u\x1b[0n",
+        ];
+        for reply in replies {
+            assert!(is_terminal_reply(reply), "{reply:?}");
+        }
+        let keys: [&[u8]; 10] = [
+            b"x",
+            b"\r",
+            b"\x1b",
+            b"\x1b[A",
+            b"\x1b[1;5C",
+            b"\x1b[3~",
+            b"\x1b[Z",
+            b"\x1bOP",
+            b"\x03",
+            // A reply with a key after it: the key is the person's.
+            b"\x1b[Ix",
+        ];
+        for key in keys {
+            assert!(!is_terminal_reply(key), "{key:?}");
+        }
+    }
 
     const PHONE: EndpointId = [1; 32];
     const RUN: u64 = 9;

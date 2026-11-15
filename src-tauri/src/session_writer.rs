@@ -319,6 +319,12 @@ impl Writers {
     ) -> Result<HostTook, String> {
         let gate = self.gate(id);
         let mut gate = gate.lock();
+        // The terminal answering the program on its own isn't the person
+        // typing: it goes in, and control stays where it is.
+        if kriyon_remote::writer::is_terminal_reply(bytes) {
+            engine.write_stdin(bytes).map_err(|e| e.to_string())?;
+            return Ok(HostTook::default());
+        }
         let took = gate.host_input(Instant::now());
         if let Some((cols, rows)) = took.restore {
             // The keystroke still goes in if the size can't be put back.
@@ -634,6 +640,42 @@ mod tests {
         let n = daemon.read(&mut buf).expect("the bytes reached the daemon");
         assert!(buf[..n].ends_with(b"ok"));
     }
+    /// The host's terminal answers what the program asks of it on its own (a
+    /// focus change, its version when Claude Code starts): that isn't the
+    /// person typing, so a device keeps control. Seen on the Windows test
+    /// PC: control dropped back to the host as Claude started.
+    #[test]
+    fn the_host_terminals_own_replies_leave_a_devices_control() {
+        let writers = Writers::default();
+        let id = SessionId("s".into());
+        let (engine, mut daemon) = engine();
+        writers.set_run(&id, 1);
+        writers
+            .take(
+                &id,
+                PHONE,
+                Some(Role::Controller),
+                Instant::now() + std::time::Duration::from_secs(60),
+            )
+            .expect("live")
+            .expect("taken");
+        let replies: [&[u8]; 3] = [
+            b"\x1b[I",
+            b"\x1bP>|xterm.js(6.1.0-beta.304)\x1b\\",
+            b"\x1b[O",
+        ];
+        for reply in replies {
+            writers.host_write(&id, &engine, reply).expect("written");
+        }
+        let holder = |w: &Writers| w.facts(&id).expect("live").control.holder();
+        assert_eq!(holder(&writers), Holder::Device(PHONE));
+        // The program still gets its answers.
+        assert_eq!(typed(&mut daemon), replies.concat());
+        // A key the person presses takes control back, as before.
+        writers.host_write(&id, &engine, b"x").expect("typed");
+        assert_eq!(holder(&writers), Holder::Host);
+    }
+
     #[test]
     fn every_change_of_control_is_told_to_the_hook() {
         let writers = Writers::default();
