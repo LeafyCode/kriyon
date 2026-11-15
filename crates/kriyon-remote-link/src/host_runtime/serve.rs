@@ -1214,15 +1214,25 @@ impl Serve {
         let (served, id, screen) = match opened {
             Ok(opened) => opened,
             Err(reason) => {
+                self.refusal(&device, reason, "open", false);
                 let _ = writer.send(&ToDevice::Refused { reason }).await;
                 writer.finish();
                 return None;
             }
         };
+        // Once per device: two streams would share, and split, one queue. A
+        // device opening it again (its app restarted, or the host missed a
+        // stream's end) gets the new stream; the old one ends.
+        if served.fanout.lock().is_open(&device) {
+            let old = served.wakers.lock().remove(&device);
+            self.drop_stream(&served, &id, &device);
+            if let Some(old) = old {
+                old.notify_one();
+            }
+        }
         let wake = Arc::new(Notify::new());
         let opened = {
             let mut fanout = served.fanout.lock();
-            // Once per device: two streams would share, and split, one queue.
             (!fanout.is_open(&device)).then(|| {
                 let ask = if screen {
                     fanout.open(device)
@@ -1235,6 +1245,8 @@ impl Serve {
             })
         };
         let Some((ask, open)) = opened else {
+            // Opened again on another stream meanwhile: this one is the older.
+            self.refusal(&device, RefuseReason::NotAllowed, "open", false);
             let _ = writer
                 .send(&ToDevice::Refused {
                     reason: RefuseReason::NotAllowed,
@@ -1558,6 +1570,16 @@ async fn write_session(
     mut answered: tokio::sync::mpsc::Receiver<ToDevice>,
 ) {
     loop {
+        // Superseded by a newer stream of this device's: this one ends.
+        let ours = served
+            .wakers
+            .lock()
+            .get(&device)
+            .is_some_and(|held| Arc::ptr_eq(held, &wake));
+        if !ours {
+            writer.finish();
+            return;
+        }
         while let Ok(answer) = answered.try_recv() {
             if writer.send(&answer).await.is_err() {
                 return;
@@ -2268,23 +2290,6 @@ mod tests {
     }
 
     #[test]
-    fn a_device_opens_a_session_once() {
-        run(async {
-            let world = world().await;
-            let (_phone, link, _cw, _cr) = device(&world, 3, Role::Viewer).await;
-            let (_first_w, _first_r) = open(&link).await;
-            let _ = asked(&world).await;
-            let (_second_w, mut second) = open(&link).await;
-            assert_eq!(
-                next(&mut second).await,
-                ToDevice::Refused {
-                    reason: RefuseReason::NotAllowed
-                }
-            );
-        });
-    }
-
-    #[test]
     fn a_device_that_reconnects_is_served_after_its_old_connection_goes() {
         run(async {
             let world = world().await;
@@ -2576,6 +2581,39 @@ mod tests {
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
             drop(old);
+        });
+    }
+
+    /// A device opening a session it has open already (its app restarted
+    /// on the same connection, or the host missed a stream's end) gets the
+    /// new stream; the old one ends. A refused Open would leave it blank.
+    #[test]
+    fn a_second_open_from_one_device_takes_over_from_the_first() {
+        run(async {
+            let world = world().await;
+            let (_phone, link, _cw, _cr) = device(&world, 3, Role::Viewer).await;
+            let (_ow, mut first) = open(&link).await;
+            let id = asked(&world).await;
+            answer(&world, id, b"one");
+            assert!(matches!(next(&mut first).await, ToDevice::Snapshot { .. }));
+            let (_nw, mut second) = open(&link).await;
+            let id = asked(&world).await;
+            answer(&world, id, b"two");
+            let ToDevice::Snapshot { bytes, .. } = next(&mut second).await else {
+                panic!("the new stream is served")
+            };
+            assert_eq!(
+                decompress(Kind::Snapshot, &bytes).expect("snapshot"),
+                b"two"
+            );
+            // The old stream ends: nothing more comes on it.
+            let ended = tokio::time::timeout(Duration::from_secs(5), first.next()).await;
+            assert!(
+                matches!(ended, Ok(Ok(None) | Err(_))),
+                "the old stream ended: {ended:?}"
+            );
+            let _ = world.serve.on_event("s", DaemonEvent::Output(b"later"));
+            assert!(matches!(next(&mut second).await, ToDevice::Update { .. }));
         });
     }
 
