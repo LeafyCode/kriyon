@@ -330,6 +330,19 @@ impl SessionScreen {
         })
     }
 
+    /// `Resize` to this device's own `cols` × `rows`: the session takes it
+    /// once this device types (ADR-0063). `None` before the run is known.
+    #[must_use]
+    pub fn resize(&self, epoch: Epoch, cols: u16, rows: u16, write_id: u32) -> Option<FromDevice> {
+        Some(FromDevice::Resize {
+            run: self.follower.run()?,
+            epoch,
+            cols,
+            rows,
+            write_id,
+        })
+    }
+
     /// `Input` for `bytes` under `epoch`, naming the run and the last update
     /// drawn. `None` before the first snapshot: there is nothing to answer.
     #[must_use]

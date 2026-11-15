@@ -868,6 +868,27 @@ impl DeviceRuntime {
         .await
     }
 
+    /// Tell the host this device's own size for `session`'s terminal: the
+    /// session takes it once this device types, and keeps it until someone
+    /// else does (ADR-0063). The host bounds it (80..=1000 columns).
+    ///
+    /// # Errors
+    /// [`DeviceError`]: not connected, not open, or the screen hasn't come
+    /// yet (`NoScreen`).
+    pub async fn resize(
+        &self,
+        host: &EndpointId,
+        session: &str,
+        cols: u16,
+        rows: u16,
+    ) -> Result<(), DeviceError> {
+        let write_id = fresh_write_id();
+        self.write(host, session, |screen, epoch| {
+            screen.resize(epoch, cols, rows, write_id)
+        })
+        .await
+    }
+
     /// Send `text` to Claude in `session` as the desktop's composer does
     /// (the host types it, then Enter), whether its screen is on or not:
     /// this device must control it. Refused while a dialog shows.
@@ -1735,6 +1756,9 @@ mod tests {
                         tokio::time::sleep(Duration::from_secs(2)).await;
                         return;
                     }
+                    Ok(Some(Decoded::Message(resize @ FromDevice::Resize { .. }))) => {
+                        heard.push(resize);
+                    }
                     Ok(Some(_)) => {}
                     _ => break,
                 },
@@ -1907,7 +1931,9 @@ mod tests {
                 ]
             );
 
-            // ADR-0063: a Controller types with nothing taken first.
+            // ADR-0063: a Controller types with nothing taken first, and
+            // says its own size, which the session takes once it types.
+            rt.resize(&host.id(), "s1", 90, 28).await.expect("sized");
             rt.input(&host.id(), "s1", b"y".to_vec())
                 .await
                 .expect("types");
@@ -1934,6 +1960,16 @@ mod tests {
                     write_id,
                     ..
                 } if bytes == b"y" && *write_id != 0
+            )));
+            assert!(heard.iter().any(|message| matches!(
+                message,
+                FromDevice::Resize {
+                    run: 9,
+                    cols: 90,
+                    rows: 28,
+                    write_id,
+                    ..
+                } if *write_id != 0
             )));
             rt.disconnect(&host.id()).await;
         });
