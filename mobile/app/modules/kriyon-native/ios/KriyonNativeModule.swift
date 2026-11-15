@@ -197,35 +197,33 @@ public final class KriyonNativeModule: Module {
 
     AsyncFunction("pair") { (inviteText: String) -> String in
       let pairing = try await rust { try await self.started().pair(inviteText: inviteText) }
-      self.lock.lock()
-      self.pairing?.cancel()
-      self.pairing = pairing
-      self.lock.unlock()
+      self.lock.withLock {
+        self.pairing?.cancel()
+        self.pairing = pairing
+      }
       // The code step: {code, role, expiresAtMs}, as JSON.
       return pairing.offer()
     }
 
     AsyncFunction("finishPairing") { () -> Any in
-      self.lock.lock()
-      let pairing = self.pairing
-      self.lock.unlock()
+      let pairing = self.lock.withLock { self.pairing }
       guard let pairing else {
         throw Exception(name: "NoPairing", description: "no pairing is in progress", code: "NoPairing")
       }
       defer {
         // Only this pairing: a newer one started meanwhile stays.
-        self.lock.lock()
-        if self.pairing === pairing { self.pairing = nil }
-        self.lock.unlock()
+        self.lock.withLock {
+          if self.pairing === pairing { self.pairing = nil }
+        }
       }
       return parsed(try await rust { try await pairing.finish() })
     }
 
     AsyncFunction("cancelPairing") {
-      self.lock.lock()
-      self.pairing?.cancel()
-      self.pairing = nil
-      self.lock.unlock()
+      self.lock.withLock {
+        self.pairing?.cancel()
+        self.pairing = nil
+      }
     }
 
     AsyncFunction("forget") { (hostId: String) in
