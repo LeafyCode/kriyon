@@ -529,6 +529,29 @@ fn forget_closed<R: tauri::Runtime>(app: &tauri::AppHandle<R>, swept: &[String])
     }
 }
 
+/// What an adopted session gets that a started one gets at its start: its
+/// status watched (hooks, transcript), so it isn't Unknown to every list and
+/// device, and its terminal given the size its served snapshots say, so a
+/// device's first screen of it isn't drawn at the old window's width. The
+/// desktop's window resizes it again when it shows it. Best effort.
+pub(crate) fn on_adopted<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    home: &Path,
+    id: &SessionId,
+    engine: &DaemonClient,
+) {
+    use kriyon_core::session::SessionEngine as _;
+    if let Err(e) = crate::commands::start_watch(app, home, id.clone(), |_| {}) {
+        eprintln!("kriyon: could not watch adopted session={} ({e})", id.0);
+    }
+    let (cols, rows) = crate::session_writer::DEFAULT_SCREEN;
+    if engine.resize(cols, rows).is_ok() {
+        app.state::<AppState>()
+            .writers
+            .note_host_size(id, (cols, rows));
+    }
+}
+
 /// [Daemon adoption]: attach a sink-less client to every owned daemon that is
 /// still alive — the survivors of a [Handover] — so the [Resource sweep], the
 /// [Sleep ledger] and `close_session` see a session nobody has opened yet.
@@ -593,6 +616,14 @@ pub(crate) fn adopt_live_daemons<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
         // Dropped outside the lock: letting go joins a reader thread.
         if displaced.is_none() {
             eprintln!("kriyon: adopted live daemon session={id}");
+            let engine = state
+                .sessions
+                .lock()
+                .get(&SessionId(id.clone()))
+                .map(|session| std::sync::Arc::clone(&session.engine));
+            if let (Some(engine), Ok(home)) = (engine, app.path().home_dir()) {
+                on_adopted(app, &home, &SessionId(id.clone()), &engine);
+            }
         }
         drop(displaced);
     }
@@ -649,6 +680,39 @@ mod tests {
                 folder_id: None,
             })
             .expect("project");
+    }
+
+    /// An adopted session (its daemon outlived the app) gets what a started
+    /// one gets: a watched status, so devices don't list it as Unknown, and
+    /// its terminal at the size its served snapshots say, so a device's
+    /// first screen isn't drawn at the old window's width (seen on the
+    /// emulator after the Windows PC's Kriyon restarted).
+    #[test]
+    fn an_adopted_session_is_watched_and_sized_as_it_is_served() {
+        let app = mock_app();
+        let home = tempfile::tempdir().expect("home");
+        let (daemon, client) = UnixStream::pair().expect("pair");
+        let engine = DaemonClient::adopt(client, SessionId("s".into())).expect("client");
+        on_adopted(app.handle(), home.path(), &SessionId("s".into()), &engine);
+        assert!(app
+            .state::<AppState>()
+            .runtimes
+            .lock()
+            .contains_key(&SessionId("s".into())));
+        let mut daemon = daemon;
+        daemon
+            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .expect("timeout");
+        let mut decoder = FrameDecoder::new();
+        let mut buf = [0_u8; 256];
+        let resized = loop {
+            let n = daemon.read(&mut buf).expect("a frame");
+            decoder.push(&buf[..n]);
+            if let Ok(Some(Frame::Resize { cols, rows })) = decoder.next_frame() {
+                break (cols, rows);
+            }
+        };
+        assert_eq!(resized, crate::session_writer::DEFAULT_SCREEN);
     }
 
     #[test]
