@@ -76,6 +76,14 @@ fn sh_path(path: &Path) -> String {
     kriyon_core::shellinit::sh_quote(&path.display().to_string().replace('\\', "/"))
 }
 
+/// What the retired Python scripts become (ADR-0066): comments only, so a
+/// `claude` started before the update, which still runs the old command,
+/// gets an exit of 0 and no output. Deleting them would make Python exit 2,
+/// which Claude reads as "block the tool".
+const RETIRED_SCRIPT: &str =
+    "# Retired: Kriyon's hook is now ~/.claude/kriyon/bin/kriyon-hook (ADR-0066).\n\
+# Kept so a claude started before the update runs this, does nothing and exits 0.\n";
+
 /// The hook program's file name: `kriyon-hook`, `.exe` on Windows.
 const HOOK_NAME: &str = if cfg!(windows) {
     "kriyon-hook.exe"
@@ -189,7 +197,10 @@ fn write_scripts_from(home: &Path, source: Option<&Path>) -> std::io::Result<()>
         STATUSLINE_SCRIPT.as_bytes(),
     )?;
     for old in ["kriyon-hook.py", "kriyon-usage.py"] {
-        let _ = std::fs::remove_file(dir.join(old));
+        let old = dir.join(old);
+        if old.exists() {
+            write_private(&old, RETIRED_SCRIPT.as_bytes())?;
+        }
     }
     Ok(())
 }
@@ -372,7 +383,13 @@ mod tests {
         write_scripts_from(home.path(), Some(&built_hook())).unwrap();
         let installed = hook_binary(home.path());
         assert!(installed.is_file());
-        assert!(!dir.join("kriyon-hook.py").exists() && !dir.join("kriyon-usage.py").exists());
+        // A claude started before the update still runs the old command:
+        // the old scripts stay as stubs that do nothing and exit 0, since a
+        // missing file would exit 2, which Claude reads as "block the tool".
+        for old in ["kriyon-hook.py", "kriyon-usage.py"] {
+            let stub = std::fs::read_to_string(dir.join(old)).expect("a stub");
+            assert_eq!(stub, RETIRED_SCRIPT, "{old}");
+        }
         let command = hook_command_for(home.path()).expect("a command");
         assert!(
             command.contains(kriyon_core::hooks::KRIYON_HOOK_MARKER),

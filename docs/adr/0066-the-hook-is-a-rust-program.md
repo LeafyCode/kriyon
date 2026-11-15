@@ -38,8 +38,13 @@ a second language for the logic that `kriyon_core::hooks` reads.
 - **Existing installs move over by themselves.** The hook command keeps the
   `kriyon-hook` marker, so `merge_hook_config` replaces the old Python entries
   and leaves the person's own hooks alone; the status-line wrapper is rewritten
-  to call the program, and the old `.py` files are removed. Running it again
-  changes nothing.
+  to call the program. Running it again changes nothing.
+- **The old scripts stay as stubs.** Claude Code reads its hooks when a
+  session starts, so a `claude` started before the update still runs the old
+  `python … kriyon-hook.py`. With the file gone Python exits 2, which Claude
+  reads as "block the tool"; so each old script becomes comments only, which
+  exits 0 and prints nothing. Without Python the old command fails as
+  "command not found", which Claude treats as a non-blocking error.
 - **Quoting.** The command is the program's path quoted for the POSIX shell
   Claude Code runs hooks in (Git Bash on Windows, with forward slashes), so a
   home folder with a space or an apostrophe works.
