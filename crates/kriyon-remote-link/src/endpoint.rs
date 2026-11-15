@@ -3,10 +3,13 @@
 use std::net::SocketAddr;
 
 use iroh::endpoint::{presets, BindOpts, QuicTransportConfig, VarInt};
+use iroh::tls::CaTlsConfig;
 use iroh::{Endpoint, RelayConfig, RelayMode, RelayUrl, SecretKey};
 use kriyon_remote::codec::CodecError;
 use kriyon_remote::link_policy::CloseCode;
 use kriyon_remote::message::{EndpointId, RefuseReason};
+use rustls_pki_types::pem::PemObject as _;
+use rustls_pki_types::CertificateDer;
 
 /// The remote protocol, major version 1.
 pub const ALPN_REMOTE: &[u8] = b"kriyon/remote/1";
@@ -62,6 +65,40 @@ pub fn relay_mode(config: &LinkConfig) -> RelayMode {
                 .into(),
         )
     })
+}
+
+/// The extra certificates `pem` names, for a local test relay with its own
+/// certificate authority: read only when `debug` (a dev or smoke build), so a
+/// release build trusts nothing but the built-in roots. Unreadable text adds
+/// nothing.
+#[must_use]
+pub fn relay_roots(pem: Option<&str>, debug: bool) -> Vec<CertificateDer<'static>> {
+    let Some(pem) = pem.filter(|pem| debug && !pem.trim().is_empty()) else {
+        return Vec::new();
+    };
+    let roots: Vec<_> = CertificateDer::pem_slice_iter(pem.as_bytes())
+        .filter_map(Result::ok)
+        .collect();
+    if roots.is_empty() {
+        eprintln!("kriyon: KRIYON_RELAY_CA holds no certificate: ignored");
+    }
+    roots
+}
+
+/// How a relay's certificate is checked: against the built-in web roots,
+/// plus `extra`. Checks stay on either way.
+#[must_use]
+pub fn relay_trust(extra: Vec<CertificateDer<'static>>) -> CaTlsConfig {
+    CaTlsConfig::embedded().with_extra_roots(extra)
+}
+
+/// This build's relay trust: [`relay_trust`] with the certificate
+/// `KRIYON_RELAY_CA` held at build time, in a debug build only.
+fn build_relay_trust() -> CaTlsConfig {
+    relay_trust(relay_roots(
+        option_env!("KRIYON_RELAY_CA"),
+        cfg!(debug_assertions),
+    ))
 }
 
 impl LinkConfig {
@@ -126,6 +163,7 @@ pub async fn bind(config: &LinkConfig, alpns: Vec<Vec<u8>>) -> Result<Endpoint, 
         .secret_key(SecretKey::from_bytes(&config.secret_key))
         .alpns(alpns)
         .relay_mode(relay)
+        .ca_tls_config(build_relay_trust())
         // No session tickets, so this endpoint never sends 0-RTT data, which
         // could be replayed. A host never reads a stream before the handshake
         // completes either, so replayed early data from elsewhere is never
@@ -184,6 +222,71 @@ pub(crate) fn gone(error: &iroh::endpoint::ConnectionError) -> LinkError {
     match close_code(error) {
         Some(code) => LinkError::Closed(Some(code)),
         None => LinkError::Connect(error.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod relay_trust_tests {
+    use super::*;
+    use rustls_pki_types::{CertificateDer, ServerName, UnixTime};
+
+    /// A test-only certificate for `localhost` (its key was thrown away).
+    const TEST_PEM: &str = include_str!("../tests/fixtures/test-relay-ca.pem");
+
+    /// Whether `trust` accepts `cert` for `localhost`, checking it in full.
+    fn accepts(trust: &iroh::tls::CaTlsConfig, cert: &CertificateDer<'static>) -> bool {
+        let provider = std::sync::Arc::new(rustls::crypto::ring::default_provider());
+        let verifier = trust.server_cert_verifier(provider).expect("a verifier");
+        verifier
+            .verify_server_cert(
+                cert,
+                &[],
+                &ServerName::try_from("localhost").expect("a name"),
+                &[],
+                UnixTime::now(),
+            )
+            .is_ok()
+    }
+
+    #[test]
+    fn a_release_build_ignores_the_extra_relay_certificate() {
+        assert_eq!(
+            relay_roots(Some(TEST_PEM), false),
+            Vec::<CertificateDer<'static>>::new()
+        );
+    }
+
+    #[test]
+    fn a_dev_build_reads_the_extra_relay_certificate() {
+        assert_eq!(relay_roots(Some(TEST_PEM), true).len(), 1);
+    }
+
+    #[test]
+    fn no_or_unreadable_certificate_adds_nothing() {
+        assert_eq!(
+            relay_roots(None, true),
+            Vec::<CertificateDer<'static>>::new()
+        );
+        assert_eq!(
+            relay_roots(Some("  "), true),
+            Vec::<CertificateDer<'static>>::new()
+        );
+        assert_eq!(
+            relay_roots(Some("not a certificate"), true),
+            Vec::<CertificateDer<'static>>::new()
+        );
+    }
+
+    #[test]
+    fn the_extra_certificate_is_trusted_with_checks_still_on() {
+        let (certs, _) = iroh_relay::server::testing::self_signed_tls_certs_and_config();
+        let cert = certs[0].clone();
+        // The built-in roots alone don't know a local relay's own certificate.
+        assert!(!accepts(&relay_trust(Vec::new()), &cert));
+        // Added, it is trusted; another unknown one still isn't.
+        assert!(accepts(&relay_trust(vec![cert.clone()]), &cert));
+        let (other, _) = iroh_relay::server::testing::self_signed_tls_certs_and_config();
+        assert!(!accepts(&relay_trust(vec![cert]), &other[0]));
     }
 }
 

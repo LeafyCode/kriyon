@@ -38,6 +38,11 @@ codes are kept by EAS (`appVersionSource: remote`).
      visibility secret. Without it, Android alerts say they need a Firebase setup.
 
    These are build-time addresses, not secrets, but they stay out of the repo.
+
+   For a local test relay with its own certificate authority, a debug build (a simulator or
+   emulator run, `pnpm smoke`) also reads `KRIYON_RELAY_CA`: the authority's certificate as
+   PEM text, for example `KRIYON_RELAY_CA="$(cat ca.pem)"`. It is trusted beside the built-in
+   roots, with certificate checks still on. Release builds, EAS's included, ignore it.
 4. **iPhone credentials.** An Apple Developer account. Run
    `npx eas-cli@27.2.0 credentials -p ios` (or let the first iOS build ask): EAS makes and keeps
    the distribution certificate and provisioning profile. For push, make an APNs key in the

@@ -13,6 +13,8 @@ kriyon-remote = { path = "../kriyon-remote" }
 # The interfaces, for this computer's Tailscale addresses: iroh's own.
 netwatch = "0.19.3"
 parking_lot = { version = "0.12", optional = true }
+# Reading a dev or smoke build's extra relay certificate (`KRIYON_RELAY_CA`, PEM).
+rustls-pki-types = { version = "1.15", features = ["std"] }
 tokio = { version = "1", default-features = false, features = ["macros", "rt", "sync", "time"] }
 
 [target.'cfg(windows)'.dependencies]
@@ -35,6 +37,8 @@ test-support = ["tokio/rt-multi-thread"]
 # with its self-signed test certificate. Never in a build of the app.
 iroh-relay = { version = "=1.4.1", features = ["server", "test-utils"] }
 kriyon-remote-link = { path = ".", features = ["host-runtime", "test-support"] }
+# Checking a certificate against the relay's trust settings, as iroh does.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 tokio = { version = "1", default-features = false, features = ["macros", "rt-multi-thread", "sync", "time"] }
 
 [lints.clippy]

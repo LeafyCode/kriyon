@@ -3555,6 +3555,8 @@ dependencies = [
  "kriyon-remote-link",
  "netwatch",
  "parking_lot",
+ "rustls",
+ "rustls-pki-types",
  "tokio",
  "windows-sys 0.61.2",
 ]

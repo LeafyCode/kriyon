@@ -13,6 +13,10 @@
 #                           #  rejected by UNUserNotificationCenter, so banners
 #                           #  are silently dropped)
 #   pnpm smoke -- <extra tauri build args>
+#
+# Relay settings are read at build time: KRIYON_RELAY_API and KRIYON_RELAY_WEB, and for a
+# local test relay with its own certificate authority KRIYON_RELAY_CA (its PEM text; debug
+# builds only, see docs/mobile-builds.md).
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
