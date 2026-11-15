@@ -17,7 +17,7 @@ import {
 import { terminalTheme } from "../../../../src/theme/terminalTheme.ts";
 import { steel } from "../../../../src/theme/themes/steel.ts";
 import { steelLight } from "../../../../src/theme/themes/steelLight.ts";
-import { TERMINAL_FONT } from "./layout.ts";
+import { boxWidth, TERMINAL_FONT } from "./layout.ts";
 import type { PageMessage } from "./protocol.ts";
 
 declare global {
@@ -65,6 +65,19 @@ if (host) {
   // a screen reader skips it rather than read an unlabelled, dead field.
   term.textarea?.setAttribute("aria-hidden", "true");
   term.textarea?.setAttribute("tabindex", "-1");
+  // The screen keeps the computer's columns: when they are wider than the
+  // phone, the box widens to them and the page scrolls sideways. xterm sets
+  // the screen's width as it renders, so this follows every render.
+  const screen = host.querySelector<HTMLElement>(".xterm-screen");
+  term.onRender(() => {
+    const width = boxWidth(
+      screen?.getBoundingClientRect().width ?? 0,
+      document.documentElement.clientWidth
+    );
+    if (host.style.width !== width) {
+      host.style.width = width;
+    }
+  });
 }
 
 window.kriyon = {

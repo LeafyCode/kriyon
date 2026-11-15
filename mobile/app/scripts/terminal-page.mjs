@@ -30,12 +30,15 @@ const symbols = readFileSync(
   join(app, "assets/fonts/NotoSansSymbols2-Technical.woff")
 ).toString("base64");
 
+// The body scrolls sideways when the box is wider than the view (a screen
+// with more columns than fit: page.ts sets the box's width).
 const html = `<!doctype html>
 <html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
 <style>${css}
 @font-face{font-family:"${SYMBOLS_FONT}";src:url(data:font/woff;base64,${symbols}) format("woff");unicode-range:${SYMBOLS_RANGE};}
 html, body, #terminal { height: 100%; margin: 0; background: ${steel.colors.chromeWindow}; }
+body{overflow-x:auto;overflow-y:hidden;}
 </style></head>
 <body><div id="terminal"></div><script>${script}</script></body></html>`;
 

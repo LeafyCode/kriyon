@@ -1,6 +1,6 @@
 /**
- * How the phone's terminal page draws a computer's screen: its fonts.
- * Shared by the page (page.ts) and the script that builds it
+ * How the phone's terminal page lays a computer's screen out: its fonts
+ * and its width. Shared by the page (page.ts) and the script that builds it
  * (scripts/terminal-page.mjs), so both say the same.
  */
 
@@ -20,3 +20,13 @@ export const SYMBOLS_RANGE = "U+2300-23FF";
 
 /** The terminal's fonts: the phone's own monospace first, then the symbols. */
 export const TERMINAL_FONT = `Menlo, monospace, "${SYMBOLS_FONT}"`;
+
+/**
+ * The CSS width of the box the terminal sits in. The screen keeps the
+ * computer's columns, so on a phone it is often wider than the view: the
+ * box then takes the screen's width and the page scrolls sideways to its
+ * last column. Otherwise the box fills the view.
+ */
+export function boxWidth(screenWidth: number, viewWidth: number): string {
+  return screenWidth > viewWidth ? `${Math.ceil(screenWidth)}px` : "100%";
+}
