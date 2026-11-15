@@ -325,7 +325,8 @@ impl PtyEngine {
     pub fn foreground_busy(&self) -> Option<bool> {
         let shell_pid = i32::try_from(self.child.lock().process_id()?).ok()?;
         let members = self.job.members()?;
-        Some(kriyon_core::proc::windows_command_of(shell_pid, members).is_some())
+        let procs = members.into_iter().map(|m| (m.pid, m.ppid));
+        Some(kriyon_core::proc::windows_command_of(shell_pid, procs).is_some())
     }
 }
 

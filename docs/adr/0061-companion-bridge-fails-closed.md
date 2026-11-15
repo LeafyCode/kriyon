@@ -41,7 +41,9 @@ bridge only.
 
 - If the daemon cannot record its terminal, or the OS cannot place the poster, the
   companion stays silent for that session. The daemon's log says why.
-- On Windows, a `claude` started through a launcher process (a `.cmd` shim run by `cmd.exe`)
-  is the shell's grandchild, so its posts are refused like a nested one's. PowerShell, the
-  session shell, runs npm's `.ps1` shim in-process and the native `claude.exe` directly, so
-  the usual installs are the shell's child.
+- On Windows, a `claude` started through a launcher process (a `.cmd` shim run by `cmd.exe`,
+  as when PowerShell's policy blocks npm's `.ps1` shim) is the shell's grandchild. Since
+  15 Nov 2026 it owns the session too: a poster whose parent is a launcher (`cmd.exe`) that
+  is the shell's own child counts, read from the job's process names
+  (`kriyon_core::proc::is_launcher`). A `claude` nested under the owner still has the owner
+  between it and the shell, so it is still refused.

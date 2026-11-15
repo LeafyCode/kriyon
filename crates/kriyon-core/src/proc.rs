@@ -621,33 +621,56 @@ pub fn windows_command_of(shell: i32, procs: impl IntoIterator<Item = (i32, i32)
         .map(|(pid, _)| pid)
 }
 
+/// A process in a Windows session's Job Object, for [`windows_seat`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct JobMember {
+    pub pid: i32,
+    pub ppid: i32,
+    /// A launcher shim ([`is_launcher`]): `cmd.exe` running a `.cmd` file.
+    pub launcher: bool,
+}
+
+/// Whether the executable `exe_name` (a process table's image name) is a
+/// launcher that only starts another program: `cmd.exe`, which runs npm's
+/// `claude.cmd` shim when PowerShell's policy blocks the `.ps1` one.
+#[must_use]
+pub fn is_launcher(exe_name: &str) -> bool {
+    exe_name.eq_ignore_ascii_case("cmd.exe")
+}
+
 /// Where a Windows poster sits in its session: process `poster` against the
-/// session's `shell` and the `(pid, parent pid)` members of the shell's Job
-/// Object.
+/// session's `shell` and the members of the shell's Job Object.
 ///
 /// Windows has no terminal foreground, so [`windows_command_of`]'s rule stands
 /// in for it: the session's [Owning claude] is a member whose parent is the
-/// shell. A `claude` nested under it (through its tool shell) is a grandchild
-/// or deeper, so it never owns the session, and neither does anything outside
-/// the job.
+/// shell, or whose parent is a launcher ([`is_launcher`]) that is the shell's
+/// child (`claude.cmd` run by `cmd.exe`). A `claude` nested under it (through
+/// its tool shell) has the owner between, so it never owns the session, and
+/// neither does anything outside the job.
 #[must_use]
 pub fn windows_seat(
     poster: i32,
     shell: i32,
-    members: impl IntoIterator<Item = (i32, i32)>,
+    members: impl IntoIterator<Item = JobMember>,
 ) -> TerminalSeat {
-    let mut in_job = false;
-    let mut shells_child = false;
-    for (pid, ppid) in members {
-        if pid == poster {
-            in_job = true;
-            shells_child = ppid == shell && pid != shell;
-        }
-    }
+    let members: Vec<JobMember> = members.into_iter().collect();
+    let shells_child = |pid: i32| {
+        members
+            .iter()
+            .any(|m| m.pid == pid && m.ppid == shell && m.pid != shell)
+    };
+    let me = members.iter().find(|m| m.pid == poster);
+    let owner = me.is_some_and(|me| {
+        !me.launcher
+            && (shells_child(me.pid)
+                || members
+                    .iter()
+                    .any(|m| m.pid == me.ppid && m.launcher && shells_child(m.pid)))
+    });
     TerminalSeat {
         pgid: poster,
-        foreground_pgid: if shells_child { poster } else { 0 },
-        on_session_tty: in_job,
+        foreground_pgid: if owner { poster } else { 0 },
+        on_session_tty: me.is_some(),
     }
 }
 
@@ -668,11 +691,24 @@ mod tests {
         assert_eq!(windows_command_of(10, [(10, 10)]), None);
     }
 
+    fn member(pid: i32, parent: i32) -> JobMember {
+        JobMember {
+            pid,
+            ppid: parent,
+            launcher: false,
+        }
+    }
+
     #[test]
     fn a_windows_poster_owns_the_session_only_as_the_shells_own_child_in_its_job() {
         // Shell 10 running claude (20); claude's tool shell (30) runs a nested
         // claude (40). 50 is a process outside the session's job.
-        let job = [(10, 5), (20, 10), (30, 20), (40, 30)];
+        let job = [
+            member(10, 5),
+            member(20, 10),
+            member(30, 20),
+            member(40, 30),
+        ];
         assert!(
             windows_seat(20, 10, job).owns_session(),
             "the session's claude"
@@ -685,7 +721,48 @@ mod tests {
         assert!(!windows_seat(50, 10, job).owns_session(), "outside the job");
         // A process whose parent pid is the shell's but who is not in the job
         // (a pid the shell's could be reused by) is outside the session.
-        assert!(!windows_seat(60, 10, [(10, 5)]).owns_session());
+        assert!(!windows_seat(60, 10, [member(10, 5)]).owns_session());
+    }
+
+    /// ADR-0061's known limit, lifted: `claude` started through a launcher
+    /// shim (`claude.cmd`, run by `cmd.exe`) is the shell's grandchild, with
+    /// only the launcher between. It owns the session; a `claude` nested under
+    /// the owner, launched the same way, still has the owner between.
+    #[test]
+    fn a_claude_started_through_a_cmd_shim_owns_the_session() {
+        let launcher = |pid, parent| JobMember {
+            pid,
+            ppid: parent,
+            launcher: true,
+        };
+        // Shell 10 → cmd 20 → claude 30; claude's tool shell 40 → cmd 50 →
+        // nested claude 60.
+        let job = [
+            member(10, 5),
+            launcher(20, 10),
+            member(30, 20),
+            member(40, 30),
+            launcher(50, 40),
+            member(60, 50),
+        ];
+        assert!(windows_seat(30, 10, job).owns_session(), "through the shim");
+        assert!(!windows_seat(60, 10, job).owns_session(), "a nested claude");
+        assert!(!windows_seat(20, 10, job).owns_session(), "the shim itself");
+        // A launcher that isn't the shell's own child lets nothing through.
+        let deep = [
+            member(10, 5),
+            member(15, 10),
+            launcher(20, 15),
+            member(30, 20),
+        ];
+        assert!(!windows_seat(30, 10, deep).owns_session());
+    }
+
+    #[test]
+    fn only_cmd_is_a_launcher() {
+        assert!(is_launcher("cmd.exe") && is_launcher("CMD.EXE"));
+        assert!(!is_launcher("claude.exe") && !is_launcher("node.exe"));
+        assert!(!is_launcher("powershell.exe") && !is_launcher(""));
     }
 
     fn seat(pgid: i32, foreground_pgid: i32, on_session_tty: bool) -> TerminalSeat {
