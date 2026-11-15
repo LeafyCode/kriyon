@@ -282,6 +282,22 @@ const REAP_EVERY_N_TICKS: u64 = 30;
 /// schedule — which work runs at which cadence — instead of a modulus buried
 /// mid-loop, and so adding a pass does not re-indent the whole block.
 fn background_tick<R: tauri::Runtime>(app: &tauri::AppHandle<R>, tick: u64) {
+    // A dialog on a session's own screen before its hooks load (the folder
+    // trust prompt) needs the person (ADR-0064). Read from the daemons first,
+    // each lock on its own, then told to the runtimes.
+    {
+        let state = app.state::<AppState>();
+        let dialogs: Vec<(SessionId, bool)> = crate::session_registry::live_engines(&state)
+            .into_iter()
+            .map(|(id, engine)| (id, engine.dialog().is_some_and(|d| d.open)))
+            .collect();
+        let mut runtimes = state.runtimes.lock();
+        for (id, open) in dialogs {
+            if let Some(runtime) = runtimes.get_mut(&id) {
+                runtime.note_screen_dialog(open);
+            }
+        }
+    }
     // Idle -> Waiting/Done transitions, for sessions whose transcript is quiet.
     let ids: Vec<SessionId> = {
         let state = app.state::<AppState>();

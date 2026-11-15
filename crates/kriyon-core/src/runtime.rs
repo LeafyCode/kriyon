@@ -447,6 +447,14 @@ impl SessionRuntime {
         self.tracker.secs_since_last_notify(now)
     }
 
+    /// Whether a dialog shows on this session's own screen now, from the
+    /// daemon's dialog watch: before any hook, it means Claude Code asks
+    /// before starting (the folder trust prompt), which needs the person
+    /// (ADR-0064). Best effort; hooks decide once they run.
+    pub fn note_screen_dialog(&mut self, open: bool) {
+        self.tracker.note_screen_dialog(open);
+    }
+
     /// Whether a live hook event has driven this runtime's tracker yet.
     #[must_use]
     pub fn is_hook_driven(&self) -> bool {
@@ -774,6 +782,29 @@ mod tests {
                 .is_some(),
             "the arm from the real transition still stands"
         );
+    }
+
+    /// Claude Code asks whether to trust the folder before its hooks load,
+    /// so no hook reports it: a dialog on the session's own screen before
+    /// any hook does (ADR-0064). It needs the person, and stops once the
+    /// dialog goes; once hooks speak, they say what the status is.
+    #[test]
+    fn a_dialog_on_screen_before_any_hook_needs_you() {
+        let now = Instant::now();
+        let mut rt = SessionRuntime::new();
+        rt.note_screen_dialog(true);
+        let change = rt.apply_recompute(now).expect("a change");
+        assert_eq!(change.status, SessionStatus::Waiting);
+        assert!(rt.needs_you());
+        rt.note_screen_dialog(false);
+        let _ = rt.apply_recompute(now);
+        assert_eq!(rt.status(), SessionStatus::Idle);
+        assert!(!rt.needs_you());
+        // Hooks running: a dialog on screen is theirs to report.
+        rt.note_hook_event(&ev("UserPromptSubmit"));
+        rt.note_screen_dialog(true);
+        let _ = rt.apply_recompute(now);
+        assert_eq!(rt.status(), SessionStatus::Running);
     }
 
     #[test]
