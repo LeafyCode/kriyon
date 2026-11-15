@@ -1,0 +1,10 @@
+{
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Bash",
+  "tool_input": { "command": "cargo test" },
+  "tool_response": {
+    "stdout": "running 3 tests\ntest result: ok. 41 passed; 0 failed; 0 ignored\ntest result: ok. 2 passed; 0 failed",
+    "stderr": "",
+    "interrupted": false
+  }
+}

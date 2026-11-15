@@ -123,7 +123,7 @@ export interface Layout {
    *  its own. A layout saved before the tour existed reads as unseen. */
   tourSeen: boolean;
   transcriptView: TranscriptView;
-  view: "studio" | "focus" | "command" | "prompts" | "settings";
+  view: "studio" | "focus" | "command" | "prompts" | "remote" | "settings";
 }
 
 /** The [Mascot]s a user can pick, and `none` for no mascot. */

@@ -48,7 +48,7 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
   when hooks fire but the mod never did (Claude Code too old, or mods off there). Every
   companion-fed feature falls back to hooks when it isn't `on`.
 - **Hook spool** — the per-[Session] JSONL file (`~/.claude/kriyon/events/<id>.jsonl`) Kriyon's
-  hook script appends one line to per Claude Code hook event. Short-lived input, not an archive:
+  hook program (`kriyon-hook`, ADR-0066) appends one line to per Claude Code hook event. Short-lived input, not an archive:
   the app tails it for live [Status] and ingests it into the [Activity store]. Owner-only
   (`0600` files, `0700` folders), like Claude Code's own transcripts. _Avoid_: events log.
 - **Activity log** — the per-[Session] record of what Claude did: one turn per prompt (grouped by
@@ -84,7 +84,7 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
   on a match Kriyon stops injecting the folder and moves its hooks to the settings route, until the
   user tries the plugin again in Settings.
 - **Redaction** (`redact`) — best-effort removal of known secret shapes (API keys, tokens, private
-  keys, `password=` values, URL passwords) from text Kriyon stores. Runs in the hook script before a
+  keys, `password=` values, URL passwords) from text Kriyon stores. Runs in the hook program before a
   line reaches the [Hook spool] and again at ingest; both halves share one case file. A secret in a
   shape it doesn't know is kept, and the UI says so. _Avoid_: masking, sanitizing.
 - **Managed source** (`ManagedSource`, `ManagedSources`) — one place an organization delivers

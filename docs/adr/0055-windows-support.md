@@ -49,7 +49,8 @@ runs natively on Windows and runs hook commands through Git Bash.
   daemon's shell with a child is running that child. The daemon's busy signal
   uses the same rule, read from its job's members, so a process a finished
   command left behind never holds a session busy.
-- **Hooks need a real Python.** The hook scripts are Python, and Windows ships
+- **Hooks need a real Python** (superseded by [ADR-0066](0066-the-hook-is-a-rust-program.md):
+  the hook is now a Rust program shipped with the app). The hook scripts were Python, and Windows ships
   none (`python3` there is a Store stub that fails). Kriyon finds a real
   `python.exe` and writes its full path into the hook command, or else uses
   the `py` launcher; with neither, it leaves the hook entries out instead of
@@ -76,8 +77,7 @@ runs natively on Windows and runs hook commands through Git Bash.
 - One codebase and one protocol; the Windows-only code is the Job Object, the
   process table, the per-build daemon copy and a handful of `cfg(windows)`
   file-system and spawn details (no console windows for helper programs).
-- Status hooks on Windows depend on Python being installed. Porting the hook
-  scripts to a small Rust program would remove that dependency; it is the
-  largest remaining Windows gap.
+- Status hooks on Windows depended on Python being installed, until ADR-0066
+  replaced the scripts with a Rust program.
 - The release tooling (`scripts/release-mac.sh`, signing, the update feed) is
   still Mac-only. A Windows installer builds with `tauri build --bundles nsis`.

@@ -1,0 +1,12 @@
+{
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Bash",
+  "tool_use_id": "t",
+  "tool_input": { "command": "cat > src/a.js" },
+  "tool_response": {
+    "stdout": "",
+    "bashEditDiff": {
+      "files": [{ "filePath": "/w/src/a.js", "hunks": [{ "lines": ["+x"] }] }]
+    }
+  }
+}

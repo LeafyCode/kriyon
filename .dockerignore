@@ -1,0 +1,9 @@
+# Docker builds use the repository root (the push sender's Dockerfile needs
+# the workspace); send only sources, never build output or secrets.
+target
+node_modules
+dist
+.git
+**/*.secret
+**/*.p8
+crates/kriyon-push/push.env

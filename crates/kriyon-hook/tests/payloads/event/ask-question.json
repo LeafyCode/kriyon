@@ -1,0 +1,15 @@
+{
+  "hook_event_name": "PreToolUse",
+  "tool_name": "AskUserQuestion",
+  "tool_use_id": "q1",
+  "tool_input": {
+    "questions": [
+      {
+        "header": "DB",
+        "question": "Which db? password=hunter2",
+        "options": [{ "label": "Postgres" }, { "label": "SQLite" }],
+        "multiSelect": false
+      }
+    ]
+  }
+}

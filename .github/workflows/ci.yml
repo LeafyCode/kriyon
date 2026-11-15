@@ -79,7 +79,7 @@ jobs:
         env:
           PACKAGES: >-
             libwebkit2gtk-4.1-dev librsvg2-dev patchelf libxdo-dev libssl-dev
-            libayatana-appindicator3-dev
+            libayatana-appindicator3-dev gnome-keyring dbus-daemon
         run: |
           echo "packages=$PACKAGES" >> "$GITHUB_OUTPUT"
           hash="$(echo "$PACKAGES" | sha256sum | cut -c1-16)"
@@ -131,6 +131,40 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
+      # Remote access's keyring on Linux against a real Secret Service:
+      # GNOME Keyring in a D-Bus session of its own, unlocked with a
+      # throwaway password. No secret of the repo's is involved.
+      - name: Keyring against a real Secret Service
+        run: |
+          # shellcheck disable=SC2016 # the session's own sh expands these
+          dbus-run-session -- sh -c '
+            set -eu
+            echo -n ci-only | gnome-keyring-daemon --unlock --components=secrets --daemonize >/dev/null
+            gnome-keyring-daemon --start --components=secrets >/dev/null
+            # The daemon claims the Secret Service name after it returns:
+            # wait for a real call to answer (it also starts the service if
+            # D-Bus starts it on demand), or show what the bus has.
+            ready=""
+            for _ in $(seq 1 20); do
+              if dbus-send --session --print-reply --dest=org.freedesktop.secrets \
+                /org/freedesktop/secrets org.freedesktop.DBus.Properties.Get \
+                string:org.freedesktop.Secret.Service string:Collections >/dev/null 2>&1; then
+                ready=yes
+                break
+              fi
+              sleep 0.5
+            done
+            if [ -z "$ready" ]; then
+              echo "No Secret Service answered. On the bus:"
+              dbus-send --session --print-reply --dest=org.freedesktop.DBus /org/freedesktop/DBus \
+                org.freedesktop.DBus.ListNames || true
+              echo "Started on demand:"
+              dbus-send --session --print-reply --dest=org.freedesktop.DBus /org/freedesktop/DBus \
+                org.freedesktop.DBus.ListActivatableNames || true
+              exit 1
+            fi
+            cargo test -p kriyon --lib keyring_vault -- --ignored
+          '
 
   # The app is Mac-first, so the Mac is where clippy, the tests and a real
   # app build have to pass. macOS runners cost ten times as much on a private

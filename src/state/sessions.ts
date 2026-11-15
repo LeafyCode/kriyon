@@ -92,7 +92,7 @@ export interface UiSession {
   /** When the session was archived (ms since epoch), or null while active. */
   archivedAt: number | null;
   /**
-   * The git oid captured at session start (see `captureBaseline`), used as the
+   * The git oid captured at session start (see `capture_baseline` in Rust, taken as the session starts), used as the
    * base of the working-tree diff for the Changes view. `null` until a
    * baseline has been captured, or when the session's cwd is not a git repo.
    * Mirrors {@link SessionRow.baselineOid} — carried through so `persist()`
@@ -274,6 +274,12 @@ export interface SessionsState {
    */
   memory: Record<string, number>;
   /**
+   * A session started without this window (by a [Remote device]): it joins
+   * the sidebar, idle, without taking the window. Opening it takes over its
+   * shell, where `claude` already runs. Heard again, it changes nothing.
+   */
+  noteSessionAdded: (row: SessionRow) => void;
+  /**
    * Record that a session's `claude` exited underneath the app. Ignores ids the
    * store does not know (the host's exit signal is shared with Project terminal
    * panes). See {@link SessionsState.exited}.
@@ -326,7 +332,7 @@ export interface SessionsState {
   sessions: Record<string, UiSession>;
   setActiveSession: (id: string) => void;
   /**
-   * Record a session's captured git baseline oid (see `bridge.captureBaseline`)
+   * Record a session's captured git baseline oid (taken by Rust as the session starts)
    * and re-persist the row so it survives app restart. A no-op if the session
    * has since been removed — the fire-and-forget capture in `createSession`
    * can resolve after the session is gone (e.g. immediately archived/closed).
@@ -937,6 +943,13 @@ export const useSessions = create<SessionsState>((set, get) => ({
       state.projects.some((existing) => existing.id === p.id)
         ? state
         : { projects: [...state.projects, p] }
+    ),
+
+  noteSessionAdded: (row) =>
+    set((state) =>
+      state.sessions[row.id]
+        ? state
+        : { sessions: { ...state.sessions, [row.id]: idleSession(row) } }
     ),
 
   addSession: (s) =>

@@ -1,0 +1,55 @@
+{
+  "expo": {
+    "name": "Kriyon",
+    "slug": "kriyon",
+    "version": "0.16.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "automatic",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.leafycode.kriyon.mobile"
+    },
+    "android": {
+      "allowBackup": false,
+      "adaptiveIcon": {
+        "backgroundColor": "#0d1017",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false,
+      "package": "com.leafycode.kriyon.mobile"
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "scheme": "kriyon",
+    "plugins": [
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "minSdkVersion": 28
+          }
+        }
+      ],
+      "expo-notifications",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Kriyon uses the camera only to scan the pairing code your computer shows.",
+          "microphonePermission": false,
+          "recordAudioAndroid": false,
+          "barcodeScannerEnabled": true
+        }
+      ],
+      [
+        "expo-local-authentication",
+        {
+          "faceIDPermission": "Kriyon asks for Face ID to unlock it, so only you can reach your computers' sessions."
+        }
+      ]
+    ]
+  }
+}

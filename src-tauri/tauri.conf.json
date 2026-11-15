@@ -53,7 +53,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "externalBin": ["binaries/kriyon-ptyd"],
+    "externalBin": ["binaries/kriyon-ptyd", "binaries/kriyon-hook"],
     "resources": {
       "sounds/marimba.wav": "marimba.wav",
       "sounds/music_box.wav": "music_box.wav",

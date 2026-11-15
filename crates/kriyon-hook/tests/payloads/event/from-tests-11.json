@@ -1,0 +1,13 @@
+{
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Agent",
+  "tool_use_id": "toolu_1",
+  "tool_input": { "subagent_type": "general-purpose", "description": "Survey" },
+  "tool_response": {
+    "isAsync": true,
+    "status": "async_launched",
+    "agentId": "a5bb20474b9c0c0bd",
+    "description": "Survey",
+    "prompt": "a very long prompt"
+  }
+}

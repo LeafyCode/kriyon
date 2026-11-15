@@ -1,0 +1,9 @@
+{
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Bash",
+  "tool_use_id": "toolu_5",
+  "tool_response": {
+    "stdout": "",
+    "bashEditDiff": { "files": [{ "filePath": "/w/a", "hunks": [] }] }
+  }
+}

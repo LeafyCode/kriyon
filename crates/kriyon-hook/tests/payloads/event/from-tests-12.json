@@ -1,0 +1,10 @@
+{
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Agent",
+  "tool_use_id": "toolu_1",
+  "tool_response": {
+    "isAsync": true,
+    "status": "async_launched",
+    "agent_id": 7
+  }
+}

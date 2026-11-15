@@ -4,7 +4,9 @@
  * (instead of one per backend chunk), and — because the merged buffer preserves
  * byte order exactly — it keeps xterm's DEC-2026 synchronized-output framing
  * intact. Each flush reports the byte count via `onFlush` so the Rust reader's
- * drained accounting (and its high-water back-pressure) stays accurate.
+ * drained accounting (its output gate) stays accurate. A hidden window gets no
+ * frames, so nothing flushes until it shows again; Rust keeps reading the
+ * session meanwhile and catches this queue up after (ADR-0059).
  */
 export interface WriteQueueOptions {
   /** Cancel a scheduled frame. Defaults to `cancelAnimationFrame`. */
@@ -63,7 +65,7 @@ export class WriteQueue {
   /**
    * Cancel any pending frame. Bytes still queued are discarded (the terminal is
    * going away) but still reported via `onFlush` so the Rust drained counter
-   * stays exact and the PTY reader does not park at the high-water mark.
+   * stays exact and the Rust output gate does not hold output for nothing.
    */
   dispose(): void {
     if (this.handle !== undefined) {

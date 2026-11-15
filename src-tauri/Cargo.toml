@@ -26,13 +26,22 @@ tauri = { version = "2.12.1", features = ["tray-icon", "macos-private-api", "ima
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Already in the tree through iroh (rustls with ring); used to reach the
+# push sender (remote_push_rt.rs). The relay API is kriyon-relay-client's.
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 kriyon-core = { path = "../crates/kriyon-core" }
+kriyon-remote = { path = "../crates/kriyon-remote" }
+kriyon-remote-link = { path = "../crates/kriyon-remote-link", features = ["host-runtime"] }
+kriyon-relay-client = { path = "../crates/kriyon-relay-client" }
+iroh = { version = "1.4.1", default-features = false, features = ["tls-ring"] }
+qrcode = { version = "0.14.1", default-features = false }
+tokio = { version = "1", default-features = false, features = ["macros", "rt", "sync", "time"] }
 tauri-plugin-notification = "2"
 tauri-plugin-fs = "2"
 tauri-plugin-shell = "2"
 tauri-plugin-deep-link = "2"
 tauri-plugin-dialog = "2"
-portable-pty = "0.9"
 parking_lot = "0.12"
 tempfile = "3"
 rusqlite = { version = "0.41.1", features = ["bundled"] }
@@ -45,6 +54,8 @@ ignore = "0.4"
 plist = "1"
 semver = "1"
 tauri-plugin-updater = "2"
+# Random ids for push wake-ups on every platform (also used by macOS notifications).
+uuid = { version = "1", features = ["v4"] }
 
 [features]
 # Lets a local test build read its update feed from `KRIYON_UPDATE_FEED`, to
@@ -52,7 +63,15 @@ tauri-plugin-updater = "2"
 # Never on in CI: a shipped build reads only its channel's fixed feed.
 local-feed = []
 
+[target.'cfg(target_os = "linux")'.dependencies]
+# Linux's keyring (the Secret Service) for remote access's keys. Pure-Rust
+# crypto, over the zbus (async-io) already in the tree.
+secret-service = { version = "5.2", features = ["rt-async-io-crypto-rust"] }
+# Its errors, to tell "no keyring running" apart (the version secret-service uses).
+zbus = { version = "5", default-features = false }
+
 [target.'cfg(target_os = "macos")'.dependencies]
+security-framework = { version = "3.7", features = ["OSX_10_15"] }
 objc2 = { version = "0.6", features = ["exception"] }
 objc2-app-kit = { version = "0.3", features = ["NSSound", "NSGraphics", "NSPasteboard", "NSPasteboardItem"] }
 objc2-foundation = { version = "0.3", features = ["NSString", "NSDictionary", "NSObject", "NSError", "NSBundle", "NSFileManager", "NSURL"] }
@@ -66,7 +85,6 @@ objc2-user-notifications = { version = "0.3", features = [
     "UNNotificationTrigger",
 ] }
 block2 = "0.6"
-uuid = { version = "1", features = ["v4"] }
 libproc = "0.14"
 
 [target."cfg(unix)".dependencies]
@@ -84,6 +102,11 @@ windows-sys = { version = "0.61", features = [
 ] }
 
 [dev-dependencies]
+# A real pty for the macOS process-table test (memory.rs).
+portable-pty = "0.9"
+kriyon-remote-link = { path = "../crates/kriyon-remote-link", features = ["host-runtime", "test-support"] }
+# The real push sender, so host-side wakes are tested against it.
+kriyon-push = { path = "../crates/kriyon-push" }
 # The mock runtime behind `tauri::test`, so the watch-signal route (state
 # mutation + event emits) is unit-testable without a real webview/tray.
 tauri = { version = "2", features = ["test"] }

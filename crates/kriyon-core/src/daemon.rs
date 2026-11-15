@@ -7,6 +7,9 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::cli_dialog::DialogState;
+use crate::wire::Frame;
+
 /// `true` if `id` is safe to interpolate into a [Session socket] path: non-empty
 /// and only ASCII alphanumerics or `-` (Kriyon ids are UUIDs). Rejects anything
 /// that could traverse (`..`, `/`) or otherwise escape the run directory.
@@ -108,8 +111,77 @@ pub fn session_socket_path(run_dir: &Path, id: &str) -> Option<PathBuf> {
     }
 }
 
+/// What the daemon said, as the reader read it: every frame from the daemon,
+/// in order, handed to the client's listener before anything can wait.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DaemonEvent<'a> {
+    /// The daemon's [Session run], first on every attach.
+    Hello { run: u64 },
+    /// Output the session just made.
+    Output(&'a [u8]),
+    /// Part of the daemon's [Screen snapshot] for the app's own terminal: a
+    /// repaint, not output the session made.
+    Screen(&'a [u8]),
+    /// The shell's foreground-busy state.
+    Busy(bool),
+    /// The [CLI dialog] on the daemon's screen.
+    Dialog(DialogState),
+    /// Part of the [Output history] for requester `id`.
+    History { id: u32, bytes: &'a [u8] },
+    /// The end of the [Output history] for requester `id`.
+    HistoryEnd { id: u32 },
+    /// Part of a [Screen snapshot] for requester `id`.
+    Snapshot { id: u32, bytes: &'a [u8] },
+    /// The end of the snapshot for requester `id`.
+    SnapshotEnd { id: u32 },
+}
+
+impl<'a> DaemonEvent<'a> {
+    /// The event a frame from the daemon is; `None` for a frame only the app
+    /// sends.
+    #[must_use]
+    pub fn of(frame: &'a Frame) -> Option<Self> {
+        Some(match frame {
+            Frame::Hello { run } => Self::Hello { run: *run },
+            Frame::Output(bytes) => Self::Output(bytes),
+            Frame::Screen(bytes) => Self::Screen(bytes),
+            Frame::Busy(busy) => Self::Busy(*busy),
+            Frame::Dialog { open, generation } => Self::Dialog(DialogState {
+                open: *open,
+                generation: *generation,
+            }),
+            Frame::History { id, bytes } => Self::History { id: *id, bytes },
+            Frame::HistoryEnd { id } => Self::HistoryEnd { id: *id },
+            Frame::Snapshot { id, bytes } => Self::Snapshot { id: *id, bytes },
+            Frame::SnapshotEnd { id } => Self::SnapshotEnd { id: *id },
+            Frame::Stdin(_)
+            | Frame::Resize { .. }
+            | Frame::Attach { .. }
+            | Frame::Shutdown
+            | Frame::Repaint
+            | Frame::RequestHistory { .. }
+            | Frame::RequestSnapshot { .. } => return None,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_frame_from_the_daemon_is_an_event_and_one_only_the_app_sends_is_not() {
+        use super::DaemonEvent;
+        use crate::wire::Frame;
+        assert_eq!(
+            DaemonEvent::of(&Frame::Hello { run: 7 }),
+            Some(DaemonEvent::Hello { run: 7 })
+        );
+        assert_eq!(
+            DaemonEvent::of(&Frame::Output(b"x".to_vec())),
+            Some(DaemonEvent::Output(b"x"))
+        );
+        assert_eq!(DaemonEvent::of(&Frame::Repaint), None);
+    }
+
     use super::*;
     use std::path::Path;
 

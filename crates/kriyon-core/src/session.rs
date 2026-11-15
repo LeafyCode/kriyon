@@ -84,6 +84,33 @@ pub enum EngineError {
     Pty(String),
     #[error("session not found")]
     NotFound,
+    #[error("screen size {cols}x{rows} is out of range (1 to {MAX_SCREEN_SIDE} each)")]
+    InvalidSize { cols: u16, rows: u16 },
+}
+
+/// The most columns or rows a session's screen may have.
+///
+/// Wide enough for any real display: a 6K monitor at a tiny font is about 700
+/// columns by 250 rows. Small enough that the daemon's screen emulator, which
+/// allocates every 32-byte cell of both its screen buffers up front, stays
+/// under 64 MB, where `u16::MAX` sides would ask for about 275 GB.
+pub const MAX_SCREEN_SIDE: u16 = 1000;
+
+/// Check a requested screen size before it reaches the pty or the daemon's
+/// emulator. Zero crashes the emulator (it subtracts one from the row count)
+/// and a huge side exhausts memory, so both are rejected, never clamped: a
+/// size the terminal didn't ask for would leave it and the session disagreeing.
+///
+/// # Errors
+/// Returns [`EngineError::InvalidSize`] if either side is 0 or above
+/// [`MAX_SCREEN_SIDE`].
+pub fn check_screen_size(cols: u16, rows: u16) -> Result<(), EngineError> {
+    let ok = |side: u16| (1..=MAX_SCREEN_SIDE).contains(&side);
+    if ok(cols) && ok(rows) {
+        Ok(())
+    } else {
+        Err(EngineError::InvalidSize { cols, rows })
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -99,6 +126,36 @@ pub enum SessionStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_real_terminal_size_is_accepted() {
+        for (cols, rows) in [(80, 24), (1, 1), (1000, 1000), (400, 120)] {
+            assert!(
+                check_screen_size(cols, rows).is_ok(),
+                "{cols}x{rows} is a size a real terminal can have"
+            );
+        }
+    }
+
+    #[test]
+    fn a_zero_or_huge_size_is_rejected() {
+        for (cols, rows) in [
+            (0, 24),
+            (80, 0),
+            (0, 0),
+            (1001, 24),
+            (80, 1001),
+            (u16::MAX, u16::MAX),
+        ] {
+            assert!(
+                matches!(
+                    check_screen_size(cols, rows),
+                    Err(EngineError::InvalidSize { .. })
+                ),
+                "{cols}x{rows} must be rejected before it reaches the pty or the emulator"
+            );
+        }
+    }
 
     #[test]
     fn strips_claude_code_identity_but_keeps_config_and_kriyon() {

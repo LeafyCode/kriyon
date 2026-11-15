@@ -13,7 +13,6 @@
 
 use std::path::{Path, PathBuf};
 
-use kriyon_core::hooks::{HOOK_SCRIPT, USAGE_SCRIPT};
 use kriyon_core::policy::{ManagedPolicy, PolicyRead};
 use serde_json::{json, Value};
 
@@ -29,10 +28,11 @@ const STATUSLINE_SCRIPT: &str = r#"#!/bin/sh
 # Kriyon status-line wrapper. Captures live usage and plan limits, then
 # renders the user's original status line. See crate::hooks.
 INPUT=$(cat)
-# Start python only when there is something to capture: a Kriyon session, or
-# a reply that carried plan limits (an API-key login never does).
+HOOK="$HOME/.claude/kriyon/bin/kriyon-hook"
+# Run the capture only when there is something to capture: a Kriyon session,
+# or a reply that carried plan limits (an API-key login never does).
 if [ -n "$KRIYON_SESSION" ] || printf '%s' "$INPUT" | grep -q '"rate_limits"'; then
-  printf '%s' "$INPUT" | __PYTHON__ "$HOME/.claude/kriyon/kriyon-usage.py" "$KRIYON_SESSION" 2>/dev/null || true
+  printf '%s' "$INPUT" | "$HOOK" usage "$KRIYON_SESSION" 2>/dev/null || true
 fi
 INNER_FILE="$HOME/.claude/kriyon/inner-statusline"
 if [ -f "$INNER_FILE" ]; then
@@ -43,10 +43,7 @@ if [ -f "$INNER_FILE" ]; then
   fi
 fi
 # No original status line: print the model name so the bar isn't blank.
-printf '%s' "$INPUT" | __PYTHON__ -c 'import sys,json
-try: d=json.load(sys.stdin)
-except Exception: d={}
-print((d.get("model") or {}).get("display_name","Claude"))' 2>/dev/null || true
+printf '%s' "$INPUT" | "$HOOK" model 2>/dev/null || echo Claude
 "#;
 
 pub use kriyon_core::paths::{events_dir, events_file, kriyon_dir, usage_dir, usage_file};
@@ -66,11 +63,10 @@ pub fn tasks_dir(home: &Path) -> PathBuf {
     home.join(".claude").join("tasks")
 }
 
-/// The shell command Claude runs for the hook: Python (see
-/// [`python_command`]) and the quoted script, or `None` when this computer has
-/// no Python to run it with.
-fn hook_command(script: &Path) -> Option<String> {
-    Some(format!("{} {}", python_command()?, sh_path(script)))
+/// The shell command Claude runs for the hook: Kriyon's own program, in
+/// its `event` mode (ADR-0066).
+fn hook_command(program: &Path) -> String {
+    format!("{} event", sh_path(program))
 }
 
 /// `path` as one word for the POSIX shell Claude Code runs hooks and the status
@@ -80,38 +76,37 @@ fn sh_path(path: &Path) -> String {
     kriyon_core::shellinit::sh_quote(&path.display().to_string().replace('\\', "/"))
 }
 
-/// How a hook command starts Python: `python3` on macOS, which ships it.
-#[cfg(not(windows))]
-#[allow(clippy::unnecessary_wraps)]
-fn python_command() -> Option<String> {
-    Some("python3".to_string())
+/// What the retired Python scripts become (ADR-0066): comments only, so a
+/// `claude` started before the update, which still runs the old command,
+/// gets an exit of 0 and no output. Deleting them would make Python exit 2,
+/// which Claude reads as "block the tool".
+const RETIRED_SCRIPT: &str =
+    "# Retired: Kriyon's hook is now ~/.claude/kriyon/bin/kriyon-hook (ADR-0066).\n\
+# Kept so a claude started before the update runs this, does nothing and exits 0.\n";
+
+/// The hook program's file name: `kriyon-hook`, `.exe` on Windows.
+const HOOK_NAME: &str = if cfg!(windows) {
+    "kriyon-hook.exe"
+} else {
+    "kriyon-hook"
+};
+
+/// The hook program as the app ships it: `$KRIYON_HOOK_BIN`, else beside the
+/// app's own executable (where the bundler and a dev build place it).
+#[cfg(not(test))]
+fn bundled_hook() -> Option<PathBuf> {
+    if let Some(path) = std::env::var_os("KRIYON_HOOK_BIN") {
+        return Some(PathBuf::from(path));
+    }
+    let exe = std::env::current_exe().ok()?;
+    Some(exe.parent()?.join(HOOK_NAME))
 }
 
-/// How a hook command starts Python on Windows: the full path of a real
-/// `python.exe`. Windows has no `python3`, and the `python.exe` / `python3.exe`
-/// in `WindowsApps` are Store stubs that print "Python was not found" — the
-/// hook would fail on every event. Found once per run on the app's PATH; the
-/// `py` launcher when only that is installed; `None` when there is no Python
-/// at all — Windows doesn't ship one — and the hooks are then left out rather
-/// than fail on every event.
-#[cfg(windows)]
-fn python_command() -> Option<String> {
-    static FOUND: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
-    FOUND
-        .get_or_init(|| {
-            let real = |name: &str| {
-                crate::spawn::on_path(name, None)
-                    .find(|exe| !exe.to_string_lossy().contains("WindowsApps"))
-            };
-            if let Some(exe) = real("python.exe") {
-                Some(sh_path(&exe))
-            } else if real("py.exe").is_some() {
-                Some("py -3".to_string())
-            } else {
-                None
-            }
-        })
-        .clone()
+/// A test executable has no sidecar beside it: tests install the staged one.
+#[cfg(test)]
+#[allow(clippy::unnecessary_wraps)] // the same signature as the shipped one
+fn bundled_hook() -> Option<PathBuf> {
+    Some(tests::built_hook())
 }
 
 /// Which settings scope, if any, turns Kriyon's hooks off for a session in
@@ -145,17 +140,21 @@ fn hooks_off_with(
     })
 }
 
-/// `~/.claude/kriyon/kriyon-hook.py` — the hook script every hook entry runs.
+/// `~/.claude/kriyon/bin/kriyon-hook`: the program every hook entry and the
+/// status-line wrapper run. A copy of the app's, at a path that doesn't move
+/// with the app and that an app update never has to replace while a hook
+/// runs.
 #[must_use]
-pub fn hook_script(home: &Path) -> PathBuf {
-    kriyon_dir(home).join("kriyon-hook.py")
+pub fn hook_binary(home: &Path) -> PathBuf {
+    kriyon_dir(home).join("bin").join(HOOK_NAME)
 }
 
-/// The command a hook entry runs (see [`hook_command`]), or `None` when there
-/// is no Python to run it with.
+/// The command a hook entry runs (see [`hook_command`]), or `None` when the
+/// hook program isn't installed (the app's copy was missing).
 #[must_use]
 pub fn hook_command_for(home: &Path) -> Option<String> {
-    hook_command(&hook_script(home))
+    let program = hook_binary(home);
+    program.is_file().then(|| hook_command(&program))
 }
 
 /// The command Claude runs for Kriyon's status-line wrapper.
@@ -167,30 +166,70 @@ pub fn statusline_command(home: &Path) -> String {
     )
 }
 
-/// Write Kriyon's scripts (hook, status-line wrapper, usage capture) and the
-/// owner-only folders they write into. Idempotent; never touches settings.
+/// Install Kriyon's hook program and write its status-line wrapper and the
+/// owner-only folders they write into; the Python scripts an older version
+/// wrote go (ADR-0066). Idempotent; never touches settings.
 ///
 /// # Errors
-/// When a folder or script can't be written.
+/// When a folder or the wrapper can't be written. A hook program the app
+/// doesn't carry isn't an error: the hooks are then left out.
 pub fn write_scripts(home: &Path) -> std::io::Result<()> {
+    write_scripts_from(home, bundled_hook().as_deref())
+}
+
+/// [`write_scripts`], installing the hook program from `source`.
+fn write_scripts_from(home: &Path, source: Option<&Path>) -> std::io::Result<()> {
     use kriyon_core::private_fs::{create_private_dir, write_private};
     let dir = kriyon_dir(home);
-    for d in [dir.clone(), events_dir(home), usage_dir(home)] {
+    for d in [
+        dir.clone(),
+        events_dir(home),
+        usage_dir(home),
+        dir.join("bin"),
+    ] {
         create_private_dir(&d)?;
     }
-    write_private(&hook_script(home), HOOK_SCRIPT.as_bytes())?;
+    if let Some(source) = source.filter(|source| source.is_file()) {
+        install_hook(source, &hook_binary(home))?;
+    }
     write_private(
         &dir.join("kriyon-statusline.sh"),
-        STATUSLINE_SCRIPT
-            // With no Python the capture lines fail quietly (`|| true`) and
-            // the user's own status line still prints.
-            .replace(
-                "__PYTHON__",
-                &python_command().unwrap_or_else(|| "python3".to_string()),
-            )
-            .as_bytes(),
+        STATUSLINE_SCRIPT.as_bytes(),
     )?;
-    write_private(&dir.join("kriyon-usage.py"), USAGE_SCRIPT.as_bytes())?;
+    for old in ["kriyon-hook.py", "kriyon-usage.py"] {
+        let old = dir.join(old);
+        if old.exists() {
+            write_private(&old, RETIRED_SCRIPT.as_bytes())?;
+        }
+    }
+    Ok(())
+}
+
+/// Put `source` at `dest`, unless the same program is there: copied beside,
+/// then renamed in, so a hook never starts a half-written file. On Windows a
+/// copy a running hook holds can't be replaced; it is then kept until the
+/// next start.
+fn install_hook(source: &Path, dest: &Path) -> std::io::Result<()> {
+    let same = std::fs::read(dest)
+        .ok()
+        .zip(std::fs::read(source).ok())
+        .is_some_and(|(old, new)| old == new);
+    if same {
+        return Ok(());
+    }
+    let partial = dest.with_extension("partial");
+    std::fs::copy(source, &partial)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&partial, std::fs::Permissions::from_mode(0o700))?;
+    }
+    if let Err(e) = std::fs::rename(&partial, dest) {
+        let _ = std::fs::remove_file(&partial);
+        if !cfg!(windows) || !dest.is_file() {
+            return Err(e);
+        }
+    }
     Ok(())
 }
 
@@ -300,20 +339,111 @@ mod tests {
         }
     }
 
+    /// A built `kriyon-hook` to install: the staged sidecar, which the
+    /// app's own build already requires (`node scripts/sidecar-ptyd.mjs`).
+    pub(super) fn built_hook() -> PathBuf {
+        let binaries = Path::new(env!("CARGO_MANIFEST_DIR")).join("binaries");
+        std::fs::read_dir(&binaries)
+            .expect("staged sidecars")
+            .flatten()
+            .map(|entry| entry.path())
+            .find(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with("kriyon-hook-"))
+            })
+            .expect("stage it first: node scripts/sidecar-ptyd.mjs")
+    }
+
     #[cfg(unix)]
     #[test]
     fn a_hook_path_with_an_apostrophe_reaches_the_shell_as_one_word() {
-        let script = Path::new("/Users/O'Neil/.claude/kriyon/kriyon-hook.py");
-        let command = hook_command(script).expect("python3 on unix");
-        let quoted = command.strip_prefix("python3 ").expect("python first");
+        let command = hook_command(Path::new("/Users/O'Neil/.claude/kriyon/bin/kriyon-hook"));
+        let quoted = command.strip_suffix(" event").expect("the event mode last");
         let out = std::process::Command::new("/bin/sh")
             .args(["-c", &format!("printf '%s|' {quoted}")])
             .output()
             .expect("sh runs");
         assert_eq!(
             String::from_utf8_lossy(&out.stdout),
-            "/Users/O'Neil/.claude/kriyon/kriyon-hook.py|"
+            "/Users/O'Neil/.claude/kriyon/bin/kriyon-hook|"
         );
+    }
+
+    /// ADR-0066: the hook is Kriyon's own program, installed under
+    /// `~/.claude/kriyon/bin` from the app; no Python anywhere.
+    #[test]
+    fn the_hook_program_is_installed_and_the_python_scripts_go() {
+        let home = tempfile::tempdir().unwrap();
+        let dir = kriyon_dir(home.path());
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("kriyon-hook.py"), "old").unwrap();
+        std::fs::write(dir.join("kriyon-usage.py"), "old").unwrap();
+        assert_eq!(hook_command_for(home.path()), None, "nothing installed yet");
+        write_scripts_from(home.path(), Some(&built_hook())).unwrap();
+        let installed = hook_binary(home.path());
+        assert!(installed.is_file());
+        // A claude started before the update still runs the old command:
+        // the old scripts stay as stubs that do nothing and exit 0, since a
+        // missing file would exit 2, which Claude reads as "block the tool".
+        for old in ["kriyon-hook.py", "kriyon-usage.py"] {
+            let stub = std::fs::read_to_string(dir.join(old)).expect("a stub");
+            assert_eq!(stub, RETIRED_SCRIPT, "{old}");
+        }
+        let command = hook_command_for(home.path()).expect("a command");
+        assert!(
+            command.contains(kriyon_core::hooks::KRIYON_HOOK_MARKER),
+            "{command}"
+        );
+        assert!(
+            command.ends_with(" event") && !command.contains("python"),
+            "{command}"
+        );
+        let wrapper = std::fs::read_to_string(dir.join("kriyon-statusline.sh")).unwrap();
+        assert!(!wrapper.contains("python"), "{wrapper}");
+        // Again: nothing changes, nothing fails.
+        write_scripts_from(home.path(), Some(&built_hook())).unwrap();
+        assert!(installed.is_file());
+    }
+
+    /// The status-line wrapper, run as Claude runs it, keeps the session's
+    /// usage and prints the person's own line, else the model's name.
+    #[cfg(unix)]
+    #[test]
+    fn the_status_line_wrapper_keeps_usage_and_prints_a_line() {
+        let home = tempfile::tempdir().unwrap();
+        write_scripts_from(home.path(), Some(&built_hook())).unwrap();
+        let input = r#"{"session_id":"c-1","model":{"display_name":"Opus"},"context_window":{"used_percentage":7}}"#;
+        let run = || {
+            let mut child = std::process::Command::new("sh")
+                .arg(kriyon_dir(home.path()).join("kriyon-statusline.sh"))
+                .env("HOME", home.path())
+                .env("KRIYON_SESSION", "sess-1")
+                .env_remove("KRIYON_TTY")
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .spawn()
+                .unwrap();
+            {
+                use std::io::Write as _;
+                child
+                    .stdin
+                    .take()
+                    .unwrap()
+                    .write_all(input.as_bytes())
+                    .unwrap();
+            }
+            String::from_utf8(child.wait_with_output().unwrap().stdout).unwrap()
+        };
+        assert_eq!(run(), "Opus\n");
+        let usage = std::fs::read_to_string(usage_dir(home.path()).join("sess-1.json")).unwrap();
+        assert!(usage.contains("\"usedPercentage\": 7"), "{usage}");
+        std::fs::write(
+            kriyon_dir(home.path()).join("inner-statusline"),
+            "echo mine",
+        )
+        .unwrap();
+        assert_eq!(run(), "mine\n");
     }
 
     #[test]

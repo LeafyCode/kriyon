@@ -33,6 +33,8 @@ export const VERSION_FILES = {
   cargoToml: "Cargo.toml",
   cargoLock: "Cargo.lock",
   site: "website/src/lib/site.ts",
+  mobilePackageJson: "mobile/app/package.json",
+  mobileAppJson: "mobile/app/app.json",
 };
 
 const replaceOrThrow = (text, pattern, version, what) => {
@@ -69,7 +71,14 @@ const setLockVersion = (cargoLock, version) =>
  * Every place the version lives, keyed by a name that points at the file.
  * Throws when one is missing, so a moved line can't pass as "in step".
  */
-export const readVersions = ({ packageJson, cargoToml, cargoLock, site }) => {
+export const readVersions = ({
+  packageJson,
+  cargoToml,
+  cargoLock,
+  site,
+  mobilePackageJson,
+  mobileAppJson,
+}) => {
   const crates = workspaceBlocks(cargoLock);
   const versions = {
     "package.json": packageJson.match(PACKAGE_VERSION)?.[2],
@@ -81,6 +90,8 @@ export const readVersions = ({ packageJson, cargoToml, cargoLock, site }) => {
       ])
     ),
     "website/src/lib/site.ts": site.match(SITE_VERSION)?.[2],
+    "mobile/app/package.json": mobilePackageJson.match(PACKAGE_VERSION)?.[2],
+    "mobile/app/app.json": mobileAppJson.match(PACKAGE_VERSION)?.[2],
   };
   const missing = Object.keys(versions).filter((file) => !versions[file]);
   if (crates.length === 0) {
@@ -116,6 +127,18 @@ export const setVersions = (files, version) => {
       SITE_VERSION,
       version,
       "website/src/lib/site.ts APP_VERSION"
+    ),
+    mobilePackageJson: replaceOrThrow(
+      files.mobilePackageJson,
+      PACKAGE_VERSION,
+      version,
+      "mobile/app/package.json"
+    ),
+    mobileAppJson: replaceOrThrow(
+      files.mobileAppJson,
+      PACKAGE_VERSION,
+      version,
+      "mobile/app/app.json expo.version"
     ),
   };
   readVersions(updated);

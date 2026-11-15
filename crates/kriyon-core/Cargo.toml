@@ -13,11 +13,15 @@ thiserror = "2"
 semver = { version = "1", features = ["serde"] }
 dunce = "1"
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [target.'cfg(windows)'.dependencies]
 uds_windows = "1.2"
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Storage_FileSystem",
+    "Win32_System_SystemInformation",
 ] }
 
 [dev-dependencies]

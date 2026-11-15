@@ -35,6 +35,39 @@ fn transcript_path(home: &Path, folder: &str, claude_id: &str) -> Option<PathBuf
         .find(|path| path.is_file())
 }
 
+/// The transcript of session `row`'s conversation, if it has one.
+#[must_use]
+pub fn session_transcript(home: &Path, row: &crate::store::SessionRow) -> Option<PathBuf> {
+    let id = row.claude_session_id.as_deref()?;
+    transcript_path(home, row.worktree_path.as_deref().unwrap_or(&row.cwd), id)
+}
+
+/// Session `session_id`'s turns (its stored `row`), oldest first, the newest
+/// [`MAX_TURNS`]: the bridge read in first. Blocking: it reads the
+/// transcript's newest part.
+pub fn load_turns<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    home: &Path,
+    session_id: &str,
+    row: Option<&crate::store::SessionRow>,
+) -> Vec<StructuredTurn> {
+    crate::activity_rt::ingest_bridge_now(app, home, session_id);
+    let bridge_lines = crate::activity_rt::bridge_rows(session_id);
+    let b: Vec<&str> = bridge_lines.iter().map(String::as_str).collect();
+    // The conversation the view is for, as Kriyon recorded it.
+    let conversation = row.and_then(|r| r.claude_session_id.clone());
+    let transcript_lines = row
+        .and_then(|r| session_transcript(home, r))
+        .map(|p| crate::status_rt::read_tail_lines(&p, TRANSCRIPT_TAIL))
+        .unwrap_or_default();
+    let t: Vec<&str> = transcript_lines.iter().map(String::as_str).collect();
+    let mut turns = build_turns(&b, &t, conversation.as_deref());
+    if turns.len() > MAX_TURNS {
+        turns.drain(..turns.len() - MAX_TURNS);
+    }
+    turns
+}
+
 /// The session's turns for the Structured view, oldest first.
 ///
 /// # Errors
@@ -55,24 +88,7 @@ pub async fn structured_turns(
         .session_row(&session_id)
         .map_err(|e| e.to_string())?;
     tauri::async_runtime::spawn_blocking(move || {
-        crate::activity_rt::ingest_bridge_now(&app, &home, &session_id);
-        let bridge_lines = crate::activity_rt::bridge_rows(&session_id);
-        let b: Vec<&str> = bridge_lines.iter().map(String::as_str).collect();
-        // The conversation the view is for, as Kriyon recorded it.
-        let conversation = row.as_ref().and_then(|r| r.claude_session_id.clone());
-        let transcript_lines = conversation
-            .as_deref()
-            .zip(row.as_ref())
-            .and_then(|(id, r)| {
-                transcript_path(&home, r.worktree_path.as_deref().unwrap_or(&r.cwd), id)
-            })
-            .map(|p| crate::status_rt::read_tail_lines(&p, TRANSCRIPT_TAIL))
-            .unwrap_or_default();
-        let t: Vec<&str> = transcript_lines.iter().map(String::as_str).collect();
-        let mut turns = build_turns(&b, &t, conversation.as_deref());
-        if turns.len() > MAX_TURNS {
-            turns.drain(..turns.len() - MAX_TURNS);
-        }
+        let mut turns = load_turns(&app, &home, &session_id, row.as_ref());
         // The images Claude Code recorded become previewable attachments;
         // one that is gone, or isn't an image any more, is left out.
         let registry = app.state::<crate::attachment_cmd::AttachmentRegistry>();
@@ -115,15 +131,23 @@ pub async fn structured_partial(
         .session_row(&session_id)
         .map_err(|e| e.to_string())?
         .and_then(|r| r.claude_session_id);
-    let path = kriyon_core::paths::bridge_partial(&home, &session_id);
-    let Ok(line) = std::fs::read_to_string(path) else {
-        return Ok(None);
-    };
+    Ok(load_partial(&home, &session_id, conversation.as_deref()))
+}
+
+/// Session `session_id`'s [Partial reply] for its conversation, if one is
+/// streaming.
+#[must_use]
+pub fn load_partial(
+    home: &Path,
+    session_id: &str,
+    conversation: Option<&str>,
+) -> Option<PartialReply> {
+    let path = kriyon_core::paths::bridge_partial(home, session_id);
+    let line = std::fs::read_to_string(path).ok()?;
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX));
-    Ok(parse_partial(&line, conversation.as_deref())
-        .filter(|p| now - p.received_ms < PARTIAL_FRESH_MS))
+    parse_partial(&line, conversation).filter(|p| now - p.received_ms < PARTIAL_FRESH_MS)
 }
 
 #[cfg(test)]

@@ -1433,3 +1433,29 @@ test("pinning a project takes it out of its folder: Pinned is its one place", ()
   useSessions.getState().setProjectPinned("p", true);
   expect(useSessions.getState().projects[0]?.folderId ?? null).toBeNull();
 });
+
+test("a session a device started joins the sidebar without taking the window", () => {
+  useSessions.setState({ activeSessionId: "mine", sessions: {} });
+  const row = {
+    archivedAt: null,
+    baselineOid: "cafebabe",
+    claudeSessionId: null,
+    createdAt: 5,
+    cwd: "/work/app",
+    id: "from-phone",
+    projectId: "/work/app",
+    title: "Fix login",
+    titleLocked: false,
+    worktreePath: null,
+  };
+  useSessions.getState().noteSessionAdded(row);
+  const added = useSessions.getState().sessions["from-phone"];
+  expect(added?.title).toBe("Fix login");
+  expect(added?.baselineOid).toBe("cafebabe");
+  expect(useSessions.getState().activeSessionId).toBe("mine");
+  // Heard twice (a resend): still one session, as it was.
+  useSessions.getState().noteSessionAdded({ ...row, title: "Other" });
+  expect(useSessions.getState().sessions["from-phone"]?.title).toBe(
+    "Fix login"
+  );
+});

@@ -1,0 +1,13 @@
+{
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Edit",
+  "tool_input": {
+    "file_path": "/w/a.ts",
+    "old_string": "a",
+    "new_string": "b"
+  },
+  "tool_response": {
+    "filePath": "/w/a.ts",
+    "structuredPatch": [{ "oldStart": 1, "lines": [" x", "-a", "+b", "+c"] }]
+  }
+}

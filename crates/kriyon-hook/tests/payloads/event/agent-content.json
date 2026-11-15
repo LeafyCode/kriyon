@@ -1,0 +1,19 @@
+{
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Agent",
+  "tool_use_id": "a1",
+  "tool_input": {
+    "subagent_type": "Explore",
+    "description": "look",
+    "prompt": "find"
+  },
+  "tool_response": {
+    "content": [
+      { "type": "text", "text": "answer one" },
+      { "type": "image" },
+      { "type": "text", "text": "" },
+      { "type": "text", "text": "answer two" }
+    ],
+    "totalTokens": 5
+  }
+}

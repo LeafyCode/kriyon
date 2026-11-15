@@ -1,26 +1,24 @@
 import {
   closeSession as closeSessionIpc,
   createSession,
+  launchClaude,
   reportDrained,
   requestRepaint,
-  seedPrompt,
-  writeStdin,
+  startFreshClaude as startFreshClaudeIpc,
+  startSession,
 } from "../ipc/bridge.ts";
-import type { NestedReport, ShellLanguage } from "../types.ts";
-import { type ClaudeLaunch, claudeLaunchCommand } from "./launchCommand.ts";
+import type {
+  LaunchOutcome,
+  NestedReport,
+  ProjectRow,
+  SessionRow,
+} from "../types.ts";
 
 function ignore(promise: Promise<unknown>): void {
   promise.catch(() => {
     // Intentionally ignore IPC errors for fire-and-forget calls.
   });
 }
-
-/**
- * A Claude session id is safe to interpolate into the launch command only if it
- * is a bare token (Claude emits UUIDs). Persisted values cross back through the
- * store, so we re-validate before building a shell command from one.
- */
-const SAFE_CLAUDE_ID = /^[A-Za-z0-9][\w-]{0,127}$/;
 
 /**
  * Owns the lifecycle of each pty-backed session, keyed by session id, so it is
@@ -65,25 +63,15 @@ interface Host {
    * the session permanently wedged with a blank pane.
    */
   failed: boolean;
-  /** Whether `claude` has been launched into this pty this run (launch once). */
-  launched: boolean;
+  /** The launch in flight, so a second ask joins it instead of racing it to
+   *  Rust with different arguments. */
+  launching: Promise<LaunchResult> | undefined;
   /** Resolves once the pty exists, so a launch can be queued behind creation. */
   ready: Promise<void>;
-  /**
-   * Whether the pty was reattached to a daemon that survived a previous app run
-   * — in which case `claude` is already running in its shell and must not be
-   * relaunched. Known only once {@link Host.ready} resolves.
-   */
-  reattached: boolean;
   /** Whether Claude was seen running since the resume, so an exit means failure. */
   resumeSawBusy: boolean;
   /** The pending resume-timeout, cleared when detection is disarmed or fires. */
   resumeTimer: ReturnType<typeof setTimeout> | undefined;
-  /**
-   * The language of the session's shell, as Rust reported it, for the launch
-   * line. Known only once {@link Host.ready} resolves.
-   */
-  shell: ShellLanguage;
   sink: Sink | undefined;
 }
 
@@ -209,7 +197,19 @@ export function setSessionExitedHandler(
 export function ensureSession(
   sessionId: string,
   cwd: string,
-  onError: () => void
+  onError: () => void,
+  /**
+   * A new session's rows: Rust saves them, then opens the shell, capturing
+   * its git baseline alongside when `baseline` (handed to `onBaseline`).
+   * Only the first open of an id takes them: the session's creator opens it
+   * before anything renders a pane for it.
+   */
+  rows?: {
+    baseline: boolean;
+    onBaseline: (oid: string) => void;
+    project: ProjectRow | null;
+    session: SessionRow;
+  }
 ): Promise<void> {
   const existing = hosts.get(sessionId);
   if (existing && !existing.failed && !existing.exited) {
@@ -221,10 +221,8 @@ export function ensureSession(
   const host: Host = existing ?? {
     exited: false,
     failed: false,
-    launched: false,
+    launching: undefined,
     ready: Promise.resolve(),
-    reattached: false,
-    shell: "posix",
     awaitingResume: false,
     resumeSawBusy: false,
     resumeTimer: undefined,
@@ -232,48 +230,49 @@ export function ensureSession(
   };
   host.exited = false;
   host.failed = false;
-  host.launched = false;
-  host.reattached = false;
   hosts.set(sessionId, host);
 
-  host.ready = createSession(
-    sessionId,
-    cwd,
-    (bytes) => {
-      if (host.sink) {
-        // Attached: the terminal's WriteQueue reports drained bytes on flush.
-        host.sink(bytes);
-      } else {
-        // Detached (no terminal mounted): nothing else will report these
-        // bytes, so the PTY reader would park at its high-water mark forever.
-        // Report-and-drop — no buffering: a terminal that attaches later asks
-        // the daemon for a screen repaint instead of replaying a byte-capped
-        // buffer that could start mid-escape-sequence (see attachTerminal).
-        ignore(reportDrained(sessionId, bytes.length));
-      }
-    },
-    // Foreground-busy transitions flow straight to the registered handler,
-    // independent of whether a terminal component is mounted — so a backgrounded
-    // tab's running process is still tracked. The handler filters to real panes.
-    // The same transition also feeds the resume watchdog (a no-op unless this
-    // session is awaiting a resume), which detects Claude exiting on an expired
-    // conversation.
-    (busy) => {
-      noteResumeBusy(sessionId, busy);
-      paneBusyHandler?.(sessionId, busy);
-    },
-    // The session died underneath the app (shell exited / daemon crashed).
-    // Mark the host so the next ensureSession revives it, clear any stale
-    // busy flag (the poller died with the daemon, possibly mid-`true`), and
-    // let the UI surface it.
-    () => {
-      host.exited = true;
-      paneBusyHandler?.(sessionId, false);
-      sessionExitedHandler?.(sessionId);
+  const onBytes = (bytes: Uint8Array) => {
+    if (host.sink) {
+      // Attached: the terminal's WriteQueue reports drained bytes on flush.
+      host.sink(bytes);
+    } else {
+      // Detached (no terminal mounted): nothing else will report these
+      // bytes, so the Rust output gate would hold, then drop, everything after
+      // its high-water mark.
+      // Report-and-drop — no buffering: a terminal that attaches later asks
+      // the daemon for a screen repaint instead of replaying a byte-capped
+      // buffer that could start mid-escape-sequence (see attachTerminal).
+      ignore(reportDrained(sessionId, bytes.length));
     }
-  ).then((opened) => {
-    host.reattached = opened.reattached;
-    host.shell = opened.shell;
+  };
+  // Foreground-busy transitions flow straight to the registered handler,
+  // independent of whether a terminal component is mounted — so a backgrounded
+  // tab's running process is still tracked. The handler filters to real panes.
+  // The same transition also feeds the resume watchdog (a no-op unless this
+  // session is awaiting a resume), which detects Claude exiting on an expired
+  // conversation.
+  const onBusy = (busy: boolean) => {
+    noteResumeBusy(sessionId, busy);
+    paneBusyHandler?.(sessionId, busy);
+  };
+  // The session died underneath the app (shell exited / daemon crashed).
+  // Mark the host so the next ensureSession revives it, clear any stale
+  // busy flag (the poller died with the daemon, possibly mid-`true`), and
+  // let the UI surface it.
+  const onExit = () => {
+    host.exited = true;
+    paneBusyHandler?.(sessionId, false);
+    sessionExitedHandler?.(sessionId);
+  };
+  const opened = rows
+    ? startSession(rows, onBytes, onBusy, onExit).then((started) => {
+        if (started.baselineOid) {
+          rows.onBaseline(started.baselineOid);
+        }
+      })
+    : createSession(sessionId, cwd, onBytes, onBusy, onExit);
+  host.ready = opened.then(() => {
     // The pty is born at a default 80x24; push the terminal's real geometry
     // now that it exists (and again after every revive — see registerSizeSync).
     sizeSyncs.get(sessionId)?.();
@@ -314,139 +313,71 @@ export function registerSizeSync(
 }
 
 /**
- * Launch `claude` into a session's pty exactly once per run, the first time the
- * session is viewed. A session with a known [Claude session id] is *resumed*
- * (`claude --resume <id>`), restoring the conversation in both the terminal and
- * its transcript; otherwise a fresh `claude` is started.
+ * Launch `claude` into a session's pty, once per shell, the first time the
+ * session is viewed: resuming its [Claude session id] when it has one,
+ * otherwise fresh, seeded with `seed` and told where to report (`report`)
+ * when given. Rust decides and types the command
+ * (`kriyon_core::claude_launch`) and owns the once-per-shell claim, so a
+ * session reattached to a surviving daemon (where `claude` already runs) is
+ * never launched into again.
  *
- * `KRIYON_SESSION` gates Kriyon's Claude Code hook (it only records events for
- * sessions Kriyon launched). It is set in the session shell's environment by the
- * daemon spawn (see `create_session`), so every `claude` in this shell inherits
- * it — we no longer type it as a command prefix (that was timing-fragile). We
- * never pass `--session-id` (handing Claude a *fresh* id suppresses its live
- * transcript — see ADR 0003); resuming a Claude-generated id is safe and is what
- * keeps one canonical transcript per session across launches.
- *
- * A session reattached to a surviving daemon already has `claude` running in its
- * shell, so we must NOT relaunch — re-sending the command would type it as
- * keystrokes into the live session. That's only known once the pty is ready, so
- * this resolves after creation: `true` only on the call that actually launched
- * `claude`, `false` otherwise (already launched, reattached, or no host).
- *
- * `seed`, when given and the session isn't resumable, seeds the first prompt as
- * a launch ARGUMENT — not keystroke injection into a running TUI. The prompt
- * text is written server-side to a Kriyon-owned, path-contained file (see
- * `seed_prompt`); the launch command reads that file into a shell var, deletes
- * it, then starts `claude` with it, so no user text is ever shell-escaped.
- *
- * Returns a {@link LaunchResult} rather than a bare boolean so the caller can
- * tell the failure modes apart and surface them: a dropped seed prompt
- * (`seedDropped`) and a launch write that never reached the pty (`writeFailed`)
- * used to be swallowed, leaving the user with a silently prompt-less session or
- * a boot overlay that could only time out.
+ * What stays here is the UI's side: waiting for the pty, and arming the
+ * resume watchdog when a resume can fail (an expired conversation makes
+ * Claude exit without `SessionStart`).
  */
-export type LaunchResult =
-  /** `claude` was launched into the pty; track its boot (`resuming` if `--resume`). */
-  | { kind: "launched"; resuming: boolean }
-  /** Launched fresh, but the seed prompt file write failed — the first prompt was lost. */
-  | { kind: "seedDropped" }
-  /** The launch command never reached the pty; nothing started, nothing to watch. */
-  | { kind: "writeFailed" }
-  /** The daemon already had `claude` running; nothing to launch or track. */
-  | { kind: "reattached" }
-  /** No host, already launched, or a failed pty — nothing to do. */
-  | { kind: "skipped" };
+export type LaunchResult = LaunchOutcome;
 
-/** A [Nested session]'s report address, when both ids are safe to type. */
-function safeReport(report: NestedReport | undefined): NestedReport | null {
-  return report &&
-    SAFE_CLAUDE_ID.test(report.to) &&
-    SAFE_CLAUDE_ID.test(report.from)
-    ? report
-    : null;
-}
-
-/** What a [Nested session]'s `claude` starts with: the env saying where its
- *  companion sends its first answer, which conversation may send it, and
- *  whether the person split it off (ADR-0049); and the flag starting its
- *  conversation under the id it reports from. */
-function nestedLaunch(report: NestedReport | undefined): ClaudeLaunch {
-  const safe = safeReport(report);
-  if (!safe) {
-    return { env: [], flags: "" };
-  }
-  const env: [string, string][] = [
-    ["KRIYON_REPORT_TO", safe.to],
-    ["KRIYON_REPORT_FROM", safe.from],
-  ];
-  if (safe.splitOff) {
-    env.push(["KRIYON_REPORT_BY", "person"]);
-  }
-  return { env, flags: ` --session-id ${safe.from}` };
-}
-
-export async function launchClaudeOnce(
+export function launchClaudeOnce(
   sessionId: string,
   claudeSessionId: string | null,
   seed?: string,
   report?: NestedReport
 ): Promise<LaunchResult> {
   const host = hosts.get(sessionId);
-  if (!host || host.failed || host.exited || host.launched) {
-    return { kind: "skipped" };
+  if (!host || host.failed || host.exited) {
+    return Promise.resolve({ kind: "skipped" });
   }
-  // Claim the launch synchronously so a re-entrant call is a no-op before we
-  // await readiness below.
-  host.launched = true;
+  if (host.launching) {
+    // Joined, not raced: the first ask's seed and report are the ones sent.
+    return host.launching;
+  }
+  const launching = launchOnHost(
+    host,
+    sessionId,
+    claudeSessionId,
+    seed,
+    report
+  ).finally(() => {
+    if (host.launching === launching) {
+      host.launching = undefined;
+    }
+  });
+  host.launching = launching;
+  return launching;
+}
 
+async function launchOnHost(
+  host: Host,
+  sessionId: string,
+  claudeSessionId: string | null,
+  seed: string | undefined,
+  report: NestedReport | undefined
+): Promise<LaunchResult> {
   try {
     await host.ready;
   } catch {
     return { kind: "skipped" };
   }
-
-  if (host.reattached) {
-    return { kind: "reattached" };
-  }
-
-  const resumable = Boolean(
-    claudeSessionId && SAFE_CLAUDE_ID.test(claudeSessionId)
-  );
-  let command: string;
-  let seedDropped = false;
-  if (resumable) {
-    command = `claude --resume ${claudeSessionId}\r`;
-  } else if (seed && seed.trim() !== "") {
-    // Seed the first prompt as a launch ARGUMENT (not keystroke injection): the
-    // prompt lives in a Kriyon-written, path-contained file, so no user text is
-    // ever shell-escaped. Read it into a var, remove the file, launch claude.
-    const path = await seedPrompt(sessionId, seed).catch(() => null);
-    if (path) {
-      command = claudeLaunchCommand(nestedLaunch(report), path, host.shell);
-    } else {
-      // The seed file write failed: the user's first prompt is gone. Launch a
-      // usable session anyway and let the caller surface the loss.
-      command = claudeLaunchCommand(nestedLaunch(report), null, host.shell);
-      seedDropped = true;
-    }
-  } else {
-    command = claudeLaunchCommand(nestedLaunch(report), null, host.shell);
-  }
-
-  let wrote = true;
-  await writeStdin(sessionId, new TextEncoder().encode(command)).catch(() => {
-    wrote = false;
-  });
-  if (!wrote) {
-    // The launch command never reached the pty: nothing started. Don't arm the
-    // resume watchdog (there is no claude to exit) or a boot overlay that could
-    // only hang until it times out — the caller surfaces this directly.
-    return { kind: "writeFailed" };
-  }
+  const result = await launchClaude(
+    sessionId,
+    claudeSessionId,
+    seed,
+    report
+  ).catch((): LaunchResult => ({ kind: "writeFailed" }));
 
   // Only a resume can "fail" in a way worth recovering — a fresh launch that
   // errors would just fail again on retry. Arm the watchdog on that path only.
-  if (resumable) {
+  if (result.kind === "launched" && result.resuming) {
     host.awaitingResume = true;
     host.resumeSawBusy = false;
     host.resumeTimer = setTimeout(
@@ -454,15 +385,12 @@ export async function launchClaudeOnce(
       RESUME_TIMEOUT_MS
     );
   }
-
-  return seedDropped
-    ? { kind: "seedDropped" }
-    : { kind: "launched", resuming: resumable };
+  return result;
 }
 
 /**
  * Start a fresh `claude` in a session whose resume failed (its conversation
- * expired). Disarms the watchdog and writes a plain `claude`, reusing the same
+ * expired). Disarms the watchdog and asks Rust for a plain launch in the same
  * pty. The new session reports its own [Claude session id] via hooks, which
  * replaces the expired one. A no-op if the session's host is gone.
  */
@@ -472,11 +400,9 @@ export async function startFreshClaude(sessionId: string): Promise<void> {
     return;
   }
   disarmResume(host);
-  await writeStdin(sessionId, new TextEncoder().encode("claude\r")).catch(
-    () => {
-      // ignored
-    }
-  );
+  await startFreshClaudeIpc(sessionId).catch(() => {
+    // ignored
+  });
 }
 
 /**

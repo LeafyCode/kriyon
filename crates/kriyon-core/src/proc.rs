@@ -80,6 +80,29 @@ impl TerminalSeat {
     }
 }
 
+/// Where a process sits on its terminal, from its Linux `/proc/<pid>/stat`
+/// line, against the session's terminal device number `session_tty`.
+///
+/// The command name (field 2) is in parentheses and may itself hold spaces and
+/// parentheses, so the fields are read after the *last* `)`: state, ppid,
+/// pgrp, session, `tty_nr`, `tpgid`. `tty_nr` uses the kernel's device
+/// encoding, which equals the `st_rdev` of the terminal's device file for
+/// every major number below 4096 — all terminals. `None` for a line that
+/// doesn't parse.
+#[must_use]
+pub fn seat_from_proc_stat(stat: &str, session_tty: u64) -> Option<TerminalSeat> {
+    let (_, after_name) = stat.rsplit_once(')')?;
+    let mut fields = after_name.split_whitespace().skip(2); // state, ppid
+    let pgid = fields.next()?.parse().ok()?;
+    let tty_nr: i64 = fields.nth(1)?.parse().ok()?; // after session
+    let foreground_pgid = fields.next()?.parse().ok()?;
+    Some(TerminalSeat {
+        pgid,
+        foreground_pgid,
+        on_session_tty: tty_nr > 0 && u64::try_from(tty_nr).ok() == Some(session_tty),
+    })
+}
+
 /// Parse the output of `ps -axww -o pid=,ppid=,tpgid=,args=`.
 ///
 /// Tolerant by design (the [Loose coupling] rule applies to the OS too): a row
@@ -598,6 +621,59 @@ pub fn windows_command_of(shell: i32, procs: impl IntoIterator<Item = (i32, i32)
         .map(|(pid, _)| pid)
 }
 
+/// A process in a Windows session's Job Object, for [`windows_seat`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct JobMember {
+    pub pid: i32,
+    pub ppid: i32,
+    /// A launcher shim ([`is_launcher`]): `cmd.exe` running a `.cmd` file.
+    pub launcher: bool,
+}
+
+/// Whether the executable `exe_name` (a process table's image name) is a
+/// launcher that only starts another program: `cmd.exe`, which runs npm's
+/// `claude.cmd` shim when PowerShell's policy blocks the `.ps1` one.
+#[must_use]
+pub fn is_launcher(exe_name: &str) -> bool {
+    exe_name.eq_ignore_ascii_case("cmd.exe")
+}
+
+/// Where a Windows poster sits in its session: process `poster` against the
+/// session's `shell` and the members of the shell's Job Object.
+///
+/// Windows has no terminal foreground, so [`windows_command_of`]'s rule stands
+/// in for it: the session's [Owning claude] is a member whose parent is the
+/// shell, or whose parent is a launcher ([`is_launcher`]) that is the shell's
+/// child (`claude.cmd` run by `cmd.exe`). A `claude` nested under it (through
+/// its tool shell) has the owner between, so it never owns the session, and
+/// neither does anything outside the job.
+#[must_use]
+pub fn windows_seat(
+    poster: i32,
+    shell: i32,
+    members: impl IntoIterator<Item = JobMember>,
+) -> TerminalSeat {
+    let members: Vec<JobMember> = members.into_iter().collect();
+    let shells_child = |pid: i32| {
+        members
+            .iter()
+            .any(|m| m.pid == pid && m.ppid == shell && m.pid != shell)
+    };
+    let me = members.iter().find(|m| m.pid == poster);
+    let owner = me.is_some_and(|me| {
+        !me.launcher
+            && (shells_child(me.pid)
+                || members
+                    .iter()
+                    .any(|m| m.pid == me.ppid && m.launcher && shells_child(m.pid)))
+    });
+    TerminalSeat {
+        pgid: poster,
+        foreground_pgid: if owner { poster } else { 0 },
+        on_session_tty: me.is_some(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -615,11 +691,123 @@ mod tests {
         assert_eq!(windows_command_of(10, [(10, 10)]), None);
     }
 
+    fn member(pid: i32, parent: i32) -> JobMember {
+        JobMember {
+            pid,
+            ppid: parent,
+            launcher: false,
+        }
+    }
+
+    #[test]
+    fn a_windows_poster_owns_the_session_only_as_the_shells_own_child_in_its_job() {
+        // Shell 10 running claude (20); claude's tool shell (30) runs a nested
+        // claude (40). 50 is a process outside the session's job.
+        let job = [
+            member(10, 5),
+            member(20, 10),
+            member(30, 20),
+            member(40, 30),
+        ];
+        assert!(
+            windows_seat(20, 10, job).owns_session(),
+            "the session's claude"
+        );
+        assert!(!windows_seat(40, 10, job).owns_session(), "a nested claude");
+        assert!(
+            !windows_seat(10, 10, job).owns_session(),
+            "the shell itself"
+        );
+        assert!(!windows_seat(50, 10, job).owns_session(), "outside the job");
+        // A process whose parent pid is the shell's but who is not in the job
+        // (a pid the shell's could be reused by) is outside the session.
+        assert!(!windows_seat(60, 10, [member(10, 5)]).owns_session());
+    }
+
+    /// ADR-0061's known limit, lifted: `claude` started through a launcher
+    /// shim (`claude.cmd`, run by `cmd.exe`) is the shell's grandchild, with
+    /// only the launcher between. It owns the session; a `claude` nested under
+    /// the owner, launched the same way, still has the owner between.
+    #[test]
+    fn a_claude_started_through_a_cmd_shim_owns_the_session() {
+        let launcher = |pid, parent| JobMember {
+            pid,
+            ppid: parent,
+            launcher: true,
+        };
+        // Shell 10 → cmd 20 → claude 30; claude's tool shell 40 → cmd 50 →
+        // nested claude 60.
+        let job = [
+            member(10, 5),
+            launcher(20, 10),
+            member(30, 20),
+            member(40, 30),
+            launcher(50, 40),
+            member(60, 50),
+        ];
+        assert!(windows_seat(30, 10, job).owns_session(), "through the shim");
+        assert!(!windows_seat(60, 10, job).owns_session(), "a nested claude");
+        assert!(!windows_seat(20, 10, job).owns_session(), "the shim itself");
+        // A launcher that isn't the shell's own child lets nothing through.
+        let deep = [
+            member(10, 5),
+            member(15, 10),
+            launcher(20, 15),
+            member(30, 20),
+        ];
+        assert!(!windows_seat(30, 10, deep).owns_session());
+    }
+
+    #[test]
+    fn only_cmd_is_a_launcher() {
+        assert!(is_launcher("cmd.exe") && is_launcher("CMD.EXE"));
+        assert!(!is_launcher("claude.exe") && !is_launcher("node.exe"));
+        assert!(!is_launcher("powershell.exe") && !is_launcher(""));
+    }
+
     fn seat(pgid: i32, foreground_pgid: i32, on_session_tty: bool) -> TerminalSeat {
         TerminalSeat {
             pgid,
             foreground_pgid,
             on_session_tty,
+        }
+    }
+
+    /// `/dev/pts/1`: major 136, minor 1.
+    const PTS_1: u64 = (136 << 8) | 1;
+
+    #[test]
+    fn a_proc_stat_line_gives_the_terminal_seat() {
+        let stat = "4242 (claude) S 4100 4242 4100 34817 4242 4194560 0 0 0 0 0 0 0 0 20 0";
+        assert_eq!(
+            seat_from_proc_stat(stat, PTS_1),
+            Some(seat(4242, 4242, true))
+        );
+        assert!(seat_from_proc_stat(stat, PTS_1).is_some_and(|s| s.owns_session()));
+    }
+
+    #[test]
+    fn a_command_name_with_spaces_and_parentheses_is_skipped_whole() {
+        let stat = "77 (a (b) c) d) S 1 70 70 34818 -1 0 0";
+        assert_eq!(seat_from_proc_stat(stat, PTS_1), Some(seat(70, -1, false)));
+    }
+
+    #[test]
+    fn a_process_with_no_terminal_is_not_on_the_session_terminal() {
+        let line = "88 (claude) S 1 88 88 0 -1 0";
+        let parsed = seat_from_proc_stat(line, PTS_1).expect("parses");
+        assert!(!parsed.on_session_tty && !parsed.owns_session());
+    }
+
+    #[test]
+    fn a_proc_stat_line_that_does_not_parse_gives_nothing() {
+        for stat in [
+            "",
+            "12 (claude",
+            "12 (claude) S 1 x 1 34817 1",
+            "12 (claude) S 1",
+        ] {
+            assert_eq!(seat_from_proc_stat(stat, PTS_1), None, "{stat:?}");
         }
     }
 

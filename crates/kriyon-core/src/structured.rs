@@ -211,6 +211,25 @@ fn blocks(role: &str, content: Option<&Value>) -> Vec<Block> {
 /// as its `peer` row, and a report that wakes Claude as a prompt row.
 const QUEUE_DOOR: &str = "queue";
 
+/// Claude's last reply among the companion's rows (`lines`, oldest first,
+/// only their tail need be passed): the newest prose the session's own main
+/// agent wrote, as the Structured view would show it. Rows of a subagent, of
+/// a nested `claude -p` (another `conversation`) and the queue's copies are
+/// left out, as there.
+#[must_use]
+pub fn last_reply(lines: &[&str], conversation: Option<&str>) -> Option<String> {
+    lines.iter().rev().find_map(|line| {
+        let (_, row) = bridge_row(line, conversation)?;
+        if row.role != "assistant" || row.sidechain || row.is_meta {
+            return None;
+        }
+        row.blocks.into_iter().rev().find_map(|block| match block {
+            Block::Text(text) if !text.trim().is_empty() => Some(text),
+            _ => None,
+        })
+    })
+}
+
 /// One live row from a [Bridge spool] line, with its (run, seq) for ordering.
 fn bridge_row(line: &str, conversation: Option<&str>) -> Option<((String, u64), Row)> {
     let value: Value = serde_json::from_str(line).ok()?;
@@ -1491,6 +1510,45 @@ mod tests {
             turns[0].reply, None,
             "the discarded reply doesn't come back"
         );
+    }
+
+    #[test]
+    fn the_last_reply_is_the_main_agents_newest_prose_in_its_own_rows() {
+        let reply = |seq, uuid: &str, text: &str| {
+            live(
+                "r",
+                seq,
+                uuid,
+                "assistant",
+                &json!([{"type":"text","text": text}]),
+            )
+        };
+        let tool = live(
+            "r",
+            3,
+            "a3",
+            "assistant",
+            &json!([{"type":"tool_use","id":"t","name":"Bash","input":{"command":"ls"}}]),
+        );
+        let subagent = json!({"kind":"row","run":"r","seq":4,"uuid":"s1","agentId":"a",
+            "message":{"type":"assistant","content":[{"type":"text","text":"subagent says"}]}})
+        .to_string();
+        let nested = json!({"kind":"row","run":"n","seq":1,"uuid":"x1","sessionId":"nested",
+            "message":{"type":"assistant","content":[{"type":"text","text":"nested says"}]}})
+        .to_string();
+        let lines = [
+            reply(1, "a1", "First."),
+            reply(2, "a2", "Fixed the login bug."),
+            tool,
+            subagent,
+            nested,
+        ];
+        let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
+        assert_eq!(
+            last_reply(&refs, Some("main")).as_deref(),
+            Some("Fixed the login bug.")
+        );
+        assert_eq!(last_reply(&[], None), None);
     }
 
     #[test]

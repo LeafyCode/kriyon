@@ -73,3 +73,23 @@ crashlog.txt
 
 # Raw macOS window captures; scripts/crop-shots.mjs cuts them into shots-src/.
 website/shots-src/new-shots/
+
+# The push sender's real settings and secrets: never committed.
+crates/kriyon-push/push.env
+*.secret
+*.p8
+
+# The phone library for iOS, built by scripts/mobile/build-ios.sh
+/mobile/app/modules/kriyon-native/ios/Rust
+
+# The phone library for Android, built by scripts/mobile/build-android.sh,
+# and the Kotlin module's Gradle output
+/mobile/app/modules/kriyon-native/android/rust
+/mobile/app/modules/kriyon-native/android/build
+
+# Firebase's files and EAS's store credentials: kept by EAS or the person,
+# never committed, wherever they land (docs/mobile-builds.md)
+google-services.json
+GoogleService-Info.plist
+credentials.json
+*.keystore

@@ -72,3 +72,33 @@ wrong option. The terminal is the source of truth (AGENTS.md).
 - A question or plan [Pending ask] left open by a missed hook keeps the
   terminal up; "Back to Structured" gets past it, and the next turn boundary
   clears it.
+
+## Update 2026-11-13 — the host knows too
+
+Remote access must refuse typing a device sends into a dialog it never saw, and
+the window may be hidden or closed, so the desktop's screen read is not enough.
+
+- **The [PTY daemon] reads its own screen.** After each output read it applies
+  the same rule (`kriyon_core::cli_dialog::dialog_on_screen`) to its `vt100`
+  emulator. The desktop's `dialogOnScreen` and the Rust one are held to the
+  same screens, `crates/kriyon-core/scripts/dialog-screens.json`, so they
+  cannot drift. The desktop keeps its own read, which already works.
+- **A [Dialog generation] marks every change.** It moves when a dialog appears,
+  closes, or changes while it shows. The change is judged on the dialog's own
+  rows (from its pane rule, or the 15 rows ending at its hint), colours
+  included: a timer above it is no change, a selection shown only by colour
+  is. It starts from a random number, so a restart never repeats one (a clock
+  can be set back), and travels as a `Dialog` frame in order with the output.
+  Whoever numbers the screen updates (at the reader, before the webview's
+  pacing) knows which update a change came after; the remote host refuses
+  input from a device that had not seen it. The app keeps the last one per
+  session (`DaemonClient::dialog`), and `dialog_showing` adds a question's or
+  plan's [Pending ask] as before.
+- **Cheap under the lock.** The look reads only the rows that can decide: those
+  that start with the rule's glyph (one cell each) and the last two filled
+  rows; the fingerprint is taken only while a dialog shows. The screen is
+  looked at most once per 50 ms whatever the read sizes, and once more 50 ms
+  after output stops, so a dialog drawn just after a look is still seen. An
+  attaching client's screen is looked at as it is sent, so the two agree.
+  Measured (release, 200x50 screen): about 5 µs a look against about 55 µs to
+  emulate one 8 KB read. A dialog can go unseen for up to 50 ms.

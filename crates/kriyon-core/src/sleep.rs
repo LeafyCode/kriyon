@@ -68,8 +68,10 @@ pub struct SleepCandidate<'a> {
     /// How long the session's status has been Idle/Done, or `None` while it is
     /// active (or its idleness has not been observed yet).
     pub idle_secs: Option<u64>,
-    /// The user is currently looking at this session.
-    pub focused: bool,
+    /// Some [Onlooker] is looking at this session right now — the desktop's
+    /// focused pane today, any other onlooker once there is one (see
+    /// [`crate::onlooker::Onlookers`]).
+    pub has_onlooker: bool,
     /// Hook-derived activity reports a background shell still running (a dev
     /// server started by claude would die with it).
     pub has_running_shells: bool,
@@ -88,7 +90,7 @@ pub struct SleepCandidate<'a> {
 /// a resumable id: a `claude` visibly holds the terminal (there is something to
 /// stop, and the shell is not mid-command), the session has been idle past the
 /// policy threshold, nothing is running in the background (no live [Subagent],
-/// no background shell), and the user is not looking at it.
+/// no background shell), and no [Onlooker] is looking at it.
 ///
 /// Split out so a caller can check the cheap gates before paying to look the
 /// [Claude session id] up — that is a per-session store read on every pass, and
@@ -101,7 +103,7 @@ pub fn is_quiescent(policy: &AutoSleep, candidate: &SleepCandidate) -> bool {
         && candidate
             .idle_secs
             .is_some_and(|secs| secs >= policy.after_secs)
-        && !candidate.focused
+        && !candidate.has_onlooker
         && !candidate.has_running_shells
         && !candidate.has_running_subagents
 }
@@ -738,7 +740,7 @@ mod tests {
         SleepCandidate {
             foreground: PtyForeground::Claude,
             idle_secs: Some(4 * 3600),
-            focused: false,
+            has_onlooker: false,
             has_running_shells: false,
             has_running_subagents: false,
             claude_id: Some("1bd1a9d0-b063-4d26-9233-7fb896735b67"),
@@ -746,7 +748,7 @@ mod tests {
     }
 
     #[test]
-    fn a_long_idle_unfocused_claude_session_sleeps() {
+    fn a_long_idle_claude_session_nobody_looks_at_sleeps() {
         assert!(should_sleep(&AutoSleep::default(), &candidate()));
     }
 
@@ -768,11 +770,11 @@ mod tests {
             ..candidate()
         };
         assert!(!should_sleep(&now, &mid_turn), "never a session mid-turn");
-        let watched = SleepCandidate {
-            focused: true,
+        let looked_at = SleepCandidate {
+            has_onlooker: true,
             ..candidate()
         };
-        assert!(!should_sleep(&now, &watched), "never the one on screen");
+        assert!(!should_sleep(&now, &looked_at), "never the one on screen");
         let serving = SleepCandidate {
             has_running_shells: true,
             ..candidate()
@@ -821,7 +823,7 @@ mod tests {
         assert!(!should_sleep(
             &policy,
             &SleepCandidate {
-                focused: true,
+                has_onlooker: true,
                 ..candidate()
             }
         ));

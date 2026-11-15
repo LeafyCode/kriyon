@@ -101,6 +101,12 @@ impl LimitsReader {
         merge(&readings, now)
     }
 
+    /// The last answer told the window: what remote devices are told too.
+    #[must_use]
+    pub fn last(&self) -> PlanLimits {
+        self.last.unwrap_or_default()
+    }
+
     /// The answer to send this tick: when it changed, or when `resend` asks.
     /// With `enabled` off ("Live usage" off) the answer is no limits, so bars
     /// from an old reading never outlive the switch.

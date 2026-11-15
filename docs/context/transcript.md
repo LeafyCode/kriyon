@@ -39,7 +39,8 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
   text, so Kriyon never copies them: the screen is the one source, and a screen that doesn't match
   shows no tip. A todo list's `Next:` in the same slot is not a tip.
 - **CLI dialog** (`useCliDialog`, `watchCliDialog`, `followCliDialog`, `dialogOnScreen`,
-  `useDialogDetour`) — Claude Code asking for keys in its own terminal: a question, a permission, a
+  `useDialogDetour`; in Rust `kriyon_core::cli_dialog::dialog_on_screen`, both held to the
+  screens in `scripts/dialog-screens.json`) — Claude Code asking for keys in its own terminal: a question, a permission, a
   plan to approve, an MCP form, or the menu a slash command opens (`/mcp`, `/model`, `/config`,
   `/resume`, `/usage`, …). Known from the screen, where each one ends in a key hint ("… · Esc to
   cancel") or, for a slash command's pane, starts with a rule of `▔` across the terminal,
@@ -49,6 +50,14 @@ Part of the Kriyon glossary. The index and the naming rule are in [`CONTEXT.md`]
   dialog closes; the user can put it aside and come back to it. The composer doesn't send while one
   is open, since its Enter would answer the dialog (ADR-0040). _Avoid_: modal, popup, prompt
   (that's the user's message).
+- **Dialog generation** (`DialogWatch`, `DialogState`, `Frame::Dialog`) — a number the [PTY
+  daemon] moves each time a [CLI dialog] appears, closes, or changes while it shows (another
+  option selected, another question), read off its own screen at most every 50 ms while output
+  comes and once after it stops. Starts from a random number, so it never repeats across a
+  restart of the same session.
+  Sent in order with the output, so whoever numbers the screen updates knows which update a
+  dialog change came after; the remote host refuses input from a device that had not seen it.
+  _Avoid_: dialog version, dialog id.
 - **Structured event** (`StructuredEvent`) — one parsed unit of the transcript model (prompt /
   assistant text / tool / bash / diff / code / question / usage). Unknown input degrades to
   `StructuredEvent::Unknown { raw }` — parsing never hard-errors. Control/UI/meta transcript lines

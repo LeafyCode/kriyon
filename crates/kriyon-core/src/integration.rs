@@ -73,8 +73,8 @@ pub fn hook_route(prefs: IntegrationPrefs, policy: SideloadPolicy) -> HookRoute 
 }
 
 /// Whether Kriyon itself keeps a session's hooks from running, and why: the
-/// user turned them off in Kriyon's Settings, or they are on but there is no
-/// Python to run them (`can_run_hooks` false). `None` when Kriyon's side is
+/// user turned them off in Kriyon's Settings, or they are on but its hook
+/// program isn't installed (`can_run_hooks` false). `None` when Kriyon's side is
 /// fine, or before consent, when there is nothing to report.
 #[must_use]
 pub fn kriyon_hooks_off(
@@ -89,7 +89,7 @@ pub fn kriyon_hooks_off(
     } else if can_run_hooks {
         None
     } else {
-        Some(crate::hooks::HooksOff::Python)
+        Some(crate::hooks::HooksOff::Missing)
     }
 }
 
@@ -175,8 +175,8 @@ pub fn plugin_manifest(version: &str) -> String {
 /// registered event, plus the companion mod module when `module` is given.
 #[must_use]
 pub fn plugin_hooks(command: Option<&str>, module: Option<&str>) -> String {
-    // No command: the hook script can't run on this computer (Windows with no
-    // Python), so only the companion module rides in the folder.
+    // No command: the hook program isn't installed, so only the companion
+    // module rides in the folder.
     let hooks: serde_json::Map<String, Value> =
         command.map_or_else(serde_json::Map::new, |command| {
             REGISTERED_HOOK_EVENTS
@@ -379,7 +379,7 @@ impl RefusalWatch {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn hooks_with_nothing_to_run_them_are_reported_as_off_for_python() {
+    fn hooks_whose_program_is_missing_are_reported_as_off_for_it() {
         use crate::hooks::HooksOff;
         let consented = IntegrationPrefs {
             consented: true,
@@ -388,13 +388,13 @@ mod tests {
         assert_eq!(kriyon_hooks_off(consented, HookRoute::Plugin, true), None);
         assert_eq!(
             kriyon_hooks_off(consented, HookRoute::Plugin, false),
-            Some(HooksOff::Python)
+            Some(HooksOff::Missing)
         );
         assert_eq!(
             kriyon_hooks_off(consented, HookRoute::Settings, false),
-            Some(HooksOff::Python)
+            Some(HooksOff::Missing)
         );
-        // Turned off in Kriyon says so, Python or not.
+        // Turned off in Kriyon says so, installed or not.
         assert_eq!(
             kriyon_hooks_off(consented, HookRoute::Off, false),
             Some(HooksOff::Kriyon)

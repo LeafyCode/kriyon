@@ -1,0 +1,97 @@
+name: Phone builds (EAS)
+
+# The phone app's store builds on EAS Build, for iPhone and Android. They run
+# only when the repo has an EXPO_TOKEN secret (docs/mobile-builds.md); without
+# it the workflow says so and stops, green. EAS's free plan has a monthly
+# build limit, so builds start on a push to main (a release: production) or
+# by hand (any profile), never on every change to dev. The Rust library is
+# built on EAS's servers before the app is packaged (scripts/mobile/eas-build.mjs).
+on:
+  push:
+    branches: [main]
+    paths:
+      - mobile/**
+      - crates/kriyon-core/**
+      - crates/kriyon-mobile/**
+      - crates/kriyon-remote/**
+      - crates/kriyon-remote-link/**
+      - crates/kriyon-relay-client/**
+      - crates/kriyon-push/**
+      - crates/kriyon-push-seal/**
+      - Cargo.toml
+      - Cargo.lock
+      - scripts/mobile/**
+      # The desktop files the phone app reads.
+      - src/remote/**
+      - src/theme/**
+      - package.json
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      - .github/workflows/eas.yml
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: Build profile (mobile/app/eas.json)
+        type: choice
+        options: [production, preview, development]
+        default: preview
+      platform:
+        description: Phones to build for
+        type: choice
+        options: [all, ios, android]
+        default: all
+
+# Nothing by default; each job asks for what it needs.
+permissions: {}
+
+concurrency:
+  group: eas-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  token:
+    name: Expo token set?
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    outputs:
+      ready: ${{ steps.check.outputs.ready }}
+    steps:
+      - id: check
+        env:
+          HAS_TOKEN: ${{ secrets.EXPO_TOKEN != '' }}
+        run: |
+          echo "ready=$HAS_TOKEN" >> "$GITHUB_OUTPUT"
+          if [ "$HAS_TOKEN" != "true" ]; then
+            echo "::notice::No EXPO_TOKEN secret: phone builds are skipped (see docs/mobile-builds.md)."
+          fi
+
+  build:
+    name: Start EAS builds
+    needs: token
+    # Store builds (production) only from main, the released code: a build
+    # number taken by other code could be uploaded in its place.
+    if: needs.token.outputs.ready == 'true' && (github.ref == 'refs/heads/main' || inputs.profile != 'production')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    env:
+      PROFILE: ${{ inputs.profile || 'production' }}
+      PLATFORM: ${{ inputs.platform || 'all' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: pnpm
+      # EAS reads the app's config (app.config.ts imports Expo's types).
+      - run: pnpm install --frozen-lockfile
+      # Starts the builds on EAS and returns; their progress is on expo.dev.
+      - name: Start the builds
+        working-directory: mobile/app
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: npx --yes eas-cli@27.2.0 build --platform "$PLATFORM" --profile "$PROFILE" --non-interactive --no-wait

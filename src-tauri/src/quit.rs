@@ -128,10 +128,7 @@ mod tests {
         assert!(engine.wait_accepted(Duration::from_secs(2)), "greeted");
         app.state::<AppState>().sessions.lock().insert(
             SessionId(id.into()),
-            Session {
-                engine: Arc::new(engine),
-                zdotdir: None,
-            },
+            Session::new(Arc::new(engine), None, false),
         );
     }
 

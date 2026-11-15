@@ -1,0 +1,15 @@
+{
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Bash",
+  "tool_use_id": "t3",
+  "tool_input": { "command": "sed -i '' s/a/b/ x y" },
+  "tool_response": {
+    "stdout": "",
+    "bashEditDiff": {
+      "files": [
+        { "filePath": "/w/x", "hunks": [{ "lines": ["-a", "+b"] }] },
+        { "filePath": "/w/y", "hunks": [{ "lines": ["+b"] }] }
+      ]
+    }
+  }
+}

@@ -1,4 +1,11 @@
+# The desktop app is the root package. The phone app (Expo) is its own
+# package beside it (the remote plan, "Repo layout: no Turborepo").
+packages:
+  - mobile/app
 allowBuilds:
+  # Expo's file watcher: it ships a prebuilt binary per platform, so its
+  # build-from-source fallback never needs to run.
+  '@parcel/watcher': false
   esbuild: true
   lefthook: true
 onlyBuiltDependencies:

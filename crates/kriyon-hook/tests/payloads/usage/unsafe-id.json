@@ -1,0 +1,4 @@
+{
+  "session_id": "../../x",
+  "rate_limits": { "five_hour": { "used_percentage": 1, "resets_at": 2 } }
+}

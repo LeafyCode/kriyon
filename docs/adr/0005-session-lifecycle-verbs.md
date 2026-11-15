@@ -19,10 +19,13 @@ running TUI**, which `AGENTS.md`'s "interactive prompts are TUI-only" rule
 forbids: Kriyon does not scrape or drive `claude`'s interactive surface.
 
 Instead, the Rust core writes the prompt to a **path-contained** file,
-`~/.claude/kriyon/run/<id>.prompt` (`seed_prompt` in
+`~/.claude/kriyon/run/<id>.prompt` (`write_seed_prompt` in
 `src-tauri/src/commands.rs`), where `<id>` is validated before it is
 interpolated into the path (`seed_prompt_path` rejects `../evil` and `a/b`).
-The session is then launched as `claude "$(cat <file>)"`. This was verified
+The session is then launched as `p="$(cat "<file>")"; rm -f "<file>"; claude
+"$p"` (`claude_command` in `kriyon-core`'s `claude_launch.rs`): the file is
+read once and removed, and a path the command can't quote safely is never
+typed (the prompt is dropped, and the person told). This was verified
 against Claude Code's CLI: `claude "<prompt>"` starts the normal interactive
 session with that prompt as the opening turn — only `-p`/`--print` is
 headless — so no user text is ever shell-escaped by Kriyon, and the prompt

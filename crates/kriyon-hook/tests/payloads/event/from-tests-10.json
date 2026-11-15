@@ -1,0 +1,20 @@
+{
+  "hook_event_name": "Stop",
+  "stop_hook_active": false,
+  "background_tasks": [
+    {
+      "id": "ac049aa2d97e68b55",
+      "type": "subagent",
+      "status": "running",
+      "description": "Map the parser edge cases",
+      "agent_type": "general-purpose"
+    },
+    {
+      "id": "b7",
+      "type": "shell",
+      "status": "running",
+      "description": "sleep 25",
+      "command": "sleep 25"
+    }
+  ]
+}

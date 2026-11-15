@@ -141,6 +141,7 @@ const LAYOUT_VIEWS: readonly Layout["view"][] = [
   "focus",
   "command",
   "prompts",
+  "remote",
   "settings",
 ];
 

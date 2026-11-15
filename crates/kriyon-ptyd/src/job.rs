@@ -91,15 +91,16 @@ impl Job {
         Ok(())
     }
 
-    /// Every process in the job right now, as `(pid, parent pid)`, or `None`
-    /// if the job or the process table can't be read.
+    /// Every process in the job right now, with its parent and whether it is
+    /// a launcher shim ([`kriyon_core::proc::is_launcher`]), or `None` if the
+    /// job or the process table can't be read.
     ///
     /// Only members are returned. A member's parent pid is trustworthy where a
     /// whole-table one is not: every member started after the shell, so no
     /// member's parent can be an older process that happened to have a pid the
     /// shell now holds.
     #[must_use]
-    pub fn members(&self) -> Option<Vec<(i32, i32)>> {
+    pub fn members(&self) -> Option<Vec<kriyon_core::proc::JobMember>> {
         let ids = self.member_ids()?;
         // SAFETY: a process snapshot; the invalid handle is the error case.
         let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
@@ -118,7 +119,17 @@ impl Job {
                     i32::try_from(entry.th32ProcessID),
                     i32::try_from(entry.th32ParentProcessID),
                 ) {
-                    members.push((pid, ppid));
+                    let len = entry
+                        .szExeFile
+                        .iter()
+                        .position(|&c| c == 0)
+                        .unwrap_or(entry.szExeFile.len());
+                    let name = String::from_utf16_lossy(&entry.szExeFile[..len]);
+                    members.push(kriyon_core::proc::JobMember {
+                        pid,
+                        ppid,
+                        launcher: kriyon_core::proc::is_launcher(&name),
+                    });
                 }
             }
             // SAFETY: as above.

@@ -1,0 +1,23 @@
+{
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Bash",
+  "tool_input": { "command": "x" },
+  "tool_response": {
+    "stdout": "",
+    "stderr": "",
+    "bashEditDiff": {
+      "files": [
+        {
+          "filePath": "/w/src/a.js",
+          "hunks": [{ "lines": ["+a", "-b", "+c"] }]
+        },
+        {
+          "filePath": "/w/node_modules/x/y.js",
+          "hunks": [{ "lines": ["+z"] }]
+        },
+        { "filePath": "/w/.git/HEAD" },
+        { "nope": 1 }
+      ]
+    }
+  }
+}

@@ -40,8 +40,8 @@ fn read_until(stream: &mut UnixStream, needle: &str, timeout: Duration) -> Strin
             Ok(0) => break,
             Ok(n) => {
                 decoder.push(&buf[..n]);
-                while let Some(frame) = decoder.next_frame() {
-                    if let Frame::Output(bytes) = frame {
+                while let Ok(Some(frame)) = decoder.next_frame() {
+                    if let Frame::Output(bytes) | Frame::Screen(bytes) = frame {
                         seen.push_str(&String::from_utf8_lossy(&bytes));
                     }
                 }

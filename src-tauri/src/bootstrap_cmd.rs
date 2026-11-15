@@ -31,6 +31,21 @@ pub struct BootstrapReport {
     pub output: String,
 }
 
+impl BootstrapReport {
+    /// The report for a setup refused before any step ran (ADR-0058).
+    #[must_use]
+    pub fn refused(reason: &str) -> Self {
+        Self {
+            ok: false,
+            steps: vec![BootstrapStep {
+                label: "check folders".to_string(),
+                ok: false,
+            }],
+            output: format!("{reason}\n"),
+        }
+    }
+}
+
 /// Copy `.env*`, run the detected install, then the optional setup command,
 /// inside `worktree_path`. `path` is the PATH they run with (`None` keeps the
 /// app's own). Best-effort and total.
@@ -190,6 +205,16 @@ fn run_in(dir: &str, path: Option<&str>, argv: &[&str]) -> (bool, String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_refused_setup_is_one_failed_step_that_says_why() {
+        let report = BootstrapReport::refused("worktree_path: not one of them");
+        assert!(!report.ok);
+        assert_eq!(report.steps.len(), 1);
+        assert_eq!(report.steps[0].label, "check folders");
+        assert!(!report.steps[0].ok);
+        assert_eq!(report.output, "worktree_path: not one of them\n");
+    }
 
     #[test]
     fn copies_env_and_runs_setup_command() {

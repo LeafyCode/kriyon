@@ -1,0 +1,12 @@
+{
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Read",
+  "tool_input": { "file_path": "/w/a.ts" },
+  "tool_response": {
+    "type": "text",
+    "file": {
+      "filePath": "/w/a.ts",
+      "content": "const k = 'sk-abcdefghijklmnopqrstuv'"
+    }
+  }
+}

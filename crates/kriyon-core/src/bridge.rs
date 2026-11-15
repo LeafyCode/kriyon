@@ -6,6 +6,56 @@
 //! spool], because it lives exactly as long as the session and survives an
 //! app crash (ADR-0022).
 
+/// Why a post to the [Companion bridge] was not kept. Every post is answered
+/// as kept, so a refused mod has nothing to retry; the reason is for the log.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PosterRefusal {
+    /// The session's terminal isn't known. The daemon records it before the
+    /// session's shell starts, so nothing inside the session can post before
+    /// it; if it could not be recorded at all, the companion stays off for the
+    /// session rather than trust any poster.
+    TerminalNotOpen,
+    /// This platform has no way here to learn who posted.
+    NoCheckOnThisPlatform,
+    /// The OS would not say who posted, or what it said made no sense.
+    LookupFailed,
+    /// The poster is not the session's [Owning claude]: a nested `claude`, or
+    /// a process outside the session.
+    NotTheOwner,
+}
+
+impl PosterRefusal {
+    /// The reason in words, for the daemon's log.
+    #[must_use]
+    pub fn reason(self) -> &'static str {
+        match self {
+            Self::TerminalNotOpen => "the session's terminal is not open yet",
+            Self::NoCheckOnThisPlatform => "this platform cannot tell who posted",
+            Self::LookupFailed => "the OS could not say who posted",
+            Self::NotTheOwner => "the poster is not the session's own claude",
+        }
+    }
+}
+
+/// Keep a post only when its sender is proven to be the session's [Owning
+/// claude]. Fails closed: no terminal yet, no check on this platform, or a
+/// lookup that failed all refuse. `seat` looks the poster up against the
+/// session's terminal (its device number).
+///
+/// # Errors
+/// The [`PosterRefusal`] that says why the post is not kept.
+pub fn check_poster(
+    session_tty: Option<u64>,
+    seat: impl FnOnce(u64) -> Result<crate::proc::TerminalSeat, PosterRefusal>,
+) -> Result<(), PosterRefusal> {
+    let tty = session_tty.ok_or(PosterRefusal::TerminalNotOpen)?;
+    if seat(tty)?.owns_session() {
+        Ok(())
+    } else {
+        Err(PosterRefusal::NotTheOwner)
+    }
+}
+
 /// The largest event body accepted. Rows are capped by the mod well below it.
 pub const MAX_BODY: usize = 512 * 1024;
 
@@ -297,5 +347,56 @@ mod tests {
             Some(BridgeEvent::SessionRequest(_))
         ));
         assert_eq!(classify("garbage"), None);
+    }
+    mod poster {
+        use super::super::{check_poster, PosterRefusal};
+        use crate::proc::TerminalSeat;
+
+        const TTY: u64 = 0x1000_0007;
+
+        fn seat(pgid: i32, foreground_pgid: i32, on_session_tty: bool) -> TerminalSeat {
+            TerminalSeat {
+                pgid,
+                foreground_pgid,
+                on_session_tty,
+            }
+        }
+
+        #[test]
+        fn the_claude_leading_the_session_terminal_is_kept() {
+            assert_eq!(
+                check_poster(Some(TTY), |tty| {
+                    assert_eq!(tty, TTY);
+                    Ok(seat(300, 300, true))
+                }),
+                Ok(())
+            );
+        }
+
+        #[test]
+        fn a_nested_claude_is_refused() {
+            assert_eq!(
+                check_poster(Some(TTY), |_| Ok(seat(400, 0, false))),
+                Err(PosterRefusal::NotTheOwner)
+            );
+        }
+
+        #[test]
+        fn nothing_is_kept_before_the_terminal_is_known() {
+            assert_eq!(
+                check_poster(None, |_| Ok(seat(300, 300, true))),
+                Err(PosterRefusal::TerminalNotOpen)
+            );
+        }
+
+        #[test]
+        fn a_lookup_that_fails_refuses_rather_than_lets_through() {
+            for why in [
+                PosterRefusal::LookupFailed,
+                PosterRefusal::NoCheckOnThisPlatform,
+            ] {
+                assert_eq!(check_poster(Some(TTY), |_| Err(why)), Err(why));
+            }
+        }
     }
 }

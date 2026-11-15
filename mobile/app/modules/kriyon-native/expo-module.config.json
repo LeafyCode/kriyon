@@ -1,0 +1,9 @@
+{
+  "platforms": ["apple", "android"],
+  "apple": {
+    "modules": ["KriyonNativeModule"]
+  },
+  "android": {
+    "modules": ["com.leafycode.kriyon.nativemodule.KriyonNativeModule"]
+  }
+}

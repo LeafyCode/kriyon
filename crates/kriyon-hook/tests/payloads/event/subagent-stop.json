@@ -1,0 +1,8 @@
+{
+  "hook_event_name": "SubagentStop",
+  "agent_id": "a-1",
+  "agent_type": "Explore",
+  "transcript_path": "/t/s.jsonl",
+  "duration_ms": 1234,
+  "stop_hook_active": false
+}

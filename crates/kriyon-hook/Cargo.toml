@@ -1,0 +1,28 @@
+[package]
+name = "kriyon-hook"
+version.workspace = true
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+description = "Kriyon's Claude Code hook and status-line capture: records a Kriyon session's events, live usage and plan limits. Never blocks Claude."
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "kriyon-hook"
+path = "src/main.rs"
+
+[dependencies]
+kriyon-core = { path = "../kriyon-core" }
+serde = "1"
+serde_json = "1"
+regex = "1"
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"
+correctness = "deny"

@@ -12,6 +12,7 @@
     "fix": "ultracite fix",
     "icons": "node scripts/make-app-icon.mjs && tauri icon app-icon.svg && node scripts/make-tray-icon.mjs",
     "lint": "ultracite check",
+    "mobile:check": "pnpm --filter @kriyon/mobile typecheck && pnpm --filter @kriyon/mobile test",
     "prepare": "node scripts/install-git-hooks.mjs",
     "preview": "vite preview",
     "release": "node scripts/release.mjs",
@@ -22,7 +23,7 @@
     "smoke": "bash scripts/smoke.sh",
     "tauri": "tauri",
     "test": "vitest run",
-    "test:node": "node --test .claude/hooks/*.test.mjs .claude/skills/pr-review/scripts/*.test.mjs crates/kriyon-core/companion/*.test.mjs scripts/*.test.mjs",
+    "test:node": "node --test .claude/hooks/*.test.mjs .claude/skills/pr-review/scripts/*.test.mjs crates/kriyon-core/companion/*.test.mjs scripts/*.test.mjs scripts/mobile/*.test.mjs",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit"
   },

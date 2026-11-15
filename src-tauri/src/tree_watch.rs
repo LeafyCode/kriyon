@@ -77,15 +77,20 @@ where
     // a symlink (`/var/...`, and every `TMPDIR` path) would fail every
     // `strip_prefix` and the watch would silently never fire — filtered out
     // rather than erroring, which is the worst shape a bug like this can take.
-    // `watch()` below still gets the caller's path; only matching is canonical.
-    let root = repo_root
-        .canonical()
-        .unwrap_or_else(|_| repo_root.to_path_buf());
+    // `watch()` below still gets the caller's path. Windows reports events
+    // under the path as watched instead, which can differ from the canonical
+    // one (a short `RUNNER~1` name for a long one), so both are matched.
+    let given = repo_root.to_path_buf();
+    let root = repo_root.canonical().unwrap_or_else(|_| given.clone());
     let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
         let Ok(event) = res else {
             return;
         };
-        if event.paths.iter().any(|p| is_interesting(&root, p)) {
+        if event
+            .paths
+            .iter()
+            .any(|p| is_interesting(&root, p) || is_interesting(&given, p))
+        {
             let _ = tx.send(());
         }
     })

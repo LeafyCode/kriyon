@@ -1,0 +1,90 @@
+[
+  {
+    "name": "running",
+    "status": "running",
+    "hooksOff": false,
+    "lastSeenMs": 10000,
+    "nowMs": 10000,
+    "standing": "running"
+  },
+  {
+    "name": "waiting is awaiting input",
+    "status": "waiting",
+    "hooksOff": false,
+    "lastSeenMs": 10000,
+    "nowMs": 10000,
+    "standing": "awaiting_input"
+  },
+  {
+    "name": "done is changed",
+    "status": "done",
+    "hooksOff": false,
+    "lastSeenMs": 10000,
+    "nowMs": 10000,
+    "standing": "changed"
+  },
+  {
+    "name": "error is changed",
+    "status": "error",
+    "hooksOff": false,
+    "lastSeenMs": 10000,
+    "nowMs": 10000,
+    "standing": "changed"
+  },
+  {
+    "name": "idle",
+    "status": "idle",
+    "hooksOff": false,
+    "lastSeenMs": 10000,
+    "nowMs": 10000,
+    "standing": "idle"
+  },
+  {
+    "name": "never seen is unknown",
+    "status": "running",
+    "hooksOff": false,
+    "lastSeenMs": null,
+    "nowMs": 10000,
+    "standing": "unknown"
+  },
+  {
+    "name": "seen exactly 6s ago still counts",
+    "status": "waiting",
+    "hooksOff": false,
+    "lastSeenMs": 4000,
+    "nowMs": 10000,
+    "standing": "awaiting_input"
+  },
+  {
+    "name": "seen over 6s ago is unknown",
+    "status": "waiting",
+    "hooksOff": false,
+    "lastSeenMs": 3999,
+    "nowMs": 10000,
+    "standing": "unknown"
+  },
+  {
+    "name": "seen over 6s in the future is unknown",
+    "status": "running",
+    "hooksOff": false,
+    "lastSeenMs": 16001,
+    "nowMs": 10000,
+    "standing": "unknown"
+  },
+  {
+    "name": "a beat in the future is fine",
+    "status": "running",
+    "hooksOff": false,
+    "lastSeenMs": 11000,
+    "nowMs": 10000,
+    "standing": "running"
+  },
+  {
+    "name": "hooks off is unknown however fresh",
+    "status": "idle",
+    "hooksOff": true,
+    "lastSeenMs": 10000,
+    "nowMs": 10000,
+    "standing": "unknown"
+  }
+]

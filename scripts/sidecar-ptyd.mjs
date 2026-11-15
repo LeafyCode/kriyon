@@ -1,5 +1,7 @@
 #!/usr/bin/env node
-// Build kriyon-ptyd and stage it as a Tauri sidecar (externalBin).
+// Build Kriyon's sidecars and stage them for Tauri (externalBin): kriyon-ptyd,
+// the per-session terminal daemon, and kriyon-hook, the Claude Code hook and
+// status-line capture (ADR-0066). The name stays for the callers that run it.
 //
 // Tauri's `bundle.externalBin` resolves each entry to a `<name>-<target-triple>`
 // artifact under src-tauri/binaries, then copies it next to the app executable
@@ -61,12 +63,15 @@ function requestedTarget() {
   return process.env.KRIYON_SIDECAR_TARGET || hostTriple();
 }
 
-// Compile kriyon-ptyd for one concrete (non-universal) triple; return the path
-// to the built binary. A `--target` flag nests the artifact under
+// The sidecars, each a package whose binary has the same name.
+const SIDECARS = ["kriyon-ptyd", "kriyon-hook"];
+
+// Compile `name` for one concrete (non-universal) triple; return the path to
+// the built binary. A `--target` flag nests the artifact under
 // target/<triple>/; omitting it for the host keeps the plain target/<profile>/
 // layout (and avoids forcing the host arch to be an explicit rustup target).
-function buildFor(triple, host) {
-  const cargoArgs = ["build", "-p", "kriyon-ptyd"];
+function buildFor(name, triple, host) {
+  const cargoArgs = ["build", "-p", name];
   if (release) {
     cargoArgs.push("--release");
   }
@@ -76,7 +81,7 @@ function buildFor(triple, host) {
     builtDir = join(repoRoot, "target", triple, profile);
   }
   execFileSync("cargo", cargoArgs, { stdio: "inherit" });
-  return join(builtDir, `kriyon-ptyd${exeSuffix(triple)}`);
+  return join(builtDir, `${name}${exeSuffix(triple)}`);
 }
 
 // Windows executables carry `.exe`, both as cargo builds them and as Tauri's
@@ -90,24 +95,28 @@ mkdirSync(sidecarDir, { recursive: true });
 
 const target = requestedTarget();
 
-if (target === UNIVERSAL) {
-  const host = hostTriple();
-  const members = UNIVERSAL_MEMBERS.map((triple) => buildFor(triple, host));
-  // Fuse the per-arch binaries into one fat Mach-O, then stage it under every
-  // name Tauri looks for: each per-arch sub-build plus the final universal copy.
-  const names = [...UNIVERSAL_MEMBERS, UNIVERSAL].map((triple) =>
-    join(sidecarDir, `kriyon-ptyd-${triple}`)
-  );
-  const [primary, ...rest] = names;
-  execFileSync("lipo", ["-create", "-output", primary, ...members], {
-    stdio: "inherit",
-  });
-  for (const path of rest) {
-    copyFileSync(primary, path);
+for (const name of SIDECARS) {
+  if (target === UNIVERSAL) {
+    const host = hostTriple();
+    const members = UNIVERSAL_MEMBERS.map((triple) =>
+      buildFor(name, triple, host)
+    );
+    // Fuse the per-arch binaries into one fat Mach-O, then stage it under every
+    // name Tauri looks for: each per-arch sub-build plus the final universal copy.
+    const names = [...UNIVERSAL_MEMBERS, UNIVERSAL].map((triple) =>
+      join(sidecarDir, `${name}-${triple}`)
+    );
+    const [primary, ...rest] = names;
+    execFileSync("lipo", ["-create", "-output", primary, ...members], {
+      stdio: "inherit",
+    });
+    for (const path of rest) {
+      copyFileSync(primary, path);
+    }
+    console.log(`staged universal sidecar: ${names.join(", ")}`);
+  } else {
+    const staged = join(sidecarDir, `${name}-${target}${exeSuffix(target)}`);
+    copyFileSync(buildFor(name, target, hostTriple()), staged);
+    console.log(`staged sidecar: ${staged}`);
   }
-  console.log(`staged universal sidecar: ${names.join(", ")}`);
-} else {
-  const staged = join(sidecarDir, `kriyon-ptyd-${target}${exeSuffix(target)}`);
-  copyFileSync(buildFor(target, hostTriple()), staged);
-  console.log(`staged sidecar: ${staged}`);
 }

@@ -1,0 +1,9 @@
+{
+  "session_id": "c-3",
+  "model": "x",
+  "context_window": [1],
+  "rate_limits": {
+    "five_hour": { "used_percentage": "40", "resets_at": 1 },
+    "seven_day": { "used_percentage": 1 }
+  }
+}

@@ -242,8 +242,9 @@ pub struct StatusTracker {
     /// — yields a single notification, not one per flip; the next turn re-arms it.
     unread_notification: bool,
     /// Whether a Claude Code hook event has driven this tracker yet — until
-    /// then it reads Idle, and live seeding may still replace it.
-    hook_driven: bool,
+    /// then it reads Idle (or Waiting while it asks before hooks), and live
+    /// seeding may still replace it.
+    hooks: Hooks,
     hook_status: Option<SessionStatus>,
     hook_summary: String,
     /// What a current `Waiting` holds for the user. Set exactly when the
@@ -341,7 +342,7 @@ impl StatusTracker {
             last_summary: String::new(),
             last_notify_at: None,
             unread_notification: false,
-            hook_driven: false,
+            hooks: Hooks::NotYet { asking: false },
             hook_status: None,
             hook_summary: String::new(),
             waiting: None,
@@ -366,7 +367,7 @@ impl StatusTracker {
         if signal == HookSignal::Unrecognized {
             return;
         }
-        self.hook_driven = true;
+        self.hooks = Hooks::Driving;
         match signal {
             HookSignal::Notified(kind) => self.note_notification(kind),
             HookSignal::Tool(call) if call.actor != Actor::Main => self.note_subagent_tool(call),
@@ -662,7 +663,7 @@ impl StatusTracker {
     /// (see [`replay_history`]) would only regress its main-session lock.
     #[must_use]
     pub fn is_hook_driven(&self) -> bool {
-        self.hook_driven
+        self.hooks == Hooks::Driving
     }
 
     /// The tracker's current committed status (updated by `apply_recompute`).
@@ -679,7 +680,18 @@ impl StatusTracker {
         &self.last_summary
     }
 
+    /// Whether a dialog shows on the session's own screen now (the daemon's
+    /// dialog watch). Counts only before any hook has driven this tracker.
+    pub fn note_screen_dialog(&mut self, open: bool) {
+        if let Hooks::NotYet { asking } = &mut self.hooks {
+            *asking = open;
+        }
+    }
+
     fn recompute(&self) -> (SessionStatus, String) {
+        if self.hooks == (Hooks::NotYet { asking: true }) {
+            return (SessionStatus::Waiting, ASKS_BEFORE_STARTING.to_string());
+        }
         (
             self.hook_status.unwrap_or(SessionStatus::Idle),
             self.hook_summary.clone(),
@@ -714,6 +726,21 @@ impl StatusTracker {
         })
     }
 }
+
+/// Whether hooks drive a [`StatusTracker`] yet.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Hooks {
+    /// No hook event yet. `asking`: a dialog shows on the session's own
+    /// screen meanwhile, Claude Code asking whether to trust the folder
+    /// before its hooks load (ADR-0064); it needs the person.
+    NotYet { asking: bool },
+    /// A hook event came: hooks say what the status is from now on.
+    Driving,
+}
+
+/// The summary while Claude Code asks something before its hooks load (the
+/// folder trust prompt, ADR-0064).
+pub const ASKS_BEFORE_STARTING: &str = "Asks before it starts";
 
 /// The summary for a tool event: what is running, or what just failed.
 fn tool_summary(call: ToolCall<'_>) -> String {

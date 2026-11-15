@@ -12,6 +12,7 @@ import { CommandPalette } from "../palette/CommandPalette.tsx";
 import { PromptEditor } from "../prompts/PromptEditor.tsx";
 import { PromptPicker } from "../prompts/PromptPicker.tsx";
 import { PromptsView } from "../prompts/PromptsView.tsx";
+import { RemoteView } from "../remote/RemoteView.tsx";
 import { SettingsView } from "../settings/SettingsView.tsx";
 import { Sidebar } from "../sidebar/Sidebar.tsx";
 import { HandoffCards } from "../spawn/HandoffCard.tsx";
@@ -246,6 +247,11 @@ export function Shell({ children, onCloseSession, onNewSession }: ShellProps) {
         {view === "prompts" ? (
           <ErrorBoundary label="This view crashed.">
             <PromptsView />
+          </ErrorBoundary>
+        ) : null}
+        {view === "remote" ? (
+          <ErrorBoundary label="This view crashed.">
+            <RemoteView />
           </ErrorBoundary>
         ) : null}
         {view === "settings" ? (

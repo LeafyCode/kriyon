@@ -1,0 +1,25 @@
+//! The remote access protocol (ADR-0057, `docs/superpowers/specs/2026-11-13-remote-protocol.md`):
+//! messages, framing, typing control, the host's one check, screen numbering,
+//! per-device queues, pairing and push crypto, and compression. Pure: no network, no IO,
+//! shared by the desktop host and the phone library.
+
+pub mod authorize;
+pub mod codec;
+pub mod compress;
+pub mod control;
+pub mod device_view;
+pub mod entries;
+pub mod fanout;
+pub mod link_policy;
+pub mod message;
+pub mod nested;
+pub mod pairing;
+/// Push crypto (spec §10), in its own crate so the push sender builds it
+/// alone; here under its old name.
+pub use kriyon_push_seal as push;
+pub mod queue;
+pub mod relay;
+pub mod routes;
+pub mod screen;
+pub mod text;
+pub mod writer;

@@ -27,6 +27,19 @@ pub struct PendingAsk {
     pub kind: AskKind,
     pub text: String,
     pub asked_at: Option<String>,
+    /// A question's header and options, for the [Readable view]; not part of
+    /// what the window is sent.
+    #[serde(skip)]
+    pub question: Option<AskQuestion>,
+}
+
+/// Claude's first question as the hook gave it, for the [Readable view]:
+/// header, question and options, cut to that view's limits (spec §6).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct AskQuestion {
+    pub header: String,
+    pub question: String,
+    pub options: Vec<String>,
 }
 
 /// Folds hook events into the session's current [`PendingAsk`].
@@ -80,6 +93,9 @@ impl AskState {
                         question_text(ev.questions.as_deref()),
                         ev,
                     );
+                    if let Some(ask) = self.current.as_mut() {
+                        ask.question = first_question(ev.questions.as_deref());
+                    }
                 }
                 "ExitPlanMode" => {
                     self.open(AskKind::PlanApproval, plan_text(ev.plan.as_deref()), ev);
@@ -148,6 +164,7 @@ impl AskState {
             kind,
             text,
             asked_at: ev.ts.clone(),
+            question: None,
         });
         self.tool_use_id.clone_from(&ev.tool_use_id);
     }
@@ -187,6 +204,41 @@ fn question_text(raw: Option<&str>) -> String {
         }
         _ => "Has a question for you".to_string(),
     }
+}
+
+/// The first question in the raw questions JSON, with its header and at
+/// most [`ASK_OPTIONS`](crate::readable::ASK_OPTIONS) option labels, each
+/// redacted, then cut short (a cut secret might no longer be recognised).
+/// `None` when it doesn't parse.
+fn first_question(raw: Option<&str>) -> Option<AskQuestion> {
+    use crate::readable::{cut, ASK_HEADER_MAX, ASK_OPTIONS, ASK_OPTION_MAX, ASK_QUESTION_MAX};
+    #[derive(Deserialize)]
+    struct Choice {
+        label: String,
+    }
+    #[derive(Deserialize)]
+    struct Entry {
+        question: String,
+        #[serde(default)]
+        header: String,
+        #[serde(default)]
+        options: Vec<Choice>,
+    }
+    let first = serde_json::from_str::<Vec<Entry>>(raw?)
+        .ok()?
+        .into_iter()
+        .next()?;
+    let shown = |text: &str, max| cut(&crate::redact::redact(text), max);
+    Some(AskQuestion {
+        header: shown(&first.header, ASK_HEADER_MAX),
+        question: shown(&first.question, ASK_QUESTION_MAX),
+        options: first
+            .options
+            .iter()
+            .take(ASK_OPTIONS)
+            .map(|choice| shown(&choice.label, ASK_OPTION_MAX))
+            .collect(),
+    })
 }
 
 fn plan_text(plan: Option<&str>) -> String {
@@ -229,6 +281,77 @@ mod tests {
         assert_eq!(ask.kind, AskKind::Question);
         assert_eq!(ask.text, "Which db? (+1 more)");
         assert_eq!(ask.asked_at.as_deref(), Some("2026-07-02T10:00:00Z"));
+    }
+
+    #[test]
+    fn a_question_keeps_its_header_and_options_while_it_is_open() {
+        let mut state = AskState::new();
+        let mut event = pre("AskUserQuestion");
+        let options: Vec<String> = (0..12)
+            .map(|n| format!(r#"{{"label":"Option {n}"}}"#))
+            .collect();
+        event.questions = Some(format!(
+            r#"[{{"question":"Which db?","header":"Database","options":[{}]}},{{"question":"Then?"}}]"#,
+            options.join(",")
+        ));
+        state.ingest(&event);
+        let question = state
+            .current()
+            .and_then(|ask| ask.question)
+            .expect("a question");
+        assert_eq!(question.header, "Database");
+        assert_eq!(question.question, "Which db?");
+        assert_eq!(question.options.len(), 8, "at most 8");
+        assert_eq!(question.options[0], "Option 0");
+        let mut post = pre("AskUserQuestion");
+        post.event = "PostToolUse".to_string();
+        state.ingest(&post);
+        assert_eq!(state.current().and_then(|ask| ask.question), None);
+    }
+
+    #[test]
+    fn a_secret_in_an_option_is_redacted_before_it_is_cut() {
+        let mut state = AskState::new();
+        let mut event = pre("AskUserQuestion");
+        let option = format!("{}sk-ant-api03-abcdefghijklmnopqrstuvwxyz", "x".repeat(60));
+        event.questions = Some(format!(
+            r#"[{{"question":"Q","options":[{{"label":"{option}"}}]}}]"#
+        ));
+        state.ingest(&event);
+        let question = state
+            .current()
+            .and_then(|ask| ask.question)
+            .expect("a question");
+        assert!(
+            !question.options[0].contains("sk-ant"),
+            "{}",
+            question.options[0]
+        );
+    }
+
+    #[test]
+    fn a_long_option_is_cut_and_a_permission_has_no_question() {
+        let mut state = AskState::new();
+        let mut event = pre("AskUserQuestion");
+        event.questions = Some(format!(
+            r#"[{{"question":"Q","options":[{{"label":"{}"}}]}}]"#,
+            "é".repeat(100)
+        ));
+        state.ingest(&event);
+        let question = state
+            .current()
+            .and_then(|ask| ask.question)
+            .expect("a question");
+        assert!(
+            question.options[0].len() <= 80,
+            "{}",
+            question.options[0].len()
+        );
+        let mut state = AskState::new();
+        let mut gate = ev("PermissionRequest");
+        gate.tool_name = Some("Bash".to_string());
+        state.ingest(&gate);
+        assert_eq!(state.current().and_then(|ask| ask.question), None);
     }
 
     #[test]

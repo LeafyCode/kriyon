@@ -52,7 +52,8 @@ mirror it.
 The daemon always removes an inherited `KRIYON_TTY` before setting its own. A Kriyon
 started from a Kriyon terminal would otherwise pass that terminal's name to its sessions.
 
-**Fail open.** When a check can't run, the event is kept, as it was before this change. That
+**Fail open.** (For the [Companion bridge], replaced by ADR-0061: it now fails closed.)
+When a check can't run, the event is kept, as it was before this change. That
 covers a session whose daemon predates `KRIYON_TTY`, a CLI that sets no `CLAUDE_PID`, `ps`
 failing, and the bridge off macOS. A dropped event from the real session would be worse than
 a nested event getting through.

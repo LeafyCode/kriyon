@@ -1,0 +1,5 @@
+{
+  "hook_event_name": "FutureEvent",
+  "novel": { "deep": [1, { "k": "v" }] },
+  "session_id": 5
+}

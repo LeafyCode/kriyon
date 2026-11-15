@@ -104,13 +104,32 @@ pub(crate) fn forget(state: &AppState, id: &SessionId) -> Option<Session> {
     // [Background shell] bookkeeping, which lives inside it.
     state.watchers.lock().remove(id);
     state.runtimes.lock().remove(id);
+    state.digests.forget(id);
     crate::handoff_rt::forget(state, id);
     state.bridged.lock().remove(id);
     // Sleep bookkeeping dies with the session; a stale mark would otherwise
     // greet a future session that reused the id. One call clears every phase.
     state.sleep.lock().forget(&id.0);
     state.memory.lock().forget(&id.0);
+    state.writers.forget(id);
     state.sessions.lock().remove(id)
+}
+
+/// Every live session's engine, collected under the sessions lock and let
+/// go before any session's gate is taken (the writers' lock order).
+#[must_use]
+pub fn live_engines(
+    state: &crate::AppState,
+) -> Vec<(
+    kriyon_core::session::SessionId,
+    std::sync::Arc<crate::daemon_client::DaemonClient>,
+)> {
+    state
+        .sessions
+        .lock()
+        .iter()
+        .map(|(id, session)| (id.clone(), std::sync::Arc::clone(&session.engine)))
+        .collect()
 }
 
 #[cfg(test)]
@@ -132,10 +151,7 @@ mod tests {
         let stream = UnixStream::connect(&socket).expect("connect");
         let engine = DaemonClient::adopt(stream, id.clone()).expect("client");
         (
-            Session {
-                engine: std::sync::Arc::new(engine),
-                zdotdir: None,
-            },
+            Session::new(std::sync::Arc::new(engine), None, false),
             daemon,
         )
     }
@@ -235,6 +251,7 @@ mod tests {
         state.sessions.lock().insert(id.clone(), session);
         ensure_runtime(&state, &id);
         state.sleep.lock().note_running_shells(&id.0, true);
+        state.writers.ensure(&id);
         {
             let mut sweep = state.memory.lock();
             sweep.per_session.insert(
@@ -257,6 +274,7 @@ mod tests {
             "the sleep ledger"
         );
         assert_eq!(state.memory.lock().total_mb, 0, "the footprint sweep");
+        assert!(!state.writers.has_gate(&id), "the writer gate");
     }
 
     #[test]
@@ -265,7 +283,9 @@ mod tests {
         let id = SessionId("s1".into());
 
         ensure_runtime(&state, &id);
-        with_runtime(&state, &id, SessionRuntime::note_exited);
+        with_runtime(&state, &id, |runtime| {
+            runtime.note_exited(std::time::Instant::now());
+        });
         ensure_runtime(&state, &id);
 
         assert!(

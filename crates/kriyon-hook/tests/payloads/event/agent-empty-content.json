@@ -1,0 +1,5 @@
+{
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Agent",
+  "tool_response": { "content": [{ "type": "image" }], "x": "é" }
+}

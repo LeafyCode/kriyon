@@ -1,0 +1,9 @@
+{
+  "hook_event_name": "Stop",
+  "background_tasks": [
+    { "id": 123, "type": "shell" },
+    { "type": "subagent" },
+    "junk",
+    { "id": null, "type": true }
+  ]
+}

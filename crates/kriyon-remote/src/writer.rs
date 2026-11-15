@@ -1,0 +1,436 @@
+//! One session's writer gate (plan Step C, "one writer per session"): the
+//! single place that decides whether a write or resize reaches the session,
+//! held under one lock with the write itself, so a removal or new dialog
+//! between a check and a write still wins.
+//!
+//! - The host and every Controller type straight in (ADR-0063): no handover.
+//!   Whoever typed last is tracked, for the size and a "typing from" hint.
+//! - The session's size follows whoever typed last: the desktop window's
+//!   size after the host's keys, a device's own size (from its `Resize`)
+//!   after its keys. The others' sizes are remembered.
+//! - A device's write is checked again here with
+//!   [`crate::authorize::recheck_at_write`].
+
+use std::time::Instant;
+
+use crate::authorize::{
+    recheck_at_write, Dialog, HostFacts, PendingWrite, ProjectFolder, SessionView,
+};
+use std::collections::HashMap;
+
+use crate::control::{Change, Control};
+use crate::message::{EndpointId, Holder, RefuseReason, Role};
+
+/// What a write did besides reaching the session.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct HostTook {
+    /// Someone else typed last now: tell every device.
+    pub change: Option<Change>,
+    /// The size to give the PTY now: the window's after the host typed, the
+    /// device's own after it typed.
+    pub restore: Option<(u16, u16)>,
+}
+
+/// The size a session's PTY has until its terminal says otherwise; the
+/// window sends its real size right after attaching.
+pub const DEFAULT_SCREEN: (u16, u16) = (80, 24);
+
+/// One session's gate.
+#[derive(Clone, Debug)]
+pub struct SessionGate {
+    control: Control,
+    /// The [Session run] now; `None` until the daemon says.
+    run: Option<u64>,
+    dialog: Dialog,
+    /// The size the session's screen has now.
+    screen: (u16, u16),
+    /// The host's own size: what the desktop window last asked for.
+    host_size: (u16, u16),
+    /// Each device's own size, from its last `Resize`.
+    device_sizes: HashMap<EndpointId, (u16, u16)>,
+}
+
+impl SessionGate {
+    /// A gate for a session under this app start (`host_boot_id`), whose
+    /// screen is `screen` big.
+    #[must_use]
+    pub fn new(host_boot_id: u64, screen: (u16, u16)) -> Self {
+        Self {
+            control: Control::new(host_boot_id),
+            run: None,
+            dialog: Dialog::default(),
+            screen,
+            host_size: screen,
+            device_sizes: HashMap::new(),
+        }
+    }
+
+    #[must_use]
+    pub fn control(&self) -> &Control {
+        &self.control
+    }
+
+    /// The current [Session run], once the daemon named it.
+    #[must_use]
+    pub fn run(&self) -> Option<u64> {
+        self.run
+    }
+
+    /// The dialog as the dialog watch last saw it.
+    #[must_use]
+    pub fn dialog(&self) -> Dialog {
+        self.dialog
+    }
+
+    /// The session's process (re)started: a new run.
+    pub fn set_run(&mut self, run: u64) {
+        self.run = Some(run);
+    }
+
+    /// The dialog watch saw the session's dialog change.
+    pub fn set_dialog(&mut self, dialog: Dialog) {
+        self.dialog = dialog;
+    }
+
+    /// The person typed at the host.
+    pub fn host_input(&mut self, now: Instant) -> HostTook {
+        let change = self.control.host_typed(now);
+        self.back_to_host(change)
+    }
+
+    /// Control went back to the host (or didn't): put the host's size back if
+    /// a device's stood.
+    fn back_to_host(&mut self, change: Option<Change>) -> HostTook {
+        let restore = (change.is_some() && self.screen != self.host_size).then(|| {
+            self.screen = self.host_size;
+            self.host_size
+        });
+        HostTook { change, restore }
+    }
+
+    /// The desktop's window gave the session `size`. Returns the size to
+    /// apply now: `None` while a device's size stands (it is remembered).
+    pub fn host_resize(&mut self, size: (u16, u16)) -> Option<(u16, u16)> {
+        self.host_size = size;
+        if self.control.holder() == Holder::Host {
+            self.screen = size;
+            Some(size)
+        } else {
+            None
+        }
+    }
+
+    /// `device` left, was removed or became a Viewer: control goes back to
+    /// the host, and so does the host's size.
+    pub fn release(&mut self, device: EndpointId) -> HostTook {
+        self.device_sizes.remove(&device);
+        let change = self.control.release(device);
+        self.back_to_host(change)
+    }
+
+    /// Check a device's write again, now, under the writer's lock. Typing
+    /// (`resize_to: None`) makes the device the one who typed last, and its
+    /// own size the session's; a resize records the device's size, the
+    /// session's at once if the device typed last.
+    ///
+    /// # Errors
+    /// The [`RefuseReason`]; nothing is written.
+    pub fn device_write(
+        &mut self,
+        device: &EndpointId,
+        role: Option<Role>,
+        write: &PendingWrite,
+        resize_to: Option<(u16, u16)>,
+    ) -> Result<HostTook, RefuseReason> {
+        // Before the run is known, no run a device names can match it.
+        let run = self.run.unwrap_or_else(|| write.run.wrapping_add(1));
+        let host = OneSession {
+            device: *device,
+            role,
+            view: SessionView {
+                run,
+                control: &self.control,
+                dialog: self.dialog,
+                cols: self.screen.0,
+                rows: self.screen.1,
+            },
+        };
+        recheck_at_write(device, "", write, &host)?;
+        let mut took = HostTook::default();
+        if let Some(size) = resize_to {
+            self.device_sizes.insert(*device, size);
+            if self.control.holder() == Holder::Device(*device) {
+                took.restore = self.size_to(size);
+            }
+        } else {
+            took.change = self.control.device_typed(*device);
+            if let Some(size) = self.device_sizes.get(device).copied() {
+                took.restore = self.size_to(size);
+            }
+        }
+        Ok(took)
+    }
+
+    /// Make `size` the session's: `Some` when that changes it.
+    fn size_to(&mut self, size: (u16, u16)) -> Option<(u16, u16)> {
+        (self.screen != size).then(|| {
+            self.screen = size;
+            size
+        })
+    }
+
+    /// The session's screen size now.
+    #[must_use]
+    pub fn screen(&self) -> (u16, u16) {
+        self.screen
+    }
+}
+
+/// The host as the recheck sees it from inside one session's gate: this one
+/// device, this one session.
+struct OneSession<'a> {
+    device: EndpointId,
+    role: Option<Role>,
+    view: SessionView<'a>,
+}
+
+impl HostFacts for OneSession<'_> {
+    fn role(&self, device: &EndpointId) -> Option<Role> {
+        (*device == self.device).then_some(self.role).flatten()
+    }
+    fn session(&self, _id: &str) -> Option<SessionView<'_>> {
+        Some(self.view)
+    }
+    fn project_folder(&self, _project_id: &str) -> ProjectFolder {
+        ProjectFolder::NoSuchProject
+    }
+    fn min_protocol_minor(&self) -> u16 {
+        0
+    }
+}
+
+/// Whether `bytes` from the host's terminal are only its own replies to what
+/// the program asked of it, not keys the person pressed: a focus change
+/// (`CSI I`, `CSI O`), device attributes (`CSI ? … c`, `CSI > … c`), the
+/// cursor position (`CSI row;col R`), a mode report (`CSI … $ y`), keyboard
+/// flags (`CSI ? … u`), a status or window report (`CSI … n`, `CSI … t`),
+/// and any DCS or OSC string (its version, a colour). These take nothing
+/// from a device in control. A key that only some terminals send as
+/// `CSI 1;2 R` (Shift+F3) reads as a reply too: it still reaches the
+/// program, it just leaves control where it is.
+#[must_use]
+pub fn is_terminal_reply(bytes: &[u8]) -> bool {
+    let mut rest = bytes;
+    while !rest.is_empty() {
+        match reply_len(rest) {
+            Some(len) => rest = &rest[len..],
+            None => return false,
+        }
+    }
+    true
+}
+
+/// The length of the one reply `bytes` start with, if they start with one.
+fn reply_len(bytes: &[u8]) -> Option<usize> {
+    match bytes {
+        [0x1b, b'[', body @ ..] => {
+            let end = body.iter().position(|b| (0x40..=0x7e).contains(b))?;
+            let (params, last) = (&body[..end], body[end]);
+            let numbers = |p: &[u8]| p.iter().all(|b| b.is_ascii_digit() || *b == b';');
+            let is_reply = match last {
+                b'I' | b'O' => params.is_empty(),
+                b'c' => matches!(params.first(), Some(b'?' | b'>')),
+                b'R' => !params.is_empty() && params.contains(&b';') && numbers(params),
+                b'y' => params.ends_with(b"$"),
+                b'u' => params.first() == Some(&b'?') && numbers(&params[1..]),
+                b'n' | b't' => !params.is_empty() && numbers(params),
+                _ => false,
+            };
+            is_reply.then_some(2 + end + 1)
+        }
+        [0x1b, b'P' | b']', body @ ..] => {
+            let osc = bytes[1] == b']';
+            let end = body.iter().enumerate().find_map(|(at, b)| match b {
+                0x07 if osc => Some(at + 1),
+                0x1b if body.get(at + 1) == Some(&b'\\') => Some(at + 2),
+                _ => None,
+            })?;
+            Some(2 + end)
+        }
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+
+    use super::*;
+
+    #[test]
+    fn a_terminals_own_replies_are_told_apart_from_keys() {
+        let replies: [&[u8]; 9] = [
+            b"",
+            b"\x1b[I",
+            b"\x1b[O",
+            b"\x1bP>|xterm.js(6.1.0-beta.304)\x1b\\",
+            b"\x1b[?1;2c",
+            b"\x1b[>0;276;0c",
+            b"\x1b]11;rgb:1e1e/1e1e/1e1e\x1b\\",
+            b"\x1b]10;rgb:ffff/ffff/ffff\x07",
+            b"\x1b[24;80R\x1b[?2026;2$y\x1b[?0u\x1b[0n",
+        ];
+        for reply in replies {
+            assert!(is_terminal_reply(reply), "{reply:?}");
+        }
+        let keys: [&[u8]; 10] = [
+            b"x",
+            b"\r",
+            b"\x1b",
+            b"\x1b[A",
+            b"\x1b[1;5C",
+            b"\x1b[3~",
+            b"\x1b[Z",
+            b"\x1bOP",
+            b"\x03",
+            // A reply with a key after it: the key is the person's.
+            b"\x1b[Ix",
+        ];
+        for key in keys {
+            assert!(!is_terminal_reply(key), "{key:?}");
+        }
+    }
+
+    const PHONE: EndpointId = [1; 32];
+    const LAPTOP: EndpointId = [2; 32];
+    const RUN: u64 = 9;
+
+    fn gate() -> (SessionGate, Instant) {
+        let mut g = SessionGate::new(3, (120, 40));
+        g.set_run(RUN);
+        (g, Instant::now())
+    }
+
+    fn input(g: &SessionGate, seen_seq: u64) -> PendingWrite {
+        PendingWrite {
+            run: RUN,
+            epoch: g.control().epoch(),
+            seen_seq: Some(seen_seq),
+            compose: false,
+        }
+    }
+
+    fn resize(g: &SessionGate) -> PendingWrite {
+        PendingWrite {
+            run: RUN,
+            epoch: g.control().epoch(),
+            seen_seq: None,
+            compose: false,
+        }
+    }
+
+    #[test]
+    fn host_typing_while_the_host_holds_control_changes_nothing() {
+        let (mut g, t) = gate();
+        assert_eq!(g.host_input(t), HostTook::default());
+        assert_eq!(g.control().holder(), Holder::Host);
+    }
+
+    #[test]
+    fn whoever_types_last_holds_it_and_its_size_stands() {
+        let (mut g, t) = gate();
+        assert_eq!(g.host_resize((130, 40)), Some((130, 40)));
+        // The phone says its size while only watching: remembered.
+        let size_write = resize(&g);
+        let took = g
+            .device_write(&PHONE, Some(Role::Controller), &size_write, Some((80, 30)))
+            .expect("recorded");
+        assert_eq!(took, HostTook::default());
+        assert_eq!(g.screen(), (130, 40));
+        // It types: it holds it now, at its own size, with no handover.
+        let took = g
+            .device_write(&PHONE, Some(Role::Controller), &input(&g, 0), None)
+            .expect("typed");
+        assert_eq!(took.change.map(|c| c.holder), Some(Holder::Device(PHONE)));
+        assert_eq!((took.restore, g.screen()), (Some((80, 30)), (80, 30)));
+        // The window changes meanwhile: remembered, not applied.
+        assert_eq!(g.host_resize((140, 45)), None);
+        assert_eq!(g.screen(), (80, 30));
+        // The host types: back to the window's size.
+        let took = g.host_input(t);
+        assert_eq!(took.change.map(|c| c.holder), Some(Holder::Host));
+        assert_eq!((took.restore, g.screen()), (Some((140, 45)), (140, 45)));
+    }
+
+    #[test]
+    fn a_device_leaving_gives_back_the_host_size() {
+        let (mut g, _) = gate();
+        let size_write = resize(&g);
+        g.device_write(&PHONE, Some(Role::Controller), &size_write, Some((80, 30)))
+            .expect("recorded");
+        g.device_write(&PHONE, Some(Role::Controller), &input(&g, 0), None)
+            .expect("typed");
+        let back = g.release(PHONE);
+        assert_eq!(back.change.map(|c| c.holder), Some(Holder::Host));
+        assert_eq!(back.restore, Some((120, 40)));
+        assert_eq!(
+            g.release(PHONE),
+            HostTook::default(),
+            "nothing more to give"
+        );
+    }
+
+    #[test]
+    fn a_write_with_an_old_epoch_still_goes_through() {
+        let (mut g, t) = gate();
+        let write = input(&g, 0);
+        g.host_input(t);
+        g.device_write(&LAPTOP, Some(Role::Controller), &input(&g, 0), None)
+            .expect("typed");
+        assert!(g
+            .device_write(&PHONE, Some(Role::Controller), &write, None)
+            .is_ok());
+    }
+
+    #[test]
+    fn a_removed_device_or_a_viewer_writes_nothing() {
+        let (mut g, _) = gate();
+        let write = input(&g, 0);
+        assert_eq!(
+            g.device_write(&PHONE, None, &write, None),
+            Err(RefuseReason::NotPaired)
+        );
+        assert_eq!(
+            g.device_write(&PHONE, Some(Role::Viewer), &write, None),
+            Err(RefuseReason::NotAllowed)
+        );
+    }
+
+    #[test]
+    fn a_dialog_that_appeared_before_the_write_makes_it_stale() {
+        let (mut g, _) = gate();
+        let write = input(&g, 4);
+        g.set_dialog(Dialog {
+            showing: true,
+            changed_at_seq: Some(5),
+        });
+        assert_eq!(
+            g.device_write(&PHONE, Some(Role::Controller), &write, None),
+            Err(RefuseReason::Stale)
+        );
+    }
+
+    #[test]
+    fn before_the_run_is_known_no_device_write_goes_through() {
+        let mut g = SessionGate::new(3, (120, 40));
+        let write = PendingWrite {
+            run: 0,
+            epoch: g.control().epoch(),
+            seen_seq: Some(0),
+            compose: false,
+        };
+        assert_eq!(
+            g.device_write(&PHONE, Some(Role::Controller), &write, None),
+            Err(RefuseReason::Stale)
+        );
+    }
+}

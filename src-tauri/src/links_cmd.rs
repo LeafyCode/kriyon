@@ -10,7 +10,7 @@ use kriyon_core::completion::path_within_roots;
 use tauri_plugin_opener::OpenerExt as _;
 
 use crate::commands::resolve_home;
-use crate::completion_cmd::{known_roots, validate_cwd};
+use crate::folder_cmd::{known_roots, validate_cwd};
 use crate::StoreState;
 
 /// Resolve a frontend-supplied `(cwd, path)` to a real, existing entry that

@@ -1,0 +1,6 @@
+[
+  {
+    "file": "usage/sess-1.json",
+    "text": "{\"usedPercentage\": null, \"contextWindowSize\": null, \"inputTokens\": null, \"outputTokens\": null, \"model\": null, \"sessionId\": \"../../x\"}"
+  }
+]

@@ -56,9 +56,6 @@ installer yourself. It needs 64-bit Windows 10 or 11 and these tools:
 - [Rust](https://rustup.rs/) (stable, the default `x86_64-pc-windows-msvc` toolchain),
   Node.js 22, [pnpm](https://pnpm.io/installation) and Git.
 - The [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code), installed and signed in.
-- [Python 3](https://www.python.org/downloads/windows/) from python.org (not the Microsoft
-  Store stub). Kriyon's Claude Code hooks run on it; without it, sessions still work but the
-  status line and live session status don't.
 
 Then, in PowerShell:
 
@@ -82,7 +79,9 @@ installer; it replaces the old version and keeps your settings.
 - Kriyon runs the `claude` CLI you installed. It never bundles, patches, or replaces it.
 - You sign in through Anthropic's own flow. Kriyon never reads, stores, or moves your
   credentials.
-- Kriyon has no accounts and no servers of its own.
+- Kriyon needs no account and runs no server for you, unless you choose our paid relay to
+  reach your computer from anywhere. Remote access is off until you turn it on; see
+  [Remote access](docs/remote-access.md).
 
 The reasoning is in [ADR 0030](docs/adr/0030-never-touch-credentials-or-bundle-the-cli.md).
 

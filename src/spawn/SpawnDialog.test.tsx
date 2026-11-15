@@ -9,14 +9,13 @@ vi.mock("../ipc/bridge.ts", () => ({
       `/repo-worktrees/${b.replace(/[^A-Za-z0-9_.]+/g, "-").replace(/^-|-$/g, "")}`
     )
   ),
-  captureBaseline: vi.fn(() => Promise.resolve("test-baseline-oid")),
   createWorktree: vi.fn(() => Promise.resolve()),
   bootstrapWorktree: vi.fn(() =>
     Promise.resolve({ ok: true, output: "", steps: [] })
   ),
   isTauriRuntime: () => true,
   pickDirectory: vi.fn(),
-  upsertProject: vi.fn(() => Promise.resolve()),
+  startSession: vi.fn(() => Promise.resolve(false)),
   upsertSession: vi.fn(() => Promise.resolve()),
 }));
 

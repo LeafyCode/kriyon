@@ -1,8 +1,12 @@
-# gitleaks config: default rules, plus the redaction test fixtures, whose
-# "secrets" are fake strings that exist to be caught.
+# gitleaks config: default rules, plus test fixtures: the redaction cases,
+# whose "secrets" are fake strings that exist to be caught, and the RSA key
+# published in RFC 7515, Appendix A.2, the push sender's RS256 test vector.
 [extend]
 useDefault = true
 
 [allowlist]
-description = "Fake secrets used to test transcript redaction"
-paths = ['''crates/kriyon-core/scripts/redaction-cases\.json''']
+description = "Fake secrets and test-only keys used by tests"
+paths = [
+  '''crates/kriyon-core/scripts/redaction-cases\.json''',
+  '''crates/kriyon-push/tests/rfc7515-a2-rsa\.pem''',
+]
