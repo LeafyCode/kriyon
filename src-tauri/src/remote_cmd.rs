@@ -133,6 +133,43 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_pairings_fields_reach_the_window_in_camel_case() {
+        fn json(value: &impl serde::Serialize) -> serde_json::Value {
+            serde_json::to_value(value).expect("serializes")
+        }
+        assert_eq!(
+            json(&PairingView::CodeWanted {
+                role: RoleArg::Controller,
+                device_name: "Phone".into(),
+                expires_at_ms: 5,
+            }),
+            serde_json::json!({
+                "state": "codeWanted",
+                "role": "controller",
+                "deviceName": "Phone",
+                "expiresAtMs": 5,
+            })
+        );
+        assert_eq!(
+            json(&CodeResult::Wrong { tries_left: 2 }),
+            serde_json::json!({ "outcome": "wrong", "triesLeft": 2 })
+        );
+        assert_eq!(
+            json(&CodeResult::Paired {
+                device_id: "ab".into(),
+                name: "Phone".into(),
+                role: RoleArg::Viewer,
+            }),
+            serde_json::json!({
+                "outcome": "paired",
+                "deviceId": "ab",
+                "name": "Phone",
+                "role": "viewer",
+            })
+        );
+    }
+
+    #[test]
     fn an_invite_names_the_relay_the_host_uses() {
         let invite = || kriyon_remote::pairing::PairingInvite {
             host_id: [2; 32],
@@ -436,7 +473,11 @@ pub struct Routes {
 
 /// The pairing in progress.
 #[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase", tag = "state")]
+#[serde(
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    tag = "state"
+)]
 pub enum PairingView {
     Idle,
     Waiting {
@@ -602,7 +643,11 @@ pub async fn remote_stop_pairing(
 
 /// What typing a code did, for the UI.
 #[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase", tag = "outcome")]
+#[serde(
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    tag = "outcome"
+)]
 pub enum CodeResult {
     Paired {
         device_id: String,

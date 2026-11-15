@@ -133,7 +133,11 @@ pub fn restore(app: &tauri::AppHandle) {
 
 /// How a pairing started here ended, for the UI.
 #[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase", tag = "outcome")]
+#[serde(
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    tag = "outcome"
+)]
 pub enum PairingEnded {
     Paired { host_id: String, name: String },
     Failed { reason: String },
@@ -392,6 +396,18 @@ pub fn remote_hosts_wake(rt: tauri::State<'_, DeviceRuntime>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_finished_pairing_reaches_the_window_in_camel_case() {
+        let ended = PairingEnded::Paired {
+            host_id: "ab".into(),
+            name: "Mac".into(),
+        };
+        assert_eq!(
+            serde_json::to_value(ended).expect("serializes"),
+            serde_json::json!({ "outcome": "paired", "hostId": "ab", "name": "Mac" })
+        );
+    }
 
     #[test]
     fn invite_text_has_the_prefix_and_one_line() {
