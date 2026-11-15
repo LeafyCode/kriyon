@@ -407,26 +407,64 @@ impl DeviceRuntime {
     /// endpoint rebuilt with the same key (a new relay pass) replaces the
     /// closed one it follows.
     pub async fn attach(&self, endpoint: iroh::Endpoint) -> Arc<Device> {
-        let mut device = self.device.lock().await;
-        match device.as_ref() {
-            Some(device) if device.id() == *endpoint.id().as_bytes() && !device.is_closed() => {
-                Arc::clone(device)
+        let attached = {
+            let mut device = self.device.lock().await;
+            match device.as_ref() {
+                Some(device) if device.id() == *endpoint.id().as_bytes() && !device.is_closed() => {
+                    return Arc::clone(device);
+                }
+                _ => {
+                    let attached = Arc::new(Device::from_endpoint(endpoint));
+                    *device = Some(Arc::clone(&attached));
+                    attached
+                }
             }
-            _ => {
-                let attached = Arc::new(Device::from_endpoint(endpoint));
-                *device = Some(Arc::clone(&attached));
-                attached
-            }
+        };
+        // Hosts whose links went with the endpoint before come back on this one.
+        for conn in self.unlinked().await {
+            self.stay_linked(&conn, Arc::clone(&attached));
         }
+        attached
     }
 
     /// Let go of the endpoint attached, if it was closed: it holds its port
-    /// until its last clone goes, and a rebuilt one wants the same port.
+    /// until its last clone goes, and a rebuilt one wants the same port. The
+    /// links to hosts hold it too: they go, and come back at the next
+    /// [`Self::attach`].
     pub async fn let_go_if_closed(&self) {
-        let mut device = self.device.lock().await;
-        if device.as_ref().is_some_and(|device| device.is_closed()) {
+        {
+            let mut device = self.device.lock().await;
+            if !device.as_ref().is_some_and(|device| device.is_closed()) {
+                return;
+            }
             *device = None;
         }
+        let conns: Vec<Arc<HostConn>> = self.hosts.lock().await.values().cloned().collect();
+        for conn in conns {
+            if let Some(task) = conn
+                .task
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take()
+            {
+                task.abort();
+            }
+            drop_link(&conn).await;
+        }
+    }
+
+    /// The hosts with no task staying linked to them.
+    async fn unlinked(&self) -> Vec<Arc<HostConn>> {
+        let conns: Vec<Arc<HostConn>> = self.hosts.lock().await.values().cloned().collect();
+        conns
+            .into_iter()
+            .filter(|conn| {
+                conn.task
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .is_none()
+            })
+            .collect()
     }
 
     async fn attached(&self) -> Result<Arc<Device>, String> {
@@ -553,16 +591,9 @@ impl DeviceRuntime {
         {
             task.abort();
         }
-        let mut c = conn.conn.lock().await;
-        for (_, open) in c.sessions.drain() {
-            open.reader.abort();
-        }
-        if let Some(link) = c.link.take() {
-            link.close();
-        }
-        c.control = None;
+        drop_link(&conn).await;
         // Whoever waits on a start hears it's gone.
-        c.starting.clear();
+        conn.conn.lock().await.starting.clear();
     }
 
     /// How many starts on `host` wait for an answer.
@@ -775,18 +806,9 @@ impl DeviceRuntime {
         *self.device.lock().await = Some(Arc::clone(&device));
         let conns: Vec<Arc<HostConn>> = self.hosts.lock().await.values().cloned().collect();
         for conn in conns {
-            {
-                // The old link goes; what is wanted and waiting stays, and
-                // the new link takes it up.
-                let mut c = conn.conn.lock().await;
-                for (_, open) in c.sessions.drain() {
-                    open.reader.abort();
-                }
-                if let Some(link) = c.link.take() {
-                    link.close();
-                }
-                c.control = None;
-            }
+            // The old link goes; what is wanted and waiting stays, and the
+            // new link takes it up.
+            drop_link(&conn).await;
             self.stay_linked(&conn, Arc::clone(&device));
         }
     }
@@ -1475,6 +1497,19 @@ fn tell_answer(answer: &AnswerSlot, events: &[ScreenEvent]) {
     }
 }
 
+/// Close `conn`'s link and its open session streams: what is wanted and
+/// waiting stays, for a new link to take up.
+async fn drop_link(conn: &HostConn) {
+    let mut c = conn.conn.lock().await;
+    for (_, open) in c.sessions.drain() {
+        open.reader.abort();
+    }
+    if let Some(link) = c.link.take() {
+        link.close();
+    }
+    c.control = None;
+}
+
 /// One session's screen event as one frame on the webview's raw channel, so
 /// a new screen and the output after it arrive in order: a kind byte, then
 /// its fields. `None` for what the webview doesn't see (`Resync` is Rust's).
@@ -2088,6 +2123,95 @@ mod tests {
                 "the new endpoint is used"
             );
             assert!(!replaced.is_closed());
+        });
+    }
+
+    /// The desktop rebuilds its one endpoint on a fixed port (a new relay
+    /// pass, the relay turned on): the links to the hosts it is connected
+    /// to must let go of the closed one, or the new endpoint can't have the
+    /// port its own paired devices dial.
+    #[test]
+    fn a_closed_endpoint_lets_go_of_its_port_and_the_hosts_come_back_on_the_new_one() {
+        run(async {
+            let rt = DeviceRuntime::default();
+            let port = std::net::UdpSocket::bind("127.0.0.1:0")
+                .and_then(|socket| socket.local_addr())
+                .expect("a free port")
+                .port();
+            let config = LinkConfig {
+                bind: std::net::SocketAddr::from(([127, 0, 0, 1], port)),
+                ..LinkConfig::new(DEVICE_KEY)
+            };
+            let first = crate::endpoint::bind(&config, Vec::new())
+                .await
+                .expect("binds");
+            let me = *first.id().as_bytes();
+            rt.attach(first.clone()).await;
+            let paired = Arc::new(MemoryPaired::of([(me, Role::Controller)]));
+            let host = Arc::new(
+                Host::bind(&loopback_config(1), paired, 10)
+                    .await
+                    .expect("host binds"),
+            );
+            // Each link: welcome, then hold it; say each one came.
+            let (linked_in, mut linked) = tokio::sync::mpsc::unbounded_channel();
+            let serving = Arc::clone(&host);
+            tokio::spawn(async move {
+                while let Some(accepted) = serving.accept().await {
+                    let Accepted::Remote(link) = accepted else {
+                        continue;
+                    };
+                    let linked_in = linked_in.clone();
+                    tokio::spawn(async move {
+                        let (mut out, mut control) = link.accept_stream().await.expect("control");
+                        let _hello = control.next().await;
+                        out.send(&ToDevice::Welcome {
+                            host_name: "Studio".into(),
+                            protocol_minor: 0,
+                            role: Role::Controller,
+                            sessions: vec![session()],
+                        })
+                        .await
+                        .expect("welcome");
+                        let _ = linked_in.send(());
+                        link.closed().await;
+                    });
+                }
+            });
+            let seen = Arc::new(RecordingEvents::default());
+            rt.connect(
+                HostEntry {
+                    id: host.id(),
+                    addr: host.addr(),
+                },
+                Arc::clone(&seen) as Arc<dyn DeviceEvents>,
+            )
+            .await
+            .expect("connects");
+            tokio::time::timeout(Duration::from_secs(10), linked.recv())
+                .await
+                .expect("linked in time");
+            // Rebuilt: the old endpoint closes; the app lets go of it.
+            first.close().await;
+            drop(first);
+            rt.let_go_if_closed().await;
+            let deadline = std::time::Instant::now() + Duration::from_secs(2);
+            let second = loop {
+                match crate::endpoint::bind(&config, Vec::new()).await {
+                    Ok(endpoint) => break endpoint,
+                    Err(why) => {
+                        assert!(
+                            std::time::Instant::now() < deadline,
+                            "the port stayed taken: {why:?}"
+                        );
+                        tokio::time::sleep(Duration::from_millis(50)).await;
+                    }
+                }
+            };
+            rt.attach(second).await;
+            tokio::time::timeout(Duration::from_secs(10), linked.recv())
+                .await
+                .expect("the host is linked again on the new endpoint");
         });
     }
 
