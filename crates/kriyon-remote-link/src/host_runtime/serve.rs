@@ -1010,7 +1010,12 @@ impl Serve {
         // A device that dialed again before the host saw its old connection
         // end gives back what it held now (spec §5): the old connection's
         // end won't, since it is no longer the device's entry.
-        if replaced.is_some() {
+        if let Some(old) = replaced {
+            // Its old connection is dead (the app was killed and opened again
+            // within QUIC's idle timeout) or a duplicate: it goes now, and its
+            // session streams with it, so the new ones open at once.
+            old.link.close(CloseCode::HostClosing);
+            self.drop_streams_of(&device);
             let host = Arc::clone(&self.0.host);
             let _ = tokio::task::spawn_blocking(move || host.release(&device)).await;
         }
@@ -1249,7 +1254,7 @@ impl Serve {
         match ask {
             Some(ask) => (served.ask)(ask),
             None if screen => {
-                self.close_session(&served, &id, &device);
+                self.close_session(&served, &id, &device, &wake);
                 let _ = writer
                     .send(&ToDevice::Refused {
                         reason: RefuseReason::NotAllowed,
@@ -1312,7 +1317,7 @@ impl Serve {
             }
         }
         writing.abort();
-        self.close_session(&served, &id, &device);
+        self.close_session(&served, &id, &device, &wake);
     }
 
     /// Send `answer` on a session stream: a refusal only within its rate
@@ -1462,7 +1467,40 @@ impl Serve {
         }
     }
 
-    fn close_session(&self, served: &Served, id: &str, device: &EndpointId) {
+    /// Close `device`'s stream of session `id`, the one woken by `wake`: a
+    /// stream that was superseded since (the device dialed again) closes
+    /// nothing, so its late end never closes the new one.
+    fn close_session(&self, served: &Served, id: &str, device: &EndpointId, wake: &Arc<Notify>) {
+        let ours = served
+            .wakers
+            .lock()
+            .get(device)
+            .is_some_and(|held| Arc::ptr_eq(held, wake));
+        if ours {
+            self.drop_stream(served, id, device);
+        }
+    }
+
+    /// Every session stream of `device`, closed now: it dialed again.
+    fn drop_streams_of(&self, device: &EndpointId) {
+        let sessions: Vec<(String, Arc<Served>)> = self
+            .0
+            .sessions
+            .lock()
+            .iter()
+            .map(|(id, served)| (id.clone(), Arc::clone(served)))
+            .collect();
+        for (id, served) in sessions {
+            let open = served.wakers.lock().remove(device);
+            if let Some(wake) = open {
+                // Its writer, if still waiting, wakes to find nothing for it.
+                wake.notify_one();
+                self.drop_stream(&served, &id, device);
+            }
+        }
+    }
+
+    fn drop_stream(&self, served: &Served, id: &str, device: &EndpointId) {
         served.readers.lock().remove(device);
         let open = {
             let mut fanout = served.fanout.lock();
@@ -2538,6 +2576,52 @@ mod tests {
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
             drop(old);
+        });
+    }
+
+    /// A phone killed and opened again within seconds dials again with the
+    /// same key before the host sees its old connection end (QUIC notices
+    /// only after its idle timeout). Its new streams must open at once, and
+    /// the old connection's streams, ending late, must not close them. Seen
+    /// on the emulator: a blank terminal and "This device isn't allowed to
+    /// do that." twice.
+    #[test]
+    fn a_device_that_dials_again_opens_its_sessions_at_once() {
+        run(async {
+            let world = world().await;
+            let (phone, old, _ocw, _ocr) = device(&world, 3, Role::Controller).await;
+            let (_osw, mut osr) = open(&old).await;
+            let id = asked(&world).await;
+            answer(&world, id, b"before");
+            assert!(matches!(next(&mut osr).await, ToDevice::Snapshot { .. }));
+            // Opened again, the host not knowing the old connection is dead.
+            let new = phone.connect(world.host.addr()).await.expect("reconnect");
+            let (mut cw, mut cr) = new.open_stream().await.expect("control");
+            cw.send(&FromDevice::Hello {
+                app_version: "test".into(),
+                protocol_minor: 0,
+            })
+            .await
+            .expect("hello");
+            assert!(matches!(next(&mut cr).await, ToDevice::Welcome { .. }));
+            let (_sw, mut sr) = open(&new).await;
+            let id = asked(&world).await;
+            answer(&world, id, b"after");
+            let ToDevice::Snapshot { bytes, .. } = next(&mut sr).await else {
+                panic!("the session opens on the new connection")
+            };
+            assert_eq!(
+                decompress(Kind::Snapshot, &bytes).expect("snapshot"),
+                b"after"
+            );
+            // The old connection goes; the new stream keeps its updates.
+            drop(old);
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            let _ = world.serve.on_event("s", DaemonEvent::Output(b"later"));
+            let ToDevice::Update { bytes, .. } = next(&mut sr).await else {
+                panic!("still served")
+            };
+            assert_eq!(decompress(Kind::Update, &bytes).expect("update"), b"later");
         });
     }
 
