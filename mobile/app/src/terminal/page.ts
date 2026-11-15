@@ -17,6 +17,7 @@ import {
 import { terminalTheme } from "../../../../src/theme/terminalTheme.ts";
 import { steel } from "../../../../src/theme/themes/steel.ts";
 import { steelLight } from "../../../../src/theme/themes/steelLight.ts";
+import { TERMINAL_FONT } from "./layout.ts";
 import type { PageMessage } from "./protocol.ts";
 
 declare global {
@@ -48,7 +49,7 @@ const term = new Terminal({
   allowProposedApi: true,
   convertEol: false,
   disableStdin: true,
-  fontFamily: "Menlo, monospace",
+  fontFamily: TERMINAL_FONT,
   fontSize: 12,
   scrollback: 1000,
   theme: terminalTheme(steel),
