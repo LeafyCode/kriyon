@@ -2037,6 +2037,51 @@ mod tests {
         });
     }
 
+    /// A phone reading entries opens its terminal while Claude asks: the
+    /// screen comes, and its size (not typing) is taken, not refused. Seen
+    /// on the emulator against the Windows PC: a blank terminal and "This
+    /// device isn't allowed to do that."
+    #[test]
+    fn turning_the_screen_on_while_claude_asks_shows_it_and_takes_the_size() {
+        run(async {
+            let world = world().await;
+            let (_phone, link, _cw, _cr) = device(&world, 3, Role::Controller).await;
+            let (mut sw, mut sr) = open_with(&link, false).await;
+            assert_eq!(next(&mut sr).await, ToDevice::Run { run: 1 });
+            world.fake.gate.lock().set_dialog(Dialog {
+                showing: true,
+                changed_at_seq: Some(0),
+            });
+            let epoch = world.fake.gate.lock().control().epoch();
+            sw.send(&FromDevice::Screen { on: true }).await.expect("on");
+            sw.send(&FromDevice::Resize {
+                run: 1,
+                epoch,
+                cols: 80,
+                rows: 30,
+                write_id: 2,
+            })
+            .await
+            .expect("size");
+            let id = asked(&world).await;
+            answer(&world, id, b"asking");
+            let mut heard = Vec::new();
+            for _ in 0..2 {
+                heard.push(next(&mut sr).await);
+            }
+            assert!(
+                heard.iter().any(|m| matches!(m, ToDevice::Snapshot { .. })),
+                "{heard:?}"
+            );
+            assert!(
+                heard
+                    .iter()
+                    .any(|m| matches!(m, ToDevice::InputAck { write_id: 2, .. })),
+                "{heard:?}"
+            );
+        });
+    }
+
     #[test]
     fn a_session_opened_for_its_entries_sends_no_screen_until_turned_on() {
         run(async {

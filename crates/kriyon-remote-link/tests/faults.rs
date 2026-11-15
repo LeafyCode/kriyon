@@ -1048,3 +1048,49 @@ fn entries_turned_on_with_the_screen_kept_ask_for_no_new_screen() {
         assert!(world.asks.lock().is_empty(), "a new screen was asked for");
     });
 }
+
+/// A phone reading a session opens its terminal while Claude asks, and says
+/// its size as the terminal opens: the screen comes and nothing is refused.
+/// Seen on the emulator against the Windows PC: a blank terminal and "This
+/// device isn't allowed to do that." twice.
+#[test]
+fn opening_the_terminal_while_claude_asks_draws_it_and_refuses_nothing() {
+    run(async {
+        let world = world().await;
+        let _beats = Beats::start(&world);
+        *world.fake.entries.lock() = Ok(vec![note("a", "A")]);
+        world
+            .fake
+            .gate
+            .lock()
+            .set_dialog(kriyon_remote::authorize::Dialog {
+                showing: true,
+                changed_at_seq: Some(0),
+            });
+        let phone = Phone::connect(&world, 3, Role::Controller).await;
+        phone.view("s", false, Some(Arc::new(|_| {}))).await;
+        // Its run named on the screen-off stream, as the readable view has it.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        // The terminal opens: the screen on, then the phone's size at once.
+        phone.view("s", true, Some(Arc::new(|_| {}))).await;
+        let _ = phone.rt.resize(&phone.host, "s", 80, 30).await;
+        let id = asked(&world).await;
+        answer(&world, id, b"asking");
+        phone.until_screen(b"asking").await;
+        let _ = phone.rt.resize(&phone.host, "s", 80, 30).await;
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let refused: Vec<_> = phone
+            .screen
+            .lock()
+            .iter()
+            .filter(|event| {
+                matches!(
+                    event,
+                    ScreenEvent::Refused(_) | ScreenEvent::WriteRefused { .. }
+                )
+            })
+            .cloned()
+            .collect();
+        assert!(refused.is_empty(), "{refused:?}");
+    });
+}
