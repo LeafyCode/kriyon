@@ -19,7 +19,7 @@ const HOOKS_OFF_WHY: Record<HooksOffScope, string> = {
   local: "hooks off in .claude/settings.local.json",
   managed: "hooks off by managed settings",
   project: "hooks off in .claude/settings.json",
-  python: "hooks need Python, which isn't installed",
+  missing: "Kriyon's hook program isn't installed",
   user: "hooks off in ~/.claude/settings.json",
 };
 

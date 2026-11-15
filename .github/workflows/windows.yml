@@ -17,6 +17,7 @@ on:
       - crates/kriyon-push/**
       - crates/kriyon-push-seal/**
       - crates/kriyon-ptyd/**
+      - crates/kriyon-hook/**
       - src-tauri/**
       - scripts/sidecar-ptyd.mjs
       - Cargo.toml
@@ -32,6 +33,7 @@ on:
       - crates/kriyon-push/**
       - crates/kriyon-push-seal/**
       - crates/kriyon-ptyd/**
+      - crates/kriyon-hook/**
       - src-tauri/**
       - scripts/sidecar-ptyd.mjs
       - Cargo.toml
@@ -99,9 +101,9 @@ jobs:
         shell: bash
       - name: Clippy
         shell: bash
-        run: cargo clippy -p kriyon-ptyd -p kriyon --all-targets -- -D warnings
+        run: cargo clippy -p kriyon-ptyd -p kriyon-hook -p kriyon --all-targets -- -D warnings
       # Single-threaded, as `pnpm rust:test` runs them: one test changes an
       # environment variable that would break git tests running beside it.
       - name: Tests
         shell: bash
-        run: cargo test -p kriyon-ptyd -p kriyon -- --test-threads=1
+        run: cargo test -p kriyon-ptyd -p kriyon-hook -p kriyon -- --test-threads=1

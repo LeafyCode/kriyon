@@ -5,6 +5,9 @@ Read the root `AGENTS.md` first. These crates live here:
 - **`kriyon-core`**: the pure logic the app is built on: parsing, status, diffs, sandbox rules,
   notifications. No Tauri. Most new behaviour belongs here, because here it can be unit-tested
   in milliseconds.
+- **`kriyon-hook`**: what Claude Code runs on every hook event and status-line refresh in a
+  Kriyon session: records the event, the session's usage and the account's plan limits. Pure
+  logic in its library, a thin binary, never fails or slows Claude (ADR-0066).
 - **`kriyon-ptyd`**: the per-session PTY daemon. One process owns one PTY and its shell and
   serves the app over a Unix socket, so a session survives an app crash. It ships as a Tauri
   sidecar.
@@ -54,10 +57,11 @@ Read the root `AGENTS.md` first. These crates live here:
 
 ## Code that runs inside the user's Claude Code
 
-`kriyon-core` embeds three files that run in the user's own `claude` process, not in Kriyon:
+Two things run in the user's own `claude` process, not in Kriyon:
 
-- `scripts/kriyon-hook.py` and `scripts/kriyon-usage.py`: the hook and status-line scripts.
-- `companion/companion.js`: the Kriyon Companion mod.
+- **`kriyon-hook`** (its own crate, a Tauri sidecar like `kriyon-ptyd`, ADR-0066): the hook and
+  the status-line capture. The app installs it at `~/.claude/kriyon/bin/`.
+- `kriyon-core`'s `companion/companion.js`: the Kriyon Companion mod.
 
 These **observe and never steer**. Every path exits cleanly, passes the event on unchanged, and
 never blocks, approves or rewrites anything, because a bug here breaks the user's Claude, not
@@ -65,8 +69,10 @@ just Kriyon. The one exception is nested sessions (ADR-0049): the companion regi
 deferred tool, `start_session`, and a nested session sends one report to its lead session,
 allowing only that one SendMessage of its own in `tool.check`.
 Kriyon, not the mod, decides whether a requested session starts. They do nothing outside a
-Kriyon session: the hook scripts check `KRIYON_SESSION`, the companion `KRIYON_BRIDGE_SOCKET`.
+Kriyon session: the hook checks `KRIYON_SESSION`, the companion `KRIYON_BRIDGE_SOCKET`.
 
-- The hook scripts are tested from Rust (`hooks.rs`), and the redaction cases are shared with
-  `redact.rs` through `scripts/redaction-cases.json`; change both sides together.
+- The hook is tested as Claude runs it (`kriyon-hook/tests/`): golden files from the retired
+  Python scripts pin its output byte for byte, and `contract.rs` reads what it writes with
+  `kriyon_core::hooks`. Its redaction is `kriyon_core::redact`, pinned by
+  `scripts/redaction-cases.json`. Rebuild the sidecar after changing it.
 - The companion is tested with `node --test crates/kriyon-core/companion/*.test.mjs`.

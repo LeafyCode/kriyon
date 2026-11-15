@@ -8,7 +8,7 @@ export type HooksOffScope =
   | "project"
   | "user"
   | "kriyon"
-  | "python";
+  | "missing";
 
 /**
  * The vocabulary the command center renders for a {@link SessionStanding}

@@ -1,7 +1,6 @@
 //! The hook's output for every recorded payload, against what the Python
-//! hook it replaced wrote for it (`tests/golden/`, made by `parity.rs` with
-//! `KRIYON_WRITE_GOLDEN=1` while the Python script still existed; ADR-0066).
-//! Needs no Python.
+//! scripts it replaced wrote for it (`tests/golden/`, recorded process
+//! against process while the scripts still existed; ADR-0066).
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
