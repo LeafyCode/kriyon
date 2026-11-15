@@ -282,7 +282,7 @@ the source of truth; entries are best-effort and say so.
     dialog is showing. The device shows the question and its options, never
     an answer button, only "Answer in the terminal", which opens the terminal
     view (ADR 0040). When the dialog closes, the host sends the same `seq`
-    again as a `Note` ("Answered in the terminal").
+    again as a `Note` ("Answered").
   - `Note { text }`: context compacted, turn interrupted, or "Older in the
     terminal" at the window's start, which is always `seq` 0.
 

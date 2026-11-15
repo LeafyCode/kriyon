@@ -16,7 +16,7 @@ use kriyon_core::readable::{EntryKind, Keyed, OLDER_KEY};
 use crate::message::{Entry, ToDevice};
 
 /// What an answered question's entry becomes.
-pub const ANSWERED: &str = "Answered in the terminal";
+pub const ANSWERED: &str = "Answered";
 
 /// The most bytes of one `Entries` message, framing included (spec §6).
 pub const ENTRIES_MESSAGE_MAX: usize = 64 * 1024;
@@ -272,6 +272,13 @@ fn batches(entries: Vec<Entry>, reset: bool, from: u64) -> Vec<ToDevice> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A question is answered from a device's choices as often as in the
+    /// terminal now (ADR-0063): the note says only that it was answered.
+    #[test]
+    fn an_answered_question_says_so_without_naming_where() {
+        assert_eq!(ANSWERED, "Answered");
+    }
     use kriyon_core::readable::{EntryKind, Keyed};
 
     fn keyed(key: &str, text: &str) -> Keyed {
