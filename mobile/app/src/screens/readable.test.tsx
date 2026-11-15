@@ -424,3 +424,47 @@ test("the bar's words follow the computer: none when it says this phone may comp
   expect(screen.queryByText(TYPING_OFF)).toBeNull();
   expect(screen.getByLabelText("Message").props.editable).toBe(true);
 });
+
+test("a question with nothing to read (a permission prompt) still gets its answer card", async () => {
+  // Seen on the Android emulator: Claude's folder-trust prompt has no
+  // readable entry, yet the bar said "Pick an answer above" over nothing.
+  usePhone.setState({ states: { [MAC]: asController(true) } });
+  await render(<SessionScreen hostId={MAC} sessionId="s1" />);
+  await act(() =>
+    send({
+      entries: [{ kind: "you", seq: 1, text: "Fix the login bug" }],
+      unavailable: null,
+    })
+  );
+  expect(screen.getByText("Claude asks.")).toBeOnTheScreen();
+  for (const name of ["1", "2", "3", "Esc"]) {
+    expect(screen.getByRole("button", { name })).toBeOnTheScreen();
+  }
+});
+
+test("how an answer went doesn't linger into the next question", async () => {
+  usePhone.setState({ states: { [MAC]: asController(true) } });
+  await render(<SessionScreen hostId={MAC} sessionId="s1" />);
+  await act(() => send(CONVERSATION));
+  await fireEvent.press(screen.getByRole("button", { name: "Esc" }));
+  await screenFrame(SCREEN);
+  await screenFrame([2, 1]);
+  expect(screen.getByText("Answered.")).toBeOnTheScreen();
+  // Claude asks something new.
+  await act(() =>
+    send({
+      ...CONVERSATION,
+      entries: [
+        ...CONVERSATION.entries,
+        {
+          header: "Docs",
+          kind: "asking",
+          options: ["Yes", "No"],
+          question: "Update the docs too?",
+          seq: 9,
+        },
+      ],
+    })
+  );
+  expect(screen.queryByText("Answered.")).toBeNull();
+});

@@ -8,6 +8,7 @@
  */
 import { type ComponentRef, useRef, useState } from "react";
 import { ScrollView, Text, TextInput, View } from "react-native";
+import type { SessionSummary } from "../../../../src/remote/hostSummary.ts";
 import type {
   ShownEntry,
   ShownKind,
@@ -340,6 +341,36 @@ function Compose({
   );
 }
 
+/**
+ * The question showing now, on a phone that may answer it: the last entry
+ * read when it is Claude's question (`read`), else one with nothing to read
+ * (a folder-trust or permission prompt), made from what the computer says
+ * of it (`unread`). `key` tells one question from the next.
+ */
+function questionShowing(
+  entries: ShownEntry[] | undefined,
+  session: SessionSummary | undefined
+): { key: string | null; read?: ShownEntry; unread?: ShownEntry } {
+  if (!(session?.dialogOpen && session.mayType)) {
+    return { key: null };
+  }
+  const last = entries?.at(-1);
+  if (last?.kind === "asking") {
+    return { key: `${last.seq}:${last.question}`, read: last };
+  }
+  const question = session.question?.text ?? "Claude asks.";
+  return {
+    key: `-1:${question}`,
+    unread: {
+      header: "",
+      kind: "asking",
+      options: session.question?.options ?? [],
+      question,
+      seq: -1,
+    },
+  };
+}
+
 export function ReadableView({
   hostId,
   note,
@@ -358,8 +389,11 @@ export function ReadableView({
     state.states[hostId]?.sessions.find((one) => one.id === sessionId)
   );
   const dialogOpen = session?.dialogOpen;
-  // What came of the last answer: how it went, or the computer's refusal.
-  const [answered, setAnswered] = useState<Answered | null>(null);
+  // What came of the last answer (how it went, or the computer's refusal),
+  // and which question it answered.
+  const [answered, setAnswered] = useState<
+    (Answered & { question: string }) | null
+  >(null);
   const scroll = useRef<ComponentRef<typeof ScrollView>>(null);
   const reduceMotion = useReduceMotion();
   // Following the newest entry, until the person scrolls up to read.
@@ -367,17 +401,21 @@ export function ReadableView({
 
   const asking =
     Boolean(dialogOpen) || summary?.entries.at(-1)?.kind === "asking";
-  // The question showing now is the last one read, and only a phone that
-  // may type answers it.
-  const showing =
-    dialogOpen && session?.mayType
-      ? summary?.entries.findLast((entry) => entry.kind === "asking")?.seq
-      : undefined;
+  const {
+    key: showingKey,
+    read,
+    unread,
+  } = questionShowing(summary?.entries, session);
   const answering: Answering = {
     hostId,
-    onAnswered: setAnswered,
+    onAnswered: (how) => setAnswered({ ...how, question: showingKey ?? "" }),
     sessionId,
   };
+  // How an answer went shows until another question does.
+  const answerLine =
+    answered && (!showingKey || answered.question === showingKey)
+      ? answered
+      : null;
   return (
     <View style={{ backgroundColor: t.bg, flex: 1 }}>
       <ScrollView
@@ -406,14 +444,19 @@ export function ReadableView({
         ) : null}
         {summary?.entries.map((entry) => (
           <Entry
-            answering={entry.seq === showing ? answering : null}
+            answering={entry === read ? answering : null}
             entry={entry}
             key={entry.seq}
           />
         ))}
-        {answered ? (
-          <Text style={[text.caption, { color: answered.ok ? t.ink2 : t.red }]}>
-            {answered.line}
+        {unread ? (
+          <Entry answering={answering} entry={unread} key="unread" />
+        ) : null}
+        {answerLine ? (
+          <Text
+            style={[text.caption, { color: answerLine.ok ? t.ink2 : t.red }]}
+          >
+            {answerLine.line}
           </Text>
         ) : null}
       </ScrollView>

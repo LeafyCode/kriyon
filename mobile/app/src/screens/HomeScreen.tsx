@@ -313,11 +313,12 @@ function AskingCard({
           ) : null}
         </>
       ) : null}
+      {/* Its choices are buttons on the session's readable view. */}
       <Button
         icon="arrowRight"
         kind="amber"
-        label="Answer in the terminal"
-        onPress={() => open(host, session, "terminal")}
+        label="Answer"
+        onPress={() => open(host, session, "readable")}
       />
     </Card>
   );

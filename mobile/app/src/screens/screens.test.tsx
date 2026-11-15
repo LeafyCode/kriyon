@@ -132,7 +132,7 @@ test("home leads with the sessions at a glance and what needs you, in words", as
   });
 });
 
-test("a question is answered in the terminal, with its first two options shown", async () => {
+test("a question opens where it is answered, with its first two options shown", async () => {
   const question = {
     options: ["Attach the listener", "Mock the network", "Retry"],
     text: "Which fix do you want?",
@@ -150,10 +150,9 @@ test("a question is answered in the terminal, with its first two options shown",
   expect(screen.getByText("Which fix do you want?")).toBeOnTheScreen();
   expect(screen.getByText(MORE)).toBeOnTheScreen();
   expect(screen.queryByText("Retry")).toBeNull();
-  await fireEvent.press(
-    screen.getByRole("button", { name: "Answer in the terminal" })
-  );
-  expect(usePhone.getState().screen).toMatchObject({ view: "terminal" });
+  // Its choices are buttons on the session's readable view (ADR-0063).
+  await fireEvent.press(screen.getByRole("button", { name: "Answer" }));
+  expect(usePhone.getState().screen).toMatchObject({ view: "readable" });
 });
 
 test("a turn waiting for you shows its summary and diff once the computer sends them", async () => {
