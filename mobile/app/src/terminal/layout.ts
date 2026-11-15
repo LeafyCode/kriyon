@@ -30,3 +30,26 @@ export const TERMINAL_FONT = `Menlo, monospace, "${SYMBOLS_FONT}"`;
 export function boxWidth(screenWidth: number, viewWidth: number): string {
   return screenWidth > viewWidth ? `${Math.ceil(screenWidth)}px` : "100%";
 }
+
+/** The fewest columns a computer takes for a session (ADR-0063). */
+export const LEAST_COLS = 80;
+
+/**
+ * This phone's own terminal size: the cells that fit its view, in columns
+ * and rows, at least {@link LEAST_COLS} columns (a narrower phone scrolls
+ * sideways to the rest). `null` until a cell has been measured.
+ */
+export function fitSize(
+  viewWidth: number,
+  viewHeight: number,
+  cellWidth: number,
+  cellHeight: number
+): { cols: number; rows: number } | null {
+  if (cellWidth <= 0 || cellHeight <= 0) {
+    return null;
+  }
+  return {
+    cols: Math.max(LEAST_COLS, Math.floor(viewWidth / cellWidth)),
+    rows: Math.max(1, Math.floor(viewHeight / cellHeight)),
+  };
+}

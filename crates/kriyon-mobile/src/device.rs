@@ -1197,6 +1197,28 @@ impl MobileDevice {
             .await??)
     }
 
+    /// Tell the computer this phone's own terminal size for a session: the
+    /// session takes it once this phone types, and keeps it until someone
+    /// else does (ADR-0063). The computer bounds it (80 to 1000 columns).
+    ///
+    /// # Errors
+    /// An id that isn't one, not connected, not open, no screen yet, or a
+    /// size out of bounds.
+    pub async fn resize(
+        &self,
+        host_id: String,
+        session_id: String,
+        cols: u16,
+        rows: u16,
+    ) -> Result<(), MobileError> {
+        let host = parse_host_id(&host_id)?;
+        let device = Arc::clone(&self.shared.device);
+        Ok(self
+            .shared
+            .on_runtime(async move { device.resize(&host, &session_id, cols, rows).await })
+            .await??)
+    }
+
     /// Send `text` to Claude in a session this phone has control of, as the
     /// desktop's composer sends a prompt: the computer types it, then Enter.
     /// Works from the readable view, the screen off. Refused while a
@@ -1603,6 +1625,22 @@ pub(crate) mod tests {
                     .start_session("nope".into(), "/work/app".into(), None)
                     .await
             }
+        });
+        assert!(matches!(bad, Err(MobileError::Invalid { .. })));
+    }
+
+    #[test]
+    fn the_phones_size_for_a_computer_not_paired_here_is_not_connected() {
+        let store = Arc::new(Memory::default());
+        let device = phone(&store);
+        let told = run({
+            let device = Arc::clone(&device);
+            async move { device.resize("ab".repeat(32), "s1".into(), 80, 30).await }
+        });
+        assert_eq!(told, Err(MobileError::NotConnected));
+        let bad = run({
+            let device = Arc::clone(&device);
+            async move { device.resize("nope".into(), "s1".into(), 80, 30).await }
         });
         assert!(matches!(bad, Err(MobileError::Invalid { .. })));
     }

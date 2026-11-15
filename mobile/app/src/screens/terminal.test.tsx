@@ -43,6 +43,7 @@ jest.mock("../../modules/kriyon-native/index.ts", () => ({
     compose: jest.fn(() => Promise.resolve()),
     giveBack: jest.fn(() => Promise.resolve()),
     input: jest.fn(() => Promise.resolve()),
+    resize: jest.fn(() => Promise.resolve()),
     setView: jest.fn(() => Promise.resolve()),
     takeControl: jest.fn(() => Promise.resolve()),
   },
@@ -393,4 +394,34 @@ test("a line typed with no question showing goes as one compose", async () => {
   await fireEvent.press(screen.getByRole("button", { name: "Enter" }));
   expect(native.compose).toHaveBeenCalledWith(MAC, "s1", "ls");
   expect(native.input).not.toHaveBeenCalled();
+});
+
+/** The page says what fits the phone, as the real one does once drawn. */
+async function pageSize(cols: number, rows: number) {
+  await act(() =>
+    pageProps.onMessage({
+      nativeEvent: { data: JSON.stringify({ cols, rows, type: "size" }) },
+    })
+  );
+}
+
+test("a Controller tells the computer the phone's own size, once for each new size", async () => {
+  usePhone.setState({ states: { [MAC]: state({}, "host") } });
+  await render(<TerminalView hostId={MAC} sessionId="s1" />);
+  await pageReady();
+  await pageSize(80, 40);
+  await pageSize(80, 40);
+  expect(native.resize).toHaveBeenCalledTimes(1);
+  expect(native.resize).toHaveBeenLastCalledWith(MAC, "s1", 80, 40);
+  // The keyboard took half the view.
+  await pageSize(80, 20);
+  expect(native.resize).toHaveBeenLastCalledWith(MAC, "s1", 80, 20);
+});
+
+test("a Viewer never sizes the computer's session", async () => {
+  usePhone.setState({ states: { [MAC]: state({ role: "viewer" }, "host") } });
+  await render(<TerminalView hostId={MAC} sessionId="s1" />);
+  await pageReady();
+  await pageSize(80, 40);
+  expect(native.resize).not.toHaveBeenCalled();
 });

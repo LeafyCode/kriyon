@@ -124,6 +124,31 @@ export function TerminalView({
   const [line, setLine] = useState("");
   const [ctrl, setCtrl] = useState(false);
   const themeScript = `window.kriyon.theme("${mode}", "${t.bg}")`;
+  // The phone's own size, as the page measured it, and the one the computer
+  // was last told: a Controller's size is the session's once it types
+  // (ADR-0063). Told again for each new size, and after typing was off.
+  const [size, setSize] = useState<{ cols: number; rows: number } | null>(null);
+  const told = useRef<string | null>(null);
+  const cols = size?.cols;
+  const rows = size?.rows;
+  useEffect(() => {
+    if (!mayType) {
+      told.current = null;
+      return;
+    }
+    if (cols === undefined || rows === undefined) {
+      return;
+    }
+    const said = `${cols}x${rows}`;
+    if (told.current === said) {
+      return;
+    }
+    told.current = said;
+    KriyonNative.resize(hostId, sessionId, cols, rows).catch(() => {
+      // Not taken (no screen yet, the link down): told again next time.
+      told.current = null;
+    });
+  }, [cols, hostId, mayType, rows, sessionId]);
 
   useEffect(() => {
     const frames = KriyonNative.addListener("onScreenFrame", (event) => {
@@ -277,6 +302,8 @@ export function TerminalView({
               pageReady();
             } else if (message?.type === "note") {
               setNote(noteLine(message.note));
+            } else if (message?.type === "size") {
+              setSize({ cols: message.cols, rows: message.rows });
             }
           }}
           originWhitelist={["about:blank"]}

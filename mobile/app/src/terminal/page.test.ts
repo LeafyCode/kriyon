@@ -1,11 +1,13 @@
 import { expect, test } from "@jest/globals";
 import {
   boxWidth,
+  fitSize,
   SYMBOLS_FONT,
   SYMBOLS_RANGE,
   TERMINAL_FONT,
 } from "./layout.ts";
 import { TERMINAL_PAGE } from "./page.generated.ts";
+import { readPageMessage } from "./protocol.ts";
 
 /** An embedded font face: its family, its WOFF bytes, its characters. */
 const FONT_FACE =
@@ -33,4 +35,23 @@ test("a screen wider than the phone widens the box, so the page scrolls to its l
   expect(boxWidth(864.4, 412)).toBe("865px");
   expect(boxWidth(300, 412)).toBe("100%");
   expect(TERMINAL_PAGE).toContain("body{overflow-x:auto;");
+});
+
+test("the phone's own size is what fits its view, at least the computer's 80 columns", () => {
+  // 7.2 × 15 px cells in a 412 × 600 view: 57 columns fit, 40 rows.
+  expect(fitSize(412, 600, 7.2, 15)).toEqual({ cols: 80, rows: 40 });
+  // A wide view (a tablet): its own columns.
+  expect(fitSize(1000, 600, 7.2, 15)).toEqual({ cols: 138, rows: 40 });
+  // Not measured yet: no size.
+  expect(fitSize(412, 600, 0, 15)).toBeNull();
+});
+
+test("the page's size message reads back, and a bad one doesn't", () => {
+  expect(readPageMessage('{"type":"size","cols":80,"rows":40}')).toEqual({
+    cols: 80,
+    rows: 40,
+    type: "size",
+  });
+  expect(readPageMessage('{"type":"size","cols":"80","rows":40}')).toBeNull();
+  expect(readPageMessage('{"type":"size","cols":80}')).toBeNull();
 });

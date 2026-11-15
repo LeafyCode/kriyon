@@ -330,6 +330,17 @@ public final class KriyonNativeModule: Module {
     // covers itself then (in JavaScript), so there is nothing to do here.
     AsyncFunction("setPrivateInSwitcher") { (_: Bool) in }
 
+    // This phone's own terminal size for a session: the computer gives it to
+    // the session once this phone types (ADR-0063). JS sends whole numbers
+    // in range; the computer bounds them again.
+    AsyncFunction("resize") { (hostId: String, sessionId: String, cols: Int, rows: Int) in
+      try await rust {
+        try await self.started().resize(
+          hostId: hostId, sessionId: sessionId,
+          cols: UInt16(clamping: cols), rows: UInt16(clamping: rows))
+      }
+    }
+
     AsyncFunction("input") { (hostId: String, sessionId: String, bytes: Data) in
       try await rust {
         try await self.started().input(hostId: hostId, sessionId: sessionId, bytes: bytes)

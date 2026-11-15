@@ -6,7 +6,8 @@
  *
  * The app talks to it through `window.kriyon` (frames as base64, light or
  * dark); it answers through React Native's message channel (a note to show,
- * ready). It never takes typing: the app's own field and keys do.
+ * ready, the phone's own size). It never takes typing: the app's own field
+ * and keys do.
  */
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { Terminal } from "@xterm/xterm";
@@ -17,7 +18,7 @@ import {
 import { terminalTheme } from "../../../../src/theme/terminalTheme.ts";
 import { steel } from "../../../../src/theme/themes/steel.ts";
 import { steelLight } from "../../../../src/theme/themes/steelLight.ts";
-import { boxWidth, TERMINAL_FONT } from "./layout.ts";
+import { boxWidth, fitSize, TERMINAL_FONT } from "./layout.ts";
 import type { PageMessage } from "./protocol.ts";
 
 declare global {
@@ -67,17 +68,35 @@ if (host) {
   term.textarea?.setAttribute("tabindex", "-1");
   // The screen keeps the computer's columns: when they are wider than the
   // phone, the box widens to them and the page scrolls sideways. xterm sets
-  // the screen's width as it renders, so this follows every render.
+  // the screen's width as it renders, so this follows every render. The
+  // same measure tells the app the phone's own size (ADR-0063).
   const screen = host.querySelector<HTMLElement>(".xterm-screen");
-  term.onRender(() => {
-    const width = boxWidth(
-      screen?.getBoundingClientRect().width ?? 0,
-      document.documentElement.clientWidth
-    );
+  // The phone's own size, the cells that fit its view, as last told.
+  let told = "";
+  const fit = () => {
+    const box = screen?.getBoundingClientRect();
+    const view = document.documentElement;
+    const width = boxWidth(box?.width ?? 0, view.clientWidth);
     if (host.style.width !== width) {
       host.style.width = width;
     }
-  });
+    const size = box
+      ? fitSize(
+          view.clientWidth,
+          view.clientHeight,
+          box.width / term.cols,
+          box.height / term.rows
+        )
+      : null;
+    const said = size ? `${size.cols}x${size.rows}` : "";
+    if (size && said !== told) {
+      told = said;
+      post({ ...size, type: "size" });
+    }
+  };
+  term.onRender(fit);
+  // The keyboard coming up or going changes the view's height.
+  window.addEventListener("resize", fit);
 }
 
 window.kriyon = {

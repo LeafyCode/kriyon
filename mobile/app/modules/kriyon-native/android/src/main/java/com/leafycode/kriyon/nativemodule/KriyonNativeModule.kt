@@ -255,6 +255,17 @@ class KriyonNativeModule : Module() {
       }
     }.runOnQueue(Queues.MAIN)
 
+    // This phone's own terminal size for a session: the computer gives it to
+    // the session once this phone types (ADR-0063). JS sends whole numbers
+    // in range; the computer bounds them again.
+    AsyncFunction("resize") Coroutine { hostId: String, sessionId: String, cols: Int, rows: Int ->
+      rust {
+        started().resize(
+          hostId, sessionId,
+          cols.coerceIn(0, 65535).toUShort(), rows.coerceIn(0, 65535).toUShort())
+      }
+    }
+
     AsyncFunction("input") Coroutine { hostId: String, sessionId: String, bytes: ByteArray ->
       rust { started().input(hostId, sessionId, bytes) }
     }

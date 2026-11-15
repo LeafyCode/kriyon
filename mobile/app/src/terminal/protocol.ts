@@ -3,7 +3,9 @@ import type { ScreenNote } from "../../../../src/remote/remoteScreen.ts";
 
 export type PageMessage =
   | { type: "ready" }
-  | { note: ScreenNote; type: "note" };
+  | { note: ScreenNote; type: "note" }
+  /** The phone's own terminal size: the cells that fit its view. */
+  | { cols: number; rows: number; type: "size" };
 
 /** A message from the page, or `null` for anything else. */
 export function readPageMessage(text: string): PageMessage | null {
@@ -14,6 +16,10 @@ export function readPageMessage(text: string): PageMessage | null {
         return message;
       case "note":
         return message.note ? message : null;
+      case "size":
+        return Number.isInteger(message.cols) && Number.isInteger(message.rows)
+          ? message
+          : null;
       default:
         return null;
     }

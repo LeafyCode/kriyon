@@ -143,6 +143,17 @@ interface KriyonNativeModule {
   /** Waits for the sign-in started last; whether it signed in. */
   relayWaitSignIn: () => Promise<boolean>;
   /**
+   * This phone's own terminal size for a session, in columns and rows: the
+   * computer gives it to the session once this phone types (ADR-0063), and
+   * refuses one under 80 columns.
+   */
+  resize: (
+    hostId: string,
+    sessionId: string,
+    cols: number,
+    rows: number
+  ) => Promise<void>;
+  /**
    * Turns this phone's alerts on or off, kept for the next start: off, each
    * connected computer forgets its push token; on, each is given it again.
    */
