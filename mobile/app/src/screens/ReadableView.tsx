@@ -15,7 +15,7 @@ import type {
 import { Icon, IconButton, useLook, useReduceMotion } from "../kit.tsx";
 import { readableKey, usePhone } from "../state/phone.ts";
 import { fonts, type Tokens } from "../theme.ts";
-import { Answers } from "./Answers.tsx";
+import { type Answered, Answers } from "./Answers.tsx";
 
 /** How near the bottom still counts as following the newest entry. */
 const FOLLOW_SLACK = 48;
@@ -45,7 +45,7 @@ function outcomeColor(t: Tokens, outcome: string): string {
  *  told; `null` when this phone can't answer it. */
 interface Answering {
   hostId: string;
-  onError: (reason: string) => void;
+  onAnswered: (answered: Answered) => void;
   sessionId: string;
 }
 
@@ -205,8 +205,9 @@ function Entry({
           {answering ? (
             <Answers
               hostId={answering.hostId}
-              onError={answering.onError}
+              onAnswered={answering.onAnswered}
               question={{ options: entry.options }}
+              screenOn={false}
               sessionId={answering.sessionId}
             />
           ) : null}
@@ -357,8 +358,8 @@ export function ReadableView({
     state.states[hostId]?.sessions.find((one) => one.id === sessionId)
   );
   const dialogOpen = session?.dialogOpen;
-  // Why an answer didn't go, in the computer's words.
-  const [answerProblem, setAnswerProblem] = useState<string | null>(null);
+  // What came of the last answer: how it went, or the computer's refusal.
+  const [answered, setAnswered] = useState<Answered | null>(null);
   const scroll = useRef<ComponentRef<typeof ScrollView>>(null);
   const reduceMotion = useReduceMotion();
   // Following the newest entry, until the person scrolls up to read.
@@ -374,7 +375,7 @@ export function ReadableView({
       : undefined;
   const answering: Answering = {
     hostId,
-    onError: setAnswerProblem,
+    onAnswered: setAnswered,
     sessionId,
   };
   return (
@@ -410,8 +411,10 @@ export function ReadableView({
             key={entry.seq}
           />
         ))}
-        {answerProblem ? (
-          <Text style={[text.caption, { color: t.red }]}>{answerProblem}</Text>
+        {answered ? (
+          <Text style={[text.caption, { color: answered.ok ? t.ink2 : t.red }]}>
+            {answered.line}
+          </Text>
         ) : null}
       </ScrollView>
       <Compose asking={asking} hostId={hostId} sessionId={sessionId} />

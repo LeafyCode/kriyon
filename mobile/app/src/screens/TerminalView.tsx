@@ -337,8 +337,9 @@ export function TerminalView({
           </Text>
           <Answers
             hostId={hostId}
-            onError={setNote}
+            onAnswered={({ line }) => setNote(line)}
             question={session?.question}
+            screenOn
             sessionId={sessionId}
           />
         </View>

@@ -2,7 +2,10 @@ import { beforeEach, expect, jest, test } from "@jest/globals";
 import { act, fireEvent, render, screen } from "@testing-library/react-native";
 import type { HostSummary } from "../../../../src/remote/hostSummary.ts";
 import type { ReadableSummary } from "../../../../src/remote/readableSummary.ts";
-import { KriyonNative } from "../../modules/kriyon-native/index.ts";
+import {
+  KriyonNative,
+  type ScreenFrameEvent,
+} from "../../modules/kriyon-native/index.ts";
 import { usePhone } from "../state/phone.ts";
 import { SessionScreen } from "./SessionScreen.tsx";
 
@@ -16,7 +19,10 @@ jest.mock("../terminal/page.generated.ts", () => ({ TERMINAL_PAGE: "" }));
 
 jest.mock("../../modules/kriyon-native/index.ts", () => ({
   KriyonNative: {
-    addListener: jest.fn(() => ({ remove: jest.fn() })),
+    addListener: jest.fn((_name: string, listener: never) => {
+      frameListeners.push(listener);
+      return { remove: jest.fn() };
+    }),
     compose: jest.fn(() => Promise.resolve()),
     input: jest.fn(() => Promise.resolve()),
     setView: jest.fn(() => Promise.resolve()),
@@ -25,6 +31,19 @@ jest.mock("../../modules/kriyon-native/index.ts", () => ({
 }));
 
 const native = jest.mocked(KriyonNative);
+const frameListeners: ((event: ScreenFrameEvent) => void)[] = [];
+
+/** The computer's screen stream sends `frame` for this session. */
+async function screenFrame(frame: number[]) {
+  await act(() => {
+    for (const listener of frameListeners) {
+      listener({ frame: new Uint8Array(frame), hostId: MAC, sessionId: "s1" });
+    }
+  });
+}
+
+/** A whole screen, 80 × 24: the frame that proves the question was seen. */
+const SCREEN = [1, 0, 80, 0, 24, 0];
 const MAC = "ab".repeat(32);
 const STILL_WRITING = /^The form sends too early/;
 const ENTRY = /^entry-/;
@@ -108,6 +127,7 @@ function send(summary: ReadableSummary) {
 
 beforeEach(() => {
   jest.clearAllMocks();
+  frameListeners.length = 0;
   usePhone.setState(usePhone.getInitialState());
   usePhone.setState({
     screen: { hostId: MAC, kind: "session", sessionId: "s1" },
@@ -207,27 +227,50 @@ test("Claude's growing reply changes in place", async () => {
   expect(screen.getAllByTestId("entry-2")).toHaveLength(1);
 });
 
-test("a Controller answers Claude's question by its choices, each sending its number key", async () => {
+test("a Controller answers Claude's question by its choices, once its screen has shown it", async () => {
   usePhone.setState({ states: { [MAC]: asController(true) } });
   await render(<SessionScreen hostId={MAC} sessionId="s1" />);
   await act(() => send(CONVERSATION));
+  native.setView.mockClear();
   await fireEvent.press(
     screen.getByRole("button", { name: "2. No, leave it" })
   );
+  // The computer takes an answer only from a screen that showed the
+  // question: the screen comes on first, and the key waits for it.
+  expect(viewsAsked().at(-1)).toEqual([true, true, true]);
+  expect(native.input).not.toHaveBeenCalled();
+  await screenFrame(SCREEN);
   expect(native.input).toHaveBeenLastCalledWith(
     MAC,
     "s1",
     new TextEncoder().encode("2")
   );
+  // The computer says it reached the session: answered, screen off again.
+  await screenFrame([2, 1]);
+  expect(screen.getByText("Answered.")).toBeOnTheScreen();
+  expect(viewsAsked().at(-1)).toEqual([true, false, true]);
+  expect(
+    screen.queryByRole("button", { name: "Answer in the terminal" })
+  ).toBeNull();
+});
+
+test("a refused answer says why, in the computer's words", async () => {
+  usePhone.setState({ states: { [MAC]: asController(true) } });
+  await render(<SessionScreen hostId={MAC} sessionId="s1" />);
+  await act(() => send(CONVERSATION));
   await fireEvent.press(screen.getByRole("button", { name: "Esc" }));
+  await screenFrame(SCREEN);
   expect(native.input).toHaveBeenLastCalledWith(
     MAC,
     "s1",
     new Uint8Array([27])
   );
-  expect(
-    screen.queryByRole("button", { name: "Answer in the terminal" })
-  ).toBeNull();
+  await screenFrame([
+    3,
+    4,
+    ...new TextEncoder().encode("That changed: look again."),
+  ]);
+  expect(screen.getByText("That changed: look again.")).toBeOnTheScreen();
 });
 
 test("a Viewer reads the question with no way to answer it", async () => {
