@@ -1,0 +1,29 @@
+{
+  "hook_event_name": "PostToolUse",
+  "session_id": "s",
+  "transcript_path": "/t.jsonl",
+  "tool_name": "Agent",
+  "tool_use_id": "toolu_1",
+  "agent_id": "a1",
+  "agent_type": "Explore",
+  "duration_ms": 12,
+  "message": "m",
+  "notification_type": "idle_prompt",
+  "error": "rate_limit",
+  "stop_hook_active": false,
+  "background_tasks": [{ "id": "a1", "type": "subagent", "status": "running" }],
+  "prompt": "p",
+  "cwd": "/w",
+  "prompt_id": "p1",
+  "permission_mode": "default",
+  "source": "user",
+  "tool_input": {
+    "subagent_type": "Explore",
+    "description": "d",
+    "run_in_background": true,
+    "command": "ls",
+    "questions": [{ "question": "q" }],
+    "plan": "step one"
+  },
+  "tool_response": { "content": [{ "type": "text", "text": "answer" }] }
+}

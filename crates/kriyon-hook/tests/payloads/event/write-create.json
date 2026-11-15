@@ -1,0 +1,10 @@
+{
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Write",
+  "tool_input": { "file_path": "/w/n.ts", "content": "a\nb" },
+  "tool_response": {
+    "type": "create",
+    "filePath": "/w/n.ts",
+    "content": "one\r\ntwo\rthree four"
+  }
+}

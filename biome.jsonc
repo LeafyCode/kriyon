@@ -19,6 +19,10 @@
       // `claude --worktree` checkouts live here; each carries its own
       // biome.jsonc, which Biome rejects as a nested root.
       "!.claude/worktrees",
+      // The hook's recorded payloads and golden outputs: byte-exact inputs
+      // and expectations (one has a repeated key on purpose).
+      "!crates/kriyon-hook/tests/payloads",
+      "!crates/kriyon-hook/tests/golden",
       // Image assets, some written by scripts/make-*.mjs. Biome 2.5 started
       // linting SVG; sorting their attributes is churn with no gain.
       "!**/*.svg"

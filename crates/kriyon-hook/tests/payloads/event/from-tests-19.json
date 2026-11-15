@@ -1,0 +1,6 @@
+{
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Write",
+  "tool_use_id": "toolu_3",
+  "tool_response": { "type": "create", "content": "x", "structuredPatch": [] }
+}

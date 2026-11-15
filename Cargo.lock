@@ -3453,6 +3453,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "kriyon-hook"
+version = "0.16.0"
+dependencies = [
+ "kriyon-core",
+ "regex",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "kriyon-mobile"
 version = "0.16.0"
 dependencies = [

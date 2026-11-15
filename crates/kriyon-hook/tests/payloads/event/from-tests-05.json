@@ -1,0 +1,11 @@
+{
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Write",
+  "tool_use_id": "t2",
+  "tool_input": { "file_path": "/w/b.ts" },
+  "tool_response": {
+    "type": "create",
+    "content": "x\ny\nz\n",
+    "structuredPatch": []
+  }
+}

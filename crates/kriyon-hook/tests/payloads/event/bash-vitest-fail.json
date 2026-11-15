@@ -1,0 +1,9 @@
+{
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Bash",
+  "tool_input": { "command": "pnpm test" },
+  "tool_response": {
+    "stdout": " Tests  2 failed | 41 passed (43)\n",
+    "stderr": "warn"
+  }
+}

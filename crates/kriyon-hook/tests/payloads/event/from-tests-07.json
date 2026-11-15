@@ -1,0 +1,7 @@
+{
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Read",
+  "tool_use_id": "t4",
+  "tool_input": { "file_path": "/w/a.ts" },
+  "tool_response": { "type": "text" }
+}

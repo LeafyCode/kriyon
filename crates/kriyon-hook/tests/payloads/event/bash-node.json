@@ -1,0 +1,6 @@
+{
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Bash",
+  "tool_input": { "command": "node --test" },
+  "tool_response": { "stdout": "ℹ pass 3\nℹ fail 0\n", "stderr": "" }
+}

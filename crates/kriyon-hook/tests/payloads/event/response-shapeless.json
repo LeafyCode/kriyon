@@ -1,0 +1,5 @@
+{
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Other",
+  "tool_response": { "a": { "b": [1, 2] }, "passwd": "x" }
+}

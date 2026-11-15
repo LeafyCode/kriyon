@@ -1,0 +1,14 @@
+{
+  "session_id": "c-1",
+  "model": { "display_name": "Opus 5.5" },
+  "context_window": {
+    "used_percentage": 12.5,
+    "context_window_size": 200000,
+    "total_input_tokens": 25000,
+    "total_output_tokens": 300
+  },
+  "rate_limits": {
+    "five_hour": { "used_percentage": 40, "resets_at": 1794724205.9 },
+    "seven_day": { "used_percentage": 84.2, "resets_at": 1795000000 }
+  }
+}

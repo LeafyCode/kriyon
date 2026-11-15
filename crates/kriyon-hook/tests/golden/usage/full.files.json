@@ -1,0 +1,10 @@
+[
+  {
+    "file": "limits/c-1.json",
+    "text": "{\"five_hour\": {\"used_percentage\": 40, \"resets_at\": 1794724205}, \"seven_day\": {\"used_percentage\": 84.2, \"resets_at\": 1795000000}}"
+  },
+  {
+    "file": "usage/sess-1.json",
+    "text": "{\"usedPercentage\": 12.5, \"contextWindowSize\": 200000, \"inputTokens\": 25000, \"outputTokens\": 300, \"model\": \"Opus 5.5\", \"sessionId\": \"c-1\"}"
+  }
+]

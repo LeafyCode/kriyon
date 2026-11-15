@@ -1,0 +1,5 @@
+{
+  "hook_event_name": "PostToolUse",
+  "tool_name": "mcp__y",
+  "tool_response": [{ "type": "text", "text": "hi" }, 1, null]
+}

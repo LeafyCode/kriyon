@@ -1,0 +1,19 @@
+{
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Bash",
+  "tool_use_id": "t",
+  "tool_input": { "command": "npm i lodash" },
+  "tool_response": {
+    "stdout": "",
+    "bashEditDiff": {
+      "files": [
+        {
+          "filePath": "/w/node_modules/.package-lock.json",
+          "hunks": [{ "lines": ["+a", "+b"] }]
+        },
+        { "filePath": "/w/.git/index", "hunks": [{ "lines": ["+c"] }] },
+        { "filePath": "/w/package.json", "hunks": [{ "lines": ["+d"] }] }
+      ]
+    }
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "hook_event_name": "PostToolUse",
+  "tool_name": "WebFetch",
+  "tool_input": { "url": "https://x" },
+  "tool_response": { "result": "page text", "code": 200 }
+}

@@ -1,0 +1,5 @@
+{
+  "hook_event_name": "PreToolUse",
+  "tool_name": "ExitPlanMode",
+  "tool_input": { "plan": "\n\n   # Plan: rotate token=abc123def\nstep two" }
+}

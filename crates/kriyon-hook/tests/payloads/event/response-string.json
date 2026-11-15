@@ -1,0 +1,5 @@
+{
+  "hook_event_name": "PostToolUse",
+  "tool_name": "mcp__x",
+  "tool_response": "plain token=abc"
+}
