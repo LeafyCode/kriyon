@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use kriyon_relay_client::keeper::{now_s, InUse, PassKeeper, Rebind, CHECK_EVERY};
 use kriyon_relay_client::runtime::{RelayRuntime, RelaySetup, ThisDevice};
-use kriyon_remote::device_view::{host_summary, name_of, HostView, LinkFacts};
+use kriyon_remote::device_view::{host_summary, name_of, HostView, LinkFacts, Reachable};
 use kriyon_remote::message::{hex, parse_id_hex, EndpointId, Role};
 use kriyon_remote::pairing::PairingInvite;
 use kriyon_remote_link::device::DevicePairing;
@@ -21,7 +21,9 @@ use kriyon_remote_link::device_runtime::{
 use kriyon_remote_link::keys::{load_or_create, SecretVault};
 use kriyon_remote_link::{LinkConfig, RelayAccess};
 
-use crate::hosts::{hosts_bytes, read_hosts, with_host, without_host, PairedHost, HOSTS_KEY};
+use crate::hosts::{
+    hosts_bytes, read_hosts, with_host, with_reach, without_host, PairedHost, HOSTS_KEY,
+};
 
 /// The store key of the device key.
 pub const DEVICE_KEY: &str = "device-key";
@@ -235,6 +237,9 @@ struct Told {
     shared: std::sync::OnceLock<std::sync::Weak<Shared>>,
     /// Each computer's link as last told, to see one come up.
     last: std::sync::Mutex<std::collections::HashMap<EndpointId, LinkState>>,
+    /// Where each computer last said it is, as kept: the store is written
+    /// only when that changes.
+    reach: std::sync::Mutex<std::collections::HashMap<EndpointId, Reachable>>,
 }
 
 impl DeviceEvents for Told {
@@ -242,9 +247,17 @@ impl DeviceEvents for Told {
         let state = link.state;
         let came_up = locked(&self.last).insert(host, state) != Some(LinkState::Connected)
             && state == LinkState::Connected;
+        let shared = self.shared.get().and_then(std::sync::Weak::upgrade);
         if came_up {
-            if let Some(shared) = self.shared.get().and_then(std::sync::Weak::upgrade) {
+            if let Some(shared) = &shared {
                 shared.give_push(host);
+            }
+        }
+        // Where it says it is now, kept for the next start (ADR-0065).
+        if let (Some(shared), Some(reach)) = (&shared, &view.reachable) {
+            let new = locked(&self.reach).get(&host) != Some(reach);
+            if new && shared.keep_reach(&host, reach).is_ok() {
+                locked(&self.reach).insert(host, reach.clone());
             }
         }
         self.listener
@@ -510,6 +523,26 @@ impl Shared {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let hosts = change(self.hosts()?);
+        self.store
+            .write(HOSTS_KEY.into(), hosts_bytes(&hosts))
+            .map_err(|e| store_error(&e))
+    }
+
+    /// Keep where `host` says it is now in its paired record, so the next
+    /// start dials there; nothing is written when nothing changed.
+    fn keep_reach(&self, host: &EndpointId, reach: &Reachable) -> Result<(), MobileError> {
+        let _held = self
+            .hosts_lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(hosts) = with_reach(
+            self.hosts()?,
+            &hex(host),
+            &reach.addrs,
+            reach.relay_url.as_deref(),
+        ) else {
+            return Ok(());
+        };
         self.store
             .write(HOSTS_KEY.into(), hosts_bytes(&hosts))
             .map_err(|e| store_error(&e))
@@ -796,6 +829,7 @@ impl MobileDevice {
             listener,
             shared: std::sync::OnceLock::new(),
             last: std::sync::Mutex::new(std::collections::HashMap::new()),
+            reach: std::sync::Mutex::new(std::collections::HashMap::new()),
         });
         // As the person left them; a store that can't say leaves them on.
         let alerts_off = matches!(store.read(ALERTS_OFF_KEY.into()), Ok(Some(_)));
@@ -1976,6 +2010,7 @@ pub(crate) mod tests {
             listener: Arc::clone(&seen) as Arc<dyn HostListener>,
             shared: std::sync::OnceLock::new(),
             last: std::sync::Mutex::new(std::collections::HashMap::new()),
+            reach: std::sync::Mutex::new(std::collections::HashMap::new()),
         };
         let view = HostView {
             host_name: Some("Mac".into()),
@@ -1988,5 +2023,45 @@ pub(crate) mod tests {
         assert_eq!(summary["hostName"], "Mac");
         assert_eq!(summary["link"], "connected");
         assert_eq!(summary["mayStart"], false);
+    }
+
+    #[test]
+    fn where_a_computer_says_it_is_is_kept_for_the_next_start() {
+        // Seen on the Android emulator against a Windows PC: paired before
+        // its relay was on, the phone never learned the relay, so with the
+        // PC's address blocked it never reached it (ADR-0065).
+        let store = Arc::new(Memory::default());
+        let device = phone(&store);
+        let id = "ab".repeat(32);
+        device
+            .shared
+            .update_hosts(|hosts| {
+                with_host(
+                    hosts,
+                    PairedHost {
+                        host_id: id.clone(),
+                        name: "PC".into(),
+                        addrs: vec!["10.0.0.77:49731".into()],
+                        relay_url: None,
+                        paired_at_ms: 1,
+                    },
+                )
+            })
+            .expect("kept");
+        let view = HostView {
+            reachable: Some(Reachable {
+                addrs: vec!["10.0.0.77:50572".into()],
+                relay_url: Some("https://relay.example/".into()),
+            }),
+            ..HostView::default()
+        };
+        device
+            .shared
+            .events
+            .host_changed([0xab; 32], &LinkFacts::new(LinkState::Connected), &view);
+        let kept = device.hosts().expect("hosts");
+        assert_eq!(kept[0].addrs, vec!["10.0.0.77:50572".to_string()]);
+        assert_eq!(kept[0].relay_url.as_deref(), Some("https://relay.example/"));
+        assert_eq!(kept[0].name, "PC");
     }
 }

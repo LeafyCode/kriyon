@@ -14,7 +14,8 @@ pub struct PairedHost {
     /// Its endpoint id, 64 lowercase hex digits.
     pub host_id: String,
     pub name: String,
-    /// `ip:port`, as the pairing code gave them.
+    /// `ip:port`, as the pairing code gave them, then as the computer last
+    /// said (ADR-0065).
     pub addrs: Vec<String>,
     pub relay_url: Option<String>,
     /// Unix milliseconds.
@@ -40,6 +41,38 @@ pub fn with_host(hosts: Vec<PairedHost>, host: PairedHost) -> Vec<PairedHost> {
     let mut hosts = without_host(hosts, &host.host_id);
     hosts.push(host);
     hosts
+}
+
+/// The list with where `host_id` says it is now (ADR-0065): its addresses
+/// and relay replace what pairing gave, so a restart dials there. `None` when
+/// nothing changes (or `host_id` isn't paired here): nothing to write.
+#[must_use]
+pub fn with_reach(
+    hosts: Vec<PairedHost>,
+    host_id: &str,
+    addrs: &[String],
+    relay_url: Option<&str>,
+) -> Option<Vec<PairedHost>> {
+    let known = hosts.iter().find(|host| host.host_id == host_id)?;
+    if known.addrs == addrs && known.relay_url.as_deref() == relay_url {
+        return None;
+    }
+    Some(
+        hosts
+            .into_iter()
+            .map(|host| {
+                if host.host_id == host_id {
+                    PairedHost {
+                        addrs: addrs.to_vec(),
+                        relay_url: relay_url.map(str::to_string),
+                        ..host
+                    }
+                } else {
+                    host
+                }
+            })
+            .collect(),
+    )
 }
 
 /// The list without `host_id`.
@@ -81,6 +114,34 @@ mod tests {
             read_hosts(Some(b"not json")).is_err(),
             "a damaged list is an error, never an empty one to write over"
         );
+    }
+
+    #[test]
+    fn where_a_host_says_it_is_now_replaces_what_pairing_gave() {
+        let hosts = vec![host("a", "Mac"), host("b", "Studio")];
+        let relay = Some("https://relay.example".to_string());
+        let moved = with_reach(
+            hosts.clone(),
+            "a",
+            &["10.0.0.9:49731".into()],
+            relay.as_deref(),
+        )
+        .expect("a is paired and moved");
+        let a = moved.iter().find(|h| h.host_id == "a").expect("a");
+        assert_eq!(a.addrs, vec!["10.0.0.9:49731".to_string()]);
+        assert_eq!(a.relay_url, relay);
+        assert_eq!(a.name, "Mac", "only where it is changes");
+        assert_eq!(
+            moved.iter().find(|h| h.host_id == "b"),
+            hosts.iter().find(|h| h.host_id == "b")
+        );
+        // Nothing new: nothing to write.
+        assert_eq!(
+            with_reach(moved, "a", &["10.0.0.9:49731".into()], relay.as_deref()),
+            None
+        );
+        // A host not paired here is never added.
+        assert_eq!(with_reach(hosts, "z", &[], None), None);
     }
 
     #[test]
