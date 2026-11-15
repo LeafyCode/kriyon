@@ -152,10 +152,23 @@ impl DaemonClient {
     /// # Errors
     /// Returns [`EngineError::Pty`] if the stream cannot be cloned.
     pub fn adopt(stream: UnixStream, id: SessionId) -> Result<Self, EngineError> {
+        Self::adopt_with(stream, id, |_| {})
+    }
+
+    /// [`Self::adopt`], with every daemon event handed to `on_event` in
+    /// order: an adopted session is served to remote devices too.
+    ///
+    /// # Errors
+    /// As [`Self::adopt`].
+    pub fn adopt_with(
+        stream: UnixStream,
+        id: SessionId,
+        on_event: impl FnMut(DaemonEvent<'_>) + Send + 'static,
+    ) -> Result<Self, EngineError> {
         Self::build(
             stream,
             id,
-            |_| {},
+            on_event,
             |_| {},
             || {},
             OutputGate::unpaced(Instant::now()),
@@ -601,6 +614,43 @@ mod tests {
             );
             std::thread::sleep(Duration::from_millis(5));
         }
+    }
+
+    /// An adopted session (a daemon that outlived the app) is served to
+    /// remote devices too: its frames reach the event hook, in order.
+    #[test]
+    fn an_adopted_client_hands_every_daemon_event_to_its_hook() {
+        let (daemon, app) = UnixStream::pair().expect("pair");
+        let heard: std::sync::Arc<std::sync::Mutex<Vec<String>>> = std::sync::Arc::default();
+        let into = std::sync::Arc::clone(&heard);
+        let _client = DaemonClient::adopt_with(app, SessionId("s".into()), move |event| {
+            let what = match event {
+                DaemonEvent::Hello { run } => format!("hello {run}"),
+                DaemonEvent::Output(bytes) => format!("output {}", bytes.len()),
+                _ => "other".to_string(),
+            };
+            into.lock().expect("lock").push(what);
+        })
+        .expect("client");
+        let mut daemon = daemon;
+        std::io::Write::write_all(
+            &mut daemon,
+            &[
+                Frame::Hello { run: 3 }.encode(),
+                Frame::Output(b"abc".to_vec()).encode(),
+            ]
+            .concat(),
+        )
+        .expect("write");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while heard.lock().expect("lock").len() < 2 {
+            assert!(Instant::now() < deadline, "the hook heard nothing");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(
+            heard.lock().expect("lock").as_slice(),
+            ["hello 3", "output 3"]
+        );
     }
 
     #[test]

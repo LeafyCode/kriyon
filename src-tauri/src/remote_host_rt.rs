@@ -18,20 +18,20 @@ const ASK_RETRY: std::time::Duration = std::time::Duration::from_millis(50);
 /// Session `id` served while its start is under way: unless [`Self::keep`]
 /// is called, dropping it stops serving it, so a failed start leaves nothing
 /// registered.
-pub struct Attached {
-    app: tauri::AppHandle,
+pub struct Attached<R: tauri::Runtime = tauri::Wry> {
+    app: tauri::AppHandle<R>,
     id: SessionId,
     kept: bool,
 }
 
-impl Attached {
+impl<R: tauri::Runtime> Attached<R> {
     /// The start succeeded: keep serving it.
     pub fn keep(mut self) {
         self.kept = true;
     }
 }
 
-impl Drop for Attached {
+impl<R: tauri::Runtime> Drop for Attached<R> {
     fn drop(&mut self) {
         if !self.kept {
             detach(&self.app, &self.id);
@@ -60,7 +60,7 @@ pub fn note_engine(
 /// the blocking pool, so the daemon reader that makes them never takes the
 /// sessions lock (a close can hold it while joining that reader).
 #[must_use = "dropping it stops serving the session"]
-pub fn attach(app: &tauri::AppHandle, id: &SessionId) -> Attached {
+pub fn attach<R: tauri::Runtime>(app: &tauri::AppHandle<R>, id: &SessionId) -> Attached<R> {
     let attached = Attached {
         app: app.clone(),
         id: id.clone(),
@@ -109,7 +109,11 @@ pub fn attach(app: &tauri::AppHandle, id: &SessionId) -> Attached {
 
 /// One event from session `id`'s daemon, for remote devices and the
 /// session's gate: its run, and where a dialog changed.
-pub fn on_event(app: &tauri::AppHandle, id: &SessionId, event: DaemonEvent<'_>) {
+pub fn on_event<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    id: &SessionId,
+    event: DaemonEvent<'_>,
+) {
     let Some(serve) = app.try_state::<Serve>() else {
         return;
     };
@@ -135,7 +139,7 @@ pub fn on_event(app: &tauri::AppHandle, id: &SessionId, event: DaemonEvent<'_>) 
 }
 
 /// Stop serving session `id`: it closed.
-pub fn detach(app: &tauri::AppHandle, id: &SessionId) {
+pub fn detach<R: tauri::Runtime>(app: &tauri::AppHandle<R>, id: &SessionId) {
     if let Some(serve) = app.try_state::<Serve>() {
         serve.detach(&id.0);
     }

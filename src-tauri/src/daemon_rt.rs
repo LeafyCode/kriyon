@@ -558,13 +558,23 @@ pub(crate) fn adopt_live_daemons<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
         let Ok(stream) = UnixStream::connect(&socket) else {
             continue;
         };
-        let engine = match DaemonClient::adopt(stream, SessionId(id.clone())) {
+        // Served to remote devices from its first frame on, as a session the
+        // desktop starts is: a device can open it before the window shows it.
+        let session_id = SessionId(id.clone());
+        let served = crate::remote_host_rt::attach(app, &session_id);
+        let (event_app, event_id) = (app.clone(), session_id.clone());
+        let engine = match DaemonClient::adopt_with(stream, session_id, move |event| {
+            crate::remote_host_rt::on_event(&event_app, &event_id, event);
+        }) {
             Ok(engine) => engine,
             Err(e) => {
                 eprintln!("kriyon: could not adopt daemon session={id} ({e})");
                 continue;
             }
         };
+        // Kept either way: when the desktop's own client took the slot first,
+        // it attached the session already, and this attach changed nothing.
+        served.keep();
         // Insert only into a vacant slot, decided under the one lock. The check
         // above and this insert are not atomic: `create_session` for the
         // session the user is looking at can land in between, and replacing its
