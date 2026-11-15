@@ -5,7 +5,7 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react-native";
-import { Linking } from "react-native";
+import { Linking, StyleSheet } from "react-native";
 import {
   KriyonNative,
   type PhoneRelay,
@@ -85,6 +85,28 @@ test("signed in, it shows the subscription only, with no way to buy", async () =
   expect(await screen.findByText("No subscription yet.")).toBeOnTheScreen();
   expect(screen.queryByText(BUY)).toBeNull();
   expect(screen.getByText(MANAGED_THERE)).toBeOnTheScreen();
+});
+
+test("a long subscription line can't squeeze its label to nothing", async () => {
+  // Seen on Android: the label had `flex: 1` (no width of its own), the
+  // long line took the whole row, and the label wrapped one letter per line
+  // into a tall, empty-looking box.
+  native.relay.mockResolvedValue(view({ on: true, signedIn: true }));
+  native.relayAccount.mockResolvedValue({
+    blocked: false,
+    deviceLimit: 10,
+    devices: [],
+    paidUntil: "2027-11-14T00:00:00Z",
+    state: "active",
+  });
+  await render(<RelaySection />);
+  const line = await screen.findByText(ACTIVE);
+  const label = StyleSheet.flatten(
+    screen.getByText("Subscription").props.style
+  );
+  expect(label.flexShrink).toBe(0);
+  expect(label.flex).toBeUndefined();
+  expect(StyleSheet.flatten(line.props.style).flex).toBe(1);
 });
 
 test("turning the relay off asks Rust, and a refusal shows in its words", async () => {

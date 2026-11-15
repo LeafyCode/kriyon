@@ -76,10 +76,13 @@ export function RelaySection() {
               />
             </View>
             <View style={row}>
-              <Text style={[text.body, { color: t.ink2, flex: 1 }]}>
+              {/* The label keeps its own width and the line takes the
+                  rest: with `flex: 1` on the label, a long line squeezed it
+                  to nothing and it wrapped one letter per line (Android). */}
+              <Text style={[text.body, { color: t.ink2, flexShrink: 0 }]}>
                 Subscription
               </Text>
-              <Text style={[text.body, { flexShrink: 1, textAlign: "right" }]}>
+              <Text style={[text.body, { flex: 1, textAlign: "right" }]}>
                 {account
                   ? subscriptionWords(account)
                   : "Reading the subscription…"}
