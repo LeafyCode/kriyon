@@ -939,7 +939,7 @@ impl DeviceRuntime {
         &self,
         host: &EndpointId,
         session: &str,
-        make: impl FnOnce(&SessionScreen, kriyon_remote::message::Epoch) -> Option<FromDevice>,
+        make: impl FnOnce(&mut SessionScreen, kriyon_remote::message::Epoch) -> Option<FromDevice>,
     ) -> Result<(), DeviceError> {
         let conn = self.host(host).await?;
         let (writer, message) = {
@@ -953,7 +953,7 @@ impl DeviceRuntime {
             );
             let open = c.sessions.get(session).ok_or(DeviceError::NotOpen)?;
             let message = make(
-                &open
+                &mut open
                     .screen
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner),
@@ -1748,8 +1748,9 @@ mod tests {
                 },
                 message = incoming.next() => match message {
                     Ok(Some(Decoded::Message(input @ FromDevice::Input { .. }))) => {
+                        let FromDevice::Input { write_id, .. } = input else { unreachable!() };
                         heard.push(input);
-                        out.send(&ToDevice::InputAck { epoch: EPOCH, written: true, write_id: 1, })
+                        out.send(&ToDevice::InputAck { epoch: EPOCH, written: true, write_id })
                             .await
                             .expect("ack");
                         // Stay up so the receipt arrives before the link goes.

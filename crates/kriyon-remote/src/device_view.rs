@@ -177,7 +177,13 @@ pub struct SessionScreen {
     /// The newest [Session run] the host named: in a snapshot, or in `Run`
     /// while the screen is off.
     run: Option<u64>,
+    /// The write ids of this device's own sizes sent: their receipts show
+    /// nothing, since nothing was typed. The last few only.
+    sizes_sent: std::collections::VecDeque<u32>,
 }
+
+/// How many of its own size writes a screen remembers the receipts of.
+const SIZES_REMEMBERED: usize = 8;
 
 /// How long a screen waits for its first snapshot before asking again: the
 /// host gives at most one a second, and may have said no to the first ask.
@@ -200,6 +206,7 @@ impl SessionScreen {
             follower: ScreenFollower::new(),
             parts: SnapshotParts::new(),
             run: None,
+            sizes_sent: std::collections::VecDeque::new(),
             unpacker: Unpacker::new()?,
         })
     }
@@ -256,6 +263,10 @@ impl SessionScreen {
                 Follow::Ignore => Vec::new(),
                 Follow::Resync => vec![ScreenEvent::Resync],
             },
+            // A receipt for this device's own size: nothing was typed.
+            ToDevice::InputAck { write_id, .. } if self.sizes_sent.contains(&write_id) => {
+                Vec::new()
+            }
             ToDevice::InputAck {
                 epoch,
                 written,
@@ -333,9 +344,20 @@ impl SessionScreen {
     /// `Resize` to this device's own `cols` × `rows`: the session takes it
     /// once this device types (ADR-0063). `None` before the run is known.
     #[must_use]
-    pub fn resize(&self, epoch: Epoch, cols: u16, rows: u16, write_id: u32) -> Option<FromDevice> {
+    pub fn resize(
+        &mut self,
+        epoch: Epoch,
+        cols: u16,
+        rows: u16,
+        write_id: u32,
+    ) -> Option<FromDevice> {
+        let run = self.follower.run()?;
+        if self.sizes_sent.len() == SIZES_REMEMBERED {
+            self.sizes_sent.pop_front();
+        }
+        self.sizes_sent.push_back(write_id);
         Some(FromDevice::Resize {
-            run: self.follower.run()?,
+            run,
             epoch,
             cols,
             rows,
@@ -1184,6 +1206,30 @@ mod tests {
             bytes: b"not zstd".to_vec(),
         };
         assert_eq!(screen.on_message(bad, t), [ScreenEvent::Resync]);
+    }
+
+    /// A device's own size isn't typing: its receipt shows nothing (the
+    /// phone said "Typed on the other computer" on opening a session).
+    #[test]
+    fn the_receipt_for_this_devices_size_shows_nothing() {
+        let t = Instant::now();
+        let mut screen = SessionScreen::new().expect("screen");
+        screen.on_message(snapshot(9, 1, b"a", false), t);
+        assert!(screen.resize(EPOCH, 80, 30, 7).is_some());
+        let ack = |write_id| ToDevice::InputAck {
+            epoch: EPOCH,
+            written: true,
+            write_id,
+        };
+        assert_eq!(screen.on_message(ack(7), t), []);
+        assert_eq!(
+            screen.on_message(ack(8), t),
+            [ScreenEvent::InputAck {
+                epoch: EPOCH,
+                written: true,
+                write_id: 8,
+            }]
+        );
     }
 
     #[test]
