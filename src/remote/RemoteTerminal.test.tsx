@@ -1,4 +1,4 @@
-import { act, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, expect, test, vi } from "vitest";
 import { remoteHostInput, remoteHostSetView } from "../ipc/bridge.ts";
 import { useLayout } from "../state/layout.ts";
@@ -230,4 +230,27 @@ test("the screen follows a theme change", async () => {
     useLayout.getState().layout.themeId === "dracula" ? "nord" : "dracula";
   act(() => useLayout.getState().setThemeId(next));
   expect(termHolder.current?.options.theme).not.toEqual(before);
+});
+
+// ADR-0063 keeps the dialog rule: free typing stays off while Claude asks,
+// and a Controller answers by its choice's key instead.
+test("while Claude asks, the choices answer it and free typing is off", async () => {
+  vi.mocked(remoteHostInput).mockResolvedValue();
+  const asking = link({}, false, true);
+  asking.sessions = asking.sessions.map((one) => ({
+    ...one,
+    dialogOpen: true,
+    question: { options: ["Yes", "No"], text: "Run the tests?" },
+  }));
+  useRemoteHosts.getState().linkChanged(asking);
+  render(<RemoteTerminal hostId={HOST} sessionId="s1" />);
+  await act(() => Promise.resolve());
+  expect(termHolder.current?.options.disableStdin).toBe(true);
+  expect(screen.getByText("Run the tests?")).toBeTruthy();
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "2. No" }));
+    await Promise.resolve();
+  });
+  expect(remoteHostInput).toHaveBeenCalledWith(HOST, "s1", "2");
+  expect(screen.getByRole("button", { name: "Esc" })).toBeTruthy();
 });

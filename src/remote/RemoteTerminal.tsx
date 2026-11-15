@@ -3,10 +3,12 @@ import "@xterm/xterm/css/xterm.css";
 import { type CSSProperties, useEffect, useRef, useState } from "react";
 import { useLayout } from "../state/layout.ts";
 import { useRemoteHosts } from "../state/remoteHosts.ts";
+import { button } from "../theme/recipes.ts";
 import { terminalTheme } from "../theme/terminalTheme.ts";
 import { themeById } from "../theme/themes/index.ts";
 import { tokens } from "../theme/tokens.ts";
 import {
+  answerKeys,
   applyScreenFrame,
   decodeScreenFrame,
   linkLine,
@@ -32,7 +34,10 @@ export function RemoteTerminal({
   const [note, setNote] = useState<string | null>(null);
   const link = useRemoteHosts((state) => state.links[hostId]);
   const session = link?.sessions.find((one) => one.id === sessionId);
-  const typing = Boolean(session?.mayType);
+  const mayType = Boolean(session?.mayType);
+  // Free typing is off while Claude asks: its choices answer it instead.
+  const asking = mayType && Boolean(session?.dialogOpen);
+  const typing = mayType && !asking;
   const lost = link?.link === "lost";
   const error = useRemoteHosts((state) => state.error);
 
@@ -110,10 +115,33 @@ export function RemoteTerminal({
         {link && !controller ? (
           <span style={hintStyle}>This computer may only watch there.</span>
         ) : null}
-        {typing && session?.typing && session.typing !== "you" ? (
+        {mayType && session?.typing && session.typing !== "you" ? (
           <span style={hintStyle}>{typedLastLine(session.typing)}</span>
         ) : null}
       </div>
+      {asking ? (
+        <div style={answerStyle}>
+          <span style={titleStyle}>
+            {session?.question?.text ?? "Claude asks."}
+          </span>
+          {answerKeys(session?.question).map((choice) => (
+            <button
+              className="kr-hover-surface"
+              key={choice.label}
+              onClick={() => {
+                useRemoteHosts
+                  .getState()
+                  .type(hostId, sessionId, choice.key)
+                  .catch(() => undefined);
+              }}
+              style={button("secondary", "sm")}
+              type="button"
+            >
+              {choice.label}
+            </button>
+          ))}
+        </div>
+      ) : null}
       <div
         data-testid="remote-screen"
         ref={containerRef}
@@ -152,6 +180,13 @@ const titleStyle: CSSProperties = {
   overflow: "hidden",
   textOverflow: "ellipsis",
   whiteSpace: "nowrap",
+};
+
+const answerStyle: CSSProperties = {
+  alignItems: "center",
+  display: "flex",
+  flexWrap: "wrap",
+  gap: tokens.space.sm,
 };
 
 const hintStyle: CSSProperties = {

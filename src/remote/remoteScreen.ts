@@ -1,3 +1,5 @@
+import type { SessionQuestion } from "./hostSummary.ts";
+
 /**
  * A paired computer's screen stream, as a remote device draws it: the frames
  * Rust passes on, how one is drawn, and the lines that tell the person what
@@ -98,6 +100,40 @@ export function applyScreenFrame(
 /** An honest receipt: the bytes reached the session, or that isn't known. */
 export function receiptLine(written: boolean): string {
   return written ? "Typed on the other computer." : "Not sure it arrived.";
+}
+
+/** One way to answer Claude's question: the key it sends, and its label. */
+export interface AnswerKey {
+  key: string;
+  label: string;
+}
+
+/** Claude Code takes a choice by its number, one key each: at most nine. */
+const MOST_CHOICES = 9;
+/** Numbers offered when the question's choices aren't known (a permission). */
+const UNNAMED_CHOICES = 3;
+
+/**
+ * How a question is answered from here: each choice's number key (labelled
+ * when the choices are known, else the first numbers, read off the screen),
+ * then Esc. Free typing stays off while Claude asks (ADR-0063); the host
+ * refuses a key from a device that hadn't seen the dialog.
+ */
+export function answerKeys(
+  question: SessionQuestion | null | undefined
+): AnswerKey[] {
+  const options = question?.options ?? [];
+  const numbered =
+    options.length > 0
+      ? options.slice(0, MOST_CHOICES).map((option, i) => ({
+          key: String(i + 1),
+          label: `${i + 1}. ${option}`,
+        }))
+      : Array.from({ length: UNNAMED_CHOICES }, (_, i) => ({
+          key: String(i + 1),
+          label: String(i + 1),
+        }));
+  return [...numbered, { key: "\u001b", label: "Esc" }];
 }
 
 /**

@@ -1,5 +1,6 @@
 import { expect, test, vi } from "vitest";
 import {
+  answerKeys,
   applyScreenFrame,
   decodeScreenFrame,
   linkLine,
@@ -125,4 +126,30 @@ test("each note from the stream has its line", () => {
   expect(noteLine({ kind: "refused", reason: 3, words: "Not yours." })).toBe(
     "Not yours."
   );
+});
+
+// A question is answered by its choice's key, never by free typing; the
+// host refuses it if this device hadn't seen the dialog (seen_seq).
+test("a question's choices become their number keys, then Esc", () => {
+  expect(
+    answerKeys({ options: ["Red", "Blue"], text: "Favourite colour?" })
+  ).toEqual([
+    { key: "1", label: "1. Red" },
+    { key: "2", label: "2. Blue" },
+    { key: "\u001b", label: "Esc" },
+  ]);
+});
+
+test("a dialog without known choices offers the first numbers, as on screen", () => {
+  expect(answerKeys(null).map((choice) => choice.key)).toEqual([
+    "1",
+    "2",
+    "3",
+    "\u001b",
+  ]);
+});
+
+test("no more than nine choices: one key each", () => {
+  const options = Array.from({ length: 12 }, (_, i) => `o${i}`);
+  expect(answerKeys({ options, text: "" })).toHaveLength(10);
 });
