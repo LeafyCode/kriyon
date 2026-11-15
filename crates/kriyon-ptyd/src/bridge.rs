@@ -688,18 +688,27 @@ mod tests {
             }
         };
 
-        // Through a second cmd, the poster is the shell's grandchild, as a
-        // `claude` nested under the session's own is: not kept.
+        // Under another program (a second pwsh), the poster is the shell's
+        // grandchild, as a `claude` nested under the session's own is: not kept.
         idle_after(format!(
-            "cmd /c pwsh -NoProfile -File \"{}\"\r",
+            "pwsh -NoProfile -Command \"pwsh -NoProfile -File '{}'\"\r",
             script.display()
         ));
         assert!(!spool.exists(), "a nested poster is not kept");
 
+        // Through a launcher shim (cmd, as npm's claude.cmd runs), it owns
+        // the session (ADR-0061, 15 Nov 2026).
+        idle_after(format!(
+            "cmd /c pwsh -NoProfile -File \"{}\"\r",
+            script.display()
+        ));
+        let text = std::fs::read_to_string(&spool).expect("the shim's post is kept");
+        assert_eq!(text.lines().count(), 1);
+
         // Run by the shell itself, the poster is the shell's own command.
         idle_after(format!("pwsh -NoProfile -File \"{}\"\r", script.display()));
         let text = std::fs::read_to_string(&spool).expect("the owner's post is kept");
-        assert_eq!(text.lines().count(), 1);
+        assert_eq!(text.lines().count(), 2);
         engine.close().expect("closes");
     }
 
