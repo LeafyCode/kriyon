@@ -1,10 +1,11 @@
 /**
  * A session's real terminal: xterm.js in a web view (the terminal page),
- * fed by the session's stream from Rust, in the phone's light or dark. It
- * only watches until this phone holds typing control; then the type field
- * and the extra keys (esc, tab, ctrl, arrows) send to the computer. It dims
- * with typing off while the link is down. Its size is the computer's: it
- * never resizes the session there.
+ * fed by the session's stream from Rust, in the phone's light or dark. A
+ * Controller types straight in, with no control to take (ADR-0063): the
+ * type field and the extra keys (esc, tab, ctrl, arrows) send to the
+ * computer, and while Claude asks, its choices answer it instead. A Viewer
+ * only watches. It dims with typing off while the link is down. Its size is
+ * the computer's: it never resizes the session there.
  */
 import {
   type ComponentType,
@@ -15,14 +16,20 @@ import {
 } from "react";
 import { Pressable, Text, TextInput, View } from "react-native";
 import { WebView, type WebViewProps } from "react-native-webview";
-import { linkLine, noteLine } from "../../../../src/remote/remoteScreen.ts";
+import type { Typing } from "../../../../src/remote/hostSummary.ts";
+import {
+  linkLine,
+  noteLine,
+  typedLastLine,
+} from "../../../../src/remote/remoteScreen.ts";
 import { KriyonNative } from "../../modules/kriyon-native/index.ts";
-import { Button, IconButton, KEY_TEXT_MAX, useLook } from "../kit.tsx";
+import { IconButton, KEY_TEXT_MAX, useLook } from "../kit.tsx";
 import { KEYS, typedLine } from "../state/keys.ts";
 import { toBase64, usePhone } from "../state/phone.ts";
 import { TERMINAL_PAGE } from "../terminal/page.generated.ts";
 import { readPageMessage } from "../terminal/protocol.ts";
 import { fonts, useMode } from "../theme.ts";
+import { Answers } from "./Answers.tsx";
 
 /** What the page's web view lets the app do. */
 interface PageHandle {
@@ -72,12 +79,16 @@ function runIn(scripts: PageScripts, script: string): void {
   waiting.current.push(script);
 }
 
-/** What this phone may do here while the link is up. */
-function roleLine(typing: boolean, controller: boolean): string {
-  if (typing) {
-    return "You have control. Type below.";
+/**
+ * The line above the screen while the link is up: a Viewer only watches; a
+ * Controller hears who typed last when it wasn't this phone, a hint and
+ * never a lock. Nothing to say otherwise.
+ */
+function roleLine(controller: boolean, typing: Typing | null): string | null {
+  if (!controller) {
+    return "This phone may only watch.";
   }
-  return controller ? "Watching." : "This phone may only watch.";
+  return typing === "host" || typing === "other" ? typedLastLine(typing) : null;
 }
 
 function reasonOf(error: unknown): string {
@@ -102,7 +113,10 @@ export function TerminalView({
   const [note, setNote] = useState<string | null>(null);
   const host = usePhone((state) => state.states[hostId]);
   const session = host?.sessions.find((one) => one.id === sessionId);
-  const typing = Boolean(session?.mayType);
+  const mayType = Boolean(session?.mayType);
+  // Free typing is off while Claude asks: its choices answer it instead.
+  const asking = mayType && Boolean(session?.dialogOpen);
+  const typing = mayType && !asking;
   const connected = host?.link === "connected";
   const controller = host?.role === "controller";
   const mode = useMode();
@@ -234,32 +248,9 @@ export function TerminalView({
           ]}
         >
           {connected
-            ? roleLine(typing, controller)
+            ? roleLine(controller, session?.typing ?? null)
             : linkLine(host?.link ?? "connecting")}
         </Text>
-        {connected && controller && session && session.typing !== "you" ? (
-          <Button
-            kind="ghost"
-            label="Take control"
-            onPress={() => {
-              KriyonNative.takeControl(hostId, sessionId).catch(
-                (error: unknown) => setNote(reasonOf(error))
-              );
-            }}
-          />
-        ) : null}
-        {connected && session?.typing === "you" ? (
-          <Button
-            kind="ghost"
-            label="Give back"
-            onPress={() => {
-              usePhone
-                .getState()
-                .giveBack(hostId, sessionId)
-                .catch((error: unknown) => setNote(reasonOf(error)));
-            }}
-          />
-        ) : null}
       </View>
       <View
         style={{
@@ -303,6 +294,27 @@ export function TerminalView({
         >
           {note}
         </Text>
+      ) : null}
+      {asking ? (
+        <View
+          style={{
+            backgroundColor: t.card,
+            borderTopColor: t.line,
+            borderTopWidth: 1,
+            gap: 10,
+            padding: 12,
+          }}
+        >
+          <Text style={text.body}>
+            {session?.question?.text ?? "Claude asks."}
+          </Text>
+          <Answers
+            hostId={hostId}
+            onError={setNote}
+            question={session?.question}
+            sessionId={sessionId}
+          />
+        </View>
       ) : null}
       {typing ? (
         <>

@@ -153,7 +153,23 @@ const CONVERSATION: ReadableSummary = {
 };
 
 test("the readable view reads what was said, by whom, and each step in one go", async () => {
-  usePhone.setState({ hosts: [paired], states: { [MAC]: mac() } });
+  // A Controller, as Rust says of one connected (ADR-0063): it may answer.
+  usePhone.setState({
+    hosts: [paired],
+    states: {
+      [MAC]: mac({
+        sessions: [
+          session({
+            dialogOpen: true,
+            mayType: true,
+            needsYou: true,
+            standing: "awaiting_input",
+            status: "waiting",
+          }),
+        ],
+      }),
+    },
+  });
   await render(<SessionScreen hostId={MAC} sessionId="s1" />);
   await act(() =>
     usePhone
@@ -170,11 +186,9 @@ test("the readable view reads what was said, by whom, and each step in one go", 
   expect(
     screen.getByLabelText("Claude, still writing: Now the tests")
   ).toBeOnTheScreen();
-  // The question is read as it is, and its button stays a button of its own.
+  // The question is read as it is, and each answer is a button of its own.
   expect(screen.getByText("Fix the failing test too?")).toBeOnTheScreen();
-  expect(
-    screen.getByRole("button", { name: "Answer in the terminal" })
-  ).toBeOnTheScreen();
+  expect(screen.getByRole("button", { name: "Esc" })).toBeOnTheScreen();
 });
 
 test("the ctrl key is a switch that says when it's held", async () => {

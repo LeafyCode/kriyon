@@ -18,6 +18,7 @@ jest.mock("../../modules/kriyon-native/index.ts", () => ({
   KriyonNative: {
     addListener: jest.fn(() => ({ remove: jest.fn() })),
     compose: jest.fn(() => Promise.resolve()),
+    input: jest.fn(() => Promise.resolve()),
     setView: jest.fn(() => Promise.resolve()),
     takeControl: jest.fn(() => Promise.resolve()),
   },
@@ -54,6 +55,21 @@ const host = (needsYou: boolean): HostSummary => ({
     },
   ],
 });
+
+/** The same session on a computer this phone is a Controller of: it may
+ *  type (ADR-0063), and write to Claude unless Claude asks. */
+const asController = (needsYou: boolean): HostSummary => {
+  const summary = host(needsYou);
+  return {
+    ...summary,
+    role: "controller",
+    sessions: summary.sessions.map((one) => ({
+      ...one,
+      mayCompose: !needsYou,
+      mayType: true,
+    })),
+  };
+};
 
 const CONVERSATION: ReadableSummary = {
   entries: [
@@ -191,15 +207,52 @@ test("Claude's growing reply changes in place", async () => {
   expect(screen.getAllByTestId("entry-2")).toHaveLength(1);
 });
 
-test("a question is answered only in the terminal", async () => {
+test("a Controller answers Claude's question by its choices, each sending its number key", async () => {
+  usePhone.setState({ states: { [MAC]: asController(true) } });
+  await render(<SessionScreen hostId={MAC} sessionId="s1" />);
+  await act(() => send(CONVERSATION));
+  await fireEvent.press(
+    screen.getByRole("button", { name: "2. No, leave it" })
+  );
+  expect(native.input).toHaveBeenLastCalledWith(
+    MAC,
+    "s1",
+    new TextEncoder().encode("2")
+  );
+  await fireEvent.press(screen.getByRole("button", { name: "Esc" }));
+  expect(native.input).toHaveBeenLastCalledWith(
+    MAC,
+    "s1",
+    new Uint8Array([27])
+  );
+  expect(
+    screen.queryByRole("button", { name: "Answer in the terminal" })
+  ).toBeNull();
+});
+
+test("a Viewer reads the question with no way to answer it", async () => {
   await render(<SessionScreen hostId={MAC} sessionId="s1" />);
   await act(() => send(CONVERSATION));
   expect(screen.getByText(FIX_IT)).toBeOnTheScreen();
   expect(screen.queryByRole("button", { name: FIX_IT })).toBeNull();
-  await fireEvent.press(
-    screen.getByRole("button", { name: "Answer in the terminal" })
+  expect(screen.queryByRole("button", { name: "Esc" })).toBeNull();
+});
+
+test("a question no longer showing takes no answer", async () => {
+  usePhone.setState({ states: { [MAC]: asController(false) } });
+  await render(<SessionScreen hostId={MAC} sessionId="s1" />);
+  await act(() => send(CONVERSATION));
+  expect(screen.getByText(FIX_IT)).toBeOnTheScreen();
+  expect(screen.queryByRole("button", { name: "Esc" })).toBeNull();
+});
+
+test("in the terminal, the header says how the session stands, never who holds control", async () => {
+  usePhone.setState({ states: { [MAC]: asController(false) } });
+  await render(
+    <SessionScreen hostId={MAC} initialView="terminal" sessionId="s1" />
   );
-  expect(screen.getByTestId("terminal-page")).toBeOnTheScreen();
+  expect(screen.getByText("Running")).toBeOnTheScreen();
+  expect(screen.queryByText("You're typing")).toBeNull();
 });
 
 test("no entries: the terminal, with why; Readable tries again", async () => {
@@ -227,10 +280,11 @@ test("what the session needs from you shows on top, in a word", async () => {
   expect(screen.getByText("Running")).toBeOnTheScreen();
 });
 
-test("while Claude asks, the message bar says to answer in the terminal", async () => {
+test("while Claude asks, the message bar points to its choices", async () => {
+  usePhone.setState({ states: { [MAC]: asController(true) } });
   await render(<SessionScreen hostId={MAC} sessionId="s1" />);
   expect(
-    screen.getByText("Typing is off while Claude asks. Answer in the terminal.")
+    screen.getByText("Typing is off while Claude asks. Pick an answer above.")
   ).toBeOnTheScreen();
   expect(screen.getByLabelText("Message").props.editable).toBe(false);
 });

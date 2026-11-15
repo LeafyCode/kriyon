@@ -52,13 +52,14 @@ const native = jest.mocked(KriyonNative);
 const MAC = "ab".repeat(32);
 
 /**
- * A summary as Rust would send it: `typing` is who holds control, `mayType`
- * what Rust says of it (cases off the link set it themselves).
+ * A summary as Rust would send it: `typing` is who typed last, a hint;
+ * `mayType` is Rust's word, a connected Controller (ADR-0063).
  */
 const state = (
   over: Partial<HostSummary>,
-  typing: "you" | "host",
-  mayType = typing === "you"
+  typing: "you" | "host" | "other",
+  mayType = (over.link ?? "connected") === "connected" &&
+    (over.role ?? "controller") === "controller"
 ): HostSummary => {
   const summary: HostSummary = {
     hostId: MAC,
@@ -144,20 +145,31 @@ test("the session's screen comes on in Rust, and its frames reach the page once 
   );
 });
 
-test("typing is off until this phone holds control, and Take control asks Rust", async () => {
+test("a Controller types at once: there is no control to take or give back", async () => {
   usePhone.setState({ states: { [MAC]: state({}, "host") } });
   await render(<TerminalView hostId={MAC} sessionId="s1" />);
   await pageReady();
-  expect(screen.queryByLabelText("Type into the terminal")).toBeNull();
-  await fireEvent.press(screen.getByRole("button", { name: "Take control" }));
-  expect(native.takeControl).toHaveBeenCalledWith(MAC, "s1");
-  await act(() => usePhone.getState().hostChanged(state({}, "you")));
   expect(screen.getByLabelText("Type into the terminal")).toBeOnTheScreen();
   expect(screen.getByLabelText("Keys")).toBeOnTheScreen();
   expect(screen.queryByRole("button", { name: "Take control" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Give back" })).toBeNull();
+  expect(screen.queryByText("Watching.")).toBeNull();
 });
 
-test("with a question showing, a line goes as typed keys, UTF-8, with its Enter", async () => {
+test("who typed last shows as a hint, never a lock", async () => {
+  usePhone.setState({ states: { [MAC]: state({}, "host") } });
+  await render(<TerminalView hostId={MAC} sessionId="s1" />);
+  expect(
+    screen.getByText("Someone typed last on that computer.")
+  ).toBeOnTheScreen();
+  await act(() => usePhone.getState().hostChanged(state({}, "other")));
+  expect(screen.getByText("Another device typed last.")).toBeOnTheScreen();
+  await act(() => usePhone.getState().hostChanged(state({}, "you")));
+  expect(screen.queryByText("Another device typed last.")).toBeNull();
+  expect(screen.getByLabelText("Type into the terminal")).toBeOnTheScreen();
+});
+
+test("a line the computer won't take as a message goes as typed keys, UTF-8, with its Enter", async () => {
   usePhone.setState({ states: { [MAC]: state({}, "you") } });
   await render(<TerminalView hostId={MAC} sessionId="s1" />);
   await fireEvent.changeText(
@@ -257,20 +269,20 @@ test("a note from the stream shows in the desktop's words", async () => {
   ).toBeOnTheScreen();
 });
 
-test("a Viewer is never offered control", async () => {
+test("a Viewer may only watch", async () => {
   usePhone.setState({ states: { [MAC]: state({ role: "viewer" }, "host") } });
   await render(<TerminalView hostId={MAC} sessionId="s1" />);
-  expect(screen.queryByRole("button", { name: "Take control" })).toBeNull();
+  expect(screen.queryByLabelText("Type into the terminal")).toBeNull();
   expect(screen.getByText("This phone may only watch.")).toBeOnTheScreen();
 });
 
-test("while connecting or removed, the link's own words show and control isn't offered", async () => {
+test("while connecting or removed, the link's own words show and typing is off", async () => {
   usePhone.setState({
     states: { [MAC]: state({ link: "connecting" }, "host") },
   });
   const view = await render(<TerminalView hostId={MAC} sessionId="s1" />);
   expect(screen.getByText("Connecting…")).toBeOnTheScreen();
-  expect(screen.queryByRole("button", { name: "Take control" })).toBeNull();
+  expect(screen.queryByLabelText("Type into the terminal")).toBeNull();
   await act(() =>
     usePhone.getState().hostChanged(state({ link: "removed" }, "host"))
   );
@@ -280,12 +292,12 @@ test("while connecting or removed, the link's own words show and control isn't o
   await view.unmount();
 });
 
-test("a session that is gone offers no control", async () => {
+test("a session that is gone takes no typing", async () => {
   usePhone.setState({
     states: { [MAC]: { ...state({}, "host"), sessions: [] } },
   });
   await render(<TerminalView hostId={MAC} sessionId="s1" />);
-  expect(screen.queryByRole("button", { name: "Take control" })).toBeNull();
+  expect(screen.queryByLabelText("Type into the terminal")).toBeNull();
 });
 
 test("frames that pile up before the page loads are dropped for a fresh screen", async () => {
@@ -310,17 +322,56 @@ test("frames that pile up before the page loads are dropped for a fresh screen",
   expect(native.setView).toHaveBeenCalledTimes(2);
 });
 
-test("holding control, this phone can give it back to the computer", async () => {
-  usePhone.setState({ states: { [MAC]: state({}, "you") } });
+/** A summary with Claude asking `options` (none: a permission prompt). */
+const asking = (options: string[], over: Partial<HostSummary> = {}) => {
+  const summary = state(over, "host");
+  const [one] = summary.sessions;
+  return {
+    ...summary,
+    sessions: [
+      {
+        ...one,
+        dialogOpen: true,
+        mayCompose: false,
+        question: { options, text: "Fix the failing test too?" },
+      },
+    ],
+  };
+};
+
+test("while Claude asks, its choices answer it, each by its number key", async () => {
+  usePhone.setState({ states: { [MAC]: asking(["Yes, fix it", "No"]) } });
   await render(<TerminalView hostId={MAC} sessionId="s1" />);
-  await fireEvent.press(screen.getByRole("button", { name: "Give back" }));
-  expect(native.giveBack).toHaveBeenCalledWith(MAC, "s1");
+  // Free typing is off while Claude asks: the choices answer it.
+  expect(screen.queryByLabelText("Type into the terminal")).toBeNull();
+  expect(screen.getByText("Fix the failing test too?")).toBeOnTheScreen();
+  await fireEvent.press(screen.getByRole("button", { name: "1. Yes, fix it" }));
+  expect(native.input).toHaveBeenLastCalledWith(
+    MAC,
+    "s1",
+    new TextEncoder().encode("1")
+  );
+  await fireEvent.press(screen.getByRole("button", { name: "Esc" }));
+  expect(native.input).toHaveBeenLastCalledWith(
+    MAC,
+    "s1",
+    new Uint8Array([27])
+  );
 });
 
-test("watching, there is nothing to give back", async () => {
-  usePhone.setState({ states: { [MAC]: state({}, "host") } });
+test("a permission prompt, its choices unnamed, offers the first numbers", async () => {
+  usePhone.setState({ states: { [MAC]: asking([]) } });
   await render(<TerminalView hostId={MAC} sessionId="s1" />);
-  expect(screen.queryByRole("button", { name: "Give back" })).toBeNull();
+  for (const name of ["1", "2", "3", "Esc"]) {
+    expect(screen.getByRole("button", { name })).toBeOnTheScreen();
+  }
+});
+
+test("a Viewer is never offered an answer", async () => {
+  usePhone.setState({ states: { [MAC]: asking(["Yes"], { role: "viewer" }) } });
+  await render(<TerminalView hostId={MAC} sessionId="s1" />);
+  expect(screen.queryByRole("button", { name: "Esc" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "1. Yes" })).toBeNull();
 });
 
 test("a line typed with no question showing goes as one compose", async () => {

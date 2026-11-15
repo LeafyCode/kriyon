@@ -1,10 +1,10 @@
 /**
  * A session's readable view: what the desktop's Structured view shows, at
  * phone width, in the mobile design's look, from the entries Rust reads off
- * the computer. Claude's questions are answered in the terminal: their
- * options are shown, never buttons. While this phone holds control, a
- * message typed below goes to Claude, as typed into the terminal. It never
- * touches the terminal's size.
+ * the computer. A Controller answers the question showing now by its
+ * choices, each a button that sends its number key (ADR-0063); a Viewer
+ * reads the options only. On a Controller, a message typed below goes to
+ * Claude, as typed into the terminal. It never touches the terminal's size.
  */
 import { type ComponentRef, useRef, useState } from "react";
 import { ScrollView, Text, TextInput, View } from "react-native";
@@ -12,9 +12,10 @@ import type {
   ShownEntry,
   ShownKind,
 } from "../../../../src/remote/readableSummary.ts";
-import { Button, Icon, IconButton, useLook, useReduceMotion } from "../kit.tsx";
+import { Icon, IconButton, useLook, useReduceMotion } from "../kit.tsx";
 import { readableKey, usePhone } from "../state/phone.ts";
 import { fonts, type Tokens } from "../theme.ts";
+import { Answers } from "./Answers.tsx";
 
 /** How near the bottom still counts as following the newest entry. */
 const FOLLOW_SLACK = 48;
@@ -40,12 +41,21 @@ function outcomeColor(t: Tokens, outcome: string): string {
   return outcome === "Failed" ? t.red : t.ink2;
 }
 
+/** Where an answer to the question showing goes, and where its refusal is
+ *  told; `null` when this phone can't answer it. */
+interface Answering {
+  hostId: string;
+  onError: (reason: string) => void;
+  sessionId: string;
+}
+
 function Entry({
+  answering,
   entry,
-  onAnswer,
 }: {
+  /** Set on the question showing now, on a phone that may answer it. */
+  answering: Answering | null;
   entry: ShownEntry;
-  onAnswer: () => void;
 }) {
   const { t, text } = useLook();
   const id = `entry-${entry.seq}`;
@@ -192,13 +202,14 @@ function Entry({
               ))}
             </View>
           ) : null}
-          <Button
-            icon="arrowRight"
-            kind="amber"
-            label="Answer in the terminal"
-            onPress={onAnswer}
-            wide
-          />
+          {answering ? (
+            <Answers
+              hostId={answering.hostId}
+              onError={answering.onError}
+              question={{ options: entry.options }}
+              sessionId={answering.sessionId}
+            />
+          ) : null}
         </View>
       );
     case "note":
@@ -221,18 +232,16 @@ function composeLine(
   controller: boolean,
   mayType: boolean
 ): string | null {
-  if (asking) {
-    return "Typing is off while Claude asks. Answer in the terminal.";
-  }
   if (!controller) {
     return "This phone may only watch.";
   }
-  return mayType
-    ? null
-    : "Take control in the terminal to write to Claude here.";
+  if (asking) {
+    return "Typing is off while Claude asks. Pick an answer above.";
+  }
+  return mayType ? null : "Not connected: messages can't go now.";
 }
 
-/** The bar below: a message to Claude while this phone holds control. */
+/** The bar below: a message to Claude, from a Controller. */
 function Compose({
   asking,
   hostId,
@@ -333,25 +342,23 @@ function Compose({
 export function ReadableView({
   hostId,
   note,
-  onAnswer,
   sessionId,
 }: {
   hostId: string;
   /** Why the session couldn't be opened, if it couldn't. */
   note: string | null;
-  /** Show the terminal, where a question is answered. */
-  onAnswer: () => void;
   sessionId: string;
 }) {
   const { t, text } = useLook();
   const summary = usePhone(
     (state) => state.readable[readableKey(hostId, sessionId)]
   );
-  const dialogOpen = usePhone(
-    (state) =>
-      state.states[hostId]?.sessions.find((one) => one.id === sessionId)
-        ?.dialogOpen
+  const session = usePhone((state) =>
+    state.states[hostId]?.sessions.find((one) => one.id === sessionId)
   );
+  const dialogOpen = session?.dialogOpen;
+  // Why an answer didn't go, in the computer's words.
+  const [answerProblem, setAnswerProblem] = useState<string | null>(null);
   const scroll = useRef<ComponentRef<typeof ScrollView>>(null);
   const reduceMotion = useReduceMotion();
   // Following the newest entry, until the person scrolls up to read.
@@ -359,6 +366,17 @@ export function ReadableView({
 
   const asking =
     Boolean(dialogOpen) || summary?.entries.at(-1)?.kind === "asking";
+  // The question showing now is the last one read, and only a phone that
+  // may type answers it.
+  const showing =
+    dialogOpen && session?.mayType
+      ? summary?.entries.findLast((entry) => entry.kind === "asking")?.seq
+      : undefined;
+  const answering: Answering = {
+    hostId,
+    onError: setAnswerProblem,
+    sessionId,
+  };
   return (
     <View style={{ backgroundColor: t.bg, flex: 1 }}>
       <ScrollView
@@ -386,8 +404,15 @@ export function ReadableView({
           <Text style={text.caption}>Nothing to read yet.</Text>
         ) : null}
         {summary?.entries.map((entry) => (
-          <Entry entry={entry} key={entry.seq} onAnswer={onAnswer} />
+          <Entry
+            answering={entry.seq === showing ? answering : null}
+            entry={entry}
+            key={entry.seq}
+          />
         ))}
+        {answerProblem ? (
+          <Text style={[text.caption, { color: t.red }]}>{answerProblem}</Text>
+        ) : null}
       </ScrollView>
       <Compose asking={asking} hostId={hostId} sessionId={sessionId} />
     </View>

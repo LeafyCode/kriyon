@@ -26,16 +26,12 @@ const HEADER_WORDS: Record<
   yourTurn: { label: "Your turn", tone: "green" },
 };
 
-/** The header's pill: in the terminal while this phone types, that. */
+/** The header's pill: how the session stands. */
 function headerWord(
-  session: SessionSummary | undefined,
-  inTerminal: boolean
+  session: SessionSummary | undefined
 ): { label: string; tone: Tone } | null {
   if (!session) {
     return null;
-  }
-  if (inTerminal && session.mayType) {
-    return { label: "You're typing", tone: "green" };
   }
   return HEADER_WORDS[kindOf(session)];
 }
@@ -88,7 +84,7 @@ export function SessionScreen({
     () => () => usePhone.getState().forgetReadable(hostId, sessionId),
     [hostId, sessionId]
   );
-  const word = headerWord(session, !readable);
+  const word = headerWord(session);
   return (
     <View style={{ backgroundColor: t.bg, flex: 1 }}>
       <View
@@ -128,12 +124,7 @@ export function SessionScreen({
         </View>
       </View>
       {readable ? (
-        <ReadableView
-          hostId={hostId}
-          note={note}
-          onAnswer={() => setView("terminal")}
-          sessionId={sessionId}
-        />
+        <ReadableView hostId={hostId} note={note} sessionId={sessionId} />
       ) : (
         <>
           {view === "readable" && unavailable ? (
