@@ -110,12 +110,20 @@ export interface AnswerKey {
 
 /** Claude Code takes a choice by its number, one key each: at most nine. */
 const MOST_CHOICES = 9;
-/** Numbers offered when the question's choices aren't known (a permission). */
-const UNNAMED_CHOICES = 3;
+/**
+ * Keys offered when the question's choices aren't known (a permission, the
+ * folder trust prompt): its choices may have no numbers, so the highlight is
+ * moved and Enter pressed, which every Claude prompt takes.
+ */
+const MOVE_AND_PICK: AnswerKey[] = [
+  { key: "\u001b[A", label: "↑" },
+  { key: "\u001b[B", label: "↓" },
+  { key: "\r", label: "Enter" },
+];
 
 /**
- * How a question is answered from here: each choice's number key (labelled
- * when the choices are known, else the first numbers, read off the screen),
+ * How a question is answered from here: each choice's number key when the
+ * choices are known, else the arrows and Enter (read against the screen),
  * then Esc. Free typing stays off while Claude asks (ADR-0063); the host
  * refuses a key from a device that hadn't seen the dialog.
  */
@@ -129,10 +137,7 @@ export function answerKeys(
           key: String(i + 1),
           label: `${i + 1}. ${option}`,
         }))
-      : Array.from({ length: UNNAMED_CHOICES }, (_, i) => ({
-          key: String(i + 1),
-          label: String(i + 1),
-        }));
+      : MOVE_AND_PICK;
   return [...numbered, { key: "\u001b", label: "Esc" }];
 }
 

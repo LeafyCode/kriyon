@@ -140,12 +140,15 @@ test("a question's choices become their number keys, then Esc", () => {
   ]);
 });
 
-test("a dialog without known choices offers the first numbers, as on screen", () => {
-  expect(answerKeys(null).map((choice) => choice.key)).toEqual([
-    "1",
-    "2",
-    "3",
-    "\u001b",
+// Some prompts (the folder trust prompt) list their choices without numbers,
+// so a guessed number could pick the wrong one: move the highlight and
+// press Enter instead, which every Claude prompt takes.
+test("a dialog without known choices offers the arrows, Enter and Esc", () => {
+  expect(answerKeys(null)).toEqual([
+    { key: "\u001b[A", label: "↑" },
+    { key: "\u001b[B", label: "↓" },
+    { key: "\r", label: "Enter" },
+    { key: "\u001b", label: "Esc" },
   ]);
 });
 
