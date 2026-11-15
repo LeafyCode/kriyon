@@ -818,50 +818,6 @@ async fn release_everywhere(app: &tauri::AppHandle, device: [u8; 32]) {
     .await;
 }
 
-/// The person clicked "Let <device> type" on a session: control goes to
-/// that device even though they typed here just now. It must still be a
-/// Controller with that session open.
-///
-/// # Errors
-/// For a bad id, a device not paired as a Controller or without the
-/// session open now, or a session that closed.
-#[tauri::command]
-pub async fn remote_let_device_type(
-    app: tauri::AppHandle,
-    session_id: String,
-    device_id: String,
-) -> Result<(), String> {
-    use tauri::Manager as _;
-    let device = parse_device_id(&device_id)?;
-    crate::remote_device_cmd::check_session_id(&session_id)?;
-    let connected = app
-        .try_state::<kriyon_remote_link::host_runtime::Serve>()
-        .is_some_and(|serve| serve.has_open(&session_id, &device));
-    if !connected {
-        return Err("That device isn't watching this session now.".to_string());
-    }
-    tauri::async_runtime::spawn_blocking(move || {
-        let role = app
-            .state::<crate::StoreState>()
-            .0
-            .lock()
-            .paired_device_role(&device)
-            .map_err(|e| e.to_string())?;
-        let given = app.state::<crate::AppState>().writers.let_device_type(
-            &kriyon_core::session::SessionId(session_id),
-            device,
-            role,
-        );
-        match given {
-            None => Err("That session closed.".to_string()),
-            Some(Err(reason)) => Err(kriyon_remote::device_view::refusal_words(reason).to_string()),
-            Some(Ok(_)) => Ok(()),
-        }
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
-
 /// Change a paired device's role. Its connections close so it comes back
 /// with the new role.
 ///

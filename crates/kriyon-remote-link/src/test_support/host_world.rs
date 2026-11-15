@@ -19,7 +19,7 @@ use kriyon_core::session::SessionStatus;
 use kriyon_core::standing::StandingState;
 use kriyon_remote::authorize::PendingWrite;
 use kriyon_remote::codec::Decoded;
-use kriyon_remote::control::{Change, HostIsTyping};
+use kriyon_remote::control::Change;
 use kriyon_remote::fanout::RequesterId;
 use kriyon_remote::message::{
     EndpointId, FromDevice, ProjectInfo, RefuseReason, Role, SessionInfo, ToDevice,
@@ -53,8 +53,6 @@ pub struct FakeHost {
     pub projects: Mutex<Vec<ProjectInfo>>,
     /// The host account's [Plan limits].
     pub usage: Mutex<kriyon_remote::message::PlanUsage>,
-    /// Asks for control the host's ten-second rule refused: (session, device).
-    pub control_asks: Mutex<Vec<(String, EndpointId)>>,
     /// What the serving layer logged, in order.
     pub logged: Mutex<Vec<String>>,
     /// Session "s"'s readable-view entries as built now, and how often they
@@ -105,7 +103,6 @@ impl Default for FakeHost {
             logged: Mutex::default(),
             entries: Mutex::new(Ok(Vec::new())),
             builds: std::sync::atomic::AtomicUsize::new(0),
-            control_asks: Mutex::default(),
             usage: Mutex::default(),
             projects: Mutex::new(vec![ProjectInfo {
                 id: "p".into(),
@@ -183,10 +180,12 @@ impl ServeHost for FakeHost {
         bytes: &[u8],
     ) -> Result<bool, RefuseReason> {
         self.called();
-        self.gate
+        let took = self
+            .gate
             .lock()
             .device_write(device, Some(role), write, None)?;
         self.typed.lock().extend_from_slice(bytes);
+        self.tell(took.change);
         Ok(true)
     }
     fn device_resize(
@@ -214,16 +213,6 @@ impl ServeHost for FakeHost {
         })
     }
 
-    fn take(&self, _id: &str, device: EndpointId, _role: Role) -> Result<(), RefuseReason> {
-        self.called();
-        let change = self
-            .gate
-            .lock()
-            .take(device, Instant::now())
-            .map_err(|HostIsTyping| RefuseReason::NotInControl)?;
-        self.tell(change);
-        Ok(())
-    }
     fn entries(&self, _id: &str, stamp: Option<u64>) -> EntriesBuilt {
         self.called();
         let entries = self.entries.lock().clone();
@@ -252,10 +241,6 @@ impl ServeHost for FakeHost {
         }
     }
 
-    fn control_asked(&self, id: &str, device: &EndpointId) {
-        self.called();
-        self.control_asks.lock().push((id.to_string(), *device));
-    }
     fn release(&self, device: &EndpointId) {
         self.called();
         let change = self.gate.lock().release(*device).change;

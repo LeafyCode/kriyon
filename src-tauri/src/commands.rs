@@ -1532,30 +1532,6 @@ mod tests {
             assert_eq!(typed(&mut daemon), b"claude\r");
         }
 
-        /// Kriyon typing `claude` into a session isn't the person typing:
-        /// a device that just started it may take control at once, and
-        /// isn't shown "Let it type".
-        #[test]
-        fn launching_claude_leaves_a_device_free_to_take_control() {
-            use kriyon_remote::message::Role;
-            let (app, _daemon) = app_with_session(false);
-            let state = app.state::<AppState>();
-            state.writers.set_run(&SessionId("s".into()), 1);
-            assert_eq!(
-                launch(&app, None),
-                LaunchOutcome::Launched { resuming: false }
-            );
-            assert!(matches!(
-                state.writers.take(
-                    &SessionId("s".into()),
-                    [7; 32],
-                    Some(Role::Controller),
-                    Instant::now()
-                ),
-                Some(Ok(_))
-            ));
-        }
-
         #[test]
         fn a_known_conversation_is_resumed() {
             let (app, mut daemon) = app_with_session(false);

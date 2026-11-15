@@ -45,8 +45,9 @@ const HOST: Required<HostSummary> = {
       diff: null,
       id: "s2",
       lastChangeMs: 5,
-      mayCompose: false,
-      mayType: false,
+      // ADR-0063: a Controller types whoever typed last.
+      mayCompose: true,
+      mayType: true,
       needsYou: false,
       projectId: "p1",
       question: null,

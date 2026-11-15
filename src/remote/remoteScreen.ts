@@ -100,6 +100,16 @@ export function receiptLine(written: boolean): string {
   return written ? "Typed on the other computer." : "Not sure it arrived.";
 }
 
+/**
+ * Who typed last in a paired computer's session, when it isn't this one: a
+ * hint, not a lock (ADR-0063). Everyone who may type still can.
+ */
+export function typedLastLine(typing: "host" | "other"): string {
+  return typing === "host"
+    ? "Someone typed last on that computer."
+    : "Another device typed last.";
+}
+
 /** The line that says where a paired computer's link stands. */
 export function linkLine(state: LinkState): string {
   switch (state) {

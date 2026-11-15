@@ -3,7 +3,6 @@ import "@xterm/xterm/css/xterm.css";
 import { type CSSProperties, useEffect, useRef, useState } from "react";
 import { useLayout } from "../state/layout.ts";
 import { useRemoteHosts } from "../state/remoteHosts.ts";
-import { button } from "../theme/recipes.ts";
 import { terminalTheme } from "../theme/terminalTheme.ts";
 import { themeById } from "../theme/themes/index.ts";
 import { tokens } from "../theme/tokens.ts";
@@ -12,12 +11,14 @@ import {
   decodeScreenFrame,
   linkLine,
   noteLine,
+  typedLastLine,
 } from "./remoteScreen.ts";
 
 /**
- * A paired computer's session, drawn from its stream. It only watches until
- * this computer holds typing control, and dims with typing off while the
- * link is lost. Its size is the other computer's: it never resizes there.
+ * A paired computer's session, drawn from its stream. A Controller types
+ * straight in, with no control to take (ADR-0063); a Viewer only watches.
+ * It dims with typing off while the link is lost, and says when someone
+ * else typed last. Its size is the other computer's: it never resizes there.
  */
 export function RemoteTerminal({
   hostId,
@@ -109,25 +110,9 @@ export function RemoteTerminal({
         {link && !controller ? (
           <span style={hintStyle}>This computer may only watch there.</span>
         ) : null}
-        {link?.link === "connected" &&
-        controller &&
-        session &&
-        session.typing !== "you" ? (
-          <button
-            className="kr-hover-surface"
-            onClick={() => {
-              useRemoteHosts
-                .getState()
-                .takeControl(hostId, sessionId)
-                .catch(() => undefined);
-            }}
-            style={button("secondary", "sm")}
-            type="button"
-          >
-            Take control
-          </button>
+        {typing && session?.typing && session.typing !== "you" ? (
+          <span style={hintStyle}>{typedLastLine(session.typing)}</span>
         ) : null}
-        {typing ? <span style={hintStyle}>You have control.</span> : null}
       </div>
       <div
         data-testid="remote-screen"

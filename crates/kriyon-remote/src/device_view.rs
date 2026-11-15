@@ -397,10 +397,10 @@ pub struct SessionSummary {
     pub needs_you: bool,
     pub dialog_open: bool,
     pub last_change_ms: i64,
-    /// `None` until the host says who holds control.
+    /// Who typed last, for a "typing from" hint; `None` until the host says.
     pub typing: Option<Typing>,
-    /// This device may type now: connected, a Controller, holding control.
-    /// The host checks again at the write.
+    /// This device may type now: connected and a Controller (ADR-0063: no
+    /// handover). The host checks again at the write.
     pub may_type: bool,
     /// This device may write to Claude now (`compose`): it may type and no
     /// question shows (one is answered in the terminal). The host checks
@@ -524,7 +524,8 @@ pub fn host_summary(
                     .control
                     .get(&session.id)
                     .map(|control| typing(&control.holder, me));
-                let may_type = connected && controller && typing == Some(Typing::You);
+                // No handover (ADR-0063): a connected Controller types.
+                let may_type = connected && controller;
                 SessionSummary {
                     id: session.id.clone(),
                     title: session.title.clone(),
@@ -1279,8 +1280,15 @@ mod tests {
         answered.sessions[0].dialog_open = false;
         let summary = host_summary(&[0xab; 32], &me, &link, &answered);
         assert!(summary.sessions[0].may_compose);
-        // Not held: neither.
-        assert!(!summary.sessions[1].may_compose);
+        // ADR-0063: someone else typed last there (or nobody yet): a
+        // Controller types and writes all the same.
+        assert!(summary.sessions[1].may_type);
+        assert!(summary.sessions[1].may_compose);
+        // A Viewer never.
+        let mut watching = answered;
+        watching.role = Some(Role::Viewer);
+        let summary = host_summary(&[0xab; 32], &me, &link, &watching);
+        assert!(!summary.sessions[0].may_type && !summary.sessions[1].may_type);
     }
 
     #[test]

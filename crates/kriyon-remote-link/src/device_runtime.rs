@@ -22,7 +22,7 @@ use kriyon_remote::device_view::{
 };
 use kriyon_remote::link_policy::{CloseCode, HeartbeatWatch};
 use kriyon_remote::message::{
-    EndpointId, FromDevice, Holder, RefuseReason, RequestId, SessionId, ToDevice,
+    EndpointId, FromDevice, RefuseReason, RequestId, SessionId, ToDevice,
 };
 use kriyon_remote::pairing::PairingInvite;
 use tokio::sync::{Mutex, Notify};
@@ -158,7 +158,8 @@ pub enum DeviceError {
     NotConnected,
     /// That session isn't open here.
     NotOpen,
-    /// This device doesn't hold typing control of that session.
+    /// Never returned since ADR-0063 (a Controller types without taking
+    /// control); kept so the phone's bindings don't change.
     NoControl,
     /// The screen hasn't arrived yet: nothing to answer.
     NoScreen,
@@ -478,10 +479,6 @@ impl DeviceRuntime {
     /// Whether this computer is connected, or connecting, to any host.
     pub async fn in_use(&self) -> bool {
         !self.hosts.lock().await.is_empty()
-    }
-
-    async fn my_id(&self) -> Option<EndpointId> {
-        self.device.lock().await.as_ref().map(|device| device.id())
     }
 
     async fn host(&self, host: &EndpointId) -> Result<Arc<HostConn>, DeviceError> {
@@ -914,31 +911,32 @@ impl DeviceRuntime {
         }
     }
 
-    /// Send the write `make` makes from `session`'s screen state and this
-    /// device's epoch; this device must control the session.
+    /// Send the write `make` makes from `session`'s screen state and the
+    /// last epoch heard for it. No control to hold since ADR-0063: the host
+    /// ignores the epoch and checks the role.
     async fn write(
         &self,
         host: &EndpointId,
         session: &str,
         make: impl FnOnce(&SessionScreen, kriyon_remote::message::Epoch) -> Option<FromDevice>,
     ) -> Result<(), DeviceError> {
-        let me = self.my_id().await.ok_or(DeviceError::NotConnected)?;
         let conn = self.host(host).await?;
         let (writer, message) = {
             let c = conn.conn.lock().await;
-            let control = c
-                .view
-                .control
-                .get(session)
-                .filter(|control| control.holder == Holder::Device(me))
-                .ok_or(DeviceError::NoControl)?;
+            let epoch = c.view.control.get(session).map_or(
+                kriyon_remote::message::Epoch {
+                    host_boot_id: 0,
+                    counter: 0,
+                },
+                |control| control.epoch,
+            );
             let open = c.sessions.get(session).ok_or(DeviceError::NotOpen)?;
             let message = make(
                 &open
                     .screen
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner),
-                control.epoch,
+                epoch,
             )
             .ok_or(DeviceError::NoScreen)?;
             (Arc::clone(&open.writer), message)
@@ -1576,7 +1574,7 @@ mod tests {
     use kriyon_core::session::SessionStatus;
     use kriyon_core::standing::StandingState;
     use kriyon_remote::compress::{compress, Kind};
-    use kriyon_remote::message::{Epoch, RefuseReason, Role, SessionInfo};
+    use kriyon_remote::message::{Epoch, Holder, RefuseReason, Role, SessionInfo};
 
     use super::*;
     use crate::test_support::{
@@ -1863,7 +1861,7 @@ mod tests {
     }
 
     #[test]
-    fn a_session_streams_its_screen_then_takes_control_and_types() {
+    fn a_session_streams_its_screen_then_types() {
         run(async {
             let (rt, me) = device_runtime().await;
             let (host, serving) = fake_host(me, true).await;
@@ -1909,18 +1907,7 @@ mod tests {
                 ]
             );
 
-            // Typing without control is refused here, before the host.
-            assert_eq!(
-                rt.input(&host.id(), "s1", b"y".to_vec()).await,
-                Err(DeviceError::NoControl)
-            );
-            rt.take_control(&host.id(), "s1").await.expect("asks");
-            wait_until("control", || {
-                seen.last().is_some_and(|(_, view)| {
-                    view.control.get("s1").map(|c| c.holder) == Some(Holder::Device(me))
-                })
-            })
-            .await;
+            // ADR-0063: a Controller types with nothing taken first.
             rt.input(&host.id(), "s1", b"y".to_vec())
                 .await
                 .expect("types");
@@ -1942,10 +1929,10 @@ mod tests {
                 message,
                 FromDevice::Input {
                     run: 9,
-                    epoch: EPOCH,
                     seen_seq: 2,
                     bytes,
                     write_id,
+                    ..
                 } if bytes == b"y" && *write_id != 0
             )));
             rt.disconnect(&host.id()).await;

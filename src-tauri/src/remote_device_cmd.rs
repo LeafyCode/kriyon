@@ -347,24 +347,6 @@ pub async fn remote_host_start_session(
         .map_err(|why| why.words().to_string())
 }
 
-/// Ask a host for typing control of its session.
-///
-/// # Errors
-/// For a bad id, or a host not connected now.
-#[tauri::command]
-pub async fn remote_host_take_control(
-    app: tauri::AppHandle,
-    host_id: String,
-    session_id: String,
-) -> Result<(), String> {
-    let id = parse_device_id(&host_id)?;
-    check_session_id(&session_id)?;
-    runtime(&app)
-        .take_control(&id, &session_id)
-        .await
-        .map_err(|e| e.to_string())
-}
-
 /// Type into a host's session this device controls.
 ///
 /// # Errors

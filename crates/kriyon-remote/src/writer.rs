@@ -1,13 +1,13 @@
 //! One session's writer gate (plan Step C, "one writer per session"): the
 //! single place that decides whether a write or resize reaches the session,
-//! held under one lock with the write itself, so a takeover, removal or new
-//! dialog between a check and a write still wins.
+//! held under one lock with the write itself, so a removal or new dialog
+//! between a check and a write still wins.
 //!
-//! - The desktop writes as the host. Typing takes [Typing control] back at
-//!   once and records when the host last typed, for the takeover rule.
-//! - The desktop's window size is the host's size. While a device holds
-//!   control the device's size stands and the host's is remembered; it comes
-//!   back when control does.
+//! - The host and every Controller type straight in (ADR-0063): no handover.
+//!   Whoever typed last is tracked, for the size and a "typing from" hint.
+//! - The session's size follows whoever typed last: the desktop window's
+//!   size after the host's keys, a device's own size (from its `Resize`)
+//!   after its keys. The others' sizes are remembered.
 //! - A device's write is checked again here with
 //!   [`crate::authorize::recheck_at_write`].
 
@@ -16,15 +16,18 @@ use std::time::Instant;
 use crate::authorize::{
     recheck_at_write, Dialog, HostFacts, PendingWrite, ProjectFolder, SessionView,
 };
-use crate::control::{Change, Control, HostIsTyping};
+use std::collections::HashMap;
+
+use crate::control::{Change, Control};
 use crate::message::{EndpointId, Holder, RefuseReason, Role};
 
-/// What the host's typing did besides reaching the session.
+/// What a write did besides reaching the session.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct HostTook {
-    /// Control came back to the host: tell every device.
+    /// Someone else typed last now: tell every device.
     pub change: Option<Change>,
-    /// The host's size to put back, from before a device resized it.
+    /// The size to give the PTY now: the window's after the host typed, the
+    /// device's own after it typed.
     pub restore: Option<(u16, u16)>,
 }
 
@@ -43,6 +46,8 @@ pub struct SessionGate {
     screen: (u16, u16),
     /// The host's own size: what the desktop window last asked for.
     host_size: (u16, u16),
+    /// Each device's own size, from its last `Resize`.
+    device_sizes: HashMap<EndpointId, (u16, u16)>,
 }
 
 impl SessionGate {
@@ -56,6 +61,7 @@ impl SessionGate {
             dialog: Dialog::default(),
             screen,
             host_size: screen,
+            device_sizes: HashMap::new(),
         }
     }
 
@@ -114,32 +120,18 @@ impl SessionGate {
         }
     }
 
-    /// A Controller asks for control.
-    ///
-    /// # Errors
-    /// [`HostIsTyping`] within the takeover wait.
-    pub fn take(
-        &mut self,
-        device: EndpointId,
-        now: Instant,
-    ) -> Result<Option<Change>, HostIsTyping> {
-        self.control.take(device, now)
-    }
-
-    /// The person clicked "Let <device> type".
-    pub fn let_device_type(&mut self, device: EndpointId) -> Option<Change> {
-        self.control.let_device_type(device)
-    }
-
     /// `device` left, was removed or became a Viewer: control goes back to
     /// the host, and so does the host's size.
     pub fn release(&mut self, device: EndpointId) -> HostTook {
+        self.device_sizes.remove(&device);
         let change = self.control.release(device);
         self.back_to_host(change)
     }
 
-    /// Check a device's write again, now, under the writer's lock. A resize
-    /// that passes becomes the session's size.
+    /// Check a device's write again, now, under the writer's lock. Typing
+    /// (`resize_to: None`) makes the device the one who typed last, and its
+    /// own size the session's; a resize records the device's size, the
+    /// session's at once if the device typed last.
     ///
     /// # Errors
     /// The [`RefuseReason`]; nothing is written.
@@ -149,7 +141,7 @@ impl SessionGate {
         role: Option<Role>,
         write: &PendingWrite,
         resize_to: Option<(u16, u16)>,
-    ) -> Result<(), RefuseReason> {
+    ) -> Result<HostTook, RefuseReason> {
         // Before the run is known, no run a device names can match it.
         let run = self.run.unwrap_or_else(|| write.run.wrapping_add(1));
         let host = OneSession {
@@ -164,16 +156,27 @@ impl SessionGate {
             },
         };
         recheck_at_write(device, "", write, &host)?;
+        let mut took = HostTook::default();
         if let Some(size) = resize_to {
-            self.screen = size;
+            self.device_sizes.insert(*device, size);
+            if self.control.holder() == Holder::Device(*device) {
+                took.restore = self.size_to(size);
+            }
+        } else {
+            took.change = self.control.device_typed(*device);
+            if let Some(size) = self.device_sizes.get(device).copied() {
+                took.restore = self.size_to(size);
+            }
         }
-        Ok(())
+        Ok(took)
     }
 
-    /// A device's resize took on the PTY: the session's size now. Only after
-    /// [`Self::device_write`] passed for it.
-    pub fn set_screen(&mut self, size: (u16, u16)) {
-        self.screen = size;
+    /// Make `size` the session's: `Some` when that changes it.
+    fn size_to(&mut self, size: (u16, u16)) -> Option<(u16, u16)> {
+        (self.screen != size).then(|| {
+            self.screen = size;
+            size
+        })
     }
 
     /// The session's screen size now.
@@ -260,7 +263,6 @@ fn reply_len(bytes: &[u8]) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
 
     use super::*;
 
@@ -299,6 +301,7 @@ mod tests {
     }
 
     const PHONE: EndpointId = [1; 32];
+    const LAPTOP: EndpointId = [2; 32];
     const RUN: u64 = 9;
 
     fn gate() -> (SessionGate, Instant) {
@@ -333,39 +336,39 @@ mod tests {
     }
 
     #[test]
-    fn host_typing_takes_control_back_and_starts_the_takeover_wait() {
-        let (mut g, t) = gate();
-        g.take(PHONE, t).expect("taken");
-        let took = g.host_input(t);
-        assert_eq!(took.change.map(|c| c.holder), Some(Holder::Host));
-        assert_eq!(g.take(PHONE, t + Duration::from_secs(1)), Err(HostIsTyping));
-    }
-
-    #[test]
-    fn the_host_size_is_kept_while_a_device_size_stands_and_comes_back_with_control() {
+    fn whoever_types_last_holds_it_and_its_size_stands() {
         let (mut g, t) = gate();
         assert_eq!(g.host_resize((130, 40)), Some((130, 40)));
-        g.take(PHONE, t).expect("taken");
-        let phone_size = resize(&g);
-        g.device_write(&PHONE, Some(Role::Controller), &phone_size, Some((80, 30)))
-            .expect("the holder may resize");
-        assert_eq!(g.screen(), (80, 30));
-        // The desktop window changes meanwhile: remembered, not applied.
+        // The phone says its size while only watching: remembered.
+        let size_write = resize(&g);
+        let took = g
+            .device_write(&PHONE, Some(Role::Controller), &size_write, Some((80, 30)))
+            .expect("recorded");
+        assert_eq!(took, HostTook::default());
+        assert_eq!(g.screen(), (130, 40));
+        // It types: it holds it now, at its own size, with no handover.
+        let took = g
+            .device_write(&PHONE, Some(Role::Controller), &input(&g, 0), None)
+            .expect("typed");
+        assert_eq!(took.change.map(|c| c.holder), Some(Holder::Device(PHONE)));
+        assert_eq!((took.restore, g.screen()), (Some((80, 30)), (80, 30)));
+        // The window changes meanwhile: remembered, not applied.
         assert_eq!(g.host_resize((140, 45)), None);
         assert_eq!(g.screen(), (80, 30));
-        // Typing at the host brings control and the host's size back.
+        // The host types: back to the window's size.
         let took = g.host_input(t);
-        assert_eq!(took.restore, Some((140, 45)));
-        assert_eq!(g.screen(), (140, 45));
+        assert_eq!(took.change.map(|c| c.holder), Some(Holder::Host));
+        assert_eq!((took.restore, g.screen()), (Some((140, 45)), (140, 45)));
     }
 
     #[test]
-    fn a_device_leaving_gives_back_control_and_the_host_size() {
-        let (mut g, t) = gate();
-        g.take(PHONE, t).expect("taken");
-        let phone_size = resize(&g);
-        g.device_write(&PHONE, Some(Role::Controller), &phone_size, Some((80, 30)))
-            .expect("resized");
+    fn a_device_leaving_gives_back_the_host_size() {
+        let (mut g, _) = gate();
+        let size_write = resize(&g);
+        g.device_write(&PHONE, Some(Role::Controller), &size_write, Some((80, 30)))
+            .expect("recorded");
+        g.device_write(&PHONE, Some(Role::Controller), &input(&g, 0), None)
+            .expect("typed");
         let back = g.release(PHONE);
         assert_eq!(back.change.map(|c| c.holder), Some(Holder::Host));
         assert_eq!(back.restore, Some((120, 40)));
@@ -377,32 +380,20 @@ mod tests {
     }
 
     #[test]
-    fn the_holders_current_write_goes_through() {
+    fn a_write_with_an_old_epoch_still_goes_through() {
         let (mut g, t) = gate();
-        g.take(PHONE, t).expect("taken");
-        let write = input(&g, 0);
-        assert_eq!(
-            g.device_write(&PHONE, Some(Role::Controller), &write, None),
-            Ok(())
-        );
-    }
-
-    #[test]
-    fn a_takeover_between_the_check_and_the_write_wins() {
-        let (mut g, t) = gate();
-        g.take(PHONE, t).expect("taken");
         let write = input(&g, 0);
         g.host_input(t);
-        assert_eq!(
-            g.device_write(&PHONE, Some(Role::Controller), &write, None),
-            Err(RefuseReason::NotInControl)
-        );
+        g.device_write(&LAPTOP, Some(Role::Controller), &input(&g, 0), None)
+            .expect("typed");
+        assert!(g
+            .device_write(&PHONE, Some(Role::Controller), &write, None)
+            .is_ok());
     }
 
     #[test]
     fn a_removed_device_or_a_viewer_writes_nothing() {
-        let (mut g, t) = gate();
-        g.take(PHONE, t).expect("taken");
+        let (mut g, _) = gate();
         let write = input(&g, 0);
         assert_eq!(
             g.device_write(&PHONE, None, &write, None),
@@ -416,8 +407,7 @@ mod tests {
 
     #[test]
     fn a_dialog_that_appeared_before_the_write_makes_it_stale() {
-        let (mut g, t) = gate();
-        g.take(PHONE, t).expect("taken");
+        let (mut g, _) = gate();
         let write = input(&g, 4);
         g.set_dialog(Dialog {
             showing: true,
@@ -432,8 +422,6 @@ mod tests {
     #[test]
     fn before_the_run_is_known_no_device_write_goes_through() {
         let mut g = SessionGate::new(3, (120, 40));
-        let t = Instant::now();
-        g.take(PHONE, t).expect("taken");
         let write = PendingWrite {
             run: 0,
             epoch: g.control().epoch(),

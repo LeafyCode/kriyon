@@ -7,13 +7,11 @@
 //! the project folder's check (`kriyon_core::folder::check_folder`) as
 //! [`ProjectFolder`], the CLI dialog as [`Dialog`].
 
-use std::time::Instant;
-
 use kriyon_core::session::check_screen_size;
 
 use crate::codec::Decoded;
 use crate::control::Control;
-use crate::message::{EndpointId, Epoch, FromDevice, Holder, RefuseReason, Role};
+use crate::message::{EndpointId, Epoch, FromDevice, RefuseReason, Role};
 
 /// What [`authorize`] decided.
 pub type Verdict = Result<(), RefuseReason>;
@@ -204,7 +202,6 @@ pub fn authorize(
     stream: Stream<'_>,
     message: &Decoded<FromDevice>,
     host: &impl HostFacts,
-    now: Instant,
 ) -> Verdict {
     // Paired first, whatever the message: a removed device must learn it was
     // removed, so it stops retrying.
@@ -240,16 +237,11 @@ pub fn authorize(
             FromDevice::Resync | FromDevice::RequestEntries { .. } | FromDevice::StopEntries,
             Stream::Session(id),
         ) => session_exists(id),
+        // Nothing to take since ADR-0063: kept on the wire, it changes
+        // nothing a write depends on.
         (FromDevice::TakeControl { session_id }, Stream::Control) => {
             controller()?;
-            let session = host
-                .session(session_id)
-                .ok_or(RefuseReason::NoSuchSession)?;
-            if session.control.may_take(now) {
-                Ok(())
-            } else {
-                Err(RefuseReason::NotInControl)
-            }
+            session_exists(session_id)
         }
         (
             FromDevice::Input { .. } | FromDevice::Compose { .. } | FromDevice::Resize { .. },
@@ -308,7 +300,8 @@ pub fn authorize(
 }
 
 /// Run the write checks again inside the PTY-writer task, atomically with
-/// the write: paired, role, session, holds control, run, epoch and dialog.
+/// the write: paired, role, session, run and dialog. Who typed last and the
+/// epoch are not checked (ADR-0063): every Controller types straight in.
 ///
 /// # Errors
 /// The [`RefuseReason`] the write is refused for; nothing is written.
@@ -324,10 +317,7 @@ pub fn recheck_at_write(
     let session = host
         .session(session_id)
         .ok_or(RefuseReason::NoSuchSession)?;
-    if session.control.holder() != Holder::Device(*device) {
-        return Err(RefuseReason::NotInControl);
-    }
-    if write.run != session.run || write.epoch != session.control.epoch() {
+    if write.run != session.run {
         return Err(RefuseReason::Stale);
     }
     // A dialog that appeared or changed after the device's last drawn update:
@@ -348,12 +338,11 @@ pub fn recheck_at_write(
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
-    use std::time::Duration;
+    use std::time::Instant;
 
     use kriyon_core::session::MAX_SCREEN_SIDE;
 
     use super::*;
-    use crate::control::HOST_IDLE_BEFORE_TAKEOVER;
 
     const PHONE: EndpointId = [1; 32];
     const VIEWER: EndpointId = [2; 32];
@@ -391,11 +380,11 @@ mod tests {
         }
     }
 
-    /// A host where PHONE (a Controller) holds control of session S.
+    /// A host where PHONE (a Controller) typed last in session S.
     fn host() -> (Host, Instant) {
         let now = Instant::now();
         let mut control = Control::new(5);
-        control.take(PHONE, now).expect("taken");
+        control.device_typed(PHONE);
         let host = Host {
             devices: HashMap::from([(PHONE, Role::Controller), (VIEWER, Role::Viewer)]),
             control,
@@ -408,13 +397,7 @@ mod tests {
     }
 
     fn check(host: &Host, device: EndpointId, stream: Stream<'_>, message: FromDevice) -> Verdict {
-        authorize(
-            &device,
-            stream,
-            &Decoded::Message(message),
-            host,
-            Instant::now(),
-        )
+        authorize(&device, stream, &Decoded::Message(message), host)
     }
 
     fn hello(minor: u16) -> FromDevice {
@@ -503,10 +486,10 @@ mod tests {
 
     #[test]
     fn an_unpaired_device_is_told_so_even_for_an_unknown_message() {
-        let (h, now) = host();
+        let (h, _) = host();
         let unknown = Decoded::Unknown { tag: 99 };
         assert_eq!(
-            authorize(&STRANGER, Stream::Control, &unknown, &h, now),
+            authorize(&STRANGER, Stream::Control, &unknown, &h),
             Err(RefuseReason::NotPaired)
         );
     }
@@ -679,16 +662,12 @@ mod tests {
         );
     }
 
+    /// ADR-0063: nothing to take, so nothing waits for the host.
     #[test]
-    fn control_is_not_taken_from_a_host_that_just_typed() {
+    fn take_control_is_allowed_even_right_after_the_host_typed() {
         let (mut h, now) = host();
         h.control.host_typed(now);
-        let at = |t| authorize(&PHONE, Stream::Control, &Decoded::Message(take()), &h, t);
-        assert_eq!(
-            at(now + Duration::from_secs(1)),
-            Err(RefuseReason::NotInControl)
-        );
-        assert_eq!(at(now + HOST_IDLE_BEFORE_TAKEOVER), Ok(()));
+        assert_eq!(check(&h, PHONE, Stream::Control, take()), Ok(()));
     }
 
     #[test]
@@ -701,10 +680,11 @@ mod tests {
         );
     }
 
-    // Row: Input, Resize — role, holds control, run + epoch + seen_seq, size.
+    // Row: Input, Resize — role, run + seen_seq, size (ADR-0063: no holder
+    // or epoch check).
 
     #[test]
-    fn input_from_the_holder_on_the_current_run_and_epoch_is_allowed() {
+    fn input_on_the_current_run_is_allowed() {
         let (h, _) = host();
         assert_eq!(check(&h, PHONE, SESSION, input(&h, 0)), Ok(()));
         assert_eq!(check(&h, PHONE, SESSION, resize(&h, 80, 24)), Ok(()));
@@ -721,18 +701,19 @@ mod tests {
         }
     }
 
+    /// ADR-0063: every Controller types straight in, whoever typed last and
+    /// whatever epoch it saw.
     #[test]
-    fn a_controller_that_does_not_hold_control_may_not_type() {
+    fn a_controller_types_whoever_typed_last_and_whatever_its_epoch() {
         let (mut h, now) = host();
+        let seen = input(&h, 0);
         h.control.host_typed(now);
-        assert_eq!(
-            check(&h, PHONE, SESSION, input(&h, 0)),
-            Err(RefuseReason::NotInControl)
-        );
+        h.control.device_typed([7; 32]);
+        assert_eq!(check(&h, PHONE, SESSION, seen), Ok(()));
     }
 
     #[test]
-    fn input_for_an_old_run_or_epoch_is_stale() {
+    fn input_for_an_old_run_is_stale() {
         let (h, _) = host();
         let old_run = FromDevice::Input {
             run: RUN - 1,
@@ -741,18 +722,7 @@ mod tests {
             bytes: vec![],
             write_id: 0,
         };
-        let mut epoch = h.control.epoch();
-        epoch.counter -= 1;
-        let old_epoch = FromDevice::Resize {
-            run: RUN,
-            epoch,
-            cols: 80,
-            rows: 24,
-            write_id: 0,
-        };
-        for message in [old_run, old_epoch] {
-            assert_eq!(check(&h, PHONE, SESSION, message), Err(RefuseReason::Stale));
-        }
+        assert_eq!(check(&h, PHONE, SESSION, old_run), Err(RefuseReason::Stale));
     }
 
     #[test]
@@ -951,26 +921,30 @@ mod tests {
 
     #[test]
     fn an_unknown_message_is_refused_as_unknown() {
-        let (h, now) = host();
+        let (h, _) = host();
         let unknown = Decoded::Unknown { tag: 99 };
         assert_eq!(
-            authorize(&PHONE, Stream::Control, &unknown, &h, now),
+            authorize(&PHONE, Stream::Control, &unknown, &h),
             Err(RefuseReason::UnknownMessage)
         );
     }
 
     // At the write: the same checks, against the state at that moment.
 
+    /// ADR-0063: the host typing between the check and the write takes
+    /// nothing: the write goes in; a removal still wins.
     #[test]
-    fn a_takeover_between_the_check_and_the_write_wins() {
+    fn the_host_typing_between_the_check_and_the_write_takes_nothing() {
         let (mut h, now) = host();
         let message = input(&h, 0);
         assert_eq!(check(&h, PHONE, SESSION, message.clone()), Ok(()));
         let write = PendingWrite::of(&message).expect("a write");
         h.control.host_typed(now);
+        assert_eq!(recheck_at_write(&PHONE, S, &write, &h), Ok(()));
+        h.devices.remove(&PHONE);
         assert_eq!(
             recheck_at_write(&PHONE, S, &write, &h),
-            Err(RefuseReason::NotInControl)
+            Err(RefuseReason::NotPaired)
         );
     }
 
@@ -1012,17 +986,5 @@ mod tests {
         assert!(PendingWrite::of(&compose(&h)).is_some_and(|w| w.compose));
         assert!(PendingWrite::of(&resize(&h, 80, 24)).is_some_and(|w| w.seen_seq.is_none()));
         assert_eq!(PendingWrite::of(&FromDevice::Resync), None);
-    }
-
-    #[test]
-    fn a_holder_check_names_the_device() {
-        // Control held by another device is not this device's control.
-        let (mut h, now) = host();
-        h.control.take([7; 32], now).expect("taken");
-        assert_eq!(h.control.holder(), Holder::Device([7; 32]));
-        assert_eq!(
-            check(&h, PHONE, SESSION, input(&h, 0)),
-            Err(RefuseReason::NotInControl)
-        );
     }
 }

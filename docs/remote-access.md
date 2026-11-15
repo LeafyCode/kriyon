@@ -124,13 +124,13 @@ Questions are answered in the terminal, with their options as Claude Code shows 
 
 ### Typing
 
-- In the terminal, a Controller presses **Take control**. "You have control. Type below." Type
-  in the field and press Enter; the key row adds esc, tab, ctrl and the arrows.
-- In Readable, with control, write to Claude in "Message Claude…".
-- **Give back** returns control to the computer. Typing on the computer takes control back at
-  once.
-- If you typed on the computer in the last few seconds, the computer shows "… wants to type"
-  instead, with **Let … type** and **Not now**.
+- A Controller just types: there is no control to take or give back. Type in the field and
+  press Enter; the key row adds esc, tab, ctrl and the arrows. What you type and what is typed
+  on the computer both reach the session, in the order they arrive.
+- In Readable, write to Claude in "Message Claude…".
+- The session takes the size of whoever typed last: the phone's while you type there, the
+  computer's window again once someone types on the computer. A small line says when someone
+  else typed last.
 - A Viewer sees "This phone may only watch."
 
 ### New session
@@ -142,8 +142,8 @@ if you like, a title ("Named after the project if left empty"), then **Start ses
 ## Using it from another computer
 
 The paired computer's sessions are under **Other computers** in the sidebar. Choose a session
-and show it as **Terminal** or **Readable**. A Controller can **Take control** to type, and
-start one with **New session**. Questions are answered in the terminal, as on the phone.
+and show it as **Terminal** or **Readable**. A Controller types straight in, and can start
+one with **New session**. Questions are answered in the terminal, as on the phone.
 
 ## Alerts
 

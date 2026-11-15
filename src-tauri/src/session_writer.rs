@@ -18,7 +18,7 @@ use std::time::Instant;
 
 use kriyon_core::session::{SessionEngine, SessionId};
 use kriyon_remote::authorize::{Dialog, PendingWrite};
-use kriyon_remote::control::{Change, Control, HostIsTyping};
+use kriyon_remote::control::{Change, Control};
 use kriyon_remote::message::{EndpointId, RefuseReason, Role};
 use kriyon_remote::writer::{HostTook, SessionGate};
 use parking_lot::Mutex;
@@ -165,8 +165,21 @@ impl Writers {
         // The role now, read under the gate's lock: a revoke passes through
         // this lock, so it lands before or after this whole write.
         let role = self.role_now(device, role).ok_or(RefuseReason::NotPaired)?;
-        gate.device_write(device, Some(role), write, None)?;
-        Ok(engine.write_stdin(bytes).is_ok())
+        let took = gate.device_write(device, Some(role), write, None)?;
+        if let Some((cols, rows)) = took.restore {
+            // The keys still go in if the device's size can't be applied.
+            if let Err(e) = engine.resize(cols, rows) {
+                eprintln!("kriyon: couldn't give the session the device's size: {e}");
+            }
+        }
+        let written = engine.write_stdin(bytes).is_ok();
+        // Under the gate's lock, in epoch order.
+        self.tell(id, took.change);
+        drop(gate);
+        if took.restore.is_some() {
+            self.told_resized(id);
+        }
+        Ok(written)
     }
 
     /// A device's resize of session `id`, checked again like its typing.
@@ -185,66 +198,18 @@ impl Writers {
     ) -> Result<bool, RefuseReason> {
         let gate = self.gate(id);
         let mut gate = gate.lock();
-        // Checked first, and the size made the session's only once the PTY
-        // took it, all under the one lock.
+        // Checked first; the device's size is recorded, and is the session's
+        // now only if it typed last (ADR-0063), all under the one lock.
         let role = self.role_now(device, role).ok_or(RefuseReason::NotPaired)?;
-        gate.device_write(device, Some(role), write, None)?;
-        if engine.resize(size.0, size.1).is_err() {
-            return Ok(false);
+        let took = gate.device_write(device, Some(role), write, Some(size))?;
+        if let Some((cols, rows)) = took.restore {
+            if engine.resize(cols, rows).is_err() {
+                return Ok(false);
+            }
+            drop(gate);
+            self.told_resized(id);
         }
-        gate.set_screen(size);
         Ok(true)
-    }
-
-    /// `device`, connected as `role`, takes [Typing control] of session
-    /// `id`: `None` for a session that closed, else whether it may
-    /// ([`RefuseReason::NotPaired`] once removed, `NotAllowed` once only a
-    /// Viewer, `NotInControl` while the host typed in the last 10 s).
-    pub fn take(
-        &self,
-        id: &SessionId,
-        device: EndpointId,
-        role: Option<Role>,
-        now: Instant,
-    ) -> Option<Result<Option<Change>, RefuseReason>> {
-        // Only a live session's gate: one closed meanwhile isn't made again.
-        let gate = self.gates.lock().get(id).cloned()?;
-        let mut gate = gate.lock();
-        match self.role_now(&device, role) {
-            None => return Some(Err(RefuseReason::NotPaired)),
-            Some(Role::Viewer) => return Some(Err(RefuseReason::NotAllowed)),
-            Some(Role::Controller) => {}
-        }
-        let change = match gate.take(device, now) {
-            Ok(change) => change,
-            Err(HostIsTyping) => return Some(Err(RefuseReason::NotInControl)),
-        };
-        // Under the gate's lock, in epoch order.
-        self.tell(id, change);
-        Some(Ok(change))
-    }
-
-    /// The person clicked "Let <device> type" on session `id`: control goes
-    /// to `device` (connected as `role`) even though the host typed just
-    /// now. `None` for a session that closed; refused for a device that is
-    /// no longer a Controller.
-    pub fn let_device_type(
-        &self,
-        id: &SessionId,
-        device: EndpointId,
-        role: Option<Role>,
-    ) -> Option<Result<Option<Change>, RefuseReason>> {
-        let gate = self.gates.lock().get(id).cloned()?;
-        let mut gate = gate.lock();
-        match self.role_now(&device, role) {
-            None => return Some(Err(RefuseReason::NotPaired)),
-            Some(Role::Viewer) => return Some(Err(RefuseReason::NotAllowed)),
-            Some(Role::Controller) => {}
-        }
-        let change = gate.let_device_type(device);
-        // Under the gate's lock, in epoch order.
-        self.tell(id, change);
-        Some(Ok(change))
     }
 
     /// Call `hook` on every change of [Typing control] these writers make,
@@ -474,21 +439,20 @@ mod tests {
         }
     }
 
-    /// A phone in control of session "s", typing "a"; the daemon's end.
+    /// The phone types nothing into session "s": it typed last now.
+    fn phone_types(writers: &Writers, id: &SessionId, engine: &DaemonClient) {
+        let write = input(writers, id, 0, 0);
+        assert_eq!(
+            writers.device_input(id, engine, &PHONE, Some(Role::Controller), &write, b""),
+            Ok(true)
+        );
+    }
+
+    /// A phone typing "a" in session "s"; the daemon's end.
     fn typing_phone(writers: &Writers, id: &SessionId) -> (DaemonClient, UnixStream, PendingWrite) {
         let (engine, daemon) = engine();
         writers.set_run(id, 1);
-        let change = writers
-            .take(
-                id,
-                PHONE,
-                Some(Role::Controller),
-                Instant::now() + std::time::Duration::from_secs(60),
-            )
-            .expect("live")
-            .expect("allowed")
-            .expect("a change");
-        let write = input(writers, id, change.epoch.counter, 0);
+        let write = input(writers, id, 0, 0);
         assert_eq!(
             writers.device_input(id, &engine, &PHONE, Some(Role::Controller), &write, b"a"),
             Ok(true)
@@ -520,39 +484,6 @@ mod tests {
     }
 
     #[test]
-    fn the_person_lets_a_device_type_even_right_after_typing_here() {
-        let writers = Writers::default();
-        let id = SessionId("s".into());
-        let (engine, _daemon) = engine();
-        writers.set_run(&id, 1);
-        let now = Instant::now();
-        writers
-            .host_write(&id, &engine, b"x")
-            .expect("the host types");
-        assert!(matches!(
-            writers.take(&id, PHONE, Some(Role::Controller), now),
-            Some(Err(RefuseReason::NotInControl))
-        ));
-        let change = writers
-            .let_device_type(&id, PHONE, Some(Role::Controller))
-            .expect("live")
-            .expect("allowed")
-            .expect("a change");
-        assert_eq!(change.holder, Holder::Device(PHONE));
-        // Never to a Viewer, nor a device removed since.
-        writers.revoke(PHONE, Revoked::Demoted(Role::Viewer));
-        assert!(matches!(
-            writers.let_device_type(&id, PHONE, Some(Role::Controller)),
-            Some(Err(RefuseReason::NotAllowed))
-        ));
-        writers.revoke(PHONE, Revoked::Removed);
-        assert!(matches!(
-            writers.let_device_type(&id, PHONE, Some(Role::Controller)),
-            Some(Err(RefuseReason::NotPaired))
-        ));
-    }
-
-    #[test]
     fn nothing_a_removed_device_types_after_the_revoke_reaches_the_pty() {
         let writers = Writers::default();
         let id = SessionId("s".into());
@@ -574,13 +505,6 @@ mod tests {
             ),
             Err(RefuseReason::NotPaired)
         );
-        assert!(
-            matches!(
-                writers.take(&id, PHONE, Some(Role::Controller), Instant::now()),
-                Some(Err(RefuseReason::NotPaired))
-            ),
-            "nor takes control again"
-        );
         assert_eq!(typed(&mut daemon), b"a");
     }
 
@@ -593,10 +517,6 @@ mod tests {
         assert!(writers
             .device_input(&id, &engine, &PHONE, Some(Role::Controller), &write, b"b")
             .is_err());
-        assert!(matches!(
-            writers.take(&id, PHONE, Some(Role::Controller), Instant::now()),
-            Some(Err(_))
-        ));
         assert_eq!(
             writers.role_now(&PHONE, Some(Role::Controller)),
             Some(Role::Viewer)
@@ -625,52 +545,91 @@ mod tests {
         );
     }
 
+    /// ADR-0063: no handover. The host and every Controller type in turn, in
+    /// any order, with an epoch nobody keeps up with, and all of it reaches
+    /// the session; a Viewer's typing never does.
     #[test]
-    fn a_device_types_only_once_it_holds_control_and_with_the_current_epoch() {
+    fn the_host_and_every_controller_type_in_turn_without_a_handover() {
+        const TABLET: EndpointId = [8; 32];
+        const WATCHER: EndpointId = [9; 32];
         let writers = Writers::default();
         let id = SessionId("s".into());
         let (engine, mut daemon) = engine();
         writers.set_run(&id, 1);
-        let write = input(&writers, &id, 0, 0);
+        let write = PendingWrite {
+            run: 1,
+            epoch: kriyon_remote::message::Epoch {
+                host_boot_id: 0,
+                counter: 0,
+            },
+            seen_seq: Some(0),
+            compose: false,
+        };
+        let from = |device: &EndpointId, role: Role, bytes: &[u8]| {
+            writers.device_input(&id, &engine, device, Some(role), &write, bytes)
+        };
+        writers.host_write(&id, &engine, b"h1").expect("host");
+        assert_eq!(from(&PHONE, Role::Controller, b"p1"), Ok(true));
+        writers.host_write(&id, &engine, b"h2").expect("host");
+        assert_eq!(from(&TABLET, Role::Controller, b"t1"), Ok(true));
+        assert_eq!(from(&PHONE, Role::Controller, b"p2"), Ok(true));
         assert_eq!(
-            writers.device_input(&id, &engine, &PHONE, Some(Role::Controller), &write, b"x"),
-            Err(RefuseReason::NotInControl)
+            from(&WATCHER, Role::Viewer, b"v"),
+            Err(RefuseReason::NotAllowed)
         );
-        let change = writers
-            .take(
-                &id,
-                PHONE,
-                Some(Role::Controller),
-                Instant::now() + std::time::Duration::from_secs(60),
-            )
-            .expect("live")
-            .expect("the host hasn't typed")
-            .expect("a change");
-        assert_eq!(change.holder, Holder::Device(PHONE));
-        let stale = input(&writers, &id, change.epoch.counter - 1, 0);
+        assert_eq!(typed(&mut daemon), b"h1p1h2t1p2");
+        // Who typed last is told, for a "typing from" hint.
+        let holder = writers.facts(&id).expect("live").control.holder();
+        assert_eq!(holder, Holder::Device(PHONE));
+    }
+
+    /// ADR-0063: the session takes the size of whoever typed last: a phone's
+    /// own size once it types, the window's again at the host's next key.
+    #[test]
+    fn the_session_takes_the_size_of_whoever_typed_last() {
+        let writers = Writers::default();
+        let resized = Arc::new(Mutex::new(0_u32));
+        let hook = Arc::clone(&resized);
+        writers.on_resize(move |_id| *hook.lock() += 1);
+        let id = SessionId("s".into());
+        let (engine, _daemon) = engine();
+        writers.set_run(&id, 1);
+        writers
+            .host_resize(&id, &engine, (120, 40))
+            .expect("the window");
+        let write = PendingWrite {
+            run: 1,
+            epoch: kriyon_remote::message::Epoch {
+                host_boot_id: 0,
+                counter: 0,
+            },
+            seen_seq: None,
+            compose: false,
+        };
+        let size = |w: &Writers| w.facts(&id).expect("live").size;
+        // The phone says its size: it stands only once the phone types.
         assert_eq!(
-            writers.device_input(&id, &engine, &PHONE, Some(Role::Controller), &stale, b"x"),
-            Err(RefuseReason::Stale)
-        );
-        let current = input(&writers, &id, change.epoch.counter, 0);
-        assert_eq!(
-            writers.device_input(
+            writers.device_resize(
                 &id,
                 &engine,
                 &PHONE,
                 Some(Role::Controller),
-                &current,
-                b"ok"
+                &write,
+                (80, 30)
             ),
             Ok(true)
         );
-        daemon
-            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
-            .expect("timeout");
-        let mut buf = [0_u8; 64];
-        let n = daemon.read(&mut buf).expect("the bytes reached the daemon");
-        assert!(buf[..n].ends_with(b"ok"));
+        assert_eq!(size(&writers), (120, 40), "watching changes nothing");
+        assert_eq!(
+            writers.device_input(&id, &engine, &PHONE, Some(Role::Controller), &write, b"a"),
+            Ok(true)
+        );
+        assert_eq!(size(&writers), (80, 30), "the phone typed");
+        writers.host_write(&id, &engine, b"b").expect("typed");
+        assert_eq!(size(&writers), (120, 40), "the window's size is back");
+        assert_eq!(*resized.lock(), 3, "each size reached the devices");
     }
+
     /// Devices are told each size the host's window gives the PTY, so they
     /// can redraw at it; not while a device's own size stands.
     #[test]
@@ -686,15 +645,7 @@ mod tests {
             .host_resize(&id, &engine, (100, 30))
             .expect("resized");
         assert_eq!(*heard.lock(), 1, "the window's size");
-        writers
-            .take(
-                &id,
-                PHONE,
-                Some(Role::Controller),
-                Instant::now() + std::time::Duration::from_secs(60),
-            )
-            .expect("live")
-            .expect("taken");
+        phone_types(&writers, &id, &engine);
         writers
             .host_resize(&id, &engine, (120, 40))
             .expect("remembered");
@@ -714,15 +665,7 @@ mod tests {
         let id = SessionId("s".into());
         let (engine, mut daemon) = engine();
         writers.set_run(&id, 1);
-        writers
-            .take(
-                &id,
-                PHONE,
-                Some(Role::Controller),
-                Instant::now() + std::time::Duration::from_secs(60),
-            )
-            .expect("live")
-            .expect("taken");
+        phone_types(&writers, &id, &engine);
         let replies: [&[u8]; 3] = [
             b"\x1b[I",
             b"\x1bP>|xterm.js(6.1.0-beta.304)\x1b\\",
@@ -749,15 +692,7 @@ mod tests {
         let id = SessionId("s".into());
         let (engine, _daemon) = engine();
         writers.set_run(&id, 1);
-        writers
-            .take(
-                &id,
-                PHONE,
-                Some(Role::Controller),
-                Instant::now() + std::time::Duration::from_secs(60),
-            )
-            .expect("live")
-            .expect("taken");
+        phone_types(&writers, &id, &engine);
         writers.host_write(&id, &engine, b"x").expect("typed");
         assert_eq!(
             heard.lock().as_slice(),
@@ -769,8 +704,7 @@ mod tests {
     }
 
     /// Kriyon waking a sleeping session (a device opened it) types into it,
-    /// but isn't the person at the host: control stays where it is, and a
-    /// Controller may still take it at once.
+    /// but isn't the person at the host: who typed last stays as it is.
     #[test]
     fn kriyon_typing_a_wake_leaves_control_where_it_is() {
         let writers = Writers::default();
@@ -780,11 +714,7 @@ mod tests {
         let id = SessionId("s".into());
         let (engine, _daemon) = engine();
         writers.set_run(&id, 1);
-        let now = Instant::now() + std::time::Duration::from_secs(60);
-        writers
-            .take(&id, PHONE, Some(Role::Controller), now)
-            .expect("live")
-            .expect("taken");
+        phone_types(&writers, &id, &engine);
         writers
             .app_write(&id, &engine, b"claude --resume x\r")
             .expect("typed");
@@ -793,24 +723,6 @@ mod tests {
             [Holder::Device(PHONE)],
             "no change"
         );
-        // With control at the host, a Controller isn't held off ten seconds.
-        let other = SessionId("t".into());
-        writers.set_run(&other, 1);
-        writers.app_write(&other, &engine, b"wake").expect("typed");
-        assert!(matches!(
-            writers.take(&other, PHONE, Some(Role::Controller), Instant::now()),
-            Some(Ok(_))
-        ));
-    }
-
-    #[test]
-    fn taking_a_session_that_is_gone_makes_nothing() {
-        let writers = Writers::default();
-        let id = SessionId("gone".into());
-        assert!(writers
-            .take(&id, PHONE, Some(Role::Controller), Instant::now())
-            .is_none());
-        assert!(!writers.has_gate(&id));
     }
 
     #[test]

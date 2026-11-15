@@ -1,10 +1,6 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import { beforeEach, expect, test, vi } from "vitest";
-import {
-  remoteHostInput,
-  remoteHostSetView,
-  remoteHostTakeControl,
-} from "../ipc/bridge.ts";
+import { remoteHostInput, remoteHostSetView } from "../ipc/bridge.ts";
 import { useLayout } from "../state/layout.ts";
 import { useRemoteHosts } from "../state/remoteHosts.ts";
 import type { HostSummary } from "./hostSummary.ts";
@@ -51,11 +47,11 @@ vi.mock("../ipc/bridge.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../ipc/bridge.ts")>()),
   remoteHostInput: vi.fn(() => Promise.resolve()),
   remoteHostSetView: vi.fn(() => Promise.resolve()),
-  remoteHostTakeControl: vi.fn(() => Promise.resolve()),
 }));
 
 const SKIPPED_AHEAD = /Skipped ahead/;
 const ONLY_WATCH = /only watch/;
+const TYPED_THERE = /typed last on that computer/;
 const HOST = "ab".repeat(32);
 
 /**
@@ -149,33 +145,31 @@ test("a screen sent because this computer fell behind says so", async () => {
   expect(screen.getByText(SKIPPED_AHEAD)).toBeTruthy();
 });
 
-test("without control it only watches, and offers to take control", async () => {
+// ADR-0063: no control to take. A Controller types at once, even right
+// after the other computer did; it only hears who typed last.
+test("a Controller types at once, with nothing to take first", async () => {
+  useRemoteHosts.getState().linkChanged(link({}, false, true));
+  render(<RemoteTerminal hostId={HOST} sessionId="s1" />);
+  await act(() => Promise.resolve());
+  expect(screen.queryByRole("button", { name: "Take control" })).toBeNull();
+  expect(termHolder.current?.options.disableStdin).toBe(false);
+  await act(async () => {
+    termHolder.current?.onDataCb?.("y");
+    await Promise.resolve();
+  });
+  expect(remoteHostInput).toHaveBeenCalledWith(HOST, "s1", "y");
+  expect(screen.getByText(TYPED_THERE)).toBeTruthy();
+});
+
+test("a Viewer only watches", async () => {
+  useRemoteHosts.getState().linkChanged(link({ role: "viewer" }));
   render(<RemoteTerminal hostId={HOST} sessionId="s1" />);
   await act(() => Promise.resolve());
   expect(termHolder.current?.options.disableStdin).toBe(true);
   act(() => termHolder.current?.onDataCb?.("y"));
   expect(remoteHostInput).not.toHaveBeenCalled();
-  fireEvent.click(screen.getByRole("button", { name: "Take control" }));
-  expect(remoteHostTakeControl).toHaveBeenCalledWith(HOST, "s1");
-});
-
-test("a Viewer is never offered control", async () => {
-  useRemoteHosts.getState().linkChanged(link({ role: "viewer" }));
-  render(<RemoteTerminal hostId={HOST} sessionId="s1" />);
-  await act(() => Promise.resolve());
-  expect(screen.queryByRole("button", { name: "Take control" })).toBeNull();
   expect(screen.getByText(ONLY_WATCH)).toBeTruthy();
 });
-
-test.each(["connecting", "lost", "removed"] as const)(
-  "control isn't offered while the link is %s",
-  async (state) => {
-    useRemoteHosts.getState().linkChanged(link({ link: state }));
-    render(<RemoteTerminal hostId={HOST} sessionId="s1" />);
-    await act(() => Promise.resolve());
-    expect(screen.queryByRole("button", { name: "Take control" })).toBeNull();
-  }
-);
 
 test("with control, typing goes to the other computer", async () => {
   useRemoteHosts.getState().linkChanged(link({}, true));

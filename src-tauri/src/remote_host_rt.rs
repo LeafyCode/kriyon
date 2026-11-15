@@ -141,39 +141,6 @@ pub fn detach(app: &tauri::AppHandle, id: &SessionId) {
     }
 }
 
-/// Told when a device asked for control the host's ten-second rule kept
-/// from it: the person can let it type.
-pub const CONTROL_ASKED_EVENT: &str = "remote-control-asked";
-
-/// A device that wants to type in a session, for "Let <device> type".
-#[derive(Clone, Debug, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ControlAsked {
-    session_id: String,
-    device_id: String,
-    device_name: String,
-}
-
-fn control_asked(app: &tauri::AppHandle, session_id: &str, device: &EndpointId) {
-    use tauri::Emitter as _;
-    let device_name = app
-        .state::<StoreState>()
-        .0
-        .lock()
-        .paired_devices()
-        .ok()
-        .and_then(|rows| rows.into_iter().find(|row| row.endpoint_id == *device))
-        .map_or_else(|| "A device".to_string(), |row| row.name);
-    let _ = app.emit(
-        CONTROL_ASKED_EVENT,
-        ControlAsked {
-            session_id: session_id.to_string(),
-            device_id: kriyon_remote::message::hex(device),
-            device_name,
-        },
-    );
-}
-
 /// [`ServeHost`] over the running app.
 pub struct AppServeHost(pub tauri::AppHandle);
 
@@ -263,30 +230,12 @@ impl ServeHost for AppServeHost {
         )
     }
 
-    fn take(&self, id: &str, device: EndpointId, role: Role) -> Result<(), RefuseReason> {
-        // The writers tell every device (their change hook).
-        match self.0.state::<AppState>().writers.take(
-            &SessionId(id.to_string()),
-            device,
-            Some(role),
-            std::time::Instant::now(),
-        ) {
-            None => Err(RefuseReason::NoSuchSession),
-            Some(Err(reason)) => Err(reason),
-            Some(Ok(_)) => Ok(()),
-        }
-    }
-
     fn entries(
         &self,
         id: &str,
         stamp: Option<u64>,
     ) -> kriyon_remote_link::host_runtime::EntriesBuilt {
         crate::readable_rt::entries(&self.0, id, stamp)
-    }
-
-    fn control_asked(&self, id: &str, device: &EndpointId) {
-        control_asked(&self.0, id, device);
     }
 
     fn role_now(&self, device: &EndpointId, connected: Role) -> Option<Role> {

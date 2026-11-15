@@ -7,7 +7,6 @@ import {
   remoteHostStartSession,
   remoteHosts,
   remoteHostsWake,
-  remoteHostTakeControl,
 } from "../ipc/bridge.ts";
 import type { HostSummary, SessionSummary } from "../remote/hostSummary.ts";
 import {
@@ -26,7 +25,6 @@ vi.mock("../ipc/bridge.ts", async (importOriginal) => ({
   remoteHosts: vi.fn(),
   remoteHostStartSession: vi.fn(),
   remoteHostsWake: vi.fn(),
-  remoteHostTakeControl: vi.fn(),
 }));
 
 const HOST = "ab".repeat(32);
@@ -249,24 +247,19 @@ test("only sessions on a connected, still-paired computer count as needing you",
   expect(remoteNeedsYouCount(useRemoteHosts.getState())).toBe(1);
 });
 
-test("typing goes only where this computer holds control", async () => {
+test("typing goes only where Rust says this computer may type", async () => {
   vi.mocked(remoteHostInput).mockResolvedValue();
   useRemoteHosts.getState().linkChanged(link());
   await useRemoteHosts.getState().type(HOST, "s1", "y");
   expect(remoteHostInput).not.toHaveBeenCalled();
+  // ADR-0063: someone else typed last there, and it types all the same.
   useRemoteHosts
     .getState()
     .linkChanged(
-      link({ sessions: [session({ mayType: true, typing: "you" })] })
+      link({ sessions: [session({ mayType: true, typing: "host" })] })
     );
   await useRemoteHosts.getState().type(HOST, "s1", "y");
   expect(remoteHostInput).toHaveBeenCalledWith(HOST, "s1", "y");
-});
-
-test("taking control asks Rust", async () => {
-  vi.mocked(remoteHostTakeControl).mockResolvedValue();
-  await useRemoteHosts.getState().takeControl(HOST, "s1");
-  expect(remoteHostTakeControl).toHaveBeenCalledWith(HOST, "s1");
 });
 
 test("the app wakes reconnects when its window comes back to the front", () => {

@@ -17,7 +17,7 @@
 //! | A slow device beside a fast one | `host_runtime::serve::a_slow_device_skips_ahead_while_a_fast_one_follows`, `fanout::a_slow_device_skips_ahead_alone` |
 //! | A device that never reads its control stream | `a_device_that_never_reads_its_control_stream_is_closed_too_slow` |
 //! | A stale epoch after a takeover | `host_runtime::serve::typing_from_before_another_device_took_over_is_refused`, `authorize::input_for_an_old_run_or_epoch_is_stale` |
-//! | Input buffered across a reconnect | the cut, sleep and crash tests here, `host_runtime::serve::a_device_that_drops_gives_control_back_to_the_host`, `host_runtime::serve::a_device_that_reconnects_before_its_old_connection_goes_must_take_control_again` |
+//! | Input buffered across a reconnect | the cut, sleep and crash tests here, `host_runtime::serve::a_device_that_drops_gives_control_back_to_the_host`, `host_runtime::serve::a_device_that_reconnects_before_its_old_connection_goes_must_take_control_again` (since ADR-0063: the host holds it again) |
 //! | A dialog after `seen_seq` | `host_runtime::serve::typing_from_before_a_dialog_appeared_is_refused`, `writer::a_dialog_that_appeared_before_the_write_makes_it_stale` |
 //! | A resend of `StartSession` | not yet: remote starts are refused until `create_session` runs without the webview |
 //! | An oversize length prefix | `an_oversize_length_ends_that_stream_and_nothing_else`, `codec::a_length_over_the_direction_limit_fails_from_the_header_alone` |
@@ -215,12 +215,6 @@ impl Phone {
         })
     }
 
-    /// Take control of "s" and wait until the host says this phone holds it.
-    async fn take_control(&self) {
-        self.rt.take_control(&self.host, "s").await.expect("asks");
-        wait_until("control", || self.holds_control()).await;
-    }
-
     async fn typed_ack(&self) {
         wait_until("a receipt", || {
             self.screen
@@ -247,7 +241,6 @@ fn a_link_cut_mid_stream_reconnects_and_redraws_without_replaying_input() {
         let _beats = Beats::start(&world);
         let phone = Phone::connect(&world, 3, Role::Controller).await;
         watching(&world, &phone, b"before").await;
-        phone.take_control().await;
         phone
             .rt
             .input(&phone.host, "s", b"a".to_vec())
@@ -274,13 +267,8 @@ fn a_link_cut_mid_stream_reconnects_and_redraws_without_replaying_input() {
         answer(&world, id, b"after");
         phone.until_screen(b"after").await;
 
-        // Control went back to the host with the drop: nothing typed before
-        // it can land, and typing needs control again.
-        assert_eq!(
-            phone.rt.input(&phone.host, "s", b"stale".to_vec()).await,
-            Err(DeviceError::NoControl)
-        );
-        phone.take_control().await;
+        // Nothing typed before the drop is sent again (ADR-0063: typing
+        // needs nothing taken first).
         phone
             .rt
             .input(&phone.host, "s", b"b".to_vec())
@@ -417,7 +405,6 @@ fn a_phone_reading_entries_writes_to_claude_without_a_screen() {
         let _beats = Beats::start(&world);
         let phone = Phone::connect(&world, 3, Role::Controller).await;
         phone.view("s", false, None).await;
-        phone.take_control().await;
         // The host names the run on this screen-off stream; until then
         // there is nothing to name.
         let deadline = Instant::now() + Duration::from_secs(10);
@@ -463,7 +450,6 @@ fn a_compose_refused_while_a_dialog_shows_leaves_the_entries_showing() {
             )
             .await;
         wait_until("the entries", || !seen.lock().is_empty()).await;
-        phone.take_control().await;
         world
             .fake
             .gate
@@ -504,7 +490,15 @@ fn a_phone_gives_back_control_and_turns_its_alerts_off_and_on() {
     run(async {
         let world = world().await;
         let phone = Phone::connect(&world, 3, Role::Controller).await;
-        phone.take_control().await;
+        // It types, so it typed last; then gives back: the host holds it.
+        watching(&world, &phone, b"screen").await;
+        phone
+            .rt
+            .input(&phone.host, "s", b"a".to_vec())
+            .await
+            .expect("types");
+        phone.typed_ack().await;
+        wait_until("it typed last", || phone.holds_control()).await;
         phone
             .rt
             .give_back(&phone.host, "s")
@@ -543,7 +537,6 @@ fn a_host_asleep_past_the_heartbeat_shows_lost_then_recovers() {
         let beats = Beats::start(&world);
         let phone = Phone::connect(&world, 3, Role::Controller).await;
         watching(&world, &phone, b"awake").await;
-        phone.take_control().await;
 
         // The host sleeps: no heartbeat, but the socket is still there.
         beats.sleep();
@@ -587,7 +580,6 @@ fn a_host_that_crashed_mid_write_comes_back_with_nothing_replayed() {
         let _beats = Beats::start(&world);
         let phone = Phone::connect(&world, 3, Role::Controller).await;
         watching(&world, &phone, b"before").await;
-        phone.take_control().await;
 
         // Typing, and the host goes down as it arrives.
         let _ = phone.rt.input(&phone.host, "s", b"mid".to_vec()).await;
@@ -607,7 +599,6 @@ fn a_host_that_crashed_mid_write_comes_back_with_nothing_replayed() {
         assert!(!phone.holds_control(), "a new app start gives no control");
 
         // Typing again needs control again, and only the new typing lands.
-        phone.take_control().await;
         phone
             .rt
             .input(&phone.host, "s", b"new".to_vec())
@@ -630,7 +621,6 @@ fn a_device_removed_while_watching_shows_removed_and_stops() {
         let _beats = Beats::start(&world);
         let phone = Phone::connect(&world, 3, Role::Controller).await;
         watching(&world, &phone, b"screen").await;
-        phone.take_control().await;
 
         world.fake.paired.lock().remove(&phone.me);
         world.host.cut_off(&phone.me);

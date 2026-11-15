@@ -22,7 +22,6 @@ import {
 import { installSessionListeners } from "./state/backendListeners.ts";
 import { installBridgeMirrors } from "./state/bridgeMirrors.ts";
 import { installCommandCenterListeners } from "./state/commandCenterListeners.ts";
-import { installControlAskListener } from "./state/controlAsks.ts";
 import { setHomeFolder } from "./state/homeRelative.ts";
 import { useIntegration } from "./state/integration.ts";
 import { useLayout } from "./state/layout.ts";
@@ -319,7 +318,6 @@ function App() {
     const stopMainWindowActions = installMainWindowActions();
     const stopMenuBarModeSync = installMenuBarModeSync();
     const stopRemoteHosts = installRemoteHostListeners();
-    const stopControlAsks = installControlAskListener();
     // A caret left in non-editable content makes WebKit rescan the whole
     // document on every rendering update, which froze the UI for as long as
     // anything kept repainting. See `strayCaret.ts` for the measured stack.
@@ -346,7 +344,6 @@ function App() {
       stopMainWindowActions();
       stopMenuBarModeSync();
       stopRemoteHosts();
-      stopControlAsks();
       stopStrayCaretGuard();
       stopDomWeightWatch();
     };

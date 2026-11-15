@@ -29,7 +29,7 @@ use kriyon_core::session::SessionStatus;
 use kriyon_core::standing::StandingState;
 use kriyon_core::work_report::ReportOutcome;
 use kriyon_remote::authorize::{Dialog, PendingWrite, ProjectFolder};
-use kriyon_remote::control::{Change, HostIsTyping};
+use kriyon_remote::control::Change;
 use kriyon_remote::message::{
     Diff, EndpointId, PlanUsage, ProjectInfo, Question, RefuseReason, Role, SessionInfo,
     UsageWindow,
@@ -464,9 +464,14 @@ impl ServeHost for DevApp {
         write: &PendingWrite,
         bytes: &[u8],
     ) -> Result<bool, RefuseReason> {
-        self.gate
+        let took = self
+            .gate
             .lock()
             .device_write(device, Some(role), write, None)?;
+        if took.change.is_some() {
+            println!("dev host: the phone typed last");
+        }
+        self.tell(took.change);
         // What a shell would echo back.
         let typed = String::from_utf8_lossy(bytes).replace('\r', "\r\n");
         println!("dev host: typed {typed:?}");
@@ -490,17 +495,6 @@ impl ServeHost for DevApp {
 
     fn role_now(&self, _device: &EndpointId, connected: Role) -> Option<Role> {
         Some(connected)
-    }
-
-    fn take(&self, _id: &str, device: EndpointId, _role: Role) -> Result<(), RefuseReason> {
-        let change = self
-            .gate
-            .lock()
-            .take(device, Instant::now())
-            .map_err(|HostIsTyping| RefuseReason::NotInControl)?;
-        println!("dev host: the phone took control");
-        self.tell(change);
-        Ok(())
     }
 
     fn release(&self, device: &EndpointId) {

@@ -12,7 +12,6 @@ import {
   remoteHostStartSession,
   remoteHosts,
   remoteHostsWake,
-  remoteHostTakeControl,
 } from "../ipc/bridge.ts";
 import { failureMessage } from "../ipc/failures.ts";
 import { onEvent, stopAll } from "../ipc/onEvent.ts";
@@ -85,7 +84,6 @@ interface RemoteHostsStore {
   ) => Promise<string | null>;
   /** Stop reading it as entries; forget what was read. */
   stopEntries: (hostId: string, sessionId: string) => Promise<void>;
-  takeControl: (hostId: string, sessionId: string) => Promise<void>;
   takeStarted: () => void;
   type: (hostId: string, sessionId: string, text: string) => Promise<void>;
   /** Each session's view as last asked of Rust, by `host:session`. */
@@ -307,12 +305,10 @@ export const useRemoteHosts = create<RemoteHostsStore>((set, get) => {
     started: null,
     starting: {},
     takeStarted: () => set({ started: null }),
-    takeControl: (hostId, sessionId) =>
-      attempt(() => remoteHostTakeControl(hostId, sessionId)),
     type: async (hostId, sessionId, text) => {
       const link = get().links[hostId];
       const session = link?.sessions.find((one) => one.id === sessionId);
-      // Typing reaches the other computer only with control; Rust checks too.
+      // Only where Rust says this computer may type (a Controller, ADR-0063); it checks again.
       if (!session?.mayType) {
         return;
       }

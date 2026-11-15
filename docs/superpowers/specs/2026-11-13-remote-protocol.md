@@ -332,6 +332,14 @@ and resets every reader.
 
 ## 7. Input and control
 
+> **Superseded in part by [ADR-0063](../../adr/0063-no-handover-of-typing-control.md)
+> (15 Nov 2026).** There is no handover any more: the host and every Controller type
+> straight in. `TakeControl` and `ReleaseControl` are accepted and change nothing a write
+> depends on; `recheck_at_write` checks no holder and no epoch, so `NotInControl` is never
+> sent for a write; the epoch still counts who-typed-last changes for `Control` and is
+> ignored on writes. The session's size follows whoever typed last. The run, `seen_seq`,
+> dialog and role rules below still hold. Read the rules below with that in mind.
+
 - **Epoch** — `(host_boot_id, counter)` per session, where `host_boot_id` is
   random per app start, so a value never repeats across restarts. It changes
   with every control change.
